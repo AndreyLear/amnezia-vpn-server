@@ -1,41 +1,39 @@
-# Runtime data
-data/*
-!data/.gitkeep
-
-status/*
-!status/.gitkeep
-
-config/*
-!config/.gitkeep
-
-backups/*
-!backups/.gitkeep
-
 # Environment / secrets
 .env
 .env.*
 !.env.example
 
-# SQLite
-*.sqlite
-*.sqlite3
-*.sqlite-wal
-*.sqlite-shm
-*.db
+# Persistent application state
+data/*
+!data/.gitkeep
 
-# Go
-/bin/
-/dist/
-/tmp/
-*.test
-*.out
+# Derived runtime state
+config/*
+!config/.gitkeep
 
-# OS / editor
-.DS_Store
-.idea/
-.vscode/
+status/*
+!status/.gitkeep
+
+# Encrypted backups
+backups/*
+!backups/.gitkeep
 
 # Temporary files
+tmp/
+restore/
 *.tmp
+
+# Go build artifacts
+/bin/
+/dist/
+*.test
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
 *.swp
-*~
+*.swo
+
+# Logs
+*.log
