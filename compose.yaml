@@ -1,0 +1,34 @@
+services:
+  # panel-init — одноразовый job: инициализация базы данных и конфигурации
+  panel-init:
+    image: amnezia-vpn-server/panel:2.0.0
+    command: ["/app/panel", "init"]
+    volumes:
+      # panel-init владеет SQLite и конфигурацией (rw)
+      - ./data:/data
+      - ./config:/config
+
+  # panel — веб-панель: владеет SQLite и config/awg0.conf
+  panel:
+    image: amnezia-vpn-server/panel:2.0.0
+    command: ["/app/panel", "serve"]
+    depends_on:
+      panel-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./data:/data
+      - ./config:/config
+      # status читается только для отображения статуса awg
+      - ./status:/status:ro
+
+  # awg — AmneziaWG runtime: читает конфигурацию, пишет статус
+  awg:
+    image: amnezia-vpn-server/awg:2.0.0
+    depends_on:
+      panel-init:
+        condition: service_completed_successfully
+    volumes:
+      # awg видит конфигурацию только на чтение
+      - ./config:/config:ro
+      # awg пишет актуальный статус runtime для панели
+      - ./status:/status
