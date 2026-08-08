@@ -1,0 +1,41 @@
+# Runtime data
+data/*
+!data/.gitkeep
+
+status/*
+!status/.gitkeep
+
+config/*
+!config/.gitkeep
+
+backups/*
+!backups/.gitkeep
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# SQLite
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# Go
+/bin/
+/dist/
+/tmp/
+*.test
+*.out
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Temporary files
+*.tmp
+*.swp
+*~

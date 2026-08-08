@@ -1,0 +1,9 @@
+# External component versions
+# Exact versions will be pinned during M0.
+
+GO_VERSION=
+ALPINE_VERSION=
+AMNEZIAWG_GO_COMMIT=
+AMNEZIAWG_TOOLS_COMMIT=
+AGE_VERSION=
+ZSTD_VERSION=
