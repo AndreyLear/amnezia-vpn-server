@@ -10,6 +10,12 @@ services:
 
   # panel — веб-панель: владеет SQLite и config/awg0.conf
   panel:
+    build:
+      context: .
+      dockerfile: app/panel/Dockerfile
+      args:
+        GO_VERSION: ${GO_VERSION:?GO_VERSION must be set via versions.lock}
+        ALPINE_VERSION: ${ALPINE_VERSION:?ALPINE_VERSION must be set via versions.lock}
     image: amnezia-vpn-server/panel:2.0.0
     command: ["/app/panel", "serve"]
     depends_on:
