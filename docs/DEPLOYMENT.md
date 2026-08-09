@@ -55,15 +55,15 @@ thus wins.
 ## Services
 
 - **panel-init** — one-shot job (`/app/panel init`): creates the SQLite
-  database and generates an initial `config/awg0.conf`, then exits. It owns
-  `data/` and `config/` (RW) and does not touch `status/`. Not implemented
-  yet: the schema is M2 scope and the config generator is M3 scope
-  (TECHNICAL_SPEC_v2.0.md section 10), so in M1 `init` exits with a non-zero code
-  and a checkpoint message. Production `docker compose up` starts the
-  remaining services only once the real `init` lands.
+  database `data/amnezia.sqlite` with the schema from TECHNICAL_SPEC_v2.0.md
+  §3 (idempotent; schema version recorded in `schema_meta`), then exits. It
+  owns `data/` and `config/` (RW) and does not touch `status/`. Initial
+  `config/awg0.conf` generation is M3 scope (the `awg0.conf generator`), so
+  `init` currently succeeds without producing a config and says so. The
+  panel `serve` subcommand is likewise unimplemented before M6.
 - **panel** — HTTP server (`/app/panel serve`); the only service that
   reads/writes SQLite. It mounts `data/` and `config/` RW and `status/`
-  RO. The `serve` subcommand is likewise unimplemented before M6.
+  RO.
 - **awg** — AmneziaWG runtime; reads `config/` RO, writes `status/`
   (`status.json`) RW. It has no `data/` (SQLite) access. The `awg` image is
   built by the M1 Dockerfile from the commits pinned on `versions.lock`.

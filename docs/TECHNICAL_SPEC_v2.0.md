@@ -332,12 +332,26 @@ M9  Hardening
   <iface> dump`), not via process `wait`: in the userspace fallback path the
   daemon is launched in the foreground of the `awg-quick` script and
   daemonizes itself (no child PID is guaranteed).
-- panel-init keeps its M0/M2/M3 boundary: `init`/`serve` subcommands exit
-  non-zero with a checkpoint message until SQLite schema (M2) and the
-  `awg0.conf` generator (M3) land.
+- panel-init keeps its milestone boundary: the `init` subcommand succeeds
+  once the SQLite schema (M2) is in place and states that the `awg0.conf`
+  generator (M3) is still missing; the `serve` subcommand keeps exiting
+  non-zero until M6.
 - milestone boundary (not a feature gap): a full `docker compose up` cannot
-  succeed before M2+M3; validations of the `awg` container use a static
-  `config/awg0.conf` fixture.
+  succeed before M3 (`awg0.conf` generator); validations of the `awg`
+  container use a static `config/awg0.conf` fixture.
+
+### M2 criteria
+
+- `panel init` creates/opens `data/amnezia.sqlite` and applies the schema
+  from §3 (`server`, `clients`, `settings`, `auth`, `schema_meta`).
+- Migrations are idempotent (§4): repeated runs do not alter existing data.
+- `schema_meta` records `schema_version` (value matches §5 manifest, 3).
+- Errors during open/migrate exit non-zero with diagnostics on stderr.
+- The `awg0.conf` generator is NOT part of M2 (M3 scope); `init` completes
+  without producing a config and says so.
+- `modernc.org/sqlite` pins stay: sqlite `1.54.0`, libc `1.74.1`
+  (versions.lock); no new modules.
+- No Docker socket, inter-container HTTP, or new volumes are introduced.
 
 ## 11. MVP exclusions
 

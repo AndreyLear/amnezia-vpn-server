@@ -18,15 +18,16 @@ The application consists of three Compose services:
 
 ### panel-init
 
-- initializes and migrates SQLite
-- generates the initial `awg0.conf`
+- initializes and migrates SQLite (`data/amnezia.sqlite`, schema from
+  TECHNICAL_SPEC_v2.0.md §3; idempotent, schema_version recorded in
+  `schema_meta` — supported since M2)
+- generates the initial `awg0.conf` (M3 — `awg0.conf generator`; not yet
+  implemented; `init` succeeds without it and states so)
 
-Until M2 (`SQLite schema + panel-init`) and M3 (`awg0.conf generator`) are
-implemented, the `init` subcommand intentionally exits with a non-zero code
-and a checkpoint message (no silent no-op). Compose
-`depends_on: condition: service_completed_successfully` therefore does not
-pass until the real implementation lands; this is the M1 milestone boundary,
-not a bypass.
+Compose `depends_on: condition: service_completed_successfully` passes once
+the SQLite migration lands; the remaining pieces of a full stack start
+still wait for the M3 generator.
+
 ### panel
 
 - reads and writes SQLite
