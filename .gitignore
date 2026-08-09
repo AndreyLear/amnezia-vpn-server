@@ -27,6 +27,8 @@ restore/
 /bin/
 /dist/
 *.test
+# local binary from `go build ./...` in app/panel (name = basename of module path)
+/app/panel/amnezia-vpn-server
 
 # IDE / OS
 .idea/
