@@ -29,7 +29,28 @@ services:
 
   # awg — AmneziaWG runtime: читает конфигурацию, пишет статус
   awg:
+    build:
+      context: .
+      dockerfile: app/awg/Dockerfile
+      args:
+        GO_VERSION: ${GO_VERSION:?GO_VERSION must be set via versions.lock}
+        ALPINE_VERSION: ${ALPINE_VERSION:?ALPINE_VERSION must be set via versions.lock}
+        AMNEZIAWG_GO_VERSION: ${AMNEZIAWG_GO_VERSION:?AMNEZIAWG_GO_VERSION must be set via versions.lock}
+        AMNEZIAWG_GO_COMMIT: ${AMNEZIAWG_GO_COMMIT:?AMNEZIAWG_GO_COMMIT must be set via versions.lock}
+        AMNEZIAWG_TOOLS_VERSION: ${AMNEZIAWG_TOOLS_VERSION:?AMNEZIAWG_TOOLS_VERSION must be set via versions.lock}
+        AMNEZIAWG_TOOLS_COMMIT: ${AMNEZIAWG_TOOLS_COMMIT:?AMNEZIAWG_TOOLS_COMMIT must be set via versions.lock}
     image: amnezia-vpn-server/awg:2.0.0
+    cap_add:
+      - NET_ADMIN
+    cap_drop:
+      # ТЗ §2: NET_RAW не используется
+      - NET_RAW
+    devices:
+      # userspace-реализация создаёт tun-интерфейс через /dev/net/tun
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      # перенаправление трафика между tun и eth0
+      net.ipv4.ip_forward: "1"
     depends_on:
       panel-init:
         condition: service_completed_successfully

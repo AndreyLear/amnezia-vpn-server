@@ -31,9 +31,13 @@ Roles:
   `compose.yaml`. The Compose file guards them with a `:?` expansion, so a
   missing value fails the command instead of silently building with an
   implicit version.
-- The remaining pins (`AMNEZIAWG_*`, `SQLITE_DRIVER*`, `AGE_VERSION`,
-  `ZSTD_VERSION`) are reserved for later milestones and are not yet consumed
-  by Compose.
+- `AMNEZIAWG_GO_VERSION` / `AMNEZIAWG_GO_COMMIT` and
+  `AMNEZIAWG_TOOLS_VERSION` / `AMNEZIAWG_TOOLS_COMMIT` feed the `awg` build
+  args. The AWG runtime image is built from these exact pinned commits:
+  the Dockerfile checks out the pinned SHA (never `master`, `main` or
+  `latest`), so a rebuild always produces the same Verified-code state.
+- The remaining pins (`SQLITE_DRIVER*`, `AGE_VERSION`, `ZSTD_VERSION`) are
+  reserved for later milestones and are not yet consumed by Compose.
 - No base image or dependency is ever selected via `latest` or a floating
   version.
 - Never hardcode versions elsewhere; edit `versions.lock` and commit it.
@@ -52,13 +56,17 @@ thus wins.
 
 - **panel-init** — one-shot job (`/app/panel init`): creates the SQLite
   database and generates an initial `config/awg0.conf`, then exits. It owns
-  `data/` and `config/` (RW) and does not touch `status/`.
+  `data/` and `config/` (RW) and does not touch `status/`. Not implemented
+  yet: the schema is M2 scope and the config generator is M3 scope
+  (TECHNICAL_SPEC_v2.0.md section 10), so in M1 `init` exits with a non-zero code
+  and a checkpoint message. Production `docker compose up` starts the
+  remaining services only once the real `init` lands.
 - **panel** — HTTP server (`/app/panel serve`); the only service that
   reads/writes SQLite. It mounts `data/` and `config/` RW and `status/`
-  RO.
+  RO. The `serve` subcommand is likewise unimplemented before M6.
 - **awg** — AmneziaWG runtime; reads `config/` RO, writes `status/`
   (`status.json`) RW. It has no `data/` (SQLite) access. The `awg` image is
-  provided by milestone M1; until then the service does not start.
+  built by the M1 Dockerfile from the commits pinned on `versions.lock`.
 
 Startup order is handled by `depends_on` with
 `condition: service_completed_successfully`: `panel` and `awg` wait for

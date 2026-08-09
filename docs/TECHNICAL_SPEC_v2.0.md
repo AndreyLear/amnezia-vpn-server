@@ -44,8 +44,9 @@ There is no `clients/*.conf`; client configs are generated on demand.
 - `awg` has no `/data` mount.
 - `awg` never writes `config/awg0.conf`.
 - No inter-container HTTP/REST API.
+- `awg` container requires `/dev/net/tun` and `CAP_NET_ADMIN`; `privileged`, `SYS_MODULE` and `NET_RAW` are not used.
 
-For M0, AWG uses directory-level read-only access to `/config`. File-level isolation can be tightened later without changing ownership.
+For M0/M1, AWG uses directory-level read-only access to `/config`. File-level isolation can be tightened later without changing ownership.
 
 ## 3. Database
 
@@ -255,6 +256,13 @@ ZSTD_VERSION=1.5.7
 
 `modernc.org/sqlite` is pure Go / CGO-free. Its transitive `modernc.org/libc` version is pinned.
 
+AWG runtime components are pinned to exact commits:
+
+- `amneziawg-go` at `AMNEZIAWG_GO_COMMIT` (version `AMNEZIAWG_GO_VERSION`)
+- `amneziawg-tools` at `AMNEZIAWG_TOOLS_COMMIT` (version `AMNEZIAWG_TOOLS_VERSION`)
+
+Builds always checkout the exact pinned commit; `master`, `main`, `latest` and other floating refs are never used. The commits listed in `versions.lock` are the only references for AWG builds.
+
 ## 9. install.sh
 
 `install.sh` is infrastructure state, not application backup.
@@ -309,6 +317,27 @@ M9  Hardening
 - panel data/config RW and status RO
 - guarded Docker build args
 - every M0 change committed to Git
+
+### M1 criteria
+
+- AWG runtime image builds from the exact commits pinned in `versions.lock`
+  (no floating refs in the Dockerfile).
+- `awg` service declares `/dev/net/tun`, `CAP_NET_ADMIN`,
+  `net.ipv4.ip_forward=1`; `NET_RAW` is dropped (`cap_drop: [NET_RAW]`) and
+  `privileged` is not used.
+- entrypoint contract: SIGTERM/SIGINT → `awg-quick down` + exit 0;
+  unexpected death of the userspace daemon or the interface → non-zero
+  exit; missing `/config/awg0.conf` → wait then non-zero exit after timeout.
+- entrypoint supervises tunnel health via the AWG UAPI (`awg show
+  <iface> dump`), not via process `wait`: in the userspace fallback path the
+  daemon is launched in the foreground of the `awg-quick` script and
+  daemonizes itself (no child PID is guaranteed).
+- panel-init keeps its M0/M2/M3 boundary: `init`/`serve` subcommands exit
+  non-zero with a checkpoint message until SQLite schema (M2) and the
+  `awg0.conf` generator (M3) land.
+- milestone boundary (not a feature gap): a full `docker compose up` cannot
+  succeed before M2+M3; validations of the `awg` container use a static
+  `config/awg0.conf` fixture.
 
 ## 11. MVP exclusions
 
