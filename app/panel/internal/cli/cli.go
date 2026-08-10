@@ -8,22 +8,27 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/web"
 )
 
 const usageText = `usage: /app/panel <command> [args]
 
 commands:
   init                          migrate the database and (re)generate config/awg0.conf
-  serve                         run the web panel (not implemented before M6)
+  serve [--addr <host:port>]    run the web panel
   status                        print the runtime AWG status (status/status.json)
   server init <address> <listen-port> [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>]
   client add <name> [--expires-at <RFC3339>]
@@ -37,9 +42,8 @@ commands:
   client config <id>
 `
 
-// serveNotImplemented keeps the M2/M6 contract and exact text of the
-// previous main.go.
-const serveNotImplemented = "panel serve: not implemented in M2. Scheduled: M6 (\"Basic panel CRUD\")."
+// serveNotImplemented kept the M2/M6 contract; M6.1 replaces it with a
+// real HTTP server (M6_AUDIT.md §2.1.1).
 
 // Run dispatches a panel command line (without argv[0]) and returns the
 // process exit code: 0 success, 1 runtime/operational error, 2 usage.
@@ -192,8 +196,45 @@ func (a *app) cmdInit(args []string) int {
 	return 0
 }
 
-// cmdServe keeps the M6 stub: unchanged exit code and error text.
+const opServe = "serve"
+
+// cmdServe runs the web panel: it installs the SIGTERM/SIGINT
+// handlers, so a clean shutdown exits 0, a fatal startup error exits 1
+// and argument errors exit 2 (M6_AUDIT.md §2.1.10).
 func (a *app) cmdServe(args []string) int {
-	fmt.Fprintln(a.stderr, serveNotImplemented)
-	return 1
+	parsed, err := parseArgs(args, map[string]bool{"addr": true})
+	if err != nil {
+		return a.usageError(opServe, err.Error())
+	}
+	if len(parsed.positional) > 0 {
+		return a.usageError(opServe, "unexpected arguments")
+	}
+	cfg := web.DefaultConfig()
+	if v := parsed.flags["addr"]; v != "" {
+		cfg.Addr = v
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return a.serveHTTP(ctx, cfg)
+}
+
+// serveHTTP runs the HTTP server until ctx is canceled. The database
+// is opened and migrated first (the panel is the only SQLite writer,
+// docs/TECHNICAL_SPEC_v2.0.md §2): a database failure is fatal and
+// exits 1 before any socket is bound.
+func (a *app) serveHTTP(ctx context.Context, cfg web.Config) int {
+	handle, err := a.openDB()
+	if err != nil {
+		return a.fatal(opServe, err)
+	}
+	defer handle.Close()
+	cfg.Logger = log.New(a.stderr, "panel serve: ", log.LstdFlags)
+	server, err := web.New(cfg)
+	if err != nil {
+		return a.fatal(opServe, err)
+	}
+	if err := server.ListenAndServe(ctx); err != nil {
+		return a.fatal(opServe, err)
+	}
+	return 0
 }

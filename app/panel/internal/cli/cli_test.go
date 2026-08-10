@@ -1026,17 +1026,17 @@ func TestInitContract(t *testing.T) {
 	c.mustRun("init")
 }
 
+// TestServeContract is superseded by M6.1: `panel serve` is a real
+// HTTP server now (web_serve_test.go covers startup, graceful
+// SIGTERM/SIGINT → exit 0, fatal startup → exit 1, usage → exit 2).
 func TestServeContract(t *testing.T) {
 	c := newCtx(t)
-	code, out, errb := c.run("serve")
-	if code != 1 {
-		t.Fatalf("exit = %d, want 1", code)
+	code, _, errb := c.run("serve", "--bogus", "x")
+	if code != 2 {
+		t.Fatalf("serve --bogus: exit = %d, want 2", code)
 	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want empty", out)
-	}
-	if errb != `panel serve: not implemented in M2. Scheduled: M6 ("Basic panel CRUD").`+"\n" {
-		t.Fatalf("stderr = %q", errb)
+	if errb == "" {
+		t.Fatalf("stderr empty, want a diagnostic")
 	}
 }
 
