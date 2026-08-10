@@ -61,6 +61,22 @@ RUN make -C src \
     && cp src/wg-quick/linux.bash /out/awg-quick \
     && chmod 0755 /out/awg /out/awg-quick
 
+# ---- build stage: status producer (awgstatus, M5) ----
+# Compiled from the panel module with only the stdlib: internal/status
+# imports nothing outside the standard library, so this stage never
+# fetches the SQLite dependency tree. No new dependencies are added.
+FROM golang:${GO_VERSION}-alpine AS awgstatus-build
+
+WORKDIR /src
+
+ENV CGO_ENABLED=0 \
+    GOOS=linux
+
+COPY app/panel/go.mod app/panel/go.sum ./
+COPY app/panel/internal/status/ ./internal/status/
+COPY app/panel/cmd/awgstatus/ ./cmd/awgstatus/
+RUN go build -trimpath -ldflags="-s -w" -o /out/awgstatus ./cmd/awgstatus
+
 # ---- runtime stage: only binaries + tools required to run ----
 FROM alpine:${ALPINE_VERSION}
 
@@ -68,6 +84,7 @@ RUN apk add --no-cache bash iproute2 iptables openresolv
 
 COPY --from=amneziawg-go-build /out/amneziawg-go /usr/bin/amneziawg-go
 COPY --from=amneziawg-tools-build /out/awg /out/awg-quick /usr/bin/
+COPY --from=awgstatus-build /out/awgstatus /opt/awg/awgstatus
 
 RUN mkdir -p /etc/amnezia/amneziawg /var/run/amneziawg /opt/awg
 

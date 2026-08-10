@@ -7,6 +7,8 @@ CONFIG_DEST=${CONFIG_DEST:-/etc/amnezia/amneziawg/awg0.conf}
 SYNCCONF_TMP=${SYNCCONF_TMP:-/tmp/awg0.syncconf.conf}
 CONFIG_TIMEOUT=${AWG_CONFIG_TIMEOUT:-300}
 CHECK_INTERVAL=${AWG_CHECK_INTERVAL:-5}
+STATUS_FILE=${AWG_STATUS_FILE:-/status/status.json}
+AWGSTATUS_BIN=${AWGSTATUS_BIN:-/opt/awg/awgstatus}
 
 log() { echo "[awg] $*" >&2; }
 
@@ -19,6 +21,21 @@ else
     # shellcheck source=/dev/null
     source "${SCRIPT_DIR}/syncconf.sh"
 fi
+
+# Regenerates status/status.json from the live UAPI dump (M5). The
+# producer reads the runtime itself; a failure to generate status must
+# never affect the M3.2 lifecycle, so only a warning is logged and the
+# previous snapshot stays. When the producer binary is absent (local
+# runs), status generation is skipped silently.
+generate_status() {
+    local producer="${AWGSTATUS_BIN}"
+    if [ ! -x "${producer}" ]; then
+        return 0
+    fi
+    if ! "${producer}" "${IFACE}" "${STATUS_FILE}"; then
+        log "warning: status generation failed; keeping the previous ${STATUS_FILE}"
+    fi
+}
 
 wait_for_config() {
     local deadline=$((SECONDS + CONFIG_TIMEOUT))
@@ -109,6 +126,12 @@ while true; do
         log "error: userspace AWG daemon behind UAPI socket for ${IFACE} is not responding"
         exit 1
     fi
+
+    # M5: status generation runs after every successful UAPI health
+    # check — at loop entry and then once per CHECK_INTERVAL. A config
+    # reload does not trigger a separate generation; the next tick
+    # rewrites status from the already-applied runtime.
+    generate_status
 
     if [ "$(config_mtime)" != "${LAST_MTIME}" ]; then
         reload_config

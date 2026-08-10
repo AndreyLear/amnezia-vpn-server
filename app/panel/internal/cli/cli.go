@@ -24,6 +24,7 @@ const usageText = `usage: /app/panel <command> [args]
 commands:
   init                          migrate the database and (re)generate config/awg0.conf
   serve                         run the web panel (not implemented before M6)
+  status                        print the runtime AWG status (status/status.json)
   server init <address> <listen-port> [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>]
   client add <name> [--expires-at <RFC3339>]
   client list
@@ -57,6 +58,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return a.cmdServer(args[1:])
 	case "client":
 		return a.cmdClient(args[1:])
+	case "status":
+		return a.cmdStatus(args[1:])
 	default:
 		a.usage()
 		return 2
