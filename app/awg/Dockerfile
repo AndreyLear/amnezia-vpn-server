@@ -64,13 +64,14 @@ RUN make -C src \
 # ---- runtime stage: only binaries + tools required to run ----
 FROM alpine:${ALPINE_VERSION}
 
-RUN apk add --no-cache bash iproute2 iptables
+RUN apk add --no-cache bash iproute2 iptables openresolv
 
 COPY --from=amneziawg-go-build /out/amneziawg-go /usr/bin/amneziawg-go
 COPY --from=amneziawg-tools-build /out/awg /out/awg-quick /usr/bin/
 
-RUN mkdir -p /etc/amnezia/amneziawg /var/run/amneziawg
+RUN mkdir -p /etc/amnezia/amneziawg /var/run/amneziawg /opt/awg
 
+COPY --chmod=0644 app/awg/syncconf.sh /opt/awg/syncconf.sh
 COPY --chmod=0755 app/awg/entrypoint.sh /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
