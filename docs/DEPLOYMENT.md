@@ -56,11 +56,11 @@ thus wins.
 
 - **panel-init** — one-shot job (`/app/panel init`): creates the SQLite
   database `data/amnezia.sqlite` with the schema from TECHNICAL_SPEC_v2.0.md
-  §3 (idempotent; schema version recorded in `schema_meta`), then exits. It
-  owns `data/` and `config/` (RW) and does not touch `status/`. Initial
-  `config/awg0.conf` generation is M3 scope (the `awg0.conf generator`), so
-  `init` currently succeeds without producing a config and says so. The
-  panel `serve` subcommand is likewise unimplemented before M6.
+  §3 (idempotent; schema version recorded in `schema_meta`), then generates
+  `config/awg0.conf` from SQLite (M3.1 `awg0.conf generator`: atomic write,
+  mode 0600; exits 1 if the server row is absent). It owns `data/` and
+  `config/` (RW) and does not touch `status/`. The panel `serve`
+  subcommand is likewise unimplemented before M6.
 - **panel** — HTTP server (`/app/panel serve`); the only service that
   reads/writes SQLite. It mounts `data/` and `config/` RW and `status/`
   RO.

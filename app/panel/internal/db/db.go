@@ -120,3 +120,77 @@ func DefaultPath() string {
 	}
 	return "/data/amnezia.sqlite"
 }
+
+// ErrServerNotFound reports that no server row (id = 1) exists.
+var ErrServerNotFound = errors.New("db: server row not found")
+
+// ServerRecord is the server configuration record (§3, table server).
+type ServerRecord struct {
+	PrivateKey string
+	PublicKey  string
+	Address    string
+	ListenPort int64
+	DNS        string
+	AWGParams  string
+}
+
+// ServerRow loads the single server record (id = 1). A missing row is
+// reported as ErrServerNotFound.
+func ServerRow(handle *sql.DB) (*ServerRecord, error) {
+	row := handle.QueryRow(
+		`SELECT private_key, public_key, address, listen_port, dns, awg_params
+		   FROM server WHERE id = 1`,
+	)
+	var (
+		s   ServerRecord
+		dns sql.NullString
+	)
+	err := row.Scan(&s.PrivateKey, &s.PublicKey, &s.Address, &s.ListenPort, &dns, &s.AWGParams)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrServerNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: read server row: %w", err)
+	}
+	s.DNS = dns.String
+	return &s, nil
+}
+
+// ClientRow is a WireGuard client record relevant to awg0.conf generation
+// (§3, table clients; only public parts).
+type ClientRow struct {
+	ID        int64
+	PublicKey string
+	// PresharedKey is empty when clients.preshared_key is NULL.
+	PresharedKey string
+	Address      string
+}
+
+// ClientsForConfig returns enabled clients, ordered by id.
+func ClientsForConfig(handle *sql.DB) ([]ClientRow, error) {
+	rows, err := handle.Query(
+		`SELECT id, public_key, preshared_key, address
+		   FROM clients WHERE enabled = 1 ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("db: query clients: %w", err)
+	}
+	defer rows.Close()
+
+	var clients []ClientRow
+	for rows.Next() {
+		var (
+			c   ClientRow
+			psk sql.NullString
+		)
+		if err := rows.Scan(&c.ID, &c.PublicKey, &psk, &c.Address); err != nil {
+			return nil, fmt.Errorf("db: scan client: %w", err)
+		}
+		c.PresharedKey = psk.String
+		clients = append(clients, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: iterate clients: %w", err)
+	}
+	return clients, nil
+}

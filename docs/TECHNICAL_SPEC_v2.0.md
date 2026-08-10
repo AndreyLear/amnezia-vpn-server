@@ -332,13 +332,14 @@ M9  Hardening
   <iface> dump`), not via process `wait`: in the userspace fallback path the
   daemon is launched in the foreground of the `awg-quick` script and
   daemonizes itself (no child PID is guaranteed).
-- panel-init keeps its milestone boundary: the `init` subcommand succeeds
-  once the SQLite schema (M2) is in place and states that the `awg0.conf`
-  generator (M3) is still missing; the `serve` subcommand keeps exiting
-  non-zero until M6.
-- milestone boundary (not a feature gap): a full `docker compose up` cannot
-  succeed before M3 (`awg0.conf` generator); validations of the `awg`
-  container use a static `config/awg0.conf` fixture.
+- panel-init (M3.1): after migrating the schema it generates
+  `config/awg0.conf` from SQLite (server row + enabled clients `ORDER BY
+  id`, atomic write, mode 0600) and exits 1 without config when the server
+  row (id = 1) is absent; the `serve` subcommand keeps exiting non-zero
+  until M6.
+- M3.2 milestone boundary: hot reload (`awg syncconf` on config change /
+  mtime polling) is not yet implemented; the `awg` container consumes the
+  panel-init-generated config on startup.
 
 ### M2 criteria
 

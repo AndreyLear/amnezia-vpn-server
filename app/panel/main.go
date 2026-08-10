@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
 
 const (
-	initDisclaimer      = "panel init: SQLite schema and database are initialized; initial awg0.conf generation is M3 (TECHNICAL_SPEC_v2.0.md §10) and not performed here yet."
 	serveNotImplemented = "panel serve: not implemented in M2. Scheduled: M6 (\"Basic panel CRUD\")."
 )
 
@@ -37,9 +37,10 @@ func cmdInit() {
 	if err := db.Migrate(handle); err != nil {
 		fatal(err)
 	}
-	fmt.Printf("panel init: %s ready (schema_version=%s)\n",
-		path, db.SchemaVersion)
-	fmt.Fprintln(os.Stderr, initDisclaimer)
+	if err := awgconf.Generate(handle, "/config/awg0.conf"); err != nil {
+		fatal(err)
+	}
+	fmt.Println("panel init: awg0.conf generated")
 }
 
 func fatal(err error) {

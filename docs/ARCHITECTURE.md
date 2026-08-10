@@ -20,13 +20,17 @@ The application consists of three Compose services:
 
 - initializes and migrates SQLite (`data/amnezia.sqlite`, schema from
   TECHNICAL_SPEC_v2.0.md §3; idempotent, schema_version recorded in
-  `schema_meta` — supported since M2)
-- generates the initial `awg0.conf` (M3 — `awg0.conf generator`; not yet
-  implemented; `init` succeeds without it and states so)
+  `schema_meta` — since M2)
+- generates the initial `config/awg0.conf` from SQLite (M3.1 — `awg0.conf
+  generator`): loads the server row and enabled clients (`enabled = 1`,
+  `ORDER BY id`), renders the deterministic config and writes it atomically
+  (tmp → fsync → close → rename → fsync parent dir; mode 0600); exits 1
+  when the server row (id = 1) is absent
 
 Compose `depends_on: condition: service_completed_successfully` passes once
-the SQLite migration lands; the remaining pieces of a full stack start
-still wait for the M3 generator.
+panel-init has generated `config/awg0.conf`; the `awg` container (M1) then
+waits for the config file. Hot reload (syncconf on config change) remains
+M3.2.
 
 ### panel
 
