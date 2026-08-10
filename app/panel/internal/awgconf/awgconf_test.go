@@ -15,7 +15,8 @@ func u16(v uint16) *uint16 { return &v }
 
 func TestRenderInterfaceMinimal(t *testing.T) {
 	server := ServerConfig{PrivateKey: testKey(1), Address: "10.8.0.1/24", ListenPort: 51820}
-	want := "PrivateKey = " + testKey(1) + "\n" +
+	want := "[Interface]\n" +
+		"PrivateKey = " + testKey(1) + "\n" +
 		"Address = 10.8.0.1/24\n" +
 		"ListenPort = 51820\n" +
 		"\n"
@@ -37,7 +38,8 @@ func TestRenderInterfaceFullParams(t *testing.T) {
 			I1: "<t><r 4><b 0x01>",
 		},
 	}
-	want := "PrivateKey = " + testKey(1) + "\n" +
+	want := "[Interface]\n" +
+		"PrivateKey = " + testKey(1) + "\n" +
 		"Address = 10.8.0.1/24\n" +
 		"ListenPort = 443\n" +
 		"DNS = 1.1.1.1,9.9.9.9\n" +
@@ -62,7 +64,8 @@ func TestRenderPeers(t *testing.T) {
 		{PublicKey: testKey(2), AllowedIPs: "10.8.0.2/32"},
 		{PublicKey: testKey(3), PresharedKey: testKey(4), AllowedIPs: "10.8.0.3/32"},
 	}
-	want := "PrivateKey = " + testKey(1) + "\n" +
+	want := "[Interface]\n" +
+		"PrivateKey = " + testKey(1) + "\n" +
 		"Address = 10.8.0.1/24\n" +
 		"ListenPort = 51820\n" +
 		"\n" +

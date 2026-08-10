@@ -21,6 +21,11 @@ services:
     depends_on:
       panel-init:
         condition: service_completed_successfully
+    ports:
+      # M6.4 (DEPLOYMENT.md §Ports): the panel binds 0.0.0.0:8787 inside
+      # the container; the host mapping is loopback-only until auth lands
+      # in M7 — the panel is not exposed to the network.
+      - "127.0.0.1:8787:8787"
     volumes:
       - ./data:/data
       - ./config:/config

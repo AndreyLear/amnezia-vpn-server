@@ -2,7 +2,57 @@
 
 {{define "body"}}<main>
   <h1>AmneziaVPN Panel</h1>
+
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
-  <p>Client cards will appear here (M6.2).</p>
+
+  <section class="status">
+    {{if .Up}}<p>Tunnel: up <span class="muted">(status generated {{.GeneratedText}})</span></p>
+    {{else if .NA}}<p>Tunnel: status not available</p>
+    {{else if .Down}}<p>Tunnel: interface down</p>
+    {{else}}<p>Tunnel: status error</p>{{end}}
+  </section>
+
+  <section class="add">
+    <h2>Add client</h2>
+    <form action="/clients/new" method="post">
+      <label>Name <input type="text" name="name" maxlength="64" required></label>
+      <label>Expiry (optional, RFC3339) <input type="text" name="expires_at"></label>
+      <button type="submit">Add</button>
+    </form>
+  </section>
+
+  <section class="cards">
+    <h2>Clients</h2>
+    {{if not .Cards}}<p>No clients yet.</p>{{end}}
+    {{range .Cards}}
+    <article class="card">
+      <h3>{{.Name}} <span class="muted">#{{.ID}}</span></h3>
+      <p>
+        <span>{{if .Online}}online{{else}}offline{{end}}</span> ·
+        <span>{{if .Enabled}}enabled{{else}}disabled{{end}}</span>
+        {{if .Expired}} · <span>expired</span>{{end}}
+      </p>
+      <p>address: {{.Address}} · created: {{.CreatedText}}</p>
+      <p>last handshake: {{.LastHandshakeText}} · rx: {{.RxText}} · tx: {{.TxText}}</p>
+      <p class="actions">
+        <form action="/clients/{{.ID}}/enable" method="post"><button type="submit">Enable</button></form>
+        <form action="/clients/{{.ID}}/disable" method="post"><button type="submit">Disable</button></form>
+        <form action="/clients/{{.ID}}/delete" method="post"><button type="submit">Delete</button></form>
+        <a href="/clients/{{.ID}}/config">config</a> ·
+        <a href="/clients/{{.ID}}/qr">QR</a>
+      </p>
+      <p class="actions">
+        <form action="/clients/{{.ID}}/rename" method="post">
+          <input type="text" name="name" maxlength="64" placeholder="new name">
+          <button type="submit">Rename</button>
+        </form>
+        <form action="/clients/{{.ID}}/expiry" method="post">
+          <input type="text" name="expires_at" placeholder="RFC3339 or none">
+          <button type="submit">Set expiry</button>
+        </form>
+      </p>
+    </article>
+    {{end}}
+  </section>
 </main>
 {{end}}

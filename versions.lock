@@ -24,3 +24,10 @@ MODERNC_LIBC_VERSION=1.74.1
 # Backup / compression
 AGE_VERSION=1.3.1
 ZSTD_VERSION=1.5.7
+
+# Panel: QR encoder (M6.5 on-demand QR), pinned
+QRCODE_GO=github.com/skip2/go-qrcode
+QRCODE_GO_VERSION=v0.0.0-20200617195104-da1b6568686e
+# Panel tests: QR decoder (payload == config verification), pinned
+QRDECODE_GO=github.com/makiuchi-d/gozxing
+QRDECODE_GO_VERSION=v0.1.1

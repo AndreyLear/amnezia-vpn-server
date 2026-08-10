@@ -229,6 +229,7 @@ func (a *app) serveHTTP(ctx context.Context, cfg web.Config) int {
 	}
 	defer handle.Close()
 	cfg.Logger = log.New(a.stderr, "panel serve: ", log.LstdFlags)
+	cfg.DB = handle
 	server, err := web.New(cfg)
 	if err != nil {
 		return a.fatal(opServe, err)

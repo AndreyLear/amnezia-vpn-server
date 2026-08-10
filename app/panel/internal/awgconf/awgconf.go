@@ -341,9 +341,12 @@ func validKey(s string) bool {
 	return len(raw) == keyLen
 }
 
-// Render produces the deterministic awg0.conf text: precisely the [Interface]
-// section, one blank line, then one [Peer] section per client in order.
-// A nil pointer or empty string in Params suppresses that key line.
+// Render produces the deterministic awg0.conf text: precisely the
+// [Interface] section (section header included — required by the real
+// amneziawg-tools parser, src/config.c rejects keys outside a section
+// with "Line unrecognized"), one blank line, then one [Peer] section
+// per client in order. A nil pointer or empty string in Params
+// suppresses that key line.
 func Render(server ServerConfig, peers []PeerConfig) string {
 	var b strings.Builder
 	line := func(key, val string) {
@@ -352,6 +355,7 @@ func Render(server ServerConfig, peers []PeerConfig) string {
 		b.WriteString(val)
 		b.WriteByte('\n')
 	}
+	b.WriteString("[Interface]\n")
 	line("PrivateKey", server.PrivateKey)
 	line("Address", server.Address)
 	line("ListenPort", strconv.FormatUint(uint64(server.ListenPort), 10))

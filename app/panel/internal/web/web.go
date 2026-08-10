@@ -1,9 +1,11 @@
 // Package web implements the M6 panel HTTP layer
 // (M6_AUDIT.md §2): server-side html/template pages, PRG redirects,
-// generic error pages and base security/timeout hardening. M6.1 scope
-// is the foundation only: routing, GET / placeholder page, graceful
-// shutdown. Client CRUD (M6.3), reconciliation (M6.2), config
-// download and QR (M6.5) are not part of this file yet.
+// generic error pages and base security/timeout hardening. M6.2 adds
+// the client-card dashboard fed by the SQLite ↔ status.json
+// reconciliation (reconcile.go); M6.3 adds the client mutation
+// handlers (mutations.go) with the mutation→awg0.conf regenerate
+// mutex; M6.5 adds the config download and QR endpoints
+// (ondemand.go).
 //
 // Security invariants (M6_AUDIT.md §5):
 //   - errors are always generic — never echo request input, file
@@ -11,11 +13,13 @@
 //   - templates are html/template with autoscape; raw (template.HTML)
 //     output is never used;
 //   - secrets never enter template data: the template data types in
-//     this package have no key/credential fields.
+//     this package (indexData, ClientCard, error pages) have no
+//     key/credential fields.
 package web
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -24,14 +28,27 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
 // DefaultAddr is the default listen address of `panel serve`
 // (M6_AUDIT.md §2.2 proposal; the audit Q2 decision defers the compose
 // ports mapping to M6.6).
 const DefaultAddr = "0.0.0.0:8787"
+
+// defaultConfPath mirrors cli.configPath(): every mutation
+// regenerates config/awg0.conf at this location.
+func defaultConfPath() string {
+	if p := os.Getenv("AMNEZIA_CONFIG_PATH"); p != "" {
+		return p
+	}
+	return "/config/awg0.conf"
+}
 
 // MaxBodyBytes caps request bodies. The full client configuration is
 // generated server-side (never uploaded), so a small limit is safe.
@@ -44,6 +61,17 @@ const DefaultShutdownTimeout = 10 * time.Second
 type Config struct {
 	// Addr is the listen address ("host:port").
 	Addr string
+	// DB is the panel's SQLite handle: the only service that
+	// reads/writes the database (docs/TECHNICAL_SPEC_v2.0.md §2). The
+	// caller (cli serve) owns closing it. Required.
+	DB *sql.DB
+	// StatusPath is the location of status/status.json; empty selects
+	// status.Path() (AMNEZIA_STATUS_PATH). The panel only reads it.
+	StatusPath string
+	// ConfPath is the location of config/awg0.conf regenerated after
+	// every mutation; empty selects the AMNEZIA_CONFIG_PATH default
+	// (parity with the cli).
+	ConfPath string
 	// Logger receives startup/shutdown diagnostics and internal errors;
 	// request-level logs are not emitted (the panel shows runtime state,
 	// keep noise low). Never contains key material by construction.
@@ -70,11 +98,19 @@ type Server struct {
 	cfg Config
 	mux *http.ServeMux
 	tpl *template.Template
+	// mutex serializes the mutation → regenerate chains (M6_AUDIT.md
+	// §4.10): the SQLite write is serialized by the database itself,
+	// but the awg0.conf regeneration must not interleave with concurrent
+	// requests. Reads (dashboard) stay lock-free.
+	mutex sync.Mutex
 }
 
 // New validates the config and builds the route table. Listen/serve
 // happens in ListenAndServe.
 func New(cfg Config) (*Server, error) {
+	if cfg.DB == nil {
+		return nil, errors.New("web: nil database handle")
+	}
 	if cfg.Addr == "" {
 		return nil, errors.New("web: empty listen address")
 	}
@@ -84,6 +120,12 @@ func New(cfg Config) (*Server, error) {
 	}
 	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
 		return nil, fmt.Errorf("web: invalid listen port %q", port)
+	}
+	if cfg.StatusPath == "" {
+		cfg.StatusPath = status.Path()
+	}
+	if cfg.ConfPath == "" {
+		cfg.ConfPath = defaultConfPath()
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(io.Discard, "", 0)
@@ -96,7 +138,15 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("web: parse templates: %w", err)
 	}
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl}
-	s.mux.HandleFunc("GET /", s.index)
+	s.mux.HandleFunc("GET /", s.dashboard)
+	s.mux.HandleFunc("POST /clients/new", s.clientNew)
+	s.mux.HandleFunc("POST /clients/{id}/enable", s.clientSetEnabled(true))
+	s.mux.HandleFunc("POST /clients/{id}/disable", s.clientSetEnabled(false))
+	s.mux.HandleFunc("POST /clients/{id}/delete", s.clientDelete)
+	s.mux.HandleFunc("POST /clients/{id}/rename", s.clientRename)
+	s.mux.HandleFunc("POST /clients/{id}/expiry", s.clientExpiry)
+	s.mux.HandleFunc("GET /clients/{id}/config", s.clientConfigDownload)
+	s.mux.HandleFunc("GET /clients/{id}/qr", s.clientQR)
 	s.mux.HandleFunc("/", s.notFound)
 	return s, nil
 }
@@ -187,26 +237,16 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// bodyLimit enforces MaxBodyBytes on request bodies: the limit is
-// applied via http.MaxBytesReader and checked eagerly for POST/PUT/
-// PATCH, which are rejected with 413 before routing when over the cap.
-// M6.1 has no body-reading routes; when M6.3 adds form handlers this
-// middleware switches to wrap-only so handlers read the limited body.
+// bodyLimit wraps request bodies with http.MaxBytesReader: form
+// handlers (M6.3) parse the limited body and answer 413 when the limit
+// is exceeded (http.MaxBytesError). GET bodies are not read.
 func (s *Server) bodyLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch:
-			r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
-			if _, err := io.Copy(io.Discard, r.Body); err != nil {
-				var mbe *http.MaxBytesError
-				if errors.As(err, &mbe) {
-					s.errorPage(w, http.StatusRequestEntityTooLarge)
-					return
-				}
-				s.errorPage(w, http.StatusBadRequest)
-				return
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 			}
-			r.Body = http.NoBody
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -214,21 +254,45 @@ func (s *Server) bodyLimit(next http.Handler) http.Handler {
 
 // ---- handlers and rendering ----
 
-// indexData is the GET / payload. No key or credential field exists in
-// this type (M6_AUDIT.md §2.1.8): rendering can never emit secrets.
-type indexData struct {
+// dashboardData is the GET / payload. No key or credential field
+// exists in this type or in ClientCard (M6_AUDIT.md §2.1.8):
+// rendering can never emit secrets.
+type dashboardData struct {
+	Reconciliation
 	Flash string
 }
 
-// index renders the placeholder dashboard. The full client-card stack
-// lands in M6.2.
-func (s *Server) index(w http.ResponseWriter, r *http.Request) {
+// Interface-state predicates keep magic numbers out of the templates.
+func (d dashboardData) Up() bool   { return d.Interface == IfaceUp }
+func (d dashboardData) NA() bool   { return d.Interface == IfaceNA }
+func (d dashboardData) Down() bool { return d.Interface == IfaceDown }
+func (d dashboardData) Err() bool  { return d.Interface == IfaceError }
+
+// GeneratedText renders the snapshot time; only meaningful when Up.
+func (d dashboardData) GeneratedText() string {
+	if !d.Up() {
+		return ""
+	}
+	return d.GeneratedAtUTC.UTC().Format("2006-01-02 15:04:05 UTC")
+}
+
+// dashboard renders the client-card stack (M6.2): clients from SQLite
+// reconciled with the runtime status. The mutation forms point at the
+// M6.3 routes but their handlers land in M6.3.
+func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		s.notFound(w, r)
 		return
 	}
-	s.renderPage(w, http.StatusOK, indexData{
-		Flash: r.URL.Query().Get("msg"),
+	rec, err := Load(s.cfg.DB, s.cfg.StatusPath, time.Now())
+	if err != nil {
+		s.cfg.Logger.Printf("dashboard: %v", err)
+		s.errorPage(w, http.StatusInternalServerError)
+		return
+	}
+	s.renderPage(w, http.StatusOK, dashboardData{
+		Reconciliation: rec,
+		Flash:          r.URL.Query().Get("msg"),
 	})
 }
 
