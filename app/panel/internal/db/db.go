@@ -4,11 +4,15 @@ package db
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/keys"
 	_ "modernc.org/sqlite"
 )
 
@@ -56,12 +60,26 @@ var schemaStatements = []string{
 }
 
 // Open creates a new SQLite database file (including parent directories)
-// and returns a handle. It does not touch the schema.
+// and returns a handle. It does not touch the schema. The database file
+// holds private keys: it is created/opened with mode 0600 (M4 contract,
+// docs/TECHNICAL_SPEC_v2.0.md §6). Parent directory permissions are not
+// touched.
 func Open(path string) (*sql.DB, error) {
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("db: create directory %s: %w", dir, err)
 		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("db: create %s: %w", path, err)
+	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("db: chmod %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("db: close %s: %w", path, err)
 	}
 	handle, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -157,19 +175,25 @@ func ServerRow(handle *sql.DB) (*ServerRecord, error) {
 }
 
 // ClientRow is a WireGuard client record relevant to awg0.conf generation
-// (§3, table clients; only public parts).
+// (§3, table clients; only public parts; expires_at is not secret).
 type ClientRow struct {
 	ID        int64
 	PublicKey string
 	// PresharedKey is empty when clients.preshared_key is NULL.
 	PresharedKey string
 	Address      string
+	// ExpiresAt is empty when clients.expires_at is NULL (no expiry).
+	ExpiresAt string
 }
 
-// ClientsForConfig returns enabled clients, ordered by id.
+// ClientsForConfig returns the clients active for the server AWG config,
+// ordered by id: enabled = 1 AND not expired (M4 contract: expires_at
+// NULL or in the future). Expiry is evaluated in Go so any RFC3339
+// offset is handled; a malformed stored value is treated as expired
+// (fail-closed).
 func ClientsForConfig(handle *sql.DB) ([]ClientRow, error) {
 	rows, err := handle.Query(
-		`SELECT id, public_key, preshared_key, address
+		`SELECT id, public_key, preshared_key, address, expires_at
 		   FROM clients WHERE enabled = 1 ORDER BY id`,
 	)
 	if err != nil {
@@ -177,20 +201,429 @@ func ClientsForConfig(handle *sql.DB) ([]ClientRow, error) {
 	}
 	defer rows.Close()
 
+	now := time.Now().UTC()
 	var clients []ClientRow
 	for rows.Next() {
 		var (
 			c   ClientRow
 			psk sql.NullString
+			exp sql.NullString
 		)
-		if err := rows.Scan(&c.ID, &c.PublicKey, &psk, &c.Address); err != nil {
+		if err := rows.Scan(&c.ID, &c.PublicKey, &psk, &c.Address, &exp); err != nil {
 			return nil, fmt.Errorf("db: scan client: %w", err)
 		}
 		c.PresharedKey = psk.String
+		c.ExpiresAt = exp.String
+		if c.Expired(now) {
+			continue
+		}
 		clients = append(clients, c)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("db: iterate clients: %w", err)
 	}
 	return clients, nil
+}
+
+// Expired reports whether the record is past expires_at. A client without
+// expires_at never expires; a malformed value is treated as expired
+// (fail-closed).
+func (c ClientRow) Expired(now time.Time) bool {
+	return clientExpired(c.ExpiresAt, now)
+}
+
+// stamp returns the current UTC time in the RFC3339 format used for
+// created_at/updated_at/expires_at.
+func stamp() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+// ErrServerExists reports that a server row (id = 1) already exists,
+// so bootstrap must not overwrite it (M4 contract).
+var ErrServerExists = errors.New("db: server row (id=1) already exists")
+
+// ErrClientNotFound reports that no client row with the given id exists.
+// Unknown ids are errors, never silent no-ops (M4 contract).
+var ErrClientNotFound = errors.New("db: client not found")
+
+// ErrNoFreeAddress reports that the server network has no free host
+// address left for a new client (M4 contract, IPv4 only).
+var ErrNoFreeAddress = errors.New("db: no free client address in the server network")
+
+// CreateServer bootstraps the single server row (id = 1) with the given
+// X25519 key pair and address, and stores the client-config endpoint
+// under the settings key "endpoint". Both the row and the setting are
+// written in one transaction. It fails with ErrServerExists when the row
+// is already present. address must be an IPv4 CIDR (M4 contract: the
+// client address allocator is IPv4-only); listenPort must fit uint16.
+func CreateServer(handle *sql.DB, privateKey, publicKey, address string, listenPort int64, dns, awgParams, endpoint string) error {
+	if !keys.ValidKey(privateKey) {
+		return fmt.Errorf("db: invalid server private key: not a 32-byte base64 key")
+	}
+	if !keys.ValidKey(publicKey) {
+		return fmt.Errorf("db: invalid server public key: not a 32-byte base64 key")
+	}
+	ip, _, err := net.ParseCIDR(address)
+	if err != nil {
+		return fmt.Errorf("db: invalid server address %q: not a CIDR network", address)
+	}
+	if ip.To4() == nil {
+		return fmt.Errorf("db: server address %q is not IPv4 (IPv6 is not supported in M4)", address)
+	}
+	if listenPort < 0 || listenPort > 65535 {
+		return fmt.Errorf("db: invalid listen port %d: must be an unsigned 16-bit value", listenPort)
+	}
+
+	tx, err := handle.Begin()
+	if err != nil {
+		return fmt.Errorf("db: begin server bootstrap: %w", err)
+	}
+	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM server WHERE id = 1`).Scan(&exists); err != nil {
+		return fmt.Errorf("db: check server row: %w", err)
+	}
+	if exists > 0 {
+		return ErrServerExists
+	}
+
+	now := stamp()
+	if _, err := tx.Exec(
+		`INSERT INTO server (id, private_key, public_key, address, listen_port, dns, awg_params, created_at, updated_at)
+		 VALUES (1, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
+		privateKey, publicKey, address, listenPort, dns, awgParams, now, now,
+	); err != nil {
+		return fmt.Errorf("db: insert server row: %w", err)
+	}
+	if endpoint != "" {
+		if err := setSettingTx(tx, "endpoint", endpoint); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit server bootstrap: %w", err)
+	}
+	return nil
+}
+
+// GetSetting returns the value of a settings key. ok is false when the
+// key is absent.
+func GetSetting(handle *sql.DB, key string) (value string, ok bool, err error) {
+	var v string
+	err = handle.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("db: read setting %q: %w", key, err)
+	}
+	return v, true, nil
+}
+
+// SetSetting upserts a settings key.
+func SetSetting(handle *sql.DB, key, value string) error {
+	tx, err := handle.Begin()
+	if err != nil {
+		return fmt.Errorf("db: begin setting write: %w", err)
+	}
+	defer tx.Rollback()
+	if err := setSettingTx(tx, key, value); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit setting write: %w", err)
+	}
+	return nil
+}
+
+func setSettingTx(tx *sql.Tx, key, value string) error {
+	if _, err := tx.Exec(
+		`INSERT INTO settings (key, value) VALUES (?, ?)
+		 ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+		key, value,
+	); err != nil {
+		return fmt.Errorf("db: write setting %q: %w", key, err)
+	}
+	return nil
+}
+
+// ClientRecord is the full client row (§3, table clients), including the
+// private key and preshared key, which are never printed by list/show or
+// logs.
+type ClientRecord struct {
+	ID           int64
+	Name         string
+	PrivateKey   string
+	PublicKey    string
+	PresharedKey string // empty when clients.preshared_key is NULL
+	Address      string
+	Enabled      bool
+	CreatedAt    string
+	UpdatedAt    string
+	ExpiresAt    string // empty when clients.expires_at is NULL
+}
+
+// Expired reports whether the record is past expires_at (see ClientRow.
+// Expired).
+func (c ClientRecord) Expired(now time.Time) bool {
+	return clientExpired(c.ExpiresAt, now)
+}
+
+func clientExpired(expiresAt string, now time.Time) bool {
+	if expiresAt == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil {
+		return true // fail-closed: malformed stored expiry is treated as expired
+	}
+	return !t.After(now)
+}
+
+// NewClient carries the key material and identity of a client to be
+// created. Keys are generated by internal/keys before the call; this
+// package never generates or re-derives them (MVP §11: public keys are
+// stored explicitly).
+type NewClient struct {
+	Name         string
+	PrivateKey   string
+	PublicKey    string
+	PresharedKey string // optional
+}
+
+// CreateClient allocates the first free /32 host address in the server
+// network (server address + 1, skipping used addresses and the network/
+// broadcast boundaries) and inserts the client within one transaction.
+// It fails with ErrNoFreeAddress when the network is exhausted and
+// returns the created record on success.
+func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRecord, error) {
+	if !keys.ValidKey(nc.PrivateKey) {
+		return nil, fmt.Errorf("db: invalid client private key: not a 32-byte base64 key")
+	}
+	if !keys.ValidKey(nc.PublicKey) {
+		return nil, fmt.Errorf("db: invalid client public key: not a 32-byte base64 key")
+	}
+	if nc.PresharedKey != "" && !keys.ValidKey(nc.PresharedKey) {
+		return nil, fmt.Errorf("db: invalid preshared key: not a 32-byte base64 key")
+	}
+	tx, err := handle.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("db: begin client create: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT address FROM clients`)
+	if err != nil {
+		return nil, fmt.Errorf("db: query used addresses: %w", err)
+	}
+	var used []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("db: scan used address: %w", err)
+		}
+		used = append(used, a)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("db: iterate used addresses: %w", err)
+	}
+	rows.Close()
+
+	address, err := allocClientAddress(serverAddress, used)
+	if err != nil {
+		return nil, err
+	}
+
+	now := stamp()
+	res, err := tx.Exec(
+		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at)
+		 VALUES (?, ?, ?, NULLIF(?, ''), ?, 1, ?, ?)`,
+		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("db: insert client: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("db: last insert id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("db: commit client create: %w", err)
+	}
+	return &ClientRecord{
+		ID:           id,
+		Name:         nc.Name,
+		PrivateKey:   nc.PrivateKey,
+		PublicKey:    nc.PublicKey,
+		PresharedKey: nc.PresharedKey,
+		Address:      address,
+		Enabled:      true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}, nil
+}
+
+// allocClientAddress picks the first free host in the server CIDR network
+// starting at server address + 1. Already assigned client addresses are
+// skipped; the network address and the broadcast address are never
+// handed out. The result carries the /32 suffix.
+func allocClientAddress(serverCIDR string, used []string) (string, error) {
+	ip, ipnet, err := net.ParseCIDR(serverCIDR)
+	if err != nil {
+		return "", fmt.Errorf("db: server address %q: not a CIDR network", serverCIDR)
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return "", fmt.Errorf("db: server address %q is not IPv4 (IPv6 is not supported in M4)", serverCIDR)
+	}
+	if len(ipnet.Mask) != net.IPv4len {
+		return "", fmt.Errorf("db: server address %q has a non-IPv4 mask", serverCIDR)
+	}
+
+	mask := binary.BigEndian.Uint32(ipnet.Mask)
+	start := binary.BigEndian.Uint32(ip4)
+	networkStart := start & mask
+	broadcast := networkStart | ^mask
+
+	usedSet := make(map[uint32]bool, len(used))
+	for _, addr := range used {
+		uip, _, err := net.ParseCIDR(addr)
+		if err != nil {
+			continue
+		}
+		u4 := uip.To4()
+		if u4 != nil {
+			usedSet[binary.BigEndian.Uint32(u4)] = true
+		}
+	}
+
+	for cand := start + 1; cand < broadcast; cand++ {
+		if usedSet[cand] {
+			continue
+		}
+		return fmt.Sprintf("%d.%d.%d.%d/32", byte(cand>>24), byte(cand>>16), byte(cand>>8), byte(cand)), nil
+	}
+	return "", ErrNoFreeAddress
+}
+
+// ClientByID loads the full client record. A missing row is reported as
+// ErrClientNotFound.
+func ClientByID(handle *sql.DB, id int64) (*ClientRecord, error) {
+	row := handle.QueryRow(
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at
+		   FROM clients WHERE id = ?`, id,
+	)
+	c, err := scanClient(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrClientNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: read client %d: %w", id, err)
+	}
+	return c, nil
+}
+
+// ClientsAll loads all client records, ordered by id.
+func ClientsAll(handle *sql.DB) ([]ClientRecord, error) {
+	rows, err := handle.Query(
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at
+		   FROM clients ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("db: query clients: %w", err)
+	}
+	defer rows.Close()
+
+	var clients []ClientRecord
+	for rows.Next() {
+		c, err := scanClient(rows)
+		if err != nil {
+			return nil, fmt.Errorf("db: scan client: %w", err)
+		}
+		clients = append(clients, *c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: iterate clients: %w", err)
+	}
+	return clients, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanClient(row rowScanner) (*ClientRecord, error) {
+	var (
+		c         ClientRecord
+		psk       sql.NullString
+		enabled   int
+		expiresAt sql.NullString
+	)
+	if err := row.Scan(&c.ID, &c.Name, &c.PrivateKey, &c.PublicKey, &psk,
+		&c.Address, &enabled, &c.CreatedAt, &c.UpdatedAt, &expiresAt); err != nil {
+		return nil, err
+	}
+	c.PresharedKey = psk.String
+	c.Enabled = enabled == 1
+	c.ExpiresAt = expiresAt.String
+	return &c, nil
+}
+
+// UpdateClientName renames a client. ErrClientNotFound when the id is
+// unknown.
+func UpdateClientName(handle *sql.DB, id int64, name string) error {
+	return mutateClient(handle, id,
+		`UPDATE clients SET name = ?, updated_at = ? WHERE id = ?`,
+		name, stamp(), id)
+}
+
+// SetClientEnabled sets the enabled flag. ErrClientNotFound when the id
+// is unknown. expired_at is never touched (M4 contract).
+func SetClientEnabled(handle *sql.DB, id int64, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	return mutateClient(handle, id,
+		`UPDATE clients SET enabled = ?, updated_at = ? WHERE id = ?`,
+		v, stamp(), id)
+}
+
+// SetClientExpiry sets or clears expires_at (expiresAt == "" clears it).
+// ErrClientNotFound when the id is unknown.
+func SetClientExpiry(handle *sql.DB, id int64, expiresAt string) error {
+	if expiresAt == "" {
+		return mutateClient(handle, id,
+			`UPDATE clients SET expires_at = NULL, updated_at = ? WHERE id = ?`,
+			stamp(), id)
+	}
+	return mutateClient(handle, id,
+		`UPDATE clients SET expires_at = ?, updated_at = ? WHERE id = ?`,
+		expiresAt, stamp(), id)
+}
+
+// DeleteClient removes a client row. ErrClientNotFound when the id is
+// unknown; delete is never a silent no-op (M4 contract).
+func DeleteClient(handle *sql.DB, id int64) error {
+	return mutateClient(handle, id,
+		`DELETE FROM clients WHERE id = ?`,
+		id)
+}
+
+func mutateClient(handle *sql.DB, id int64, query string, args ...any) error {
+	res, err := handle.Exec(query, args...)
+	if err != nil {
+		return fmt.Errorf("db: mutate client %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("db: rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrClientNotFound
+	}
+	return nil
 }

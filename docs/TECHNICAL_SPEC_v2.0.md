@@ -213,6 +213,7 @@ The panel is one Go binary with subcommands:
 ```text
 /app/panel init
 /app/panel serve
+/app/panel server init
 /app/panel client ...
 /app/panel backup ...
 /app/panel restore ...
@@ -353,6 +354,41 @@ M9  Hardening
 - `modernc.org/sqlite` pins stay: sqlite `1.54.0`, libc `1.74.1`
   (versions.lock); no new modules.
 - No Docker socket, inter-container HTTP, or new volumes are introduced.
+
+### M4 criteria
+
+- `panel server init <address> <listen-port> --endpoint <host:port>
+  [--dns ...] [--awg-params ...]` bootstraps the server row (id = 1) with a
+  fresh X25519 key pair and stores the endpoint under the `settings` key
+  `endpoint`. Re-running `server init` when the row already exists exits 1.
+  Server/listen_port editing is not part of M4: `awg syncconf` (M3.2) does
+  not apply `ListenPort` on hot reload, so the port is changeable only via a
+  full restart.
+- Client lifecycle via the CLI (`panel client ...`):
+  `add <name> [--expires-at RFC3339]`, `list`, `show <id>`,
+  `enable <id>`, `disable <id>`, `rename <id> <name>`,
+  `set-expiry <id> <RFC3339|none>`, `delete <id>`, `config <id>`.
+  A missing client id always exits 1 with a diagnostic; silent no-op is
+  forbidden. `client add` allocates the address as the first free host in
+  the server `address` network, starting at server address + 1, stored as
+  `/32`; allocation and the INSERT happen in one SQLite transaction.
+  IPv4 only in M4. No free address → exit 1.
+- `expires_at` semantics: stored as RFC3339 text; `enabled` is never
+  mutated automatically; a client is active for the server AWG config
+  only when `enabled = 1 AND (expires_at IS NULL OR expires_at > now)`.
+  Expired clients are excluded from `awg0.conf`, are not deleted
+  automatically, and are shown as expired in `client list/show`.
+- `client config <id>` prints the client configuration on demand:
+  full IPv4 tunnel (`AllowedIPs = 0.0.0.0/0`), `Endpoint` from the
+  `settings` key `endpoint` (required; missing → exit 1), server
+  `public_key`, client `private_key`, `PresharedKey` when present, and the
+  server's AWG J/S/H/I parameters mirrored. DNS is mirrored from
+  `server.dns` when set.
+- Key pairs and preshared keys are generated with the Go standard library
+  (`crypto/ecdh`); no new modules. `public_key` remains stored explicitly
+  (§11); private keys are never printed by `list/show` or logs.
+- The SQLite database file is chmod 0600 after creation/open.
+- No QR in M4 (scheduled for M6).
 
 ## 11. MVP exclusions
 

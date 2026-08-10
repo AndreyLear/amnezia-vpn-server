@@ -38,6 +38,11 @@ M3.2.
 - owns `awg0.conf`
 - generates client configurations on demand
 - reads `status.json`
+- since M4: CLI client management — `panel server init` bootstraps the
+  server row (keys + endpoint in `settings`), `panel client ...` implements
+  the client lifecycle (add/list/show/enable/disable/rename/set-expiry/
+  delete/config); every mutation regenerates `config/awg0.conf` atomically,
+  which the M3.2 hot reload applies via `awg syncconf`
 
 ### awg
 
