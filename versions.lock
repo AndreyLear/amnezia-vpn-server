@@ -21,9 +21,16 @@ SQLITE_DRIVER_VERSION=1.54.0
 # SQLite transitive dependencies
 MODERNC_LIBC_VERSION=1.74.1
 
-# Backup / compression
+# Backup / compression (CLI tools)
 AGE_VERSION=1.3.1
 ZSTD_VERSION=1.5.7
+# Backup pipeline (M8.2): Go libraries, pinned (Q1)
+AGE_GO_MODULE=filippo.io/age
+AGE_GO_VERSION=v1.3.1
+AGE_GO_TRANSITIVE=filippo.io/hpke
+AGE_GO_TRANSITIVE_VERSION=v0.4.0
+ZSTD_GO_MODULE=github.com/klauspost/compress
+ZSTD_GO_VERSION=v1.19.2
 
 # Panel: QR encoder (M6.5 on-demand QR), pinned
 QRCODE_GO=github.com/skip2/go-qrcode

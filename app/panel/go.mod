@@ -3,6 +3,8 @@ module github.com/amnezia-vpn/amnezia-vpn-server
 go 1.25.0
 
 require (
+	filippo.io/age v1.3.1
+	github.com/klauspost/compress v1.19.2
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.54.0
@@ -10,6 +12,7 @@ require (
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
