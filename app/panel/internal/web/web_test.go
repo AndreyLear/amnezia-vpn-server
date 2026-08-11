@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/keys"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
@@ -30,7 +31,13 @@ const webTestServerCIDR = "10.8.0.1/24"
 const webTestEndpoint = "vpn.example.com:51820"
 
 // fixture wires a real SQLite database, a status.json location and an
-// http.Server under test.
+// http.Server under test. Every request through f.get/f.serve carries a
+// valid admin session (M7.4: the whole panel is protected by
+// RequireAuth); f.post additionally carries the session's real CSRF
+// token (M7.6: every POST is CSRF-protected — the token comes from the
+// actual server-side session, the middleware is never bypassed).
+// Unauthorized-request tests build requests and call
+// f.server.ServeHTTP directly or clear the cookie.
 type fixture struct {
 	t          *testing.T
 	h          *sql.DB
@@ -38,6 +45,10 @@ type fixture struct {
 	statusPath string
 	confPath   string
 	server     *Server
+	sessions   *auth.SessionStore
+	sid        string
+	csrf       string
+	username   string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -47,6 +58,12 @@ func newFixture(t *testing.T) *fixture {
 // newFixtureWithLogger builds the standard fixture with a configurable
 // log sink (io.Discard by default; a buffer for log-leak assertions).
 func newFixtureWithLogger(t *testing.T, logSink io.Writer) *fixture {
+	return newFixtureWithStore(t, logSink, 24*time.Hour)
+}
+
+// newFixtureWithStore is the shared fixture builder; ttl controls the
+// session store lifetime (short values for expiry tests).
+func newFixtureWithStore(t *testing.T, logSink io.Writer, ttl time.Duration) *fixture {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "amnezia.sqlite")
 	h, err := db.Open(dbPath)
@@ -66,9 +83,16 @@ func newFixtureWithLogger(t *testing.T, logSink io.Writer) *fixture {
 	}
 	statusPath := filepath.Join(t.TempDir(), "status.json")
 	confPath := filepath.Join(t.TempDir(), "awg0.conf")
+	const testUsername = "admin"
+	sessions := auth.NewSessionStore(ttl)
+	sess, err := sessions.Create(testUsername)
+	if err != nil {
+		t.Fatalf("session create: %v", err)
+	}
 	s, err := New(Config{
 		Addr:       "127.0.0.1:0",
 		DB:         h,
+		Sessions:   sessions,
 		StatusPath: statusPath,
 		ConfPath:   confPath,
 		Logger:     log.New(logSink, "", 0),
@@ -76,7 +100,11 @@ func newFixtureWithLogger(t *testing.T, logSink io.Writer) *fixture {
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
 	}
-	return &fixture{t: t, h: h, dbPath: dbPath, statusPath: statusPath, confPath: confPath, server: s}
+	return &fixture{
+		t: t, h: h, dbPath: dbPath, statusPath: statusPath,
+		confPath: confPath, server: s, sessions: sessions,
+		sid: sess.ID, csrf: sess.CSRFToken, username: testUsername,
+	}
 }
 
 // files returns the set of every file under the fixture's three
@@ -146,8 +174,17 @@ func (f *fixture) get(path string) *httptest.ResponseRecorder {
 	f.t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, req)
+	f.serve(rec, req)
 	return rec
+}
+
+// serve runs an authenticated request against the fixture's server: it
+// attaches the admin session cookie before dispatching. Session-free
+// tests must build their own request and call f.server.ServeHTTP.
+func (f *fixture) serve(rec *httptest.ResponseRecorder, req *http.Request) {
+	f.t.Helper()
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
+	f.server.ServeHTTP(rec, req)
 }
 
 func hs(age time.Duration) *time.Time {
@@ -407,7 +444,7 @@ func TestPanicRecoveryGeneric500(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, req)
+	f.serve(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("panic route: code = %d, want 500", rec.Code)
 	}
@@ -453,7 +490,7 @@ func TestBodyLimitRejectsOversizedPOST(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/clients/new", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, req)
+	f.serve(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized POST: code = %d, want 413", rec.Code)
 	}
@@ -463,7 +500,7 @@ func TestBodyLimitSmallPOSTRoutesNormally(t *testing.T) {
 	f := newFixture(t)
 	req := httptest.NewRequest(http.MethodPost, "/nope", strings.NewReader("name=x"))
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, req)
+	f.serve(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("small POST to unwired route: code = %d, want 404", rec.Code)
 	}
@@ -476,7 +513,7 @@ func TestRedirect303(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodPost, "/prg", nil)
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, req)
+	f.serve(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("PRG redirect: code = %d, want 303", rec.Code)
 	}

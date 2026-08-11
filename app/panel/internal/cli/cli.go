@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/web"
@@ -40,6 +41,7 @@ commands:
   client set-expiry <id> <RFC3339|none>
   client delete <id>
   client config <id>
+  auth add-user <username> (--password-stdin | --password-env <ENV>)
 `
 
 // serveNotImplemented kept the M2/M6 contract; M6.1 replaces it with a
@@ -47,8 +49,15 @@ commands:
 
 // Run dispatches a panel command line (without argv[0]) and returns the
 // process exit code: 0 success, 1 runtime/operational error, 2 usage.
+// stdin is wired to os.Stdin; tests use the internal `run` variant to
+// inject a reader (auth add-user --password-stdin).
 func Run(args []string, stdout, stderr io.Writer) int {
-	a := &app{stdout: stdout, stderr: stderr}
+	return run(args, os.Stdin, stdout, stderr)
+}
+
+// run is Run with an injectable stdin.
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	a := &app{stdin: stdin, stdout: stdout, stderr: stderr}
 	if len(args) == 0 {
 		a.usage()
 		return 2
@@ -62,6 +71,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return a.cmdServer(args[1:])
 	case "client":
 		return a.cmdClient(args[1:])
+	case "auth":
+		return a.cmdAuth(args[1:])
 	case "status":
 		return a.cmdStatus(args[1:])
 	default:
@@ -71,6 +82,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 type app struct {
+	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
 }
@@ -101,7 +113,8 @@ func (a *app) usage() {
 }
 
 // parsedArgs is the output of the manual token scan: positional
-// arguments in order plus the declared --flag values.
+// arguments in order plus the declared --flag values. Boolean flags
+// (declared with takesValue=false) are recorded with an empty value.
 type parsedArgs struct {
 	positional []string
 	flags      map[string]string
@@ -111,21 +124,30 @@ type parsedArgs struct {
 // allowed (unknown flags and missing values are usage errors), "-x" and
 // other dash tokens are rejected, everything else is positional. The
 // stdlib flag package is deliberately not used: flags may follow
-// positional arguments ("client add <name> --expires-at ...").
+// positional arguments ("client add <name> --expires-at ...") and
+// boolean flags may appear anywhere ("auth add-user <name>
+// --password-stdin"). Map semantics: allowed[name] == true means the
+// flag consumes the following token as its value; false means a
+// boolean flag that consumes nothing.
 func parseArgs(tokens []string, allowed map[string]bool) (*parsedArgs, error) {
 	out := &parsedArgs{flags: map[string]string{}}
 	for i := 0; i < len(tokens); i++ {
 		t := tokens[i]
 		if strings.HasPrefix(t, "--") {
 			name := t[2:]
-			if !allowed[name] {
+			takesValue, ok := allowed[name]
+			if !ok {
 				return nil, fmt.Errorf("unknown flag --%s", name)
 			}
-			if i+1 >= len(tokens) {
-				return nil, fmt.Errorf("flag --%s requires a value", name)
+			if takesValue {
+				if i+1 >= len(tokens) {
+					return nil, fmt.Errorf("flag --%s requires a value", name)
+				}
+				out.flags[name] = tokens[i+1]
+				i++
+			} else {
+				out.flags[name] = ""
 			}
-			out.flags[name] = tokens[i+1]
-			i++
 			continue
 		}
 		if strings.HasPrefix(t, "-") {
@@ -230,6 +252,9 @@ func (a *app) serveHTTP(ctx context.Context, cfg web.Config) int {
 	defer handle.Close()
 	cfg.Logger = log.New(a.stderr, "panel serve: ", log.LstdFlags)
 	cfg.DB = handle
+	// M7.4: one in-memory session store per serve process; restarting
+	// the panel discards every session (M7.3 contract).
+	cfg.Sessions = auth.NewSessionStore(auth.SessionTTL)
 	server, err := web.New(cfg)
 	if err != nil {
 		return a.fatal(opServe, err)

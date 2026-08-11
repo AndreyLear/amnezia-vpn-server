@@ -39,22 +39,22 @@ func freePort(t *testing.T) string {
 	return fmt.Sprintf("127.0.0.1:%d", ln.Addr().(*net.TCPAddr).Port)
 }
 
-// waitForGET polls the server until GET / answers 200 or the deadline
-// passes.
-func waitForGET(t *testing.T, addr string, timeout time.Duration) {
+// waitForServe polls the server until an HTTP response arrives or the
+// deadline passes. Since M7.4 the panel is auth-closed by default, so
+// an unauthenticated GET / answers 303 /login: any response counts as
+// "the server is up".
+func waitForServe(t *testing.T, addr string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		resp, err := http.Get("http://" + addr + "/")
 		if err == nil {
 			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return
-			}
+			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("GET http://%s/ did not return 200 within %v", addr, timeout)
+	t.Fatalf("GET http://%s/ answered nothing within %v", addr, timeout)
 }
 
 // serveFixture wires the test database through the environment and
@@ -91,7 +91,7 @@ func TestServeStartsAndAnswersGET(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- a.serveHTTP(ctx, web.Config{Addr: addr}) }()
 
-	waitForGET(t, addr, 5*time.Second)
+	waitForServe(t, addr, 5*time.Second)
 	cancel()
 	checkExit(t, done, errb, 0)
 
@@ -110,7 +110,7 @@ func TestServeGracefulSIGTERM(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- a.serveHTTP(ctx, web.Config{Addr: addr}) }()
 
-	waitForGET(t, addr, 5*time.Second)
+	waitForServe(t, addr, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatalf("kill self: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestServeGracefulSIGINT(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- a.serveHTTP(ctx, web.Config{Addr: addr}) }()
 
-	waitForGET(t, addr, 5*time.Second)
+	waitForServe(t, addr, 5*time.Second)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatalf("kill self: %v", err)
 	}
@@ -194,14 +194,26 @@ func TestServeHTTPSecretFreeAnd404(t *testing.T) {
 		}
 	}()
 
-	waitForGET(t, addr, 5*time.Second)
+	waitForServe(t, addr, 5*time.Second)
 
-	resp, err := http.Get("http://" + addr + "/?msg=" + sampleKeyMaterial)
+	// M7.4: an unauthenticated GET / is challenged with 303 /login, and
+	// the challenge must not echo query key material anywhere. The
+	// client must not follow redirects: the 303 is the assertion target.
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := noFollow.Get("http://" + addr + "/?msg=" + sampleKeyMaterial)
 	if err != nil {
 		t.Fatalf("GET /: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("GET / unauthenticated: status %d, want 303 /login", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "/login" {
+		t.Errorf("GET / unauthenticated: Location %q, want /login", loc)
+	}
 	if strings.Contains(string(body), sampleKeyMaterial) {
 		t.Errorf("GET / echoed query key material: %s", body)
 	}

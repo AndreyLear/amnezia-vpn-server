@@ -31,3 +31,7 @@ QRCODE_GO_VERSION=v0.0.0-20200617195104-da1b6568686e
 # Panel tests: QR decoder (payload == config verification), pinned
 QRDECODE_GO=github.com/makiuchi-d/gozxing
 QRDECODE_GO_VERSION=v0.1.1
+
+# Panel: Argon2id password hashing (M7 authentication), pinned
+XCRYPTO_GO=golang.org/x/crypto
+XCRYPTO_GO_VERSION=v0.54.0

@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
@@ -65,6 +66,10 @@ type Config struct {
 	// reads/writes the database (docs/TECHNICAL_SPEC_v2.0.md §2). The
 	// caller (cli serve) owns closing it. Required.
 	DB *sql.DB
+	// Sessions is the in-memory session store backing RequireAuth
+	// (M7.4). Required: without it the panel would have no way to
+	// authenticate any request.
+	Sessions *auth.SessionStore
 	// StatusPath is the location of status/status.json; empty selects
 	// status.Path() (AMNEZIA_STATUS_PATH). The panel only reads it.
 	StatusPath string
@@ -95,9 +100,10 @@ var templateFS embed.FS
 // construction; Handler wraps the mux (plus middlewares) and allows
 // tests to register extra routes before the first request.
 type Server struct {
-	cfg Config
-	mux *http.ServeMux
-	tpl *template.Template
+	cfg  Config
+	mux  *http.ServeMux
+	tpl  *template.Template
+	auth *auth.Auth
 	// mutex serializes the mutation → regenerate chains (M6_AUDIT.md
 	// §4.10): the SQLite write is serialized by the database itself,
 	// but the awg0.conf regeneration must not interleave with concurrent
@@ -110,6 +116,9 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.DB == nil {
 		return nil, errors.New("web: nil database handle")
+	}
+	if cfg.Sessions == nil {
+		return nil, errors.New("web: nil session store")
 	}
 	if cfg.Addr == "" {
 		return nil, errors.New("web: empty listen address")
@@ -137,16 +146,27 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("web: parse templates: %w", err)
 	}
-	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl}
-	s.mux.HandleFunc("GET /", s.dashboard)
-	s.mux.HandleFunc("POST /clients/new", s.clientNew)
-	s.mux.HandleFunc("POST /clients/{id}/enable", s.clientSetEnabled(true))
-	s.mux.HandleFunc("POST /clients/{id}/disable", s.clientSetEnabled(false))
-	s.mux.HandleFunc("POST /clients/{id}/delete", s.clientDelete)
-	s.mux.HandleFunc("POST /clients/{id}/rename", s.clientRename)
-	s.mux.HandleFunc("POST /clients/{id}/expiry", s.clientExpiry)
-	s.mux.HandleFunc("GET /clients/{id}/config", s.clientConfigDownload)
-	s.mux.HandleFunc("GET /clients/{id}/qr", s.clientQR)
+	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl, auth: auth.NewAuth(cfg.Sessions)}
+	// Route protection (M7.4/M7.6): every panel route runs behind
+	// RequireAuth; every state-changing POST additionally runs behind
+	// RequireCSRF (auth → csrf → handler). /login is the single public
+	// pair (GET form, POST submit — login.go) and is deliberately NOT
+	// CSRF-protected (M7.5 contract: login stays the CSRF exception,
+	// SameSite=Lax is the extra layer). "GET /{$}" is the exact-match
+	// root: unknown paths fall through to the public 404 catch-all
+	// instead of being swallowed by the "/" subtree.
+	s.mux.Handle("GET /{$}", s.auth.RequireAuth(http.HandlerFunc(s.dashboard)))
+	s.mux.Handle("POST /clients/new", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientNew))))
+	s.mux.Handle("POST /clients/{id}/enable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientSetEnabled(true)))))
+	s.mux.Handle("POST /clients/{id}/disable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientSetEnabled(false)))))
+	s.mux.Handle("POST /clients/{id}/delete", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientDelete))))
+	s.mux.Handle("POST /clients/{id}/rename", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientRename))))
+	s.mux.Handle("POST /clients/{id}/expiry", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientExpiry))))
+	s.mux.Handle("POST /logout", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.logout))))
+	s.mux.Handle("GET /clients/{id}/config", s.auth.RequireAuth(http.HandlerFunc(s.clientConfigDownload)))
+	s.mux.Handle("GET /clients/{id}/qr", s.auth.RequireAuth(http.HandlerFunc(s.clientQR)))
+	s.mux.HandleFunc("GET /login", s.loginPage)
+	s.mux.HandleFunc("POST /login", s.loginSubmit)
 	s.mux.HandleFunc("/", s.notFound)
 	return s, nil
 }
@@ -256,10 +276,14 @@ func (s *Server) bodyLimit(next http.Handler) http.Handler {
 
 // dashboardData is the GET / payload. No key or credential field
 // exists in this type or in ClientCard (M6_AUDIT.md §2.1.8):
-// rendering can never emit secrets.
+// rendering can never emit secrets. Username is the authenticated
+// principal from the session context (M7.5); CSRF is the session's
+// CSRF token rendered only into hidden form inputs (M7.6).
 type dashboardData struct {
 	Reconciliation
-	Flash string
+	Flash    string
+	Username string
+	CSRF     string
 }
 
 // Interface-state predicates keep magic numbers out of the templates.
@@ -280,19 +304,18 @@ func (d dashboardData) GeneratedText() string {
 // reconciled with the runtime status. The mutation forms point at the
 // M6.3 routes but their handlers land in M6.3.
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		s.notFound(w, r)
-		return
-	}
 	rec, err := Load(s.cfg.DB, s.cfg.StatusPath, time.Now())
 	if err != nil {
 		s.cfg.Logger.Printf("dashboard: %v", err)
 		s.errorPage(w, http.StatusInternalServerError)
 		return
 	}
+	sess, _ := auth.CurrentUser(r.Context())
 	s.renderPage(w, http.StatusOK, dashboardData{
 		Reconciliation: rec,
 		Flash:          r.URL.Query().Get("msg"),
+		Username:       sess.Username,
+		CSRF:           sess.CSRFToken,
 	})
 }
 

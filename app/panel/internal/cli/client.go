@@ -58,18 +58,24 @@ func (a *app) cmdClient(args []string) int {
 	}
 }
 
-// validateName trims whitespace and requires a non-empty, valid-UTF-8
-// name of at most 64 characters; it returns the trimmed form to store.
+// validateName validates a client name (trimmed, non-empty, valid
+// UTF-8, at most 64 characters) and returns the trimmed form.
 func validateName(raw string) (string, error) {
+	return validateNamed(raw, "client name")
+}
+
+// validateNamed is the shared name validator used for client names and
+// auth usernames. Errors are fixed strings that never echo the input.
+func validateNamed(raw, what string) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" {
-		return "", fmt.Errorf("client name must not be empty")
+		return "", fmt.Errorf("%s must not be empty", what)
 	}
 	if !utf8.ValidString(name) {
-		return "", fmt.Errorf("client name must be valid UTF-8")
+		return "", fmt.Errorf("%s must be valid UTF-8", what)
 	}
 	if n := utf8.RuneCountInString(name); n > clientNameMaxRunes {
-		return "", fmt.Errorf("client name must be at most %d characters (got %d)", clientNameMaxRunes, n)
+		return "", fmt.Errorf("%s must be at most %d characters (got %d)", what, clientNameMaxRunes, n)
 	}
 	return name, nil
 }

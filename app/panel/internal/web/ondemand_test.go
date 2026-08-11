@@ -262,7 +262,7 @@ func TestOndemandMethodsEnforced(t *testing.T) {
 		} {
 			req := httptest.NewRequest(m, p, nil)
 			rec := httptest.NewRecorder()
-			f.server.ServeHTTP(rec, req)
+			f.serve(rec, req)
 			if rec.Code != http.StatusNotFound {
 				t.Errorf("%s %s: code = %d, want 404", m, p, rec.Code)
 			}

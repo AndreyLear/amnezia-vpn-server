@@ -1,6 +1,15 @@
 {{define "title"}}Panel{{end}}
 
 {{define "body"}}<main>
+  <header class="session">
+    <p>Signed in as {{.Username}}
+      <form action="/logout" method="post">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}">
+        <button type="submit">Log out</button>
+      </form>
+    </p>
+  </header>
+
   <h1>AmneziaVPN Panel</h1>
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
@@ -15,6 +24,7 @@
   <section class="add">
     <h2>Add client</h2>
     <form action="/clients/new" method="post">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <label>Name <input type="text" name="name" maxlength="64" required></label>
       <label>Expiry (optional, RFC3339) <input type="text" name="expires_at"></label>
       <button type="submit">Add</button>
@@ -35,18 +45,20 @@
       <p>address: {{.Address}} · created: {{.CreatedText}}</p>
       <p>last handshake: {{.LastHandshakeText}} · rx: {{.RxText}} · tx: {{.TxText}}</p>
       <p class="actions">
-        <form action="/clients/{{.ID}}/enable" method="post"><button type="submit">Enable</button></form>
-        <form action="/clients/{{.ID}}/disable" method="post"><button type="submit">Disable</button></form>
-        <form action="/clients/{{.ID}}/delete" method="post"><button type="submit">Delete</button></form>
+        <form action="/clients/{{.ID}}/enable" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit">Enable</button></form>
+        <form action="/clients/{{.ID}}/disable" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit">Disable</button></form>
+        <form action="/clients/{{.ID}}/delete" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit">Delete</button></form>
         <a href="/clients/{{.ID}}/config">config</a> ·
         <a href="/clients/{{.ID}}/qr">QR</a>
       </p>
       <p class="actions">
         <form action="/clients/{{.ID}}/rename" method="post">
+          <input type="hidden" name="_csrf" value="{{$.CSRF}}">
           <input type="text" name="name" maxlength="64" placeholder="new name">
           <button type="submit">Rename</button>
         </form>
         <form action="/clients/{{.ID}}/expiry" method="post">
+          <input type="hidden" name="_csrf" value="{{$.CSRF}}">
           <input type="text" name="expires_at" placeholder="RFC3339 or none">
           <button type="submit">Set expiry</button>
         </form>

@@ -17,18 +17,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
 
-// post sends a form-encoded POST to path and returns the recorder.
+// post sends a form-encoded POST to path with the fixture session's
+// real CSRF token (M7.6) and returns the recorder.
 func (f *fixture) post(path string, form url.Values) *httptest.ResponseRecorder {
 	f.t.Helper()
+	if form == nil {
+		form = url.Values{}
+	}
+	form = cloneValues(form)
+	form.Set(auth.CSRFFieldName, f.csrf)
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, req)
+	f.serve(rec, req)
 	return rec
+}
+
+// cloneValues copies a url.Values map so tests can reuse their fixture
+// form definitions across posts.
+func cloneValues(v url.Values) url.Values {
+	out := make(url.Values, len(v))
+	for k, vals := range v {
+		out[k] = append([]string(nil), vals...)
+	}
+	return out
 }
 
 // redirectLocation returns the Location of a 303 response.
@@ -287,7 +304,7 @@ func TestMutationWrongMethod404(t *testing.T) {
 		{http.MethodPut, "/clients/1/enable"},
 	} {
 		rec := httptest.NewRecorder()
-		f.server.ServeHTTP(rec, httptest.NewRequest(req.method, req.path, nil))
+		f.serve(rec, httptest.NewRequest(req.method, req.path, nil))
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("%s %s: code = %d, want 404", req.method, req.path, rec.Code)
 		}
