@@ -64,15 +64,21 @@ func Generate(handle *sql.DB, path string) error {
 	return WriteAtomic(path, []byte(Render(cfg, peers)))
 }
 
-// WriteAtomic writes data to target via a temporary file, fsync, and rename,
-// then fsyncs the parent directory so the new config survives a crash.
-// The target keeps its old content if anything fails before the rename.
+// WriteAtomic writes data to target atomically: a unique temporary file
+// in the same directory (0600) → write → fsync → close → rename →
+// fsync of the parent directory so the new config survives a crash.
+// The temp name is unique per call, so concurrent Generates (web
+// mutations are serialized by the server mutex, but Generate is also
+// callable from other goroutines/tests) can never truncate or rename
+// each other's temp file. The target keeps its old content if anything
+// fails before the rename.
 func WriteAtomic(target string, data []byte) error {
-	tmp := target + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	dir := filepath.Dir(target)
+	f, err := os.CreateTemp(dir, filepath.Base(target)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("awgconf: create %s: %w", tmp, err)
+		return fmt.Errorf("awgconf: create temp in %s: %w", dir, err)
 	}
+	tmp := f.Name()
 	cleanup := func() {
 		f.Close()
 		os.Remove(tmp)
@@ -97,8 +103,8 @@ func WriteAtomic(target string, data []byte) error {
 		os.Remove(tmp)
 		return fmt.Errorf("awgconf: rename %s -> %s: %w", tmp, target, err)
 	}
-	if err := syncDir(filepath.Dir(target)); err != nil {
-		return fmt.Errorf("awgconf: fsync %s: %w", filepath.Dir(target), err)
+	if err := syncDir(dir); err != nil {
+		return fmt.Errorf("awgconf: fsync %s: %w", dir, err)
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
@@ -232,5 +233,74 @@ func TestGenerateIntegrationBadListenPort(t *testing.T) {
 	err := Generate(handle, filepath.Join(dir, "awg0.conf"))
 	if err == nil {
 		t.Fatal("expected error for ListenPort > 65535")
+	}
+}
+
+// TestWriteAtomicConcurrent pins the unique-temp invariant: concurrent
+// WriteAtomic calls to the same target must all succeed (a fixed
+// ".tmp" name would make losers fail with rename ENOENT or corrupt
+// each other's data), the final content must be exactly one of the
+// written payloads, and no temp files may be left behind. Runs under
+// -race.
+func TestWriteAtomicConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "awg0.conf")
+	old := []byte("old content")
+	if err := WriteAtomic(target, old); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	const writers = 16
+	payloads := make([][]byte, writers)
+	for i := range payloads {
+		payloads[i] = []byte(fmt.Sprintf("payload-%d-%s", i, strings.Repeat("x", 256)))
+	}
+
+	errs := make([]error, writers)
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			errs[w] = WriteAtomic(target, payloads[w])
+		}(w)
+	}
+	wg.Wait()
+
+	for w, err := range errs {
+		if err != nil {
+			t.Fatalf("writer %d: %v", w, err)
+		}
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	ok := false
+	for _, p := range payloads {
+		if string(data) == string(p) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		t.Fatalf("target content is not one of the written payloads (len=%d)", len(data))
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat target: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("target mode = %o, want 600", perm)
+	}
+
+	leftovers, err := filepath.Glob(filepath.Join(dir, "awg0.conf.tmp-*"))
+	if err != nil {
+		t.Fatalf("glob leftovers: %v", err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("leftover temp files: %v", leftovers)
 	}
 }

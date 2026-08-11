@@ -51,8 +51,11 @@ func AuthUserByUsername(handle *sql.DB, username string) (*AuthUser, error) {
 // (internal/auth.HashPassword must run in the caller). The username is
 // stored verbatim and the hash is stored verbatim — no transformation,
 // no logging. A duplicate username fails with ErrAuthUserExists. The
-// single SQLite connection (MaxOpenConns(1)) serializes the existence
-// check and the insert, so the pre-check cannot race.
+// existence check and the insert run inside a single transaction: on
+// the single SQLite connection (MaxOpenConns(1)) no other writer can
+// slip between the check and the insert, so concurrent duplicate
+// creates always classify as ErrAuthUserExists (never a raw
+// UNIQUE-constraint error).
 func CreateAuthUser(handle *sql.DB, username, passwordHash string) (*AuthUser, error) {
 	if username == "" {
 		return nil, errors.New("db: auth username must not be empty")
@@ -60,8 +63,13 @@ func CreateAuthUser(handle *sql.DB, username, passwordHash string) (*AuthUser, e
 	if passwordHash == "" {
 		return nil, errors.New("db: auth password hash must not be empty")
 	}
+	tx, err := handle.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("db: begin auth user: %w", err)
+	}
+	defer tx.Rollback()
 	var exists int
-	if err := handle.QueryRow(
+	if err := tx.QueryRow(
 		`SELECT COUNT(*) FROM auth WHERE username = ?`, username,
 	).Scan(&exists); err != nil {
 		return nil, fmt.Errorf("db: check auth user: %w", err)
@@ -69,7 +77,7 @@ func CreateAuthUser(handle *sql.DB, username, passwordHash string) (*AuthUser, e
 	if exists > 0 {
 		return nil, ErrAuthUserExists
 	}
-	res, err := handle.Exec(
+	res, err := tx.Exec(
 		`INSERT INTO auth (username, password_hash) VALUES (?, ?)`,
 		username, passwordHash,
 	)
@@ -79,6 +87,9 @@ func CreateAuthUser(handle *sql.DB, username, passwordHash string) (*AuthUser, e
 	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, fmt.Errorf("db: auth last insert id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("db: commit auth user: %w", err)
 	}
 	return &AuthUser{ID: id, Username: username, PasswordHash: passwordHash}, nil
 }
