@@ -23,7 +23,10 @@ const (
 	snapshotFilename   = "amnezia.sqlite"
 	archiveSuffix      = ".tar.zst.age"
 	filenameTimeLayout = "2006-01-02"
-	manifestTimeLayout = time.RFC3339
+	// filenameTimeOfDayLayout disambiguates safety backups taken the
+	// same day (they must never overwrite each other).
+	filenameTimeOfDayLayout = "15-04-05"
+	manifestTimeLayout      = time.RFC3339
 )
 
 // Manifest is the archive metadata. JSON field names and values are the

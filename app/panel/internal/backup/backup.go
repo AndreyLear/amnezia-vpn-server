@@ -126,6 +126,27 @@ func verifySnapshot(snapPath string) error {
 // files under a unique 0700 directory. Overwrite policy (Q8) is a
 // caller-level concern.
 func Create(handle *sql.DB, backupsDir, recipient string, now func() time.Time) (string, error) {
+	return create(handle, backupsDir, recipient, now, func(ts time.Time) string {
+		return "backup-" + ts.Format(filenameTimeLayout) + archiveSuffix
+	})
+}
+
+// Safety builds a safety backup of the current database ahead of a
+// restore (spec §5). Unlike Create it never overwrites: the name
+// carries the time of day, so every safety backup is unique and no
+// archive is ever lost.
+func Safety(handle *sql.DB, backupsDir, recipient string, now func() time.Time) (string, error) {
+	return create(handle, backupsDir, recipient, now, func(ts time.Time) string {
+		return "safety-backup-" + ts.Format(filenameTimeLayout) + "-" + ts.Format(filenameTimeOfDayLayout) + archiveSuffix
+	})
+}
+
+// create is the shared backup pipeline; nameOf derives the archive
+// file name from the creation timestamp (which also feeds the
+// manifest). create() never echoes live database state through the
+// returned path or errors (except the chosen file name in case of
+// failure — carrying no secrets by construction).
+func create(handle *sql.DB, backupsDir, recipient string, now func() time.Time, nameOf func(time.Time) string) (string, error) {
 	if now == nil {
 		now = time.Now
 	}
@@ -150,7 +171,7 @@ func Create(handle *sql.DB, backupsDir, recipient string, now func() time.Time) 
 	defer os.RemoveAll(staging)
 
 	ts := now().UTC()
-	name := "backup-" + ts.Format(filenameTimeLayout) + archiveSuffix
+	name := nameOf(ts)
 	target := filepath.Join(backupsDir, name)
 
 	snapPath := filepath.Join(staging, snapshotFilename)

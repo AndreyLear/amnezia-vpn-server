@@ -44,6 +44,7 @@ commands:
   auth add-user <username> (--password-stdin | --password-env <ENV>)
   backup create                  create an encrypted database backup
   backup list                    list existing backups
+  restore <backup> --identity-stdin   prepare a restore (restart required)
 `
 
 // serveNotImplemented kept the M2/M6 contract; M6.1 replaces it with a
@@ -79,6 +80,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return a.cmdStatus(args[1:])
 	case "backup":
 		return a.cmdBackup(args[1:])
+	case "restore":
+		return a.cmdRestore(args[1:])
 	default:
 		a.usage()
 		return 2
