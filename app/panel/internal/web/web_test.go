@@ -95,6 +95,7 @@ func newFixtureWithStore(t *testing.T, logSink io.Writer, ttl time.Duration) *fi
 		Sessions:   sessions,
 		StatusPath: statusPath,
 		ConfPath:   confPath,
+		DBPath:     dbPath,
 		Logger:     log.New(logSink, "", 0),
 	})
 	if err != nil {

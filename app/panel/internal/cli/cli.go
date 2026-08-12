@@ -259,6 +259,7 @@ func (a *app) serveHTTP(ctx context.Context, cfg web.Config) int {
 	defer handle.Close()
 	cfg.Logger = log.New(a.stderr, "panel serve: ", log.LstdFlags)
 	cfg.DB = handle
+	cfg.DBPath = db.DefaultPath()
 	// M7.4: one in-memory session store per serve process; restarting
 	// the panel discards every session (M7.3 contract).
 	cfg.Sessions = auth.NewSessionStore(auth.SessionTTL)

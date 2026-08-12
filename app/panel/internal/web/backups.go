@@ -46,6 +46,13 @@ const (
 	flashBackupCreateFailed = "Backup creation failed."
 	flashBackupDeleteFailed = "Backup deletion failed."
 	flashBackupUnconfigured = "Backup encryption is not configured."
+	// flashRestoreBlockedByPending is also shown when create/delete is
+	// attempted while a restore is pending (M8.6: no mutation while a
+	// restore is prepared).
+	flashRestoreBlockedByPending = "Restore pending. Restart required."
+	// flashRestorePendingNotice is the page banner while a restore is
+	// pending; it is fixed text, like every flash.
+	flashRestorePendingNotice = "A restore is prepared and waiting. The panel never restarts itself: restart it to apply, or the restore cancels on the next serve."
 )
 
 // backupsDir mirrors cli.backupsPath(): the deployment configures the
@@ -80,6 +87,9 @@ type backupsData struct {
 	Username string
 	CSRF     string
 	Backups  []backupRow
+	// Pending reflects an existing .restore-pending marker: the page
+	// shows the restart-required banner and the restore link.
+	Pending bool
 }
 
 // backupRow is one validated archive in the listing.
@@ -124,12 +134,17 @@ func (s *Server) backupsPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+	pending, ok := s.pendingExists(w)
+	if !ok {
+		return
+	}
 	sess, _ := auth.CurrentUser(r.Context())
 	s.renderBackups(w, backupsData{
 		Flash:    r.URL.Query().Get("msg"),
 		Username: sess.Username,
 		CSRF:     sess.CSRFToken,
 		Backups:  rows,
+		Pending:  pending,
 	})
 }
 
@@ -151,6 +166,12 @@ func (s *Server) renderBackups(w http.ResponseWriter, data backupsData) {
 // flash messages — the staging path and the error text never reach the
 // client. backup.Create cleans its own staging on success and failure.
 func (s *Server) backupCreate(w http.ResponseWriter, r *http.Request) {
+	if pending, ok := s.pendingExists(w); !ok {
+		return
+	} else if pending {
+		s.flashBackups(w, r, flashRestoreBlockedByPending)
+		return
+	}
 	recipient, err := backup.RecipientFromEnv()
 	if err != nil {
 		s.cfg.Logger.Printf("backup create: recipient: %v", err)
@@ -215,6 +236,12 @@ func (s *Server) backupDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if !validBackupName(name) {
 		s.flashBackups(w, r, flashBackupInvalidName)
+		return
+	}
+	if pending, ok := s.pendingExists(w); !ok {
+		return
+	} else if pending {
+		s.flashBackups(w, r, flashRestoreBlockedByPending)
 		return
 	}
 	s.mutex.Lock()

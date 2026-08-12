@@ -21,11 +21,16 @@
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
 
+  {{if .Pending}}
+  <p class="pending">A restore is prepared and waiting. The panel never restarts itself: restart it to apply, or the restore cancels on the next serve. Create, delete and further restores are paused until then.</p>
+  {{end}}
+
   <section class="create">
     <form action="/backups/create" method="post">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <button type="submit">Create backup</button>
     </form>
+    <p><a href="/backups/restore">Restore a backup</a></p>
   </section>
 
   <section class="backups">

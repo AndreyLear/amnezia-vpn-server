@@ -9,8 +9,10 @@
 package web
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,10 +26,14 @@ import (
 
 // protectedPosts is the M7.6 route inventory: every authenticated POST
 // that must demand a CSRF token. Each entry creates its own clients so
-// the matrix is independent of test order.
+// the matrix is independent of test order. The restore route is the
+// one multipart route: its POSTer builds a multipart body (the M7.6
+// matrix otherwise posts url-encoded forms, which that route cannot
+// parse by design — M8.6).
 func protectedPosts(f *fixture) []struct {
 	name string
 	path func() string
+	post func(f *fixture, path, token string) *httptest.ResponseRecorder
 } {
 	mk := func(prefix string) func() string {
 		return func() string {
@@ -35,26 +41,52 @@ func protectedPosts(f *fixture) []struct {
 			return fmt.Sprintf("/clients/%d/%s", c.ID, prefix)
 		}
 	}
-	return []struct {
+	entries := []struct {
 		name string
 		path func() string
+		post func(f *fixture, path, token string) *httptest.ResponseRecorder
 	}{
-		{"new", func() string { return "/clients/new" }},
-		{"enable", mk("enable")},
-		{"disable", mk("disable")},
-		{"delete", mk("delete")},
-		{"rename", mk("rename")},
-		{"expiry", mk("expiry")},
-		{"backup create", func() string { return "/backups/create" }},
+		{"new", func() string { return "/clients/new" }, nil},
+		{"enable", mk("enable"), nil},
+		{"disable", mk("disable"), nil},
+		{"delete", mk("delete"), nil},
+		{"rename", mk("rename"), nil},
+		{"expiry", mk("expiry"), nil},
+		{"backup create", func() string { return "/backups/create" }, nil},
 		{"backup delete", func() string {
 			dir, _ := setBackupsPath(f.t)
 			name := makeBackup(f.t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
 			return "/backups/" + name + "/delete"
-		}},
+		}, nil},
+		{"backup restore", func() string { return "/backups/restore" }, restoreCSRFPost},
 		// logout invalidates the session; it must stay the last entry
 		// so later subtests reuse a live fixture session.
-		{"logout", func() string { return "/logout" }},
+		{"logout", func() string { return "/logout" }, nil},
 	}
+	return entries
+}
+
+// restoreCSRFPost posts a multipart body carrying only the given CSRF
+// token to path (an empty body when token == ""): the restore handler
+// answers a fixed 403 for bad tokens and PRG (missing identity flash)
+// for the valid one — never a 200, never a mutation.
+func restoreCSRFPost(f *fixture, path, token string) *httptest.ResponseRecorder {
+	f.t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if token != "" {
+		if err := mw.WriteField(auth.CSRFFieldName, token); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		f.t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	f.serve(rec, req)
+	return rec
 }
 
 // csrfPOST posts to path with the given token (or none when token ==
@@ -80,8 +112,12 @@ func TestCSRFValidTokenNormalBehaviour(t *testing.T) {
 	f := newFixture(t)
 	for _, rt := range protectedPosts(f) {
 		path := rt.path()
+		post := rt.post
+		if post == nil {
+			post = csrfPOST
+		}
 		t.Run(rt.name, func(t *testing.T) {
-			rec := csrfPOST(f, path, f.csrf)
+			rec := post(f, path, f.csrf)
 			if rec.Code != http.StatusSeeOther {
 				t.Fatalf("valid token %s: code = %d, want 303 (PRG)", path, rec.Code)
 			}
@@ -98,8 +134,12 @@ func TestCSRFMissingTokenForbidden(t *testing.T) {
 	f := newFixture(t)
 	for _, rt := range protectedPosts(f) {
 		path := rt.path()
+		post := rt.post
+		if post == nil {
+			post = csrfPOST
+		}
 		t.Run(rt.name, func(t *testing.T) {
-			rec := csrfPOST(f, path, "")
+			rec := post(f, path, "")
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("missing token %s: code = %d, want 403", path, rec.Code)
 			}
@@ -133,8 +173,12 @@ func TestCSRFWrongTokenForbidden(t *testing.T) {
 	f := newFixture(t)
 	for _, rt := range protectedPosts(f) {
 		path := rt.path()
+		post := rt.post
+		if post == nil {
+			post = csrfPOST
+		}
 		t.Run(rt.name, func(t *testing.T) {
-			rec := csrfPOST(f, path, "wrong-token-value")
+			rec := post(f, path, "wrong-token-value")
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("wrong token %s: code = %d, want 403", path, rec.Code)
 			}
@@ -155,8 +199,12 @@ func TestCSRFTokenOfAnotherUser(t *testing.T) {
 	}
 	for _, rt := range protectedPosts(f) {
 		path := rt.path()
+		post := rt.post
+		if post == nil {
+			post = csrfPOST
+		}
 		t.Run(rt.name, func(t *testing.T) {
-			rec := csrfPOST(f, path, other.CSRFToken)
+			rec := post(f, path, other.CSRFToken)
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("foreign token %s: code = %d, want 403", path, rec.Code)
 			}

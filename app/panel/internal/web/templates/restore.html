@@ -1,0 +1,54 @@
+{{define "restore"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Restore backup</title>
+</head>
+<body>
+<main>
+  <header class="session">
+    <p>Signed in as {{.Username}}
+      <a href="/backups">Backups</a>
+      <form action="/logout" method="post">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}">
+        <button type="submit">Log out</button>
+      </form>
+    </p>
+  </header>
+
+  <h1>Restore a backup</h1>
+
+  {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+
+  {{if .Pending}}
+  <p class="pending">A restore is prepared and waiting. The panel never restarts itself: restart it to apply, or the restore cancels on the next serve. Further restores are paused until then.</p>
+  {{end}}
+
+  <p>The archive (.tar.zst.age) is checked, unpacked into a staging
+     directory and scanned before anything changes. The panel never
+     restarts itself: on success the restore is prepared and waits —
+     restart the panel to apply it. The identity is used only to open
+     the archive, kept in memory, and never stored, logged or shown.</p>
+
+  <section class="restore">
+    <form action="/backups/restore" method="post" enctype="multipart/form-data">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <p>
+        <label>Backup archive
+          <input type="file" name="backup" accept=".age" required>
+        </label>
+      </p>
+      <p>
+        <label>Age identity (secret key)
+          <textarea name="identity" rows="5" autocomplete="off"
+                    spellcheck="false" placeholder="AGE-SECRET-KEY-1..."></textarea>
+        </label>
+      </p>
+      <button type="submit">Prepare restore</button>
+    </form>
+  </section>
+</main>
+</body>
+</html>
+{{end}}

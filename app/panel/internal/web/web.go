@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
@@ -77,6 +78,11 @@ type Config struct {
 	// every mutation; empty selects the AMNEZIA_CONFIG_PATH default
 	// (parity with the cli).
 	ConfPath string
+	// DBPath is the SQLite location the DB handle was opened from. The
+	// restore flow places its pending marker next to it and the page
+	// shows the restart-required state from it; empty selects
+	// db.DefaultPath() (parity with the cli).
+	DBPath string
 	// Logger receives startup/shutdown diagnostics and internal errors;
 	// request-level logs are not emitted (the panel shows runtime state,
 	// keep noise low). Never contains key material by construction.
@@ -136,6 +142,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ConfPath == "" {
 		cfg.ConfPath = defaultConfPath()
 	}
+	if cfg.DBPath == "" {
+		cfg.DBPath = db.DefaultPath()
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(io.Discard, "", 0)
 	}
@@ -167,6 +176,14 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /backups/create", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupCreate))))
 	s.mux.Handle("GET /backups/{name}/download", s.auth.RequireAuth(http.HandlerFunc(s.backupDownload)))
 	s.mux.Handle("POST /backups/{name}/delete", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupDelete))))
+	// The restore pair is the one multipart route of the panel: the
+	// POST carries a file upload, so it is NOT mounted through
+	// RequireCSRF (r.ParseForm never parses multipart bodies and would
+	// 403 every legitimate upload). restoreSubmit performs the same
+	// check with the same primitives (auth.CSRFFieldName +
+	// auth.CSRFValid) after parsing the parts itself.
+	s.mux.Handle("GET /backups/restore", s.auth.RequireAuth(http.HandlerFunc(s.restorePage)))
+	s.mux.Handle("POST /backups/restore", s.auth.RequireAuth(http.HandlerFunc(s.restoreSubmit)))
 	s.mux.Handle("GET /clients/{id}/config", s.auth.RequireAuth(http.HandlerFunc(s.clientConfigDownload)))
 	s.mux.Handle("GET /clients/{id}/qr", s.auth.RequireAuth(http.HandlerFunc(s.clientQR)))
 	s.mux.HandleFunc("GET /login", s.loginPage)
@@ -263,12 +280,14 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 
 // bodyLimit wraps request bodies with http.MaxBytesReader: form
 // handlers (M6.3) parse the limited body and answer 413 when the limit
-// is exceeded (http.MaxBytesError). GET bodies are not read.
+// is exceeded (http.MaxBytesError). GET bodies are not read. The
+// restore upload route is exempt: it sets its own (larger)
+// MaxRestoreBodyBytes limit in the handler.
 func (s *Server) bodyLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch:
-			if r.Body != nil {
+			if r.Body != nil && r.URL.Path != restoreUploadPath {
 				r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 			}
 		}
