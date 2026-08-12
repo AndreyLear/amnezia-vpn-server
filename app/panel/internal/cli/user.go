@@ -119,11 +119,6 @@ func (a *app) cmdAuthAddUser(args []string) int {
 // to typed input ("\n" and the "\r\n" form). The rest of the password
 // — including leading/trailing spaces — is preserved verbatim.
 func trimTrailingNewline(s string) string {
-	if strings.HasSuffix(s, "\n") {
-		s = strings.TrimSuffix(s, "\n")
-		if strings.HasSuffix(s, "\r") {
-			s = strings.TrimSuffix(s, "\r")
-		}
-	}
-	return s
+	s = strings.TrimSuffix(s, "\n")
+	return strings.TrimSuffix(s, "\r")
 }

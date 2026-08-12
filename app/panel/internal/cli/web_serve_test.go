@@ -227,3 +227,27 @@ func TestServeHTTPSecretFreeAnd404(t *testing.T) {
 		t.Errorf("unknown route: status %d, want 404", resp.StatusCode)
 	}
 }
+
+// TestCmdServeAddrFlag drives the full cmdServe entry point (not just
+// serveHTTP): the --addr flag is wired through to the listener. Run
+// executes in a goroutine; SIGTERM triggers the graceful exit 0.
+func TestCmdServeAddrFlag(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	addr := freePort(t)
+
+	out := &bytes.Buffer{}
+	errb := &bytes.Buffer{}
+	done := make(chan int, 1)
+	go func() { done <- Run([]string{"serve", "--addr", addr}, out, errb) }()
+
+	waitForServe(t, addr, 5*time.Second)
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("kill self: %v", err)
+	}
+	checkExit(t, done, errb, 0)
+	if !strings.Contains(errb.String(), "listening on "+addr) {
+		t.Errorf("stderr missing startup log for %s: %q", addr, errb.String())
+	}
+}

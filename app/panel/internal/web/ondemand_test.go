@@ -149,22 +149,49 @@ func TestQRValidPNG(t *testing.T) {
 	}
 }
 
-// decodeQR reads the text encoded in a QR PNG.
+// decodeQR reads the text encoded in a QR PNG. The gozxing R12 detector
+// occasionally misses a finder pattern when the 256px render puts module
+// centers on fractional coordinates; retrying on a nearest-neighbour
+// upscale (pixel-perfect QR content, integer module grid) makes the
+// decode deterministic.
 func decodeQR(t *testing.T, png []byte) string {
 	t.Helper()
 	img, _, err := image.Decode(bytes.NewReader(png))
 	if err != nil {
 		t.Fatalf("decode png: %v", err)
 	}
-	bin, err := gozxing.NewBinaryBitmapFromImage(img)
-	if err != nil {
-		t.Fatalf("binarize: %v", err)
+	var lastErr error
+	for _, scale := range []int{1, 3, 4} {
+		src := img
+		if scale > 1 {
+			b := src.Bounds()
+			up := image.NewNRGBA(image.Rect(0, 0, b.Dx()*scale, b.Dy()*scale))
+			for y := b.Min.Y; y < b.Max.Y; y++ {
+				for x := b.Min.X; x < b.Max.X; x++ {
+					c := src.At(x, y)
+					for dy := 0; dy < scale; dy++ {
+						for dx := 0; dx < scale; dx++ {
+							up.Set(x*scale+dx, y*scale+dy, c)
+						}
+					}
+				}
+			}
+			src = up
+		}
+		bin, err := gozxing.NewBinaryBitmapFromImage(src)
+		if err != nil {
+			lastErr = fmt.Errorf("binarize: %w", err)
+			continue
+		}
+		res, err := qrcode.NewQRCodeReader().Decode(bin, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("decode: %w", err)
+			continue
+		}
+		return res.GetText()
 	}
-	res, err := qrcode.NewQRCodeReader().Decode(bin, nil)
-	if err != nil {
-		t.Fatalf("QR decode: %v", err)
-	}
-	return res.GetText()
+	t.Fatalf("QR decode failed at all scales: %v", lastErr)
+	return ""
 }
 
 func TestQRPayloadMatchesClientConfig(t *testing.T) {

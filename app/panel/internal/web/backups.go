@@ -50,9 +50,6 @@ const (
 	// attempted while a restore is pending (M8.6: no mutation while a
 	// restore is prepared).
 	flashRestoreBlockedByPending = "Restore pending. Restart required."
-	// flashRestorePendingNotice is the page banner while a restore is
-	// pending; it is fixed text, like every flash.
-	flashRestorePendingNotice = "A restore is prepared and waiting. The panel never restarts itself: restart it to apply, or the restore cancels on the next serve."
 )
 
 // backupsDir mirrors cli.backupsPath(): the deployment configures the

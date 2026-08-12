@@ -304,3 +304,57 @@ func TestWriteAtomicConcurrent(t *testing.T) {
 		t.Fatalf("leftover temp files: %v", leftovers)
 	}
 }
+
+// TestWriteAtomicRenameFailure: when the rename cannot happen (target
+// path is occupied by a directory), WriteAtomic returns an error, the
+// directory is left untouched, and no temp files leak behind.
+func TestWriteAtomicRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "conf")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := WriteAtomic(target, []byte("should not replace a directory"))
+	if err == nil {
+		t.Fatal("WriteAtomic over a directory succeeded")
+	}
+	if !strings.Contains(err.Error(), "rename") {
+		t.Errorf("error %q does not mention the rename step", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("target disappeared: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("target is no longer a directory")
+	}
+	leftovers, err := filepath.Glob(filepath.Join(dir, "conf.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("temp files leaked: %v", leftovers)
+	}
+}
+
+// TestWriteAtomicTempCreateFailure: when the temp file cannot be
+// created (parent path is a regular file, not a directory) the error
+// names the create step and the target never comes into existence.
+func TestWriteAtomicTempCreateFailure(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(notDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(notDir, "awg0.conf")
+	err := WriteAtomic(target, []byte("x"))
+	if err == nil {
+		t.Fatal("WriteAtomic with an uncreatable temp succeeded")
+	}
+	if !strings.Contains(err.Error(), "create temp") {
+		t.Errorf("error %q does not mention the create-temp step", err)
+	}
+	if _, statErr := os.Stat(target); statErr == nil {
+		t.Fatal("target exists after failed create")
+	}
+}

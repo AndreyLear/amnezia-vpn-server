@@ -47,10 +47,33 @@ mkdir -p "${M8_DATA}" "${M8_CONFIG}" "${M8_STATUS}" "${M8_BACKUPS}"
 
 M8_ADMIN="m8-admin"
 M8_PASSWORD="m8-password-for-backup-42"
-# A real x25519 recipient (public by design — it may live on the VPS).
-# The matching identity stays out of the script: create only needs the
-# recipient.
-M8_RECIPIENT="age194rhdm90su5g8mt0z5qntsyukc9t36xemcmvhx7l3k75pdzyfudsthmshy"
+# The age keypair is generated at runtime (the module resolves
+# filippo/age from app/panel's go.mod — no age CLI required on the
+# host); the private half never lives in the repo or the script.
+cat > "${M8_ROOT}/genident.go" <<'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"filippo.io/age"
+)
+
+func main() {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "genident:", err)
+		os.Exit(1)
+	}
+	fmt.Println(id.String())
+	fmt.Println(id.Recipient().String())
+}
+EOF
+M8_KEYPAIR="$(cd app/panel && go run "${M8_ROOT}/genident.go" 2>/dev/null)"
+[ -n "${M8_KEYPAIR}" ] || { echo "FAIL: identity generation failed"; exit 1; }
+M8_IDENT="$(printf '%s\n' "${M8_KEYPAIR}" | sed -n '1p')"
+M8_RECIPIENT="$(printf '%s\n' "${M8_KEYPAIR}" | sed -n '2p')"
 
 # stat_mode prints the octal mode of a path (GNU on Linux CI, BSD on
 # macOS hosts).
@@ -179,6 +202,55 @@ echo "${AWG_MOUNTS}" | grep -q '/status:true'     || fail "awg /status lost"
 echo "${AWG_MOUNTS}" | grep -q 'backups'          && fail "awg gained a backups mount"
 echo "OK: mount sets match the M8.7 contract"
 
+echo "==> [6] live restore cycle (M8.8): snapshot -> mutate -> restore -> restart -> applied"
+
+# Snapshot state: auth user + client alice. Then mutate with bob.
+printf '%s\n' "${M8_PASSWORD}" | "${COMPOSE[@]}" exec -T panel /app/panel auth add-user "${M8_ADMIN}" --password-stdin \
+    >/dev/null || fail "auth add-user"
+"${COMPOSE[@]}" exec -T panel /app/panel client add alice >/dev/null || fail "client add alice"
+"${COMPOSE[@]}" exec -T panel /app/panel backup create >/dev/null 2>&1 || fail "snapshot backup create"
+SNAP="$("${COMPOSE[@]}" exec -T panel /app/panel backup list | head -1)"
+[ -n "${SNAP}" ] || fail "snapshot backup list empty"
+"${COMPOSE[@]}" exec -T panel /app/panel client add bob >/dev/null || fail "client add bob"
+
+# Restore prepares the pending marker; the identity goes via stdin only.
+printf '%s\n' "${M8_IDENT}" | "${COMPOSE[@]}" exec -T panel /app/panel restore "${SNAP}" --identity-stdin \
+    >/dev/null || fail "restore prepare"
+[ -d "${M8_DATA}/.restore-pending" ] || fail "pending marker missing on the host bind dir"
+ls -A "${M8_BACKUPS}" | grep -q '^safety-backup-' || fail "no safety backup after restore"
+echo "OK: restore pending, safety backup present"
+
+# Restart the stack: panel-init applies the pending restore first.
+"${COMPOSE[@]}" down >/dev/null || fail "stack down"
+"${COMPOSE[@]}" up -d >/dev/null || fail "stack up"
+I=0
+while ! "${COMPOSE[@]}" logs panel-init --no-color 2>/dev/null | grep -q "pending restore applied"; do
+    I=$((I + 1))
+    [ "${I}" -gt 60 ] && fail "panel-init did not apply the pending restore"
+    sleep 1
+done
+[ ! -e "${M8_DATA}/.restore-pending" ] || fail "pending marker survived the restart"
+[ -f "${M8_DATA}/amnezia.sqlite.pre-restore" ] || fail "no .pre-restore recovery copy"
+
+# Live state is the snapshot: alice present, bob gone.
+CLIENTS="$("${COMPOSE[@]}" exec -T panel /app/panel client list)"
+printf '%s\n' "${CLIENTS}" | grep -q alice || fail "restored state lost alice"
+printf '%s\n' "${CLIENTS}" | grep -q bob && fail "post-restore mutation bob survived the restore"
+ALICE_PUB="$(printf '%s\n' "${CLIENTS}" | awk -F'\t' '$2 == "alice" { print $6 }')"
+[ -n "${ALICE_PUB}" ] || fail "no alice public key in client list"
+
+# awg0.conf was regenerated from the restored state (alice only).
+grep -q "${ALICE_PUB}" "${M8_CONFIG}/awg0.conf" || fail "awg0.conf missing the restored alice peer"
+grep -c "^\[Peer\]" "${M8_CONFIG}/awg0.conf" | grep -qx 1 || fail "awg0.conf peer count != 1"
+
+# The restored auth user still logs in over HTTP (M7.5 flow).
+M8_PORT="8787"
+curl -fsS -c "${M8_ROOT}/cookies.txt" \
+    -d "username=${M8_ADMIN}&password=${M8_PASSWORD}" \
+    -o /dev/null "http://127.0.0.1:${M8_PORT}/login" || fail "post-restore HTTP login"
+curl -fsS -b "${M8_ROOT}/cookies.txt" -o /dev/null "http://127.0.0.1:${M8_PORT}/" || fail "post-restore dashboard GET"
+echo "OK: restore applied, awg0.conf regenerated, auth user works"
+
 echo
-echo "==> e2e OK: compose config, panel rw backups, 0700/0600, awg isolated"
+echo "==> e2e OK: compose config, panel rw backups, 0700/0600, awg isolated, restore cycle"
 exit 0

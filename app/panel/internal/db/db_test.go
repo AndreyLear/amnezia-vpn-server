@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -590,5 +591,53 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if v, _, _ := GetSetting(handle, "endpoint"); v != "vpn2.example.com:51820" {
 		t.Fatalf("endpoint after upsert = %q", v)
+	}
+}
+
+// TestOpenFailsWhenParentIsAFile: database paths under a regular file
+// (not a directory) fail fast with an error naming the create step,
+// and no partial database file appears anywhere.
+func TestOpenFailsWhenParentIsAFile(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "occupied")
+	if err := os.WriteFile(notDir, []byte("i am a file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := Open(filepath.Join(notDir, "amnezia.sqlite"))
+	if err == nil {
+		handle.Close()
+		t.Fatal("Open succeeded under a regular file parent")
+	}
+	if !strings.Contains(err.Error(), "create directory") {
+		t.Errorf("error %q does not name the create-directory step", err)
+	}
+	if _, statErr := os.Stat(notDir); statErr != nil {
+		t.Fatalf("the blocking file was disturbed: %v", statErr)
+	}
+}
+
+// TestOpenFailsWhenDirUnwritable: an unwritable parent names the create
+// step and leaves no database file behind (the tempdir is restored to
+// mode 0700 in cleanup so t.TempDir's removal succeeds).
+func TestOpenFailsWhenDirUnwritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission checks are bypassed")
+	}
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "locked")
+	if err := os.Mkdir(sub, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(sub, 0o700)
+	handle, err := Open(filepath.Join(sub, "amnezia.sqlite"))
+	if err == nil {
+		handle.Close()
+		t.Fatal("Open succeeded in an unwritable directory")
+	}
+	if !strings.Contains(err.Error(), "create") {
+		t.Errorf("error %q does not name the create step", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(sub, "amnezia.sqlite")); statErr == nil {
+		t.Fatal("database file appeared despite the failure")
 	}
 }

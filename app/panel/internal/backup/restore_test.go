@@ -835,3 +835,38 @@ func TestRestoreErrorsDoNotLeakSecrets(t *testing.T) {
 		}
 	}
 }
+
+// TestRestoreRejectsSpecialTypes: every non-regular tar entry type is
+// refused with a diagnostic naming the type (the message never echoes
+// file content).
+func TestRestoreRejectsSpecialTypes(t *testing.T) {
+	cases := []struct {
+		typ  byte
+		link string
+		diag string
+	}{
+		{tar.TypeDir, "", "a directory"},
+		{tar.TypeSymlink, "/etc/passwd", "a symlink"},
+		{tar.TypeLink, "manifest.json", "a hard link"},
+		{tar.TypeChar, "", "a character device"},
+		{tar.TypeBlock, "", "a block device"},
+		{tar.TypeFifo, "", `type "6"`},
+	}
+	for _, tc := range cases {
+		c := newRestoreCtx(t)
+		archive := buildArchive(t, c.id, []archiveEntry{
+			{name: manifestFilename, typ: tc.typ, link: tc.link},
+		})
+		before, names := c.liveState()
+		_, err := c.doRestore(archive)
+		if err == nil {
+			t.Fatalf("type %d must be rejected", tc.typ)
+		}
+		if !strings.Contains(err.Error(), tc.diag) {
+			t.Fatalf("type %d: error %q missing %q", tc.typ, err, tc.diag)
+		}
+		c.assertUntouched(before)
+		c.assertNoMarker()
+		c.assertNoNewBackups(names)
+	}
+}

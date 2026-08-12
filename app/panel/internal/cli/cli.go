@@ -21,6 +21,7 @@ import (
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/web"
 )
@@ -209,9 +210,20 @@ func requireServer(handle *sql.DB) (*db.ServerRecord, error) {
 
 // cmdInit is the M2/M3 panel-init contract: migrate the database, then
 // (re)generate config/awg0.conf; exit 1 when the server row is absent.
+// The M8 restart workflow is part of this contract: a pending restore
+// (backup.ApplyPending) is applied first, so the regenerated config
+// reflects the restored state (ТЗ §5 chain: restore → restart →
+// panel-init applies → regenerate awg0.conf → AWG startup).
 func (a *app) cmdInit(args []string) int {
 	if len(args) != 0 {
 		return a.usageError("init", "unexpected arguments")
+	}
+	applied, err := backup.ApplyPending(db.DefaultPath())
+	if err != nil {
+		return a.fatal("init", err)
+	}
+	if applied {
+		fmt.Fprintln(a.stdout, "panel init: pending restore applied")
 	}
 	handle, err := a.openDB()
 	if err != nil {
