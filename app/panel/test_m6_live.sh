@@ -29,7 +29,7 @@ set -a; source versions.lock; set +a
 
 PROJ="m6-e2e-$$"
 M6_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/amnezia-m6-e2e-XXXXXX")"
-M6_DATA="${M6_ROOT}/data"; M6_CONFIG="${M6_ROOT}/config"; M6_STATUS="${M6_ROOT}/status"
+M6_DATA="${M6_ROOT}/data"; M6_CONFIG="${M6_ROOT}/config"; M6_STATUS="${M6_ROOT}/status"; M6_BACKUPS="${M6_ROOT}/backups"
 mkdir -p "${M6_DATA}" "${M6_CONFIG}" "${M6_STATUS}"
 # The M6.4 mapping under test is the fixed loopback port.
 M6_PORT=8787
@@ -55,6 +55,7 @@ services:
       - ${M6_DATA}:/data
       - ${M6_CONFIG}:/config
       - ${M6_STATUS}:/status:ro
+      - ${M6_BACKUPS}:/data/backups
   panel-init:
     volumes:
       - ${M6_DATA}:/data

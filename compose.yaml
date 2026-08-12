@@ -31,6 +31,9 @@ services:
       - ./config:/config
       # status читается только для отображения статуса awg
       - ./status:/status:ro
+      # M8.7: хранилище резервных копий — только panel (rw);
+      # awg backups не получает (ARCHITECTURE.md mount contract)
+      - ./backups:/data/backups
 
   # awg — AmneziaWG runtime: читает конфигурацию, пишет статус
   awg:

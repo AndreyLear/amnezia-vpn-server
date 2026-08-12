@@ -27,13 +27,13 @@ import (
 // backupsPath returns the backups directory. AMNEZIA_BACKUPS_PATH
 // overrides the default for tests and custom setups, mirroring
 // AMNEZIA_DB_PATH / AMNEZIA_CONFIG_PATH. The default matches the
-// M8.6 compose mount (./backups:/backups), which the web UI also
-// serves.
+// M8.7 compose mount (./backups:/data/backups, RW only panel), which
+// the web UI also serves.
 func backupsPath() string {
 	if p := os.Getenv("AMNEZIA_BACKUPS_PATH"); p != "" {
 		return p
 	}
-	return "/backups"
+	return "/data/backups"
 }
 
 // backupNameRe matches exactly the archive naming contract (§5):

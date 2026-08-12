@@ -56,13 +56,13 @@ const (
 )
 
 // backupsDir mirrors cli.backupsPath(): the deployment configures the
-// location through AMNEZIA_BACKUPS_PATH; the default is /backups (the
-// M8.6 compose mount point).
+// location through AMNEZIA_BACKUPS_PATH; the default is /data/backups
+// (the M8.7 compose mount ./backups:/data/backups, RW only panel).
 func backupsDir() string {
 	if p := os.Getenv("AMNEZIA_BACKUPS_PATH"); p != "" {
 		return p
 	}
-	return "/backups"
+	return "/data/backups"
 }
 
 // backupNameRe and validBackupName mirror cli (M8.3): the archive
