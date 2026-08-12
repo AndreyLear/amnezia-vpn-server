@@ -45,6 +45,14 @@ func protectedPosts(f *fixture) []struct {
 		{"delete", mk("delete")},
 		{"rename", mk("rename")},
 		{"expiry", mk("expiry")},
+		{"backup create", func() string { return "/backups/create" }},
+		{"backup delete", func() string {
+			dir, _ := setBackupsPath(f.t)
+			name := makeBackup(f.t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
+			return "/backups/" + name + "/delete"
+		}},
+		// logout invalidates the session; it must stay the last entry
+		// so later subtests reuse a live fixture session.
 		{"logout", func() string { return "/logout" }},
 	}
 }

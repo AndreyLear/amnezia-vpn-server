@@ -3,6 +3,7 @@
 {{define "body"}}<main>
   <header class="session">
     <p>Signed in as {{.Username}}
+      <a href="/backups">Backups</a>
       <form action="/logout" method="post">
         <input type="hidden" name="_csrf" value="{{.CSRF}}">
         <button type="submit">Log out</button>

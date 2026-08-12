@@ -1,0 +1,54 @@
+{{define "backups"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backups</title>
+</head>
+<body>
+<main>
+  <header class="session">
+    <p>Signed in as {{.Username}}
+      <a href="/">Panel dashboard</a>
+      <form action="/logout" method="post">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}">
+        <button type="submit">Log out</button>
+      </form>
+    </p>
+  </header>
+
+  <h1>Backups</h1>
+
+  {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+
+  <section class="create">
+    <form action="/backups/create" method="post">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <button type="submit">Create backup</button>
+    </form>
+  </section>
+
+  <section class="backups">
+    <h2>Archives</h2>
+    {{if not .Backups}}<p>No backups yet.</p>{{end}}
+    <table>
+      {{range .Backups}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td>{{.DateText}}</td>
+        <td>{{.SizeText}}</td>
+        <td><a href="/backups/{{.Name}}/download">download</a></td>
+        <td>
+          <form action="/backups/{{.Name}}/delete" method="post">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+            <button type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </table>
+  </section>
+</main>
+</body>
+</html>
+{{end}}
