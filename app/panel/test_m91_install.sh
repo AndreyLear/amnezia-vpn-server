@@ -1,0 +1,459 @@
+#!/bin/bash
+# M9.1 install.sh test harness (AUDITS/M9.1_AUDIT.md §критерии приёмки).
+#
+# Runs install.sh against scripted fakes: nothing on the real host is
+# touched (no Docker config, no apt, no systemd, no sysctl, no /etc).
+# Every privileged/system command is a fake under the harness FAKE_DIR,
+# prepended to PATH; host paths that install.sh writes are redirected
+# into the harness tempdir through the AMNEZIA_INSTALL_* hooks.
+#
+#   bash app/panel/test_m91_install.sh
+#
+# Exit code: 0 when every test passes; 1 otherwise.
+
+set -u
+
+M91_ERRORS=0
+M91_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+INSTALL_SH="$M91_HOME/install.sh"
+
+pass() { printf 'PASS  %s\n' "$1"; }
+fail() { printf 'FAIL  %s\n' "$1"; M91_ERRORS=$((M91_ERRORS + 1)); }
+
+# --- fakes -------------------------------------------------------------
+
+FAKE_DIR="$(mktemp -d /tmp/m91-fakes.XXXXXX)"
+FAKE_STATE="$FAKE_DIR/state.env"
+FAKE_CALLS="$FAKE_DIR/calls.log"
+FAKE_FS="$FAKE_DIR/fs"
+TMP_TEST="$(mktemp -d /tmp/m91-run.XXXXXX)"
+export FAKE_DIR FAKE_STATE FAKE_CALLS FAKE_FS
+trap 'rm -rf "$FAKE_DIR" "$TMP_TEST"' EXIT
+
+setstate() { # portable in-place update: sed(1) -i differs on BSD/GNU
+    local key="$1" value="$2" file="$3"
+    sed "s|^${key}=.*|${key}=${value}|" "$file" > "$file.new" && mv "$file.new" "$file"
+}
+
+fakes_reset() {
+    : > "$FAKE_CALLS"
+    mkdir -p "$FAKE_FS"
+    rm -rf "$ROOT" "$SYSCTL_TEST" "$KEYRING_TEST" "$SOURCES_TEST"
+    cat > "$FAKE_STATE" <<EOF
+COMPOSE_VERSION=${1:-2.30.1}
+NEW_COMPOSE_VERSION=
+DAEMON=ok
+IP_FORWARD=1
+EOF
+}
+
+# fake binaries: bash shims that log to $FAKE_CALLS and answer from state.
+
+cat > "$FAKE_DIR/docker" <<'FAKE_EOF'
+#!/bin/bash
+LOG="${FAKE_CALLS:?}"
+echo "docker $*" >> "$LOG"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "info" ]; then
+    [ "$DAEMON" = "ok" ] || exit 1
+    echo "Server: FAKE 27.0.0"
+    exit 0
+fi
+if [ "${1:-}" = "compose" ]; then
+    shift
+    verb=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --env-file) shift 2 ;;
+            version | config | build | up | ps) verb="$1"; break ;;
+            *) shift ;;
+        esac
+    done
+    case "$verb" in
+        version)
+            echo "Docker Compose version v${COMPOSE_VERSION}"
+            ;;
+        config)
+            exit "${COMPOSE_CONFIG_RC:-0}"
+            ;;
+        ps)
+            echo "amneziavpn-panel-init-1   panel-init   /app/panel init   Exited (1) 0 seconds ago"
+            echo "amneziavpn-panel-1        panel        /app/panel serve  Created 0 seconds ago"
+            echo "amneziavpn-awg-1          awg          /entrypoint.sh    Created 0 seconds ago"
+            ;;
+        build | up) ;;
+    esac
+    exit 0
+fi
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/apt-get" <<'FAKE_EOF'
+#!/bin/bash
+echo "apt-get $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "install" ]; then
+    touch "$FAKE_FS/apt-installed"
+    if [ -n "$NEW_COMPOSE_VERSION" ]; then
+        sed "s|^COMPOSE_VERSION=.*|COMPOSE_VERSION=${NEW_COMPOSE_VERSION}|" "$FAKE_STATE" \
+            > "$FAKE_STATE.new" && mv "$FAKE_STATE.new" "$FAKE_STATE"
+    fi
+fi
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/systemctl" <<'FAKE_EOF'
+#!/bin/bash
+echo "systemctl $*" >> "${FAKE_CALLS:?}"
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/sysctl" <<'FAKE_EOF'
+#!/bin/bash
+echo "sysctl $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+case "$*" in
+    *"-n net.ipv4.ip_forward"*) echo "$IP_FORWARD" ;;
+    *"-w net.ipv4.ip_forward=1"*)
+        sed 's|^IP_FORWARD=.*|IP_FORWARD=1|' "$FAKE_STATE" > "$FAKE_STATE.new" \
+            && mv "$FAKE_STATE.new" "$FAKE_STATE"
+        echo "net.ipv4.ip_forward = 1"
+        ;;
+esac
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/curl" <<'FAKE_EOF'
+#!/bin/bash
+echo "curl $*" >> "${FAKE_CALLS:?}"
+oarg=""
+prev=""
+for a in "$@"; do
+    [ "$prev" = "-o" ] && oarg="$a"
+    prev="$a"
+done
+if [ -n "$oarg" ]; then
+    mkdir -p "$(dirname "$oarg")"
+    printf 'FAKE-DOCKER-GPG-KEY\n' > "$oarg"
+fi
+exit 0
+FAKE_EOF
+
+chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/curl"
+
+# --- harness plumbing ---------------------------------------------------
+
+os_release() { # os_release ID VERSION CODENAME
+    cat > "$TMP_TEST/os-release" <<EOF
+PRETTY_NAME="$1 $2"
+ID=$1
+VERSION_ID="$2"
+VERSION_CODENAME=$3
+EOF
+}
+
+ROOT="$TMP_TEST/root"
+SYSCTL_TEST="$TMP_TEST/sysctl.d"
+KEYRING_TEST="$TMP_TEST/apt/keyrings"
+SOURCES_TEST="$TMP_TEST/apt/sources.list.d"
+
+run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
+    AMNEZIA_INSTALL_TEST=1 \
+    AMNEZIA_INSTALL_FAKE_DIR="$FAKE_DIR" \
+    AMNEZIA_INSTALL_OS_RELEASE="$TMP_TEST/os-release" \
+    AMNEZIA_INSTALL_SYSCTL_DIR="$SYSCTL_TEST" \
+    AMNEZIA_INSTALL_KEYRING_DIR="$KEYRING_TEST" \
+    AMNEZIA_INSTALL_APT_SOURCES_DIR="$SOURCES_TEST" \
+    PATH="$FAKE_DIR:$PATH" \
+    bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+    rc=$?
+    if [ -n "${M91_DEBUG:-}" ] && [ "$rc" != "0" ]; then
+        echo "=== DEBUG run rc=$rc ===" >&2
+        cat "$TMP_TEST/out" "$TMP_TEST/err" >&2
+    fi
+    echo $rc
+}
+
+stdout() { cat "$TMP_TEST/out"; }
+stderr() { cat "$TMP_TEST/err"; }
+
+assert_contains() { # needle haystack-file
+    grep -q "$1" "$2" || { fail "missing \"$1\" in $3"; return 0; }
+    return 0
+}
+
+# --- tests ---------------------------------------------------------------
+
+test_bash_syntax() {
+    bash -n "$INSTALL_SH" && pass "bash -n install.sh" || fail "bash -n install.sh"
+}
+
+test_unsupported_os() {
+    fakes_reset
+    rm -rf "$ROOT"
+    os_release arch rolling rolling
+    rc="$(run_install)"
+    [ "$rc" = "1" ] || fail "unsupported OS: exit $rc, want 1"
+    [ -d "$ROOT" ] || pass "unsupported OS: deployment root not created" \
+        || true
+    [ -d "$ROOT" ] && fail "unsupported OS: deployment root was created"
+    grep -q "unsupported OS" "$TMP_TEST/err" && pass "unsupported OS: rejection message" \
+        || fail "unsupported OS: rejection message"
+}
+
+test_supported_os_matrix() {
+    for spec in "debian:12:bookworm" "ubuntu:22.04:jammy" "ubuntu:24.04:noble"; do
+        id="${spec%%:*}"; rest="${spec#*:}"; ver="${rest%%:*}"; code="${rest#*:}"
+        fakes_reset
+        rm -rf "$ROOT"
+        os_release "$id" "$ver" "$code"
+        rc="$(run_install)"
+        if [ "$rc" = "0" ]; then
+            pass "supported OS flow: $id $ver"
+        else
+            fail "supported OS flow: $id $ver (exit $rc)"
+        fi
+    done
+}
+
+test_compose_current_skips_apt() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "compose>=2.20 flow: exit $rc"
+    if grep -q "apt-get" "$FAKE_CALLS"; then
+        fail "compose>=2.20: apt-get was invoked although Docker was complete"
+    else
+        pass "compose>=2.20: apt-get not invoked"
+    fi
+}
+
+test_docker_missing_installs() {
+    # Docker "absent": the fake answers an empty compose version (no
+    # usable engine/plugin), so the installer must go through the
+    # official-repo installation path; the fake stays absent after the
+    # install, so the run ends with the contract exit 1 — proving the
+    # install attempt happened before the refusal. The fake always
+    # shadows the real host docker CLI (no host lookup ever happens).
+    fakes_reset
+    setstate COMPOSE_VERSION "" "$FAKE_STATE"
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "1" ] || fail "docker missing: exit $rc, want 1 (still missing after install)"
+    [ -f "$FAKE_FS/apt-installed" ] && pass "docker missing: apt installation ran" \
+        || fail "docker missing: apt installation did not run"
+    [ -f "$KEYRING_TEST/docker.asc" ] && pass "docker missing: keyring written via injected dir" \
+        || fail "docker missing: keyring not written"
+    grep -q "still missing or < 2.20" "$TMP_TEST/err" && pass "docker missing: refusal message" \
+        || fail "docker missing: refusal message"
+}
+
+test_compose_old_upgraded() {
+    fakes_reset "2.19.6"
+    setstate NEW_COMPOSE_VERSION 2.30.0 "$FAKE_STATE"
+    os_release ubuntu 22.04 jammy
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "compose upgrade path: exit $rc"
+    grep -q "apt-get.*install.*docker-ce" "$FAKE_CALLS" && pass "compose<2.20: official repo install ran" \
+        || fail "compose<2.20: official repo install did not run"
+    grep -q "docker-compose-plugin" "$FAKE_CALLS" && pass "compose<2.20: compose plugin in install set" \
+        || fail "compose<2.20: compose plugin missing from install set"
+}
+
+test_compose_old_still_old() {
+    fakes_reset "2.19.6"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "1" ] || fail "compose still <2.20: exit $rc, want 1"
+    grep -q "still missing or < 2.20" "$TMP_TEST/err" && pass "compose still <2.20: refusal message" \
+        || fail "compose still <2.20: refusal message"
+}
+
+test_invalid_port() {
+    fakes_reset
+    os_release debian 12 bookworm
+    for bad in 0 65536 abc ""; do
+        rc="$(run_install --awg-port "$bad")"
+        [ "$rc" = "2" ] || fail "invalid port '$bad': exit $rc, want 2"
+    done
+    pass "invalid AWG_PORT values rejected (exit 2)"
+}
+
+test_default_port() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "default port flow: exit $rc"
+    grep -q "AWG_PORT=51820" "$ROOT/.env" && pass "default AWG_PORT=51820 in .env" \
+        || fail "default AWG_PORT=51820 in .env"
+}
+
+test_custom_port() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --awg-port 23456)"
+    [ "$rc" = "0" ] || fail "custom port flow: exit $rc"
+    grep -q "AWG_PORT=23456" "$ROOT/.env" && pass "custom AWG_PORT=23456 in .env" \
+        || fail "custom AWG_PORT=23456 in .env"
+}
+
+test_unknown_argument() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --bogus)"
+    [ "$rc" = "2" ] || fail "unknown argument: exit $rc, want 2"
+    pass "unknown arguments rejected (exit 2)"
+}
+
+test_panel_loopback_and_no_sock() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "loopback flow: exit $rc"
+    grep -q "127.0.0.1:8787:8787" "$ROOT/compose.yaml" && pass "panel stays loopback: 127.0.0.1:8787:8787" \
+        || fail "panel loopback mapping missing"
+    if grep -Eq '^[[:space:]]*- "0\.0\.0\.0' "$ROOT/compose.yaml"; then
+        fail "panel published on 0.0.0.0:8787"
+    else
+        pass "panel never published on 0.0.0.0"
+    fi
+    grep -q "docker.sock" "$ROOT/compose.yaml" && fail "docker.sock present in installed compose" \
+        || pass "no docker.sock in installed compose"
+}
+
+test_layout_and_permissions() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "layout flow: exit $rc"
+    mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+    [ "$(mode "$ROOT")" = "750" ] && pass "root dir 0750" || fail "root dir perms: $(mode "$ROOT")"
+    for sub in data config status backups; do
+        [ "$(mode "$ROOT/$sub")" = "700" ] && pass "$sub/ 0700" || fail "$sub/ perms: $(mode "$ROOT/$sub")"
+    done
+    [ "$(mode "$ROOT/.env")" = "600" ] && pass ".env 0600" || fail ".env perms: $(mode "$ROOT/.env")"
+    [ -f "$ROOT/app/panel/Dockerfile" ] && pass "app/ build context installed" \
+        || fail "app/ build context not installed"
+}
+
+test_versions_lock_used() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "versions.lock flow: exit $rc"
+    if cmp -s "$M91_HOME/versions.lock" "$ROOT/versions.lock"; then
+        pass "installed versions.lock identical to the repo pin"
+    else
+        fail "installed versions.lock differs from the repo pin"
+    fi
+    grep -q -- "--env-file" "$FAKE_CALLS" && grep -q "versions.lock" "$FAKE_CALLS" \
+        && pass "compose invoked with --env-file versions.lock" \
+        || fail "compose not invoked with --env-file versions.lock"
+}
+
+test_ip_forward_disabled() {
+    fakes_reset
+    setstate IP_FORWARD 0 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "ip_forward disabled flow: exit $rc"
+    [ -f "$SYSCTL_TEST/99-amnezia-vpn.conf" ] && grep -q "net.ipv4.ip_forward = 1" "$SYSCTL_TEST/99-amnezia-vpn.conf" \
+        && pass "ip_forward persisted via injected sysctl.d" \
+        || fail "ip_forward not persisted"
+    grep -q "sysctl -w net.ipv4.ip_forward=1" "$FAKE_CALLS" && pass "ip_forward applied immediately" \
+        || fail "ip_forward not applied immediately"
+}
+
+test_ip_forward_already_enabled() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "ip_forward enabled flow: exit $rc"
+    [ -f "$SYSCTL_TEST/99-amnezia-vpn.conf" ] && fail "unrelated sysctl file written although forward=1" \
+        || pass "no sysctl file written when already enabled"
+}
+
+test_doctor_failure() {
+    fakes_reset
+    setstate DAEMON fail "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "1" ] || fail "doctor failure: exit $rc, want 1"
+    grep -q "self-check: the Docker daemon is not reachable" "$TMP_TEST/err" \
+        && pass "doctor failure: message on stderr" \
+        || fail "doctor failure: message missing"
+}
+
+test_ssh_hint() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "hint flow: exit $rc"
+    grep -q "ssh -L 8787:127.0.0.1:8787" "$TMP_TEST/out" && pass "SSH tunnel hint printed" \
+        || fail "SSH tunnel hint missing from stdout"
+}
+
+test_secrets_absent() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "secrets flow: exit $rc"
+    for needle in "private_key" "password" "age identity" "docker.asc" "AWG_PORT=23456"; do
+        if grep -qi "$needle" "$TMP_TEST/out" "$TMP_TEST/err" 2>/dev/null; then
+            fail "secret-like output leaked: \"$needle\""
+        fi
+    done
+    pass "no secrets/credentials in stdout+stderr"
+}
+
+test_idempotent_rerun() {
+    fakes_reset "2.19.6"
+    setstate NEW_COMPOSE_VERSION 2.30.0 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "rerun first pass: exit $rc"
+    echo "user-data" > "$ROOT/data/keep.txt"
+    marker_before="$(awk -F= '/AWG_PORT/{print $2}' "$ROOT/.env")"
+    apt_calls_before="$(grep -c "apt-get" "$FAKE_CALLS")"
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "rerun second pass: exit $rc"
+    [ -f "$ROOT/data/keep.txt" ] && pass "rerun: application data untouched" \
+        || fail "rerun: application data destroyed"
+    [ "$(awk -F= '/AWG_PORT/{print $2}' "$ROOT/.env")" = "$marker_before" ] \
+        && pass "rerun: .env not overwritten" \
+        || fail "rerun: .env overwritten"
+    [ "$(grep -c "apt-get" "$FAKE_CALLS")" = "$apt_calls_before" ] \
+        && pass "rerun: no repeated docker installation" \
+        || fail "rerun: docker installation repeated"
+}
+
+# --- main ---------------------------------------------------------------
+
+test_bash_syntax
+test_unsupported_os
+test_supported_os_matrix
+test_compose_current_skips_apt
+test_docker_missing_installs
+test_compose_old_upgraded
+test_compose_old_still_old
+test_invalid_port
+test_default_port
+test_custom_port
+test_unknown_argument
+test_panel_loopback_and_no_sock
+test_layout_and_permissions
+test_versions_lock_used
+test_ip_forward_disabled
+test_ip_forward_already_enabled
+test_doctor_failure
+test_ssh_hint
+test_secrets_absent
+test_idempotent_rerun
+
+echo
+if [ "$M91_ERRORS" -eq 0 ]; then
+    echo "M9.1 install.sh: ALL TESTS PASSED"
+    exit 0
+fi
+echo "M9.1 install.sh: $M91_ERRORS test(s) FAILED"
+exit 1
