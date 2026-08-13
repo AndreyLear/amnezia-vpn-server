@@ -735,6 +735,10 @@ test_forward_accept_docker_user() {
     [ -f "$unit" ] || fail "forward-accept unit missing"
     grep -q "After=docker.service nftables.service" "$unit" && pass "unit ordered after docker+nftables" \
         || fail "unit ordering missing"
+    grep -q 'iptables -t filter -C "\$chain" \$d -j ACCEPT' "$unit" && pass "unit ExecStart keeps literal \$chain (no \$\$ PID expansion)" \
+        || fail "unit ExecStart expanded \$\$ (installer PID leaked into the unit)"
+    grep -q 'iptables -t filter -I "\$chain" 1 \$d -j ACCEPT' "$unit" && pass "unit ExecStart insert path intact" \
+        || fail "unit ExecStart insert path missing"
     grep -q "systemctl enable amnezia-vpn-forward.service" "$FAKE_CALLS" && pass "unit enabled" \
         || fail "unit not enabled"
     grep -q "systemctl start amnezia-vpn-forward.service" "$FAKE_CALLS" && pass "unit started" \

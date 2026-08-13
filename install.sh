@@ -602,7 +602,10 @@ net_setup() {
         # Boot persistence: docker/ufw rebuild their chains on every
         # boot, so the insertion runs again from a one-shot unit
         # (idempotent; no-op when the rules are already present).
-        cat > "$SYSTEMD_DIR/amnezia-vpn-forward.service" <<EOF
+        # Quoted delimiter: the unit file must receive the literal
+        # "$chain"/"$d" (expanded at boot by /bin/sh), NOT the
+        # installer's PID ("$$" would be expanded by this shell).
+        cat > "$SYSTEMD_DIR/amnezia-vpn-forward.service" <<'EOF'
 # amnezia-vpn managed (M9.2): tunnel egress forward accept for
 # docker/ufw coexistence. Runs after docker and nftables, never
 # flushes or drops anything, idempotent on every boot.
@@ -614,7 +617,7 @@ Wants=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'command -v iptables >/dev/null 2>&1 || exit 0; chain=FORWARD; iptables -t filter -L DOCKER-USER >/dev/null 2>&1 && chain=DOCKER-USER; for d in "-i awg0" "-o awg0"; do iptables -t filter -C "$$chain" $$d -j ACCEPT 2>/dev/null || iptables -t filter -I "$$chain" 1 $$d -j ACCEPT; done'
+ExecStart=/bin/sh -c 'command -v iptables >/dev/null 2>&1 || exit 0; chain=FORWARD; iptables -t filter -L DOCKER-USER >/dev/null 2>&1 && chain=DOCKER-USER; for d in "-i awg0" "-o awg0"; do iptables -t filter -C "$chain" $d -j ACCEPT 2>/dev/null || iptables -t filter -I "$chain" 1 $d -j ACCEPT; done'
 
 [Install]
 WantedBy=multi-user.target
