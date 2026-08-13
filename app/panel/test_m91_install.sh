@@ -49,6 +49,9 @@ IP_FORWARD=1
 NFT_CHECK_RC=0
 NFT_APPLY_RC=0
 NFT_APPLIED=0
+MODPROBE_OK=yes
+DU_IN_ACCEPT=0
+DU_OUT_ACCEPT=0
 EOF
 }
 
@@ -169,6 +172,75 @@ exit 0
 FAKE_EOF
 
 chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl"
+
+# M9.2c fakes: the installer probes the AmneziaWG client stack and
+# manages the docker/ufw forward-accept coexistence rules.
+cat > "$FAKE_DIR/modprobe" <<'FAKE_EOF'
+#!/bin/bash
+echo "modprobe $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+[ "${MODPROBE_OK:-yes}" = "yes" ] || exit 1
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/awg" <<'FAKE_EOF'
+#!/bin/bash
+echo "awg $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "version" ]; then
+    echo "awg 1.0.20260223"
+    exit 0
+fi
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/uname" <<'FAKE_EOF'
+#!/bin/bash
+echo "uname $*" >> "${FAKE_CALLS:?}"
+[ "${1:-}" = "-r" ] && echo "6.8.0-fake"
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/add-apt-repository" <<'FAKE_EOF'
+#!/bin/bash
+echo "add-apt-repository $*" >> "${FAKE_CALLS:?}"
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/iptables" <<'FAKE_EOF'
+#!/bin/bash
+echo "iptables $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+act=""; chain=""; inf=""
+for a in "$@"; do
+    case "$a" in
+        -L) act="L" ;;
+        -C) act="C" ;;
+        -I) act="I" ;;
+        -t | filter | 1) ;;
+        DOCKER-USER) chain="DU" ;;
+        FORWARD) chain="FW" ;;
+        -i) inf="IN" ;;
+        -o) inf="OUT" ;;
+        -j | ACCEPT) ;;
+    esac
+done
+if [ "$act" = "L" ]; then
+    [ "$chain" = "DU" ] && [ "${DU_CHAIN:-yes}" = "no" ] && exit 1
+    exit 0
+fi
+if [ "$act" = "C" ]; then
+    eval "v=\${${chain}_${inf}_ACCEPT:-0}"
+    [ "$v" = "1" ] && exit 0 || exit 1
+fi
+setstate_val="${chain}_${inf}_ACCEPT"
+sed "s/^${setstate_val}=.*/${setstate_val}=1/" "$FAKE_STATE" > "$FAKE_STATE.new" \
+    && mv "$FAKE_STATE.new" "$FAKE_STATE"
+exit 0
+FAKE_EOF
+
+chmod +x "$FAKE_DIR/modprobe" "$FAKE_DIR/awg" "$FAKE_DIR/uname" \
+    "$FAKE_DIR/add-apt-repository" "$FAKE_DIR/iptables"
 
 # --- harness plumbing ---------------------------------------------------
 
