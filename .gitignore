@@ -40,9 +40,10 @@ restore/
 # Logs
 *.log
 
-# Milestone audit documents live only in AUDITS/ (never committed);
-# the changelog stays tracked for the release process.
+# Milestone audit documents live only in AUDITS/ (never committed).
 AUDITS/
 # Internal design documents (spec, architecture, security notes) are
 # kept out of the repository like the audits.
 docs/
+# The changelog is maintained locally and not committed.
+CHANGELOG.md
