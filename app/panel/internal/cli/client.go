@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -159,6 +160,9 @@ func (a *app) cmdClientAdd(args []string) int {
 		PresharedKey: presharedKey,
 	})
 	if err != nil {
+		if errors.Is(err, db.ErrClientNameExists) {
+			return a.fatal(opClientAdd, err)
+		}
 		return a.fatal(opClientAdd, fmt.Errorf("create client: %w", err))
 	}
 	if expiresAt != "" {

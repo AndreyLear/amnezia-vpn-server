@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -336,7 +337,7 @@ func TestAllocatorSkipsUsedAndReusesFreed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GenerateKeyPair: %v", err)
 		}
-		born[i], err = CreateClient(handle, "10.8.0.1/24", NewClient{Name: "c", PrivateKey: priv, PublicKey: pub})
+		born[i], err = CreateClient(handle, "10.8.0.1/24", NewClient{Name: "c" + strconv.Itoa(i+1), PrivateKey: priv, PublicKey: pub})
 		if err != nil {
 			t.Fatalf("CreateClient #%d: %v", i+1, err)
 		}
@@ -591,6 +592,232 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if v, _, _ := GetSetting(handle, "endpoint"); v != "vpn2.example.com:51820" {
 		t.Fatalf("endpoint after upsert = %q", v)
+	}
+}
+
+// ---- M4.10: unique client names (schema v4) and server update ----
+
+func TestCreateClientDuplicateNameRejected(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := seedServerM4(t, handle, "10.8.0.1/24"); err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+	c1, err := CreateClient(handle, "10.8.0.1/24", NewClient{Name: "alice", PrivateKey: testPriv, PublicKey: testPub})
+	if err != nil {
+		t.Fatalf("CreateClient #1: %v", err)
+	}
+	if _, err := CreateClient(handle, "10.8.0.1/24", NewClient{Name: "alice", PrivateKey: testPriv, PublicKey: testPub2}); !errors.Is(err, ErrClientNameExists) {
+		t.Fatalf("duplicate CreateClient error = %v, want ErrClientNameExists", err)
+	}
+	// the failed insert must not consume the next address
+	if containsPeerAddr(handle, "10.8.0.3/32") {
+		t.Fatalf("failed duplicate insert consumed address 10.8.0.3/32")
+	}
+	if c1.Address != "10.8.0.2/32" {
+		t.Fatalf("first client address = %q, want 10.8.0.2/32", c1.Address)
+	}
+	// a distinct name still succeeds
+	c2, err := CreateClient(handle, "10.8.0.1/24", NewClient{Name: "alice2", PrivateKey: testPriv, PublicKey: testPub2})
+	if err != nil {
+		t.Fatalf("CreateClient distinct name: %v", err)
+	}
+	if c2.Address != "10.8.0.3/32" {
+		t.Fatalf("distinct-name client address = %q, want 10.8.0.3/32", c2.Address)
+	}
+}
+
+func TestUpdateClientNameDuplicateRejected(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := seedServerM4(t, handle, "10.8.0.1/24"); err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+	alice, err := CreateClient(handle, "10.8.0.1/24", NewClient{Name: "alice", PrivateKey: testPriv, PublicKey: testPub})
+	if err != nil {
+		t.Fatalf("CreateClient alice: %v", err)
+	}
+	if _, err := CreateClient(handle, "10.8.0.1/24", NewClient{Name: "bob", PrivateKey: testPriv, PublicKey: testPub2}); err != nil {
+		t.Fatalf("CreateClient bob: %v", err)
+	}
+	if err := UpdateClientName(handle, alice.ID, "bob"); !errors.Is(err, ErrClientNameExists) {
+		t.Fatalf("rename onto taken name error = %v, want ErrClientNameExists", err)
+	}
+	// renaming to the current name is a no-op, not an error
+	if err := UpdateClientName(handle, alice.ID, "alice"); err != nil {
+		t.Fatalf("self-rename: %v", err)
+	}
+	if err := UpdateClientName(handle, alice.ID, "carol"); err != nil {
+		t.Fatalf("rename to fresh name: %v", err)
+	}
+	var name string
+	if err := handle.QueryRow(`SELECT name FROM clients WHERE id = ?`, alice.ID).Scan(&name); err != nil {
+		t.Fatalf("read back name: %v", err)
+	}
+	if name != "carol" {
+		t.Fatalf("name after rename = %q, want carol", name)
+	}
+}
+
+func TestMigrateDedupesLegacyNames(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	// Simulate a v3 database: clients table without the unique name
+	// index and duplicated names (Migrate adds the missing tables via
+	// CREATE TABLE IF NOT EXISTS).
+	if _, err := handle.Exec(`CREATE TABLE clients (
+		id INTEGER PRIMARY KEY,
+		name TEXT NOT NULL,
+		private_key TEXT NOT NULL,
+		public_key TEXT NOT NULL UNIQUE,
+		preshared_key TEXT,
+		address TEXT NOT NULL UNIQUE,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		expires_at TEXT
+	)`); err != nil {
+		t.Fatalf("create legacy clients table: %v", err)
+	}
+	seed := []struct{ name, key, addr string }{
+		{"alice", "legacy-key-1", "10.8.0.2/32"},
+		{"alice", "legacy-key-2", "10.8.0.3/32"},
+		{"bob", "legacy-key-3", "10.8.0.4/32"},
+		{"bob", "legacy-key-4", "10.8.0.5/32"},
+		{"carol", "legacy-key-5", "10.8.0.6/32"},
+	}
+	for _, s := range seed {
+		if _, err := handle.Exec(
+			`INSERT INTO clients (name, private_key, public_key, address, enabled, created_at, updated_at)
+			 VALUES (?, 'k', ?, ?, 1, 't', 't')`,
+			s.name, s.key, s.addr,
+		); err != nil {
+			t.Fatalf("seed client %s: %v", s.name, err)
+		}
+	}
+
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	want := []struct {
+		id   int64
+		name string
+	}{
+		{1, "alice"},
+		{2, "alice-2"},
+		{3, "bob"},
+		{4, "bob-4"},
+		{5, "carol"},
+	}
+	rows, err := handle.Query(`SELECT id, name FROM clients ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query names: %v", err)
+	}
+	defer rows.Close()
+	i := 0
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if i >= len(want) {
+			t.Fatalf("unexpected extra client %q (id %d)", name, id)
+		}
+		if id != want[i].id || name != want[i].name {
+			t.Errorf("row %d = (%d, %q), want (%d, %q)", i, id, name, want[i].id, want[i].name)
+		}
+		i++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	if i != len(want) {
+		t.Fatalf("got %d clients, want %d", i, len(want))
+	}
+
+	// the unique index exists and guards raw inserts (backstop)
+	var idx string
+	if err := handle.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_clients_name'`,
+	).Scan(&idx); err != nil {
+		t.Fatalf("unique name index missing: %v", err)
+	}
+	if _, err := handle.Exec(
+		`INSERT INTO clients (name, private_key, public_key, address, enabled, created_at, updated_at)
+		 VALUES ('alice', 'k', 'legacy-key-6', '10.8.0.7/32', 1, 't', 't')`,
+	); err == nil {
+		t.Fatal("unique index accepted a duplicate name")
+	}
+	if got, err := SchemaVersionStored(handle); err != nil || got != SchemaVersion {
+		t.Fatalf("schema_version after migrate = %q (err %v), want %q", got, err, SchemaVersion)
+	}
+}
+
+func TestUpdateServerFields(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := seedServerM4(t, handle, "10.8.0.1/24"); err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+	dns, params, ep := "1.1.1.1,8.8.8.8", `{"junk": false}`, "vpn2.example.com:51821"
+	if err := UpdateServer(handle, &dns, &params, &ep); err != nil {
+		t.Fatalf("UpdateServer: %v", err)
+	}
+	s, err := ServerRow(handle)
+	if err != nil {
+		t.Fatalf("ServerRow: %v", err)
+	}
+	if s.DNS != "1.1.1.1,8.8.8.8" {
+		t.Errorf("dns = %q, want 1.1.1.1,8.8.8.8", s.DNS)
+	}
+	if s.AWGParams != `{"junk": false}` {
+		t.Errorf("awg_params = %q, want %q", s.AWGParams, `{"junk": false}`)
+	}
+	if v, ok, _ := GetSetting(handle, "endpoint"); !ok || v != "vpn2.example.com:51821" {
+		t.Errorf("endpoint = %q (ok=%v), want vpn2.example.com:51821", v, ok)
+	}
+	// partial update: nil args leave the stored values untouched
+	ep2 := "vpn3.example.com:51822"
+	if err := UpdateServer(handle, nil, nil, &ep2); err != nil {
+		t.Fatalf("UpdateServer partial: %v", err)
+	}
+	s, err = ServerRow(handle)
+	if err != nil {
+		t.Fatalf("ServerRow: %v", err)
+	}
+	if s.DNS != "1.1.1.1,8.8.8.8" {
+		t.Errorf("dns after partial update = %q", s.DNS)
+	}
+	if s.AWGParams != `{"junk": false}` {
+		t.Errorf("awg_params after partial update = %q", s.AWGParams)
+	}
+	if v, _, _ := GetSetting(handle, "endpoint"); v != "vpn3.example.com:51822" {
+		t.Errorf("endpoint after partial update = %q", v)
+	}
+	// an explicit empty pointer clears the value
+	empty := ""
+	if err := UpdateServer(handle, nil, nil, &empty); err != nil {
+		t.Fatalf("UpdateServer clear: %v", err)
+	}
+	if v, ok, _ := GetSetting(handle, "endpoint"); ok || v != "" {
+		t.Errorf("endpoint after clear = %q (ok=%v), want cleared", v, ok)
+	}
+}
+
+func TestUpdateServerMissingRow(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	dns := "1.1.1.1"
+	if err := UpdateServer(handle, &dns, nil, nil); !errors.Is(err, ErrServerNotFound) {
+		t.Fatalf("UpdateServer without server row error = %v, want ErrServerNotFound", err)
 	}
 }
 

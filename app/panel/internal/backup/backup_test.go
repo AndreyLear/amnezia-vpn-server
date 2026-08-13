@@ -152,7 +152,7 @@ func TestCreateRoundTrip(t *testing.T) {
 	if err := m.Validate(); err != nil {
 		t.Fatalf("manifest invalid: %v", err)
 	}
-	if m.SchemaVersion != 3 || m.Format != 1 || m.Application != applicationValue ||
+	if m.SchemaVersion != schemaVersion() || m.Format != 1 || m.Application != applicationValue ||
 		m.ApplicationVersion != applicationVersion || m.CreatedAt != "2026-08-12T10:30:00Z" {
 		t.Fatalf("manifest = %+v", m)
 	}

@@ -344,6 +344,99 @@ func TestServerInitBadAWGParamsLeavesNoRow(t *testing.T) {
 	}
 }
 
+// ---------- server update ----------
+
+func TestServerUpdateDNS(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	out := c.mustRun("server", "update", "--dns", testDNS)
+	if !strings.Contains(out, "panel server update: ok; dns = "+testDNS) {
+		t.Fatalf("stdout = %q", out)
+	}
+	h := c.openDB()
+	defer h.Close()
+	server, err := db.ServerRow(h)
+	if err != nil {
+		t.Fatalf("server row: %v", err)
+	}
+	if server.DNS != testDNS {
+		t.Fatalf("dns = %q, want %q", server.DNS, testDNS)
+	}
+	if !strings.Contains(c.readConfig(), "DNS = "+testDNS) {
+		t.Fatal("config missing DNS line after update")
+	}
+}
+
+func TestServerUpdateAWGParamsAndEndpoint(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	c.mustRun("server", "update",
+		"--awg-params", testAWGParams, "--endpoint", "vpn2.example.com:51821")
+	h := c.openDB()
+	defer h.Close()
+	server, err := db.ServerRow(h)
+	if err != nil {
+		t.Fatalf("server row: %v", err)
+	}
+	if server.AWGParams != testAWGParams {
+		t.Fatalf("awg_params = %q, want %q", server.AWGParams, testAWGParams)
+	}
+	if server.DNS != "" {
+		t.Fatalf("dns changed by unrelated update: %q", server.DNS)
+	}
+	if ep, ok, err := db.GetSetting(h, "endpoint"); err != nil || !ok || ep != "vpn2.example.com:51821" {
+		t.Fatalf("endpoint = %q, %v, %v", ep, ok, err)
+	}
+}
+
+func TestServerUpdateUsageErrors(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	for _, args := range [][]string{
+		{"server", "update"},
+		{"server", "update", "10.9.0.1/24"},
+		{"server", "update", "--awg-params", `{"jc":0}`},
+		{"server", "update", "--endpoint", "noport"},
+	} {
+		if code, _, _ := c.run(args...); code != 2 {
+			t.Fatalf("panel %v: exit = %d, want 2 (usage)", args, code)
+		}
+	}
+	h := c.openDB()
+	defer h.Close()
+	server, err := db.ServerRow(h)
+	if err != nil {
+		t.Fatalf("server row: %v", err)
+	}
+	if server.DNS != "" || server.AWGParams != "{}" {
+		t.Fatalf("usage-error updates changed the row: %+v", server)
+	}
+}
+
+func TestServerUpdateWithoutServerRow(t *testing.T) {
+	c := newCtx(t)
+	code, _, errb := c.run("server", "update", "--dns", testDNS)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(errb, "server row") {
+		t.Fatalf("stderr = %q, want server-row error", errb)
+	}
+}
+
+func TestServerUpdateClearsEndpointExplicitly(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	c.mustRun("server", "update", "--endpoint", "")
+	h := c.openDB()
+	defer h.Close()
+	if ep, ok, err := db.GetSetting(h, "endpoint"); err != nil {
+		t.Fatalf("GetSetting: %v", err)
+	} else if ok || ep != "" {
+		t.Fatalf("endpoint = %q (ok=%v), want cleared", ep, ok)
+	}
+}
+
 // ---------- client add ----------
 
 func TestClientAdd(t *testing.T) {
@@ -428,6 +521,42 @@ func TestClientAddName64Chars(t *testing.T) {
 	c.seedServer("", "")
 	if code, _, _ := c.run("client", "add", strings.Repeat("x", 64)); code != 0 {
 		t.Fatalf("exit = %d, want 0 for exactly 64 chars", code)
+	}
+}
+
+func TestClientAddDuplicateNameRejected(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	c.mustRun("client", "add", "bob")
+	code, _, errb := c.run("client", "add", "bob")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(errb, "already exists") {
+		t.Fatalf("stderr = %q, want duplicate-name error", errb)
+	}
+	h := c.openDB()
+	defer h.Close()
+	clients, err := db.ClientsAll(h)
+	if err != nil || len(clients) != 1 {
+		t.Fatalf("clients = %v, %v (duplicate add must not create a row)", clients, err)
+	}
+}
+
+func TestClientRenameDuplicateRejected(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	c.mustRun("client", "add", "bob")
+	c.mustRun("client", "add", "alice")
+	code, _, errb := c.run("client", "rename", "1", "alice")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(errb, "already exists") {
+		t.Fatalf("stderr = %q, want duplicate-name error", errb)
+	}
+	if rec := c.clientByID(1); rec.Name != "bob" {
+		t.Fatalf("name after rejected rename = %q, want bob", rec.Name)
 	}
 }
 

@@ -315,7 +315,7 @@ func syncDir(dir string) error {
 func RecipientFromEnv() (string, error) {
 	r := strings.TrimSpace(os.Getenv(envRecipient))
 	if r == "" {
-		return "", fmt.Errorf("backup: %s is not set", envRecipient)
+		return "", fmt.Errorf("backup: %s is not set: export the age recipient (public key) in the deployment environment or compose .env (AGE_RECIPIENT=age1...) before `panel backup create`; the matching private identity is supplied at restore time", envRecipient)
 	}
 	if _, err := age.ParseX25519Recipient(r); err != nil {
 		return "", fmt.Errorf("backup: %s is not a valid age recipient", envRecipient)

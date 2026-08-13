@@ -277,10 +277,10 @@ func TestBackupDownloadBytes(t *testing.T) {
 
 // TestBackupDownloadRejectsBadNames: traversal attempts, absolute
 // paths and malformed names never reach the file system. The mux
-// itself clean-path-redirects (307) "..", "//" and trailing-slash
-// shapes — those redirects are also refused (follow them to a 404);
-// everything else answers the generic 404 whose body never echoes the
-// requested name.
+// itself clean-path-redirects (301/307 — 301 since Go 1.22) "..",
+// "//" and trailing-slash shapes — those redirects are also refused
+// (follow them to a 404); everything else answers the generic 404
+// whose body never echoes the requested name.
 func TestBackupDownloadRejectsBadNames(t *testing.T) {
 	f := newFixture(t)
 	setBackupsPath(t)
@@ -296,7 +296,7 @@ func TestBackupDownloadRejectsBadNames(t *testing.T) {
 	}
 	for _, p := range hostile {
 		rec := f.get("/backups/" + p + "/download")
-		if rec.Code == http.StatusTemporaryRedirect {
+		if rec.Code == http.StatusMovedPermanently || rec.Code == http.StatusTemporaryRedirect {
 			target := rec.Header().Get("Location")
 			if target == "" || !strings.HasPrefix(target, "/") {
 				t.Fatalf("%q: 307 with bad Location %q", p, target)

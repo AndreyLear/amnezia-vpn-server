@@ -32,6 +32,7 @@ const (
 	flashInvalidID     = "Invalid client id."
 	flashNotFound      = "Client not found."
 	flashInvalidName   = "Invalid client name."
+	flashNameTaken     = "A client with this name already exists."
 	flashInvalidExpiry = "Expected RFC3339 timestamp or \"none\"."
 	flashNoServer      = "Server not initialized."
 	flashNoAddress     = "No free address in the pool."
@@ -93,6 +94,8 @@ func classifyExpected(err error) (string, bool) {
 	switch {
 	case errors.Is(err, db.ErrClientNotFound):
 		return flashNotFound, true
+	case errors.Is(err, db.ErrClientNameExists):
+		return flashNameTaken, true
 	case errors.Is(err, db.ErrServerNotFound):
 		return flashNoServer, true
 	case errors.Is(err, db.ErrNoFreeAddress):

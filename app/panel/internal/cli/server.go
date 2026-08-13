@@ -28,6 +28,8 @@ func (a *app) cmdServer(args []string) int {
 	switch args[0] {
 	case "init":
 		return a.cmdServerInit(args[1:])
+	case "update":
+		return a.cmdServerUpdate(args[1:])
 	default:
 		a.usage()
 		return 2
@@ -142,4 +144,91 @@ func validateEndpointArg(endpoint string) error {
 		return fmt.Errorf("invalid endpoint %q: port must be a number in [1, 65535]", endpoint)
 	}
 	return nil
+}
+
+// cmdServerUpdate applies server settings on the existing row:
+//
+// `panel server update [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>]`
+//
+// Only the flags actually passed are changed; at least one is required
+// (otherwise a usage error). awg_params is pre-flighted through
+// ParseParams and endpoint through validateEndpointArg before the
+// database is touched. After the update awg0.conf is regenerated from
+// the new state; a failed Generate exits 1 with the old config intact
+// (WriteAtomic) and the database not rolled back (derived state). The
+// endpoint may be cleared explicitly with `--endpoint ""`. A missing
+// server row fails with db.ErrServerNotFound.
+func (a *app) cmdServerUpdate(args []string) int {
+	parsed, err := parseArgs(args, map[string]bool{
+		"dns":        true,
+		"awg-params": true,
+		"endpoint":   true,
+	})
+	if err != nil {
+		return a.usageError(opServerUpdate, err.Error())
+	}
+	if len(parsed.positional) != 0 {
+		return a.usageError(opServerUpdate, "want no positional arguments")
+	}
+
+	dns, hasDNS := parsed.flags["dns"]
+	awgParams, hasParams := parsed.flags["awg-params"]
+	endpoint, hasEndpoint := parsed.flags["endpoint"]
+	if !hasDNS && !hasParams && !hasEndpoint {
+		return a.usageError(opServerUpdate, "nothing to update: pass --dns, --awg-params and/or --endpoint")
+	}
+	if hasParams && awgParams == "" {
+		awgParams = "{}"
+	}
+	if awgParams != "" {
+		if _, err := awgconf.ParseParams(awgParams); err != nil {
+			return a.usageError(opServerUpdate, err.Error())
+		}
+	}
+	if hasEndpoint && endpoint != "" {
+		if err := validateEndpointArg(endpoint); err != nil {
+			return a.usageError(opServerUpdate, err.Error())
+		}
+	}
+
+	handle, err := a.openDB()
+	if err != nil {
+		return a.fatal(opServerUpdate, err)
+	}
+	defer handle.Close()
+
+	updateErr := fault("server-update.apply")
+	if updateErr == nil {
+		var dnsArg, paramsArg, endpointArg *string
+		if hasDNS {
+			dnsArg = &dns
+		}
+		if hasParams {
+			paramsArg = &awgParams
+		}
+		if hasEndpoint {
+			endpointArg = &endpoint
+		}
+		updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg)
+	}
+	if updateErr != nil {
+		if errors.Is(updateErr, db.ErrServerNotFound) {
+			return a.fatal(opServerUpdate, updateErr)
+		}
+		return a.fatal(opServerUpdate, fmt.Errorf("update server: %w", updateErr))
+	}
+	if err := a.regenerate(handle); err != nil {
+		return a.fatal(opServerUpdate, fmt.Errorf("generate config: %w", err))
+	}
+	message := "ok"
+	if hasDNS {
+		message += "; dns = " + dns
+	}
+	if hasParams {
+		message += "; awg_params = " + awgParams
+	}
+	if hasEndpoint {
+		message += "; endpoint = " + endpoint
+	}
+	return a.ok(opServerUpdate, message)
 }

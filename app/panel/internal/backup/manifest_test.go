@@ -1,11 +1,22 @@
 package backup
 
 import (
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
+
+// testSchemaVersion is the schema_version the current binary admits;
+// it mirrors db.SchemaVersion so these contract tests survive bumps.
+func testSchemaVersion() int {
+	v, _ := strconv.Atoi(db.SchemaVersion)
+	return v
+}
 
 // TestManifestContract pins the exact JSON shape and values of the M8
 // manifest (§5) and its canonical byte stream.
@@ -14,14 +25,14 @@ func TestManifestContract(t *testing.T) {
 		Format:             1,
 		Application:        "amnezia-vpn-server",
 		ApplicationVersion: "2.0.0",
-		SchemaVersion:      3,
+		SchemaVersion:      testSchemaVersion(),
 		CreatedAt:          "2026-08-12T10:30:00Z",
 	}
 	b, err := m.Marshal()
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	want := `{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":3,"created_at":"2026-08-12T10:30:00Z"}` + "\n"
+	want := fmt.Sprintf(`{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":%d,"created_at":"2026-08-12T10:30:00Z"}`+"\n", testSchemaVersion())
 	if string(b) != want {
 		t.Fatalf("manifest bytes:\n got %q\nwant %q", b, want)
 	}
@@ -32,7 +43,7 @@ func TestManifestValidate(t *testing.T) {
 		Format:             1,
 		Application:        "amnezia-vpn-server",
 		ApplicationVersion: "2.0.0",
-		SchemaVersion:      3,
+		SchemaVersion:      testSchemaVersion(),
 		CreatedAt:          "2026-08-12T10:30:00Z",
 	}
 	if err := base.Validate(); err != nil {
@@ -46,7 +57,7 @@ func TestManifestValidate(t *testing.T) {
 		{"format", func(m *Manifest) { m.Format = 2 }},
 		{"application", func(m *Manifest) { m.Application = "other" }},
 		{"application_version", func(m *Manifest) { m.ApplicationVersion = "2.1.0" }},
-		{"schema_version", func(m *Manifest) { m.SchemaVersion = 4 }},
+		{"schema_version", func(m *Manifest) { m.SchemaVersion = testSchemaVersion() + 1 }},
 		{"schema_version_zero", func(m *Manifest) { m.SchemaVersion = 0 }},
 		{"created_at_garbage", func(m *Manifest) { m.CreatedAt = "not-a-time" }},
 		{"created_at_missing", func(m *Manifest) { m.CreatedAt = "" }},
@@ -60,18 +71,25 @@ func TestManifestValidate(t *testing.T) {
 	}
 }
 
+// manifestJSON builds a valid manifest JSON line with the given extra
+// suffix (before the closing brace) so the tests survive schema bumps.
+func manifestJSON(extra string) string {
+	return fmt.Sprintf(`{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":%d,"created_at":"2026-08-12T10:30:00Z"%s}`,
+		testSchemaVersion(), extra)
+}
+
 func TestManifestUnmarshal(t *testing.T) {
-	ok, err := UnmarshalManifest([]byte(`{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":3,"created_at":"2026-08-12T10:30:00Z"}`))
+	ok, err := UnmarshalManifest([]byte(manifestJSON("")))
 	if err != nil {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}
-	if ok.SchemaVersion != 3 || ok.CreatedAt != "2026-08-12T10:30:00Z" {
+	if ok.SchemaVersion != testSchemaVersion() || ok.CreatedAt != "2026-08-12T10:30:00Z" {
 		t.Fatalf("parsed manifest: %+v", ok)
 	}
 	for _, bad := range []string{
-		`{`,            // garbage
+		`{`, // garbage
 		`{"format":1}`, // missing fields
-		`{"format":1,"application":"x","application_version":"2.0.0","schema_version":3,"created_at":"2026-08-12T10:30:00Z"}`, // bad application
+		fmt.Sprintf(`{"format":1,"application":"x","application_version":"2.0.0","schema_version":%d,"created_at":"2026-08-12T10:30:00Z"}`, testSchemaVersion()), // bad application
 		``, // empty
 	} {
 		if _, err := UnmarshalManifest([]byte(bad)); err == nil {
@@ -80,7 +98,7 @@ func TestManifestUnmarshal(t *testing.T) {
 	}
 	// Extra JSON fields are tolerated by design: json.Unmarshal ignores
 	// them and Validate checks only the contract fields.
-	if _, err := UnmarshalManifest([]byte(`{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":3,"created_at":"2026-08-12T10:30:00Z","extra":"field"}`)); err != nil {
+	if _, err := UnmarshalManifest([]byte(manifestJSON(`,"extra":"field"`))); err != nil {
 		t.Fatalf("extra field must be tolerated: %v", err)
 	}
 }
@@ -97,8 +115,8 @@ func TestLoadManifestFromSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadManifest: %v", err)
 	}
-	if m.SchemaVersion != 3 {
-		t.Fatalf("schema_version = %d, want 3", m.SchemaVersion)
+	if m.SchemaVersion != testSchemaVersion() {
+		t.Fatalf("schema_version = %d, want %d", m.SchemaVersion, testSchemaVersion())
 	}
 	if m.CreatedAt != "2026-08-12T10:30:00Z" {
 		t.Fatalf("created_at = %q", m.CreatedAt)

@@ -4,6 +4,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -89,7 +90,7 @@ func TestClientAddNoFreeAddress(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := db.CreateClient(f.h, webTestServerCIDR, db.NewClient{
-			Name: "bulk", PrivateKey: priv, PublicKey: pub, PresharedKey: psk,
+			Name: fmt.Sprintf("bulk-%d", i), PrivateKey: priv, PublicKey: pub, PresharedKey: psk,
 		}); err != nil {
 			t.Fatalf("bulk client %d: %v", i, err)
 		}

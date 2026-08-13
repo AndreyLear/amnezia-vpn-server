@@ -692,7 +692,11 @@ install: DONE — the AmneziaWG VPN Server stack is deployed under $ROOT_DIR.
 install: Next steps (application bootstrap is intentionally manual):
 install:   panel-init needs a server row: run inside the deployed stack
 install:     docker compose --env-file versions.lock run --rm panel-init \
-install:       /app/panel server init 10.8.0.1/24 51820 --endpoint <public-ip>:${AWG_PORT}
+install:       /app/panel server init 10.8.0.1/24 51820 --endpoint <public-ip>:${AWG_PORT} --dns 1.1.1.1,8.8.8.8
+install:   (--dns is recommended: client configs only get a DNS line when the
+install:   server has one; without it a full-tunnel client (AllowedIPs
+install:   0.0.0.0/0) loses the local network's DNS, and internet goes dark.
+install:   DNS can also be set later with: /app/panel server update --dns ...)
 install:   or restore an existing database:
 install:     docker compose --env-file versions.lock run --rm panel-init \
 install:       /app/panel restore <archive> --identity-stdin  (M8 restore flow)

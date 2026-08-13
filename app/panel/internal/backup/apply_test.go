@@ -50,7 +50,7 @@ func sqliteFileWithClient(t *testing.T, name, key string) []byte {
 func archiveWithAlice(t *testing.T, id *age.X25519Identity) string {
 	t.Helper()
 	return buildArchive(t, id, []archiveEntry{
-		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON)},
+		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileWithClient(t, "alice", "x-archive-client-private-key-alice")},
 	})
 }
@@ -272,7 +272,7 @@ func TestApplyPendingCrashBeforeRetire(t *testing.T) {
 // start): the image simply becomes the live database.
 func TestApplyPendingNoLiveDatabase(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, validEntries(t, "3"))
+	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
 	if _, err := c.doRestore(archive); err != nil {
 		t.Fatal(err)
 	}

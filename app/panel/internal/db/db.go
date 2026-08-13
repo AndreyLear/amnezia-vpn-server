@@ -10,14 +10,18 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/keys"
 	_ "modernc.org/sqlite"
 )
 
-// SchemaVersion matches manifest.schema_version in §5.
-const SchemaVersion = "3"
+// SchemaVersion matches manifest.schema_version in §5. Bumped to 4 when
+// client names became unique (M4.10): v4 adds the dedup migration plus
+// the unique name index; backups taken before the bump are restored
+// only by the v3 binary.
+const SchemaVersion = "4"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS server (
@@ -101,12 +105,48 @@ func Migrate(handle *sql.DB) error {
 			return fmt.Errorf("db: migrate: %w", err)
 		}
 	}
+	if err := migrateClientNameUniqueness(handle); err != nil {
+		return err
+	}
 	if _, err := handle.Exec(
 		`INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)
 		 ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
 		SchemaVersion,
 	); err != nil {
 		return fmt.Errorf("db: record schema_version: %w", err)
+	}
+	return nil
+}
+
+// migrateClientNameUniqueness (schema v4) makes clients.name unique.
+// Pre-existing duplicates are renamed in place to "<name>-<id>" (the
+// lowest id keeps the bare name), then a unique index guards both
+// inserts and renames. SQLite has no UPDATE ... LIMIT, so the dedup
+// loop runs until one pass removes no duplicate (each pass renames at
+// most one row per duplicate group). The migration is idempotent: once
+// the index exists, every name is unique and the loop exits on the
+// first pass.
+func migrateClientNameUniqueness(handle *sql.DB) error {
+	for {
+		res, err := handle.Exec(
+			`UPDATE clients SET name = name || '-' || id
+			 WHERE id NOT IN (SELECT MIN(id) FROM clients GROUP BY name)`,
+		)
+		if err != nil {
+			return fmt.Errorf("db: migrate client name uniqueness (dedup): %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("db: migrate client name uniqueness (rows affected): %w", err)
+		}
+		if n == 0 {
+			break
+		}
+	}
+	if _, err := handle.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_name ON clients(name)`,
+	); err != nil {
+		return fmt.Errorf("db: migrate client name uniqueness (index): %w", err)
 	}
 	return nil
 }
@@ -250,6 +290,11 @@ var ErrClientNotFound = errors.New("db: client not found")
 // address left for a new client (M4 contract, IPv4 only).
 var ErrNoFreeAddress = errors.New("db: no free client address in the server network")
 
+// ErrClientNameExists reports that a client with the same name already
+// exists. Client names are unique (M4.10): duplicate names previously
+// produced indistinguishable `client show` rows and config fragments.
+var ErrClientNameExists = errors.New("db: a client with this name already exists")
+
 // CreateServer bootstraps the single server row (id = 1) with the given
 // X25519 key pair and address, and stores the client-config endpoint
 // under the settings key "endpoint". Both the row and the setting are
@@ -348,6 +393,64 @@ func setSettingTx(tx *sql.Tx, key, value string) error {
 	return nil
 }
 
+// UpdateServer applies the given settings to the single server row
+// (id = 1). Every argument is optional: a nil pointer leaves the stored
+// value untouched; a non-nil pointer is written verbatim, so an empty
+// string explicitly clears the value. dns and awgParams are written to
+// the row, endpoint to the settings table. It fails with
+// ErrServerNotFound when the row is missing. The callers validate
+// awgParams/endpoint before calling.
+func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string) error {
+	tx, err := handle.Begin()
+	if err != nil {
+		return fmt.Errorf("db: begin server update: %w", err)
+	}
+	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM server WHERE id = 1`).Scan(&exists); err != nil {
+		return fmt.Errorf("db: check server row: %w", err)
+	}
+	if exists == 0 {
+		return ErrServerNotFound
+	}
+
+	if dns != nil || awgParams != nil {
+		updates := []string{"updated_at = ?"}
+		args := []any{stamp()}
+		if dns != nil {
+			updates = append(updates, "dns = ?")
+			args = append(args, *dns)
+		}
+		if awgParams != nil {
+			updates = append(updates, "awg_params = ?")
+			args = append(args, *awgParams)
+		}
+		args = append(args, int64(1))
+		if _, err := tx.Exec(
+			`UPDATE server SET `+strings.Join(updates, ", ")+` WHERE id = ?`,
+			args...,
+		); err != nil {
+			return fmt.Errorf("db: update server row: %w", err)
+		}
+	}
+	if endpoint != nil {
+		if *endpoint == "" {
+			if _, err := tx.Exec(`DELETE FROM settings WHERE key = 'endpoint'`); err != nil {
+				return fmt.Errorf("db: clear endpoint setting: %w", err)
+			}
+		} else {
+			if err := setSettingTx(tx, "endpoint", *endpoint); err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit server update: %w", err)
+	}
+	return nil
+}
+
 // ClientRecord is the full client row (§3, table clients), including the
 // private key and preshared key, which are never printed by list/show or
 // logs.
@@ -395,8 +498,9 @@ type NewClient struct {
 // CreateClient allocates the first free /32 host address in the server
 // network (server address + 1, skipping used addresses and the network/
 // broadcast boundaries) and inserts the client within one transaction.
-// It fails with ErrNoFreeAddress when the network is exhausted and
-// returns the created record on success.
+// It fails with ErrNoFreeAddress when the network is exhausted and with
+// ErrClientNameExists when the name is already taken (unique client
+// names, schema v4). It returns the created record on success.
 func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRecord, error) {
 	if !keys.ValidKey(nc.PrivateKey) {
 		return nil, fmt.Errorf("db: invalid client private key: not a 32-byte base64 key")
@@ -412,6 +516,14 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 		return nil, fmt.Errorf("db: begin client create: %w", err)
 	}
 	defer tx.Rollback()
+
+	var taken int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM clients WHERE name = ?`, nc.Name).Scan(&taken); err != nil {
+		return nil, fmt.Errorf("db: check client name: %w", err)
+	}
+	if taken > 0 {
+		return nil, ErrClientNameExists
+	}
 
 	rows, err := tx.Query(`SELECT address FROM clients`)
 	if err != nil {
@@ -573,8 +685,15 @@ func scanClient(row rowScanner) (*ClientRecord, error) {
 }
 
 // UpdateClientName renames a client. ErrClientNotFound when the id is
-// unknown.
+// unknown; ErrClientNameExists when the new name is already taken.
 func UpdateClientName(handle *sql.DB, id int64, name string) error {
+	var taken int
+	if err := handle.QueryRow(`SELECT COUNT(*) FROM clients WHERE name = ? AND id != ?`, name, id).Scan(&taken); err != nil {
+		return fmt.Errorf("db: check client name: %w", err)
+	}
+	if taken > 0 {
+		return ErrClientNameExists
+	}
 	return mutateClient(handle, id,
 		`UPDATE clients SET name = ?, updated_at = ? WHERE id = ?`,
 		name, stamp(), id)

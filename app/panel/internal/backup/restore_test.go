@@ -36,7 +36,12 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-const validManifestJSON = `{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":3,"created_at":"2026-08-12T10:30:00Z"}` + "\n"
+// validManifestJSON returns a valid manifest line for the current
+// binary schema_version (the exact value is the M8 contract mirror of
+// db.SchemaVersion, so it must track the binary).
+func validManifestJSON() string {
+	return fmt.Sprintf(`{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":%d,"created_at":"2026-08-12T10:30:00Z"}`+"\n", schemaVersion())
+}
 
 // archiveEntry is a raw tar entry for buildArchive.
 type archiveEntry struct {
@@ -104,14 +109,14 @@ func buildArchive(t *testing.T, id *age.X25519Identity, entries []archiveEntry) 
 func validEntries(t *testing.T, wantStored string) []archiveEntry {
 	t.Helper()
 	return []archiveEntry{
-		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON)},
+		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, wantStored)},
 	}
 }
 
 // sqliteFileBytes returns the raw bytes of a migrated database whose
-// stored schema_version is set to schemaVersion ("3" normally; other
-// values craft the manifest/stored disagreement test).
+// stored schema_version is set to the given value (db.SchemaVersion
+// normally; other values craft the manifest/stored disagreement test).
 func sqliteFileBytes(t *testing.T, schemaVersion string) []byte {
 	t.Helper()
 	dir := t.TempDir()
@@ -416,7 +421,7 @@ func corruptFile(t *testing.T, path string, i int) {
 // container must fail without touching anything.
 func TestRestoreCorruptedAgeFile(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, validEntries(t, "3"))
+	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
 	corruptFile(t, archive, 7)
 	before, names := c.liveState()
 	if _, err := c.doRestore(archive); err == nil {
@@ -431,7 +436,7 @@ func TestRestoreCorruptedAgeFile(t *testing.T) {
 // zstd/tar payload inside is corrupted.
 func TestRestoreCorruptedBody(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, validEntries(t, "3"))
+	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
 	f, err := os.Open(archive)
 	if err != nil {
 		t.Fatal(err)
@@ -478,7 +483,7 @@ func TestRestoreCorruptedBody(t *testing.T) {
 func TestRestoreMissingManifest(t *testing.T) {
 	c := newRestoreCtx(t)
 	archive := buildArchive(t, c.id, []archiveEntry{
-		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, "3")},
+		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, db.SchemaVersion)},
 	})
 	before, names := c.liveState()
 	_, err := c.doRestore(archive)
@@ -494,7 +499,7 @@ func TestRestoreMissingManifest(t *testing.T) {
 func TestRestoreMissingSQLite(t *testing.T) {
 	c := newRestoreCtx(t)
 	archive := buildArchive(t, c.id, []archiveEntry{
-		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON)},
+		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 	})
 	before, names := c.liveState()
 	_, err := c.doRestore(archive)
@@ -509,7 +514,7 @@ func TestRestoreMissingSQLite(t *testing.T) {
 // TestRestoreExtraFile: a third entry is rejected (Q15).
 func TestRestoreExtraFile(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, append(validEntries(t, "3"),
+	archive := buildArchive(t, c.id, append(validEntries(t, db.SchemaVersion),
 		archiveEntry{name: "evil.txt", typ: tar.TypeReg, data: []byte("x")}))
 	before, names := c.liveState()
 	_, err := c.doRestore(archive)
@@ -525,9 +530,9 @@ func TestRestoreExtraFile(t *testing.T) {
 func TestRestoreDuplicate(t *testing.T) {
 	c := newRestoreCtx(t)
 	archive := buildArchive(t, c.id, []archiveEntry{
-		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON)},
-		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON)},
-		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, "3")},
+		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
+		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
+		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, db.SchemaVersion)},
 	})
 	before, names := c.liveState()
 	_, err := c.doRestore(archive)
@@ -578,7 +583,7 @@ func TestRestoreInvalidManifest(t *testing.T) {
 		c := newRestoreCtx(t)
 		archive := buildArchive(t, c.id, []archiveEntry{
 			{name: manifestFilename, typ: tar.TypeReg, data: []byte(m)},
-			{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, "3")},
+			{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, db.SchemaVersion)},
 		})
 		before, names := c.liveState()
 		if _, err := c.doRestore(archive); err == nil {
@@ -599,7 +604,7 @@ func TestRestoreWrongSchemaVersion(t *testing.T) {
 	badManifest := `{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":77,"created_at":"2026-08-12T10:30:00Z"}` + "\n"
 	archive := buildArchive(t, c.id, []archiveEntry{
 		{name: manifestFilename, typ: tar.TypeReg, data: []byte(badManifest)},
-		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, "3")},
+		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, db.SchemaVersion)},
 	})
 	before, names := c.liveState()
 	if _, err := c.doRestore(archive); err == nil {
@@ -609,12 +614,13 @@ func TestRestoreWrongSchemaVersion(t *testing.T) {
 	c.assertNoMarker()
 	c.assertNoNewBackups(names)
 
-	// manifest 3 but the image stores 2 → stored/manifest disagreement
+	// a valid manifest but the image stores a different version →
+	// stored/manifest disagreement
 	c2 := newRestoreCtx(t)
 	archive2 := buildArchive(t, c2.id, validEntries(t, "2"))
 	before2, names2 := c2.liveState()
 	if _, err := c2.doRestore(archive2); err == nil {
-		t.Fatal("stored schema_version 2 with manifest 3 must be rejected")
+		t.Fatal("stored schema_version 2 with a valid manifest must be rejected")
 	}
 	c2.assertUntouched(before2)
 	c2.assertNoMarker()
@@ -622,13 +628,16 @@ func TestRestoreWrongSchemaVersion(t *testing.T) {
 }
 
 // TestRestoreCorruptedSQLite: the image inside a valid archive is
-// damaged (truncated mid-page), integrity_check must refuse it.
+// damaged (the middle half is zeroed, which lands on b-tree pages and
+// never on the header), integrity_check must refuse it.
 func TestRestoreCorruptedSQLite(t *testing.T) {
 	c := newRestoreCtx(t)
-	data := sqliteFileBytes(t, "3")
-	data = data[:len(data)-777] // cut whole pages + a partial one
+	data := sqliteFileBytes(t, db.SchemaVersion)
+	for i := len(data) / 4; i < 3*len(data)/4; i++ {
+		data[i] = 0
+	}
 	archive := buildArchive(t, c.id, []archiveEntry{
-		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON)},
+		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 		{name: snapshotFilename, typ: tar.TypeReg, data: data},
 	})
 	before, names := c.liveState()
@@ -647,7 +656,7 @@ func TestRestoreCorruptedSQLite(t *testing.T) {
 func TestRestoreSafetyBackupFailure(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", testClientKey)
-	archive := buildArchive(t, c.id, validEntries(t, "3"))
+	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
 	before, _ := c.liveState()
 	blocker := filepath.Join(c.t.TempDir(), "blocker")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
@@ -668,8 +677,8 @@ func TestRestoreSafetyBackupFailure(t *testing.T) {
 func TestRestoreFailedLeavesCleanState(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", testClientKey)
-	good := buildArchive(t, c.id, validEntries(t, "3"))
-	bad := buildArchive(t, c.id, validEntries(t, "3"))
+	good := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
+	bad := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
 	corruptFile(t, bad, 3)
 	if _, err := c.doRestore(bad); err == nil {
 		t.Fatal("bad archive must fail")
@@ -782,7 +791,7 @@ func TestRestoreConcurrent(t *testing.T) {
 func TestRestoreIdentityNotOnDisk(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", testClientKey)
-	archive := buildArchive(t, c.id, validEntries(t, "3"))
+	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
 	if _, err := c.doRestore(archive); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -819,7 +828,7 @@ func TestRestoreErrorsDoNotLeakSecrets(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", markedPriv+"-broken")
 	archive2 := buildArchive(t, c.id, validEntries(t, "2")) // schema mismatch
-	corrupt := buildArchive(t, c.id, validEntries(t, "3"))
+	corrupt := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
 	corruptFile(t, corrupt, 5)
 	identityStr := c.id.String()
 

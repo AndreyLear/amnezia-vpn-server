@@ -161,16 +161,21 @@ func TestMutationAddFailures(t *testing.T) {
 	}
 }
 
-func TestMutationAddDuplicateNamesAllowed(t *testing.T) {
+func TestMutationAddDuplicateNameRejected(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 2; i++ {
-		if got := f.flashOf(f.post("/clients/new", url.Values{"name": {"twin"}})); got != flashAdded {
-			t.Fatalf("add %d: flash = %q", i, got)
-		}
+	if got := f.flashOf(f.post("/clients/new", url.Values{"name": {"twin"}})); got != flashAdded {
+		t.Fatalf("first add: flash = %q", got)
 	}
-	clients, _ := db.ClientsAll(f.h)
-	if len(clients) != 2 || clients[0].Address == clients[1].Address {
-		t.Fatalf("duplicate names / addresses: %+v", clients)
+	rec := f.post("/clients/new", url.Values{"name": {"twin"}})
+	if got := f.flashOf(rec); got != flashNameTaken {
+		t.Fatalf("duplicate add: flash = %q, want %q", got, flashNameTaken)
+	}
+	clients, err := db.ClientsAll(f.h)
+	if err != nil {
+		t.Fatalf("ClientsAll: %v", err)
+	}
+	if len(clients) != 1 {
+		t.Fatalf("duplicate add created a row: %d clients", len(clients))
 	}
 }
 

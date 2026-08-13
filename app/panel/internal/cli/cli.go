@@ -33,6 +33,7 @@ commands:
   serve [--addr <host:port>]    run the web panel
   status                        print the runtime AWG status (status/status.json)
   server init <address> <listen-port> [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>]
+  server update [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>]
   client add <name> [--expires-at <RFC3339>]
   client list
   client show <id>
