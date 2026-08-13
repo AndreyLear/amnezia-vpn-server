@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -131,8 +132,9 @@ func equal(t *testing.T, what string, got, want []string) {
 }
 
 // TestComposeMountMatrix: the exact per-service mount lists. The M8.7
-// backups mount is present on panel only and must be RW (the plain
-// entry without a mode suffix); anything else in this matrix is a
+// backups mount is shared by panel and panel-init (RW, plain entry
+// without a mode suffix) — the M10.2-FIX makes CLI backup/restore see
+// the same store as the web panel; anything else in this matrix is a
 // deliberate topology change and must update this test.
 func TestComposeMountMatrix(t *testing.T) {
 	services := parseCompose(t, composePath(t))
@@ -146,6 +148,7 @@ func TestComposeMountMatrix(t *testing.T) {
 	equal(t, "panel-init volumes", mustService(t, services, "panel-init").volumes, []string{
 		"./data:/data",
 		"./config:/config",
+		"./backups:/data/backups",
 	})
 	equal(t, "awg volumes", mustService(t, services, "awg").volumes, []string{
 		"./config:/config:ro",
@@ -153,8 +156,8 @@ func TestComposeMountMatrix(t *testing.T) {
 	})
 }
 
-// TestComposeBackupsMountOnlyOnPanel: exactly one backups mount in the
-// whole topology, on panel, RW — awg and panel-init never see it.
+// TestComposeBackupsMountOnlyOnPanel: exactly two backups mounts in the
+// whole topology — panel and panel-init, both RW — awg never sees it.
 func TestComposeBackupsMountOnlyOnPanel(t *testing.T) {
 	services := parseCompose(t, composePath(t))
 	var mounts []string
@@ -165,11 +168,16 @@ func TestComposeBackupsMountOnlyOnPanel(t *testing.T) {
 			}
 		}
 	}
-	if len(mounts) != 1 || mounts[0] != "panel: ./backups:/data/backups" {
-		t.Fatalf("backups mounts = %v, want exactly [panel: ./backups:/data/backups]", mounts)
+	sort.Strings(mounts)
+	if len(mounts) != 2 ||
+		mounts[0] != "panel-init: ./backups:/data/backups" ||
+		mounts[1] != "panel: ./backups:/data/backups" {
+		t.Fatalf("backups mounts = %v, want exactly [panel: ./backups:/data/backups, panel-init: ./backups:/data/backups]", mounts)
 	}
-	if strings.HasSuffix(mounts[0], ":ro") {
-		t.Fatalf("backups mount must be RW, got %q", mounts[0])
+	for _, m := range mounts {
+		if strings.HasSuffix(m, ":ro") {
+			t.Fatalf("backups mount must be RW, got %q", m)
+		}
 	}
 }
 

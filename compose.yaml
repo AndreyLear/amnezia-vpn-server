@@ -7,6 +7,9 @@ services:
       # panel-init владеет SQLite и конфигурацией (rw)
       - ./data:/data
       - ./config:/config
+      # M10.2-FIX: общее с panel хранилище резервных копий (rw) — CLI
+      # backup create/restore видит архивы панели и наоборот (DR-флоу)
+      - ./backups:/data/backups
 
   # panel — веб-панель: владеет SQLite и config/awg0.conf
   panel:

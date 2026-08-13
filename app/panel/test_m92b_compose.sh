@@ -80,6 +80,7 @@ test_mount_contract() {
     check_in '^panel:.*- ./config:/config$' "panel: config mounted read-write"
     check_in '^panel:.*- ./status:/status:ro' "panel: status mounted read-only"
     check_in '^panel:.*- ./backups:/data/backups' "panel: backups mounted read-write"
+    check_in '^panel-init:.*- ./backups:/data/backups' "panel-init: backups mounted read-write (M10.2-FIX shared store)"
     check_out 'docker\.sock' "no service mounts the docker socket"
 }
 

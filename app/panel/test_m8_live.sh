@@ -14,8 +14,11 @@
 #     awg has no /data/backups access: its mount list contains no
 #     backups mount and the directory does not exist inside awg;
 #     the runtime mount sets match the compose contract (panel: rw
-#     /data /config /data/backups + ro /status; awg: ro /config +
-#     rw /status).
+#     /data /config /data/backups + ro /status; panel-init: rw /data
+#     /config /data/backups; awg: ro /config + rw /status);
+#     the CLI restore runs through panel-init (the documented install.sh
+#     DR flow) and sees the same archive the panel created (M10.2-FIX:
+#     the shared backup store).
 #
 # Everything runs in a temp directory (data/config/status/backups are
 # never written inside the repo). Docker daemon required.
@@ -131,6 +134,7 @@ services:
     volumes:
       - ${M8_DATA}:/data
       - ${M8_CONFIG}:/config
+      - ${M8_BACKUPS}:/data/backups
   awg:
     volumes:
       - ${M8_CONFIG}:/config:ro
@@ -221,6 +225,13 @@ echo "${PANEL_MOUNTS}" | grep -q '/data/backups:true' || fail "panel backups mou
 echo "${AWG_MOUNTS}" | grep -q '/config:false'    || fail "awg /config lost or rw"
 echo "${AWG_MOUNTS}" | grep -q '/status:true'     || fail "awg /status lost"
 echo "${AWG_MOUNTS}" | grep -q 'backups'          && fail "awg gained a backups mount"
+PI_ID="$(docker ps -a --filter "name=${PROJ}-panel-init" --format '{{.ID}}' | head -1)"
+[ -n "${PI_ID}" ] || fail "no panel-init container to inspect"
+PI_MOUNTS="$(docker inspect -f '{{range .Mounts}}{{.Destination}}:{{.RW}} {{end}}' "${PI_ID}")"
+echo "panel-init mounts: ${PI_MOUNTS}"
+echo "${PI_MOUNTS}" | grep -q '/data:true'        || fail "panel-init lost /data"
+echo "${PI_MOUNTS}" | grep -q '/config:true'      || fail "panel-init lost /config"
+echo "${PI_MOUNTS}" | grep -q '/data/backups:true' || fail "panel-init backups mount missing or ro (M10.2-FIX)"
 echo "OK: mount sets match the M8.7 contract"
 
 echo "==> [6] live restore cycle (M8.8): snapshot -> mutate -> restore -> restart -> applied"
@@ -232,11 +243,23 @@ printf '%s\n' "${M8_PASSWORD}" | "${COMPOSE[@]}" exec -T panel /app/panel auth a
 "${COMPOSE[@]}" exec -T panel /app/panel backup create >/dev/null 2>&1 || fail "snapshot backup create"
 SNAP="$("${COMPOSE[@]}" exec -T panel /app/panel backup list | head -1)"
 [ -n "${SNAP}" ] || fail "snapshot backup list empty"
+
+# M10.2-FIX regression: the archive created through the panel is visible
+# to panel-init (the shared store), so the documented DR restore path
+# (`docker compose run --rm panel-init ... restore`) can reach it.
+PI_SNAP="$("${COMPOSE[@]}" run --rm -e AGE_RECIPIENT="${M8_RECIPIENT}" panel-init /app/panel backup list | head -1)"
+[ -n "${PI_SNAP}" ] || fail "panel-init cannot see the panel-created backup"
+[ "${PI_SNAP}" = "${SNAP}" ] || fail "panel and panel-init disagree on the backup store (${SNAP} vs ${PI_SNAP})"
+echo "OK: panel-created archive ${SNAP} visible to panel-init (shared store)"
+
 "${COMPOSE[@]}" exec -T panel /app/panel client add bob >/dev/null || fail "client add bob"
 
-# Restore prepares the pending marker; the identity goes via stdin only.
-printf '%s\n' "${M8_IDENT}" | "${COMPOSE[@]}" exec -T panel /app/panel restore "${SNAP}" --identity-stdin \
-    >/dev/null || fail "restore prepare"
+# Restore prepares the pending marker via the panel-init CLI path — the
+# flow install.sh documents for disaster recovery; the identity goes via
+# stdin only, AGE_RECIPIENT matches the archive creation.
+printf '%s\n' "${M8_IDENT}" | "${COMPOSE[@]}" run --rm -e AGE_RECIPIENT="${M8_RECIPIENT}" \
+    panel-init /app/panel restore "${SNAP}" --identity-stdin \
+    >/dev/null || fail "restore prepare via panel-init"
 [ -d "${M8_DATA}/.restore-pending" ] || fail "pending marker missing on the host bind dir"
 ls -A "${M8_BACKUPS}" | grep -q '^safety-backup-' || fail "no safety backup after restore"
 echo "OK: restore pending, safety backup present"
