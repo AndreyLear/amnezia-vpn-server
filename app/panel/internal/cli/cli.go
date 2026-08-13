@@ -184,9 +184,13 @@ func (a *app) openDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	if err := db.Migrate(handle); err != nil {
+	migErr := fault("migrate")
+	if migErr == nil {
+		migErr = db.Migrate(handle)
+	}
+	if migErr != nil {
 		handle.Close()
-		return nil, fmt.Errorf("migrate database: %w", err)
+		return nil, fmt.Errorf("migrate database: %w", migErr)
 	}
 	return handle, nil
 }
@@ -196,6 +200,20 @@ func (a *app) openDB() (*sql.DB, error) {
 // and does not touch the database.
 func (a *app) regenerate(handle *sql.DB) error {
 	return awgconf.Generate(handle, configPath())
+}
+
+// testFault, when set by tests, injects the named failure into
+// panel-init error paths that cannot be provoked through the public
+// API (nil in production).
+var testFault func(step string) error
+
+// fault invokes the injection hook when installed; it is a no-op in
+// production builds.
+func fault(step string) error {
+	if testFault == nil {
+		return nil
+	}
+	return testFault(step)
 }
 
 // requireServer loads the server row, mapping a missing row to the M3
@@ -214,11 +232,51 @@ func requireServer(handle *sql.DB) (*db.ServerRecord, error) {
 // (backup.ApplyPending) is applied first, so the regenerated config
 // reflects the restored state (ТЗ §5 chain: restore → restart →
 // panel-init applies → regenerate awg0.conf → AWG startup).
+//
+// M9.3 data-loss guards run before the database is opened:
+//   - a boot snapshot of the live database is taken (recoverable
+//     without keys, rotation kept in backup.BootSnapshot);
+//   - when the .server-initialized sentinel is present but the
+//     database or its server row is gone, init refuses with restore
+//     instructions instead of silently creating a fresh schema;
+//   - an initialized deployment that predates the sentinel gets it
+//     written on the first successful init (upgrade self-heal).
 func (a *app) cmdInit(args []string) int {
 	if len(args) != 0 {
 		return a.usageError("init", "unexpected arguments")
 	}
-	applied, err := backup.ApplyPending(db.DefaultPath())
+	dbPath := db.DefaultPath()
+	if _, err := backup.BootSnapshot(dbPath); err != nil {
+		return a.fatal("init", err)
+	}
+
+	// M9.3 sentinel guard — checked BEFORE the database is opened so a
+	// lost database is never recreated as an empty schema.
+	sentinel, err := backup.SentinelPresent(dbPath)
+	if err == nil {
+		err = fault("init.sentinel-present")
+	}
+	if err != nil {
+		return a.fatal("init", err)
+	}
+	if sentinel {
+		lstatErr := fault("init.sentinel-lstat")
+		if lstatErr == nil {
+			_, lstatErr = os.Lstat(dbPath)
+		}
+		if lstatErr != nil {
+			if errors.Is(lstatErr, os.ErrNotExist) {
+				return a.fatal("init", fmt.Errorf(
+					".server-initialized exists but the database is missing — "+
+						"refusing to create a fresh one. Restore it: `panel restore <archive> "+
+						"--identity-stdin` (backups/), or copy back a boot snapshot "+
+						"amnezia.sqlite.boot-* from the data directory"))
+			}
+			return a.fatal("init", lstatErr)
+		}
+	}
+
+	applied, err := backup.ApplyPending(dbPath)
 	if err != nil {
 		return a.fatal("init", err)
 	}
@@ -230,6 +288,42 @@ func (a *app) cmdInit(args []string) int {
 		return a.fatal("init", err)
 	}
 	defer handle.Close()
+
+	// Post-open guard: a schema-only database under the sentinel (the
+	// silent-wipe outcome) must not be regenerated as a fresh server.
+	if sentinel {
+		_, srvErr := db.ServerRow(handle)
+		if srvErr == nil {
+			srvErr = fault("init.server-row")
+		}
+		if srvErr != nil {
+			if errors.Is(srvErr, db.ErrServerNotFound) {
+				return a.fatal("init", fmt.Errorf(
+					".server-initialized exists but no server row was found — "+
+						"the database was lost or reset, refusing to create a fresh one. "+
+						"Restore it: `panel restore <archive> --identity-stdin` (backups/), "+
+						"or copy back a boot snapshot amnezia.sqlite.boot-* from the data directory"))
+			}
+			return a.fatal("init", srvErr)
+		}
+	} else {
+		// M9.3 upgrade self-heal: an initialized deployment WITHOUT a
+		// sentinel (predates the marker, or a marker was lost) gets it
+		// recorded on the first successful init. A fresh schema
+		// without a server row (M3: init exits 1 with "no server row")
+		// must NOT be marked: the sentinel claims "the server row
+		// exists", so only a real server row may create it.
+		if _, err := db.ServerRow(handle); err == nil {
+			healErr := fault("init.selfheal")
+			if healErr == nil {
+				healErr = backup.WriteSentinel(dbPath)
+			}
+			if healErr != nil {
+				return a.fatal("init", fmt.Errorf("write init sentinel: %w", healErr))
+			}
+		}
+	}
+
 	if err := awgconf.Generate(handle, configPath()); err != nil {
 		return a.fatal("init", err)
 	}

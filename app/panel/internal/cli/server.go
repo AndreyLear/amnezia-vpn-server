@@ -7,16 +7,19 @@ import (
 	"strconv"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/keys"
 )
 
 const opServerInit = "server init"
 
-// cmdServer dispatches the `server` subcommands. There is no server
-// edit/update command in M4: listen_port is set once at init and is
-// changeable only via a full restart (awg syncconf does not apply
-// ListenPort on hot reload, docs/TECHNICAL_SPEC_v2.0.md §10 M4).
+const opServerUpdate = "server update"
+
+// cmdServer dispatches the `server` subcommands. listen_port itself is
+// set once at init and is changeable only via a full restart (awg
+// syncconf does not apply ListenPort on hot reload,
+// docs/TECHNICAL_SPEC_v2.0.md §10 M4).
 func (a *app) cmdServer(args []string) int {
 	if len(args) == 0 {
 		a.usage()
@@ -81,9 +84,13 @@ func (a *app) cmdServerInit(args []string) int {
 		}
 	}
 
-	privateKey, publicKey, err := keys.GenerateKeyPair()
-	if err != nil {
-		return a.fatal(opServerInit, fmt.Errorf("generate server keys: %w", err))
+	var privateKey, publicKey string
+	keyErr := fault("server-init.keys")
+	if keyErr == nil {
+		privateKey, publicKey, keyErr = keys.GenerateKeyPair()
+	}
+	if keyErr != nil {
+		return a.fatal(opServerInit, fmt.Errorf("generate server keys: %w", keyErr))
 	}
 
 	handle, err := a.openDB()
@@ -92,12 +99,26 @@ func (a *app) cmdServerInit(args []string) int {
 	}
 	defer handle.Close()
 
-	if err := db.CreateServer(handle, privateKey, publicKey, address,
-		int64(listenPort), parsed.flags["dns"], awgParams, endpoint); err != nil {
-		if errors.Is(err, db.ErrServerExists) {
-			return a.fatal(opServerInit, err)
+	createErr := fault("server-init.create")
+	if createErr == nil {
+		createErr = db.CreateServer(handle, privateKey, publicKey, address,
+			int64(listenPort), parsed.flags["dns"], awgParams, endpoint)
+	}
+	if createErr != nil {
+		if errors.Is(createErr, db.ErrServerExists) {
+			return a.fatal(opServerInit, createErr)
 		}
-		return a.fatal(opServerInit, fmt.Errorf("create server: %w", err))
+		return a.fatal(opServerInit, fmt.Errorf("create server: %w", createErr))
+	}
+	// M9.3: the initialization sentinel marks "the server row exists";
+	// panel-init refuses to build a fresh schema over a lost database
+	// when the sentinel is present.
+	sentinelErr := fault("server-init.sentinel")
+	if sentinelErr == nil {
+		sentinelErr = backup.WriteSentinel(db.DefaultPath())
+	}
+	if sentinelErr != nil {
+		return a.fatal(opServerInit, sentinelErr)
 	}
 	if err := a.regenerate(handle); err != nil {
 		return a.fatal(opServerInit, fmt.Errorf("generate config: %w", err))
