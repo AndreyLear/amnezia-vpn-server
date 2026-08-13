@@ -52,6 +52,11 @@ NFT_APPLY_RC=0
 NFT_APPLIED=0
 NFTABLES_ACTIVE=yes
 DOCKER_ACTIVE=yes
+DU_CHAIN=yes
+DU_IN_ACCEPT=0
+DU_OUT_ACCEPT=0
+FW_IN_ACCEPT=0
+FW_OUT_ACCEPT=0
 EOF
     # nft fake is hidden between runs (fakes_reset removes it) so the
     # "nft absent -> apt-get install nftables" path can be exercised;
@@ -200,6 +205,66 @@ FAKE_EOF
 
 chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" \
     "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl"
+
+cat > "$FAKE_DIR/modprobe" <<'FAKE_EOF'
+#!/bin/bash
+echo "modprobe $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+[ "${MODPROBE_OK:-yes}" = "yes" ] || exit 1
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/awg" <<'FAKE_EOF'
+#!/bin/bash
+echo "awg $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "version" ]; then
+    echo "awg 1.0.20260223"
+    exit 0
+fi
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/add-apt-repository" <<'FAKE_EOF'
+#!/bin/bash
+echo "add-apt-repository $*" >> "${FAKE_CALLS:?}"
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/iptables" <<'FAKE_EOF'
+#!/bin/bash
+echo "iptables $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+act=""; chain=""; dir=""; inf=""
+for a in "$@"; do
+    case "$a" in
+        -L) act="L" ;;
+        -C) act="C" ;;
+        -I) act="I" ;;
+        -t | filter | 1) ;;
+        DOCKER-USER) chain="DU" ;;
+        FORWARD) chain="FW" ;;
+        awg0) dir="awg0" ;;
+        -i) inf="IN" ;;
+        -o) inf="OUT" ;;
+        -j | ACCEPT) ;;
+    esac
+done
+if [ "$act" = "L" ]; then
+    [ "$chain" = "DU" ] && [ "${DU_CHAIN:-yes}" = "no" ] && exit 1
+    exit 0
+fi
+if [ "$act" = "C" ]; then
+    eval "v=\${${chain}_${inf}_ACCEPT:-0}"
+    [ "$v" = "1" ] && exit 0 || exit 1
+fi
+setstate_val="${chain}_${inf}_ACCEPT"
+sed "s/^${setstate_val}=.*/${setstate_val}=1/" "$FAKE_STATE" > "$FAKE_STATE.new" \
+    && mv "$FAKE_STATE.new" "$FAKE_STATE"
+exit 0
+FAKE_EOF
+
+chmod +x "$FAKE_DIR/modprobe" "$FAKE_DIR/awg" "$FAKE_DIR/add-apt-repository" "$FAKE_DIR/iptables"
 cp "$FAKE_DIR/nft" "$FAKE_DIR/nft.hidden"
 
 # --- harness plumbing ---------------------------------------------------
@@ -234,6 +299,7 @@ run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_NFTABLES_DIR="$NFTABLES_DIR_TEST" \
     AMNEZIA_INSTALL_NFTABLES_CONF="$NFTABLES_CONF_TEST" \
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
+    AMNEZIA_INSTALL_MODULES_DIR="$TMP_TEST/modules-load.d" \
     PATH="${M92_PATH:-$FAKE_DIR:$PATH}" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
@@ -606,6 +672,94 @@ test_ssh_hint() {
         || fail "SSH tunnel hint missing from stdout"
 }
 
+test_awg_stack_present_skips_install() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "awg-present flow: exit $rc"
+    grep -q "add-apt-repository" "$FAKE_CALLS" && fail "awg stack reinstalled though module + awg are present" \
+        || pass "awg stack skipped when module + awg tools are present"
+    grep -q "apt-get install -y amneziawg" "$FAKE_CALLS" && fail "amneziawg packages installed though present" \
+        || pass "no amneziawg package install when already present"
+    [ ! -f "$TMP_TEST/modules-load.d/amneziawg.conf" ] && pass "no modules-load entry when already present" \
+        || fail "modules-load entry written though module is present"
+}
+
+test_awg_stack_forced_install() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1 \
+    AMNEZIA_INSTALL_TEST=1 \
+    AMNEZIA_INSTALL_FAKE_DIR="$FAKE_DIR" \
+    AMNEZIA_INSTALL_OS_RELEASE="$TMP_TEST/os-release" \
+    AMNEZIA_INSTALL_SYSCTL_DIR="$SYSCTL_TEST" \
+    AMNEZIA_INSTALL_KEYRING_DIR="$KEYRING_TEST" \
+    AMNEZIA_INSTALL_APT_SOURCES_DIR="$SOURCES_TEST" \
+    AMNEZIA_INSTALL_NFTABLES_DIR="$NFTABLES_DIR_TEST" \
+    AMNEZIA_INSTALL_NFTABLES_CONF="$NFTABLES_CONF_TEST" \
+    AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
+    AMNEZIA_INSTALL_MODULES_DIR="$TMP_TEST/modules-load.d" \
+    PATH="$FAKE_DIR:$PATH" \
+    bash "$INSTALL_SH" --root "$ROOT" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+    rc=$?
+    [ "$rc" = "0" ] || fail "awg forced flow: exit $rc"
+    grep -q "add-apt-repository -y ppa:amnezia/ppa" "$FAKE_CALLS" && pass "official PPA added (ppa:amnezia/ppa)" \
+        || fail "PPA addition missing"
+    grep -q "apt-get install -y amneziawg amneziawg-tools" "$FAKE_CALLS" && pass "amneziawg + amneziawg-tools installed" \
+        || fail "amneziawg package install missing"
+    grep -q "apt-get install -y software-properties-common linux-headers-" "$FAKE_CALLS" \
+        && pass "dkms build deps (software-properties-common, linux-headers) installed" \
+        || fail "dkms build deps missing"
+    grep -q "^amneziawg$" "$TMP_TEST/modules-load.d/amneziawg.conf" && pass "modules-load entry written" \
+        || fail "modules-load entry missing"
+    grep -q "modprobe amneziawg$" "$FAKE_CALLS" && pass "module probed after install" \
+        || fail "post-install modprobe missing"
+    grep -q "awg version" "$FAKE_CALLS" && pass "awg version reported" \
+        || fail "awg version not reported"
+}
+
+test_forward_accept_docker_user() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward-accept flow: exit $rc"
+    grep -q "iptables -t filter -I DOCKER-USER 1 -i awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "forward accept -i awg0 inserted into DOCKER-USER" \
+        || fail "forward accept -i awg0 missing from DOCKER-USER"
+    grep -q "iptables -t filter -I DOCKER-USER 1 -o awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "forward accept -o awg0 inserted into DOCKER-USER" \
+        || fail "forward accept -o awg0 missing from DOCKER-USER"
+    grep -q "iptables -t filter -C DOCKER-USER" "$FAKE_CALLS" && pass "-C guard checked before insert" \
+        || fail "-C guard missing"
+    unit="$SYSTEMD_DIR_TEST/amnezia-vpn-forward.service"
+    [ -f "$unit" ] || fail "forward-accept unit missing"
+    grep -q "After=docker.service nftables.service" "$unit" && pass "unit ordered after docker+nftables" \
+        || fail "unit ordering missing"
+    grep -q "systemctl enable amnezia-vpn-forward.service" "$FAKE_CALLS" && pass "unit enabled" \
+        || fail "unit not enabled"
+    grep -q "systemctl start amnezia-vpn-forward.service" "$FAKE_CALLS" && pass "unit started" \
+        || fail "unit not started"
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward-accept rerun: exit $rc"
+    [ "$(grep -c "iptables -t filter -I DOCKER-USER" "$FAKE_CALLS")" = "2" ] \
+        && pass "rerun: no duplicate inserts (-C guard) (2 inserts across two runs)" \
+        || fail "rerun: inserts duplicated: $(grep -c "iptables -t filter -I DOCKER-USER" "$FAKE_CALLS")"
+}
+
+test_forward_accept_no_docker_user() {
+    fakes_reset
+    setstate DU_CHAIN no "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward-accept no-DOCKER-USER flow: exit $rc"
+    grep -q "iptables -t filter -I FORWARD 1 -i awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "forward accept falls back to FORWARD top when DOCKER-USER absent" \
+        || fail "FORWARD fallback insert missing"
+    grep -q "iptables -t filter -I FORWARD 1 -o awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "-o awg0 insert into FORWARD" \
+        || fail "-o awg0 FORWARD insert missing"
+}
+
 # --- main ---------------------------------------------------------------
 
 test_bash_syntax
@@ -634,6 +788,10 @@ test_env_invalid_vpn_subnet
 test_env_missing_awg_port
 test_secrets_absent
 test_ssh_hint
+test_awg_stack_present_skips_install
+test_awg_stack_forced_install
+test_forward_accept_docker_user
+test_forward_accept_no_docker_user
 
 echo
 if [ "$M92_ERRORS" -eq 0 ]; then

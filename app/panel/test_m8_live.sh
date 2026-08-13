@@ -70,7 +70,17 @@ func main() {
 	fmt.Println(id.Recipient().String())
 }
 EOF
-M8_KEYPAIR="$(cd app/panel && go run "${M8_ROOT}/genident.go" 2>/dev/null)"
+# age identity generation: go run on hosts with Go; otherwise the
+# versions.lock-pinned golang image (module download needs network).
+if command -v go >/dev/null 2>&1; then
+    M8_KEYPAIR="$(cd app/panel && go run "${M8_ROOT}/genident.go" 2>/dev/null)"
+else
+    M8_GENDIR="${M8_ROOT}/gen"
+    mkdir -p "${M8_GENDIR}"
+    cp "${M8_ROOT}/genident.go" "${REPO}/app/panel/go.mod" "${REPO}/app/panel/go.sum" "${M8_GENDIR}/"
+    M8_KEYPAIR="$(docker run --rm -v "${M8_GENDIR}:/work" \
+        -w /work golang:${GO_VERSION} go run /work/genident.go 2>/dev/null)"
+fi
 [ -n "${M8_KEYPAIR}" ] || { echo "FAIL: identity generation failed"; exit 1; }
 M8_IDENT="$(printf '%s\n' "${M8_KEYPAIR}" | sed -n '1p')"
 M8_RECIPIENT="$(printf '%s\n' "${M8_KEYPAIR}" | sed -n '2p')"
@@ -91,10 +101,21 @@ cleanup() {
         echo "==> M8_KEEP set: leaving stack for debugging (project ${PROJ}, dir ${M8_ROOT})"
         return
     fi
-    docker compose -p "${PROJ}" -f compose.yaml -f "${M8_ROOT}/override.yaml" down -v >/dev/null 2>&1
+    "${COMPOSE[@]}" down -v >/dev/null 2>&1
     rm -rf "${M8_ROOT}"
 }
 trap cleanup EXIT
+
+# The base compose maps 127.0.0.1:8787:8787; when the default port is
+# taken (e.g. a live deployment on the same host) the harness remaps it
+# via a sed-ed copy so the loopback contract still holds.
+BASE_COMPOSE="${REPO}/compose.yaml"
+COMPOSE_FILE="${BASE_COMPOSE}"
+if [ "${M8_PORT:-8787}" != "8787" ]; then
+    COMPOSE_FILE="${M8_ROOT}/compose.portfix.yaml"
+    sed -e "s|127.0.0.1:8787:8787|127.0.0.1:${M8_PORT}:8787|" \
+        -e "s|context: \.|context: ${REPO}|" "${BASE_COMPOSE}" > "${COMPOSE_FILE}"
+fi
 
 cat > "${M8_ROOT}/override.yaml" <<EOF
 services:
@@ -116,7 +137,7 @@ services:
       - ${M8_STATUS}:/status
 EOF
 
-COMPOSE=(docker compose -p "${PROJ}" -f compose.yaml -f "${M8_ROOT}/override.yaml")
+COMPOSE=(docker compose -p "${PROJ}" -f "${COMPOSE_FILE}" -f "${M8_ROOT}/override.yaml")
 
 fail() {
     echo "FAIL: $1"
@@ -243,8 +264,9 @@ ALICE_PUB="$(printf '%s\n' "${CLIENTS}" | awk -F'\t' '$2 == "alice" { print $6 }
 grep -q "${ALICE_PUB}" "${M8_CONFIG}/awg0.conf" || fail "awg0.conf missing the restored alice peer"
 grep -c "^\[Peer\]" "${M8_CONFIG}/awg0.conf" | grep -qx 1 || fail "awg0.conf peer count != 1"
 
-# The restored auth user still logs in over HTTP (M7.5 flow).
-M8_PORT="8787"
+# The restored auth user still logs in over HTTP (M7.5 flow). The port
+# follows M8_PORT when the default 8787 is taken on the host.
+M8_PORT="${M8_PORT:-8787}"
 curl -fsS -c "${M8_ROOT}/cookies.txt" \
     -d "username=${M8_ADMIN}&password=${M8_PASSWORD}" \
     -o /dev/null "http://127.0.0.1:${M8_PORT}/login" || fail "post-restore HTTP login"

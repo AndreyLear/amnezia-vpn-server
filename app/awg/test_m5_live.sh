@@ -142,9 +142,19 @@ grep -q "\"public_key\":\"${PEER_PUB_1}\"" "${STATUS}" || { echo "FAIL: peer 1 l
 echo "OK: both peers in status.json after reload"
 
 echo "==> [21] killing the AWG daemon"
-docker exec "${CT_NAME}" pkill -TERM -x amneziawg-go 2>/dev/null \
-    || docker exec "${CT_NAME}" sh -c 'kill $(pgrep -f amneziawg-go | head -1)' \
-    || { echo "FAIL: could not find amneziawg-go"; exit 1; }
+KILLED=0
+if docker exec "${CT_NAME}" pkill -TERM -x amneziawg-go 2>/dev/null \
+    || docker exec "${CT_NAME}" sh -c 'kill $(pgrep -f amneziawg-go | head -1)' 2>/dev/null; then
+    KILLED=1
+    echo "==> [21] userspace daemon killed"
+else
+    echo "==> [21] no userspace daemon; kernel mode (module loaded), removing interface awg0"
+    docker exec "${CT_NAME}" ip link del awg0 2>/dev/null
+fi
+if [ "${KILLED}" = "0" ] && docker exec "${CT_NAME}" ip link show awg0 >/dev/null 2>&1; then
+    echo "FAIL: could not find amneziawg-go nor remove awg0"
+    exit 1
+fi
 
 echo "==> [21] waiting for container exit (up to 60s)"
 set +e

@@ -31,8 +31,10 @@ PROJ="m6-e2e-$$"
 M6_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/amnezia-m6-e2e-XXXXXX")"
 M6_DATA="${M6_ROOT}/data"; M6_CONFIG="${M6_ROOT}/config"; M6_STATUS="${M6_ROOT}/status"; M6_BACKUPS="${M6_ROOT}/backups"
 mkdir -p "${M6_DATA}" "${M6_CONFIG}" "${M6_STATUS}"
-# The M6.4 mapping under test is the fixed loopback port.
-M6_PORT=8787
+# The M6.4 mapping under test is the fixed loopback port; override
+# with M6_PORT when the default 8787 is taken (e.g. alongside a live
+# deployment on the same host).
+M6_PORT="${M6_PORT:-8787}"
 # Admin credentials for the live HTTP login (M6.2/M7.5).
 M6_ADMIN="e2e-admin"
 M6_PASSWORD="e2e-password-for-csrf-42"
@@ -43,10 +45,21 @@ cleanup() {
         echo "==> M6_KEEP set: leaving stack for debugging (project ${PROJ}, dir ${M6_ROOT})"
         return
     fi
-    docker compose -p "${PROJ}" -f compose.yaml -f "${M6_ROOT}/override.yaml" down -v >/dev/null 2>&1
+    "${COMPOSE[@]}" down -v >/dev/null 2>&1
     rm -rf "${M6_ROOT}"
 }
 trap cleanup EXIT
+
+# The base compose maps 127.0.0.1:8787:8787; when the default port is
+# taken (e.g. a live deployment on the same host) the harness remaps it
+# via a sed-ed copy so the M6.4 loopback contract still holds.
+BASE_COMPOSE="${REPO}/compose.yaml"
+COMPOSE_FILE="${BASE_COMPOSE}"
+if [ "${M6_PORT}" != "8787" ]; then
+    COMPOSE_FILE="${M6_ROOT}/compose.portfix.yaml"
+    sed -e "s|127.0.0.1:8787:8787|127.0.0.1:${M6_PORT}:8787|" \
+        -e "s|context: \.|context: ${REPO}|" "${BASE_COMPOSE}" > "${COMPOSE_FILE}"
+fi
 
 cat > "${M6_ROOT}/override.yaml" <<EOF
 services:
@@ -66,7 +79,7 @@ services:
       - ${M6_STATUS}:/status
 EOF
 
-COMPOSE=(docker compose -p "${PROJ}" -f compose.yaml -f "${M6_ROOT}/override.yaml")
+COMPOSE=(docker compose -p "${PROJ}" -f "${COMPOSE_FILE}" -f "${M6_ROOT}/override.yaml")
 
 fail() {
     echo "FAIL: $1"

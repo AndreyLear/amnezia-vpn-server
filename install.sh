@@ -19,15 +19,16 @@
 #   3. verify Docker Compose >= 2.20
 #   4. enable/start the Docker service
 #   5. verify/persist host net.ipv4.ip_forward
-#   6. create the deployment layout under the root
-#   7. secure directory permissions
-#   8. install/copy repository deployment files
-#   9. create deployment .env (deployment-specific values)
-#  10. host networking: managed nftables ruleset (M9.2)
-#  11. docker compose --env-file versions.lock config --quiet
-#  12. build and start the stack (current compose contract)
-#  13. minimal post-install self-check (never mutates application state)
-#  14. final status + SSH tunnel hint for the loopback-only panel
+#   6. AmneziaWG client stack (kernel module + tools, official PPA)
+#   7. create the deployment layout under the root
+#   8. secure directory permissions
+#   9. install/copy repository deployment files
+#  10. create deployment .env (deployment-specific values)
+#  11. host networking: managed nftables ruleset (M9.2)
+#  12. docker compose --env-file versions.lock config --quiet
+#  13. build and start the stack (current compose contract)
+#  14. minimal post-install self-check (never mutates application state)
+#  15. final status + SSH tunnel hint for the loopback-only panel
 #
 # Arguments (only these are supported):
 #   --root DIR      deployment root (default: /opt/amnezia-vpn)
@@ -61,6 +62,12 @@
 #   AMNEZIA_INSTALL_SYSTEMD_DIR=DIR    systemd unit dir for the docker
 #                                      boot-order drop-in
 #                                      (default /etc/systemd/system)
+#   AMNEZIA_INSTALL_MODULES_DIR=DIR    modules-load dir for the
+#                                      amneziawg auto-load entry
+#                                      (default /etc/modules-load.d)
+#   AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1  run the AmneziaWG client-stack
+#                                      install even when already present
+#                                      (testability)
 #
 # Security contract: no secrets are ever accepted, logged or printed;
 # .env is created only when absent, with 0600; the panel stays
@@ -307,7 +314,41 @@ else
     [ "$(ip_forward_value)" = "1" ] || die_op "net.ipv4.ip_forward is still disabled after enabling it"
 fi
 
-# --- 6./7. deployment layout + permissions ----------------------------
+# --- 6. AmneziaWG client stack (amneziawg + amneziawg-tools) ----------
+# The host keeps a kernel-native AmneziaWG stack (module + CLI tools)
+# NEXT TO the userspace awg container: the awg runtime stays in Docker,
+# while the kernel module lets the box itself act as a tunnel client
+# (tests, diagnostics, management access) and guarantees the full
+# client stack is present for a trouble-free operation. This is the
+# official install path (amnezia-vpn/amneziawg-linux-kernel-module):
+# PPA ppa:amnezia/ppa, packages amneziawg (DKMS module) and
+# amneziawg-tools. Idempotent: a working module plus the awg binary
+# skip the install; the module auto-loads at boot and DKMS rebuilds it
+# after kernel upgrades.
+
+MODULES_DIR="${AMNEZIA_INSTALL_MODULES_DIR:-/etc/modules-load.d}"
+MODULES_FILE="$MODULES_DIR/amneziawg.conf"
+
+amneziawg_available() {
+    cmd modprobe amneziawg 2>/dev/null && command -v awg >/dev/null 2>&1
+}
+
+if [ -z "${AMNEZIA_INSTALL_FORCE_AWG_INSTALL:-}" ] && amneziawg_available; then
+    log "AmneziaWG client stack already present (kernel module + awg tools)"
+else
+    log "installing AmneziaWG client stack from the official PPA (ppa:amnezia/ppa)"
+    cmd apt-get update
+    cmd apt-get install -y software-properties-common linux-headers-"$(cmd uname -r)"
+    cmd add-apt-repository -y ppa:amnezia/ppa
+    DEBIAN_FRONTEND=noninteractive cmd apt-get install -y amneziawg amneziawg-tools
+    mkdir -p "$MODULES_DIR" || die_op "cannot create modules-load dir $MODULES_DIR"
+    printf 'amneziawg\n' > "$MODULES_FILE"
+    chmod 0644 "$MODULES_FILE"
+    cmd modprobe amneziawg || die_op "amneziawg kernel module failed to load after installation"
+    log "AmneziaWG client stack installed: $(cmd awg version 2>/dev/null | head -1)"
+fi
+
+# --- 7./8. deployment layout + permissions ----------------------------
 
 mkdir -p "$ROOT_DIR" || die_op "cannot create deployment root $ROOT_DIR"
 [ -d "$ROOT_DIR" ] || die_op "deployment root $ROOT_DIR is not a directory"
@@ -319,7 +360,7 @@ for sub in data config status backups; do
 done
 log "deployment layout created under $ROOT_DIR (data/config/status/backups: 0700)"
 
-# --- 8. install/copy repository deployment files ----------------------
+# --- 9. install/copy repository deployment files ----------------------
 
 copy_tree() { # cp -a with per-file error stop
     if ! cp -a "$@" 2>/dev/null; then
@@ -336,7 +377,7 @@ copy_tree "$SCRIPT_DIR/app" "$ROOT_DIR/"
 chmod 0644 "$ROOT_DIR/compose.yaml" "$ROOT_DIR/versions.lock"
 log "deployment files installed (compose.yaml, versions.lock, app/)"
 
-# --- 9. deployment .env (never overwrites an existing file) -----------
+# --- 10. deployment .env (never overwrites an existing file) -----------
 
 env_read() { # env_read KEY — value of KEY in the deployment .env, ""
     sed -n "s/^${1}=//p" "$ROOT_DIR/$ENV_FILE" 2>/dev/null | tail -1
@@ -368,7 +409,7 @@ EOF
     log "$ENV_FILE created with AWG_PORT=${AWG_PORT}, VPN_SUBNET=${VPN_SUBNET} (0600)"
 fi
 
-# --- 10. host networking: managed nftables ruleset (M9.2) --------------
+# --- 11. host networking: managed nftables ruleset (M9.2) --------------
 
 NFT_FRAGMENT="amnezia-vpn.nft"
 NFT_DEPLOY_DIR="$ROOT_DIR/nftables"
@@ -410,13 +451,17 @@ render_nftables() {
 
 table ip amnezia {
     chain forward {
-        type filter hook forward priority filter; policy accept;
+        # priority -100: evaluated before foreign filter chains (ufw/
+        # docker/iptables all register at priority 0), so the VPN-subnet
+        # accept is seen even when a host firewall defaults FORWARD to
+        # DROP — without touching any foreign rule.
+        type filter hook forward priority -100; policy accept;
         ip saddr $1 accept
         ip daddr $1 accept
     }
 
     chain input {
-        type filter hook input priority filter; policy accept;
+        type filter hook input priority -100; policy accept;
         udp dport $2 accept
     }
 
@@ -537,17 +582,76 @@ net_setup() {
 
     nftables_persist
     log "nftables: persisted via $NFTABLES_CONF + nftables.service; docker ordered after nftables"
+
+    # A host firewall (ufw and/or docker) registers filter chains at the
+    # same hook priority as the managed table and commonly defaults
+    # FORWARD to DROP; nft filter chains cannot use a negative priority,
+    # so the managed forward-accept would never be reached on such hosts
+    # and tunnel egress would silently die (only ICMP passes, via the
+    # firewall's own echo rule). The forward accept for the tunnel
+    # interface is therefore ALSO inserted at the TOP of the docker
+    # DOCKER-USER chain (docker's designated user hook, which docker
+    # never rewrites) — or of FORWARD when DOCKER-USER is absent.
+    # Additive only: nothing is flushed, nothing is dropped, and a
+    # re-run never duplicates the rules (iptables -C guard).
+    ensure_forward_accept() {
+        command -v iptables >/dev/null 2>&1 || {
+            log "forward accept: iptables not present; relying on the nft ruleset"
+            return 0
+        }
+        # Boot persistence: docker/ufw rebuild their chains on every
+        # boot, so the insertion runs again from a one-shot unit
+        # (idempotent; no-op when the rules are already present).
+        cat > "$SYSTEMD_DIR/amnezia-vpn-forward.service" <<EOF
+# amnezia-vpn managed (M9.2): tunnel egress forward accept for
+# docker/ufw coexistence. Runs after docker and nftables, never
+# flushes or drops anything, idempotent on every boot.
+[Unit]
+Description=Amnezia VPN forward accept for the tunnel interface
+After=docker.service nftables.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'command -v iptables >/dev/null 2>&1 || exit 0; chain=FORWARD; iptables -t filter -L DOCKER-USER >/dev/null 2>&1 && chain=DOCKER-USER; for d in "-i awg0" "-o awg0"; do iptables -t filter -C "$$chain" $$d -j ACCEPT 2>/dev/null || iptables -t filter -I "$$chain" 1 $$d -j ACCEPT; done'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-forward.service"
+        local chain="FORWARD" d=""
+        if cmd iptables -t filter -L DOCKER-USER >/dev/null 2>&1; then
+            chain="DOCKER-USER"
+        fi
+        for d in "-i awg0" "-o awg0"; do
+            if ! cmd iptables -t filter -C "$chain" $d -j ACCEPT >/dev/null 2>&1; then
+                cmd iptables -t filter -I "$chain" 1 $d -j ACCEPT \
+                    || die_op "iptables forward accept failed ($chain $d)"
+                log "forward accept: inserted $d -j ACCEPT into $chain"
+            fi
+        done
+        cmd systemctl daemon-reload >/dev/null 2>&1 \
+            || die_op "systemctl daemon-reload failed (forward accept unit)"
+        cmd systemctl enable amnezia-vpn-forward.service >/dev/null 2>&1 \
+            || die_op "systemctl enable amnezia-vpn-forward.service failed"
+        cmd systemctl start amnezia-vpn-forward.service >/dev/null 2>&1 \
+            || die_op "systemctl start amnezia-vpn-forward.service failed"
+        log "forward accept: persisted via amnezia-vpn-forward.service"
+    }
+
+    ensure_forward_accept
 }
 
 net_setup
 
-# --- 11. compose config validation ------------------------------------
+# --- 12. compose config validation ------------------------------------
 
 log "validating: docker compose --env-file versions.lock config --quiet"
 docker_compose --env-file versions.lock config --quiet \
     || die_op "docker compose config failed under $ROOT_DIR"
 
-# --- 12. build and start the stack ------------------------------------
+# --- 13. build and start the stack ------------------------------------
 
 log "building the stack images (pinned versions from versions.lock)"
 docker_compose --env-file versions.lock build \
@@ -556,7 +660,7 @@ log "starting the stack"
 docker_compose --env-file versions.lock up -d \
     || die_op "docker compose up -d failed"
 
-# --- 13. minimal post-install self-check -------------------------------
+# --- 14. minimal post-install self-check -------------------------------
 # Reads-only: no application state is mutated. Awaiting `panel server
 # init` or a restore, panel-init exits 1 by design (M3.1 contract) and
 # the panel/awg services stay created-but-not-running: this is the
@@ -575,7 +679,7 @@ for svc in panel-init panel awg; do
 done
 log "self-check: services panel-init/panel/awg present in the stack"
 
-# --- 14. final status + SSH tunnel hint --------------------------------
+# --- 15. final status + SSH tunnel hint --------------------------------
 
 HOST_HINT="<server-ip>"
 if command -v hostname >/dev/null 2>&1 && hostname -I 2>/dev/null | grep -q '[0-9]'; then
