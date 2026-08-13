@@ -42,25 +42,17 @@ M93_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/amnezia-m93-e2e-XXXXXX")"
 M93_DATA="${M93_ROOT}/data"; M93_CONFIG="${M93_ROOT}/config"; M93_STATUS="${M93_ROOT}/status"; M93_BACKUPS="${M93_ROOT}/backups"
 mkdir -p "${M93_DATA}" "${M93_CONFIG}" "${M93_STATUS}" "${M93_BACKUPS}"
 
-cat > "${M93_ROOT}/override.yaml" <<EOF
-services:
-  panel:
-    volumes:
-      - ${M93_DATA}:/data
-      - ${M93_CONFIG}:/config
-      - ${M93_STATUS}:/status:ro
-      - ${M93_BACKUPS}:/data/backups
-  panel-init:
-    volumes:
-      - ${M93_DATA}:/data
-      - ${M93_CONFIG}:/config
-  awg:
-    volumes:
-      - ${M93_CONFIG}:/config:ro
-      - ${M93_STATUS}:/status
-EOF
+# M10.2-FIX2: the harness runs the real compose.yaml copied next to its
+# temp dirs, so the relative ./data ./config ./status ./backups binds
+# resolve inside the harness root (a compose merge with an override
+# volume list would duplicate mounts and litter the repo with parent
+# stubs; the copied file keeps the production mount contract exact).
+cp compose.yaml versions.lock "${M93_ROOT}/"
+# The copied compose keeps the production topology; the build context
+# must point back at the repo (the harness dir has no app/ tree).
+sed -i.bak -e "s|context: \.|context: ${REPO}|" "${M93_ROOT}/compose.yaml"
 
-COMPOSE=(docker compose -p "${PROJ}" -f compose.yaml -f "${M93_ROOT}/override.yaml")
+COMPOSE=(docker compose -p "${PROJ}" --env-file versions.lock -f "${M93_ROOT}/compose.yaml")
 
 fail() {
     echo "FAIL: $1"
@@ -99,7 +91,10 @@ case "${out}" in *"no server row"*) ;; *) fail "fresh init stdout: ${out}" ;; es
 [ -f "${M93_DATA}/.server-initialized" ] && fail "fresh install wrote a sentinel"
 # .restore-apply.lock is the persistent advisory lock (kernel-released
 # flock), by design never removed; it must be the only extra file.
-LIVE_FILES="$(ls -A "${M93_DATA}" | grep -v '^\.restore-apply\.lock$' | sort)"
+# `backups` is the Docker-created parent mountpoint for the nested
+# ./backups:/data/backups bind (M10.2-FIX2); Docker materializes it
+# inside the /data bind source — production behaves the same.
+LIVE_FILES="$(ls -A "${M93_DATA}" | grep -v '^\.restore-apply\.lock$' | grep -v '^backups$' | sort)"
 [ "${LIVE_FILES}" = "amnezia.sqlite" ] || fail "fresh data dir content: $(ls -A "${M93_DATA}")"
 echo "OK: M3 contract — init without a server row exits 1, no sentinel, no boot snapshot"
 

@@ -50,36 +50,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The harness runs the real compose.yaml copied into its temp root, so
+# the relative ./data ./config ./status ./backups binds resolve inside
+# the harness dirs (a compose merge with an override volume list would
+# duplicate mounts and litter the repo with parent stubs — M10.2-FIX2).
 # The base compose maps 127.0.0.1:8787:8787; when the default port is
-# taken (e.g. a live deployment on the same host) the harness remaps it
-# via a sed-ed copy so the M6.4 loopback contract still holds.
-BASE_COMPOSE="${REPO}/compose.yaml"
-COMPOSE_FILE="${BASE_COMPOSE}"
-if [ "${M6_PORT}" != "8787" ]; then
-    COMPOSE_FILE="${M6_ROOT}/compose.portfix.yaml"
-    sed -e "s|127.0.0.1:8787:8787|127.0.0.1:${M6_PORT}:8787|" \
-        -e "s|context: \.|context: ${REPO}|" "${BASE_COMPOSE}" > "${COMPOSE_FILE}"
-fi
+# taken (e.g. a live deployment on the same host) it is remapped via a
+# sed-ed copy so the M6.4 loopback contract still holds.
+COMPOSE_FILE="${M6_ROOT}/compose.yaml"
+cp "${REPO}/compose.yaml" versions.lock "${M6_ROOT}/"
+sed -i.bak \
+    -e "s|127.0.0.1:8787:8787|127.0.0.1:${M6_PORT}:8787|" \
+    -e "s|context: \.|context: ${REPO}|" "${COMPOSE_FILE}"
 
-cat > "${M6_ROOT}/override.yaml" <<EOF
-services:
-  panel:
-    volumes:
-      - ${M6_DATA}:/data
-      - ${M6_CONFIG}:/config
-      - ${M6_STATUS}:/status:ro
-      - ${M6_BACKUPS}:/data/backups
-  panel-init:
-    volumes:
-      - ${M6_DATA}:/data
-      - ${M6_CONFIG}:/config
-  awg:
-    volumes:
-      - ${M6_CONFIG}:/config:ro
-      - ${M6_STATUS}:/status
-EOF
-
-COMPOSE=(docker compose -p "${PROJ}" -f "${COMPOSE_FILE}" -f "${M6_ROOT}/override.yaml")
+COMPOSE=(docker compose -p "${PROJ}" --env-file versions.lock -f "${COMPOSE_FILE}")
 
 fail() {
     echo "FAIL: $1"

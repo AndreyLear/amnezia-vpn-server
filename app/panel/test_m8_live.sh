@@ -109,39 +109,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The harness runs the real compose.yaml copied into its temp root, so
+# the relative ./data ./config ./status ./backups binds resolve inside
+# the harness dirs (a compose merge with an override volume list would
+# duplicate mounts and litter the repo with parent stubs — M10.2-FIX2).
 # The base compose maps 127.0.0.1:8787:8787; when the default port is
-# taken (e.g. a live deployment on the same host) the harness remaps it
-# via a sed-ed copy so the loopback contract still holds.
-BASE_COMPOSE="${REPO}/compose.yaml"
-COMPOSE_FILE="${BASE_COMPOSE}"
-if [ "${M8_PORT:-8787}" != "8787" ]; then
-    COMPOSE_FILE="${M8_ROOT}/compose.portfix.yaml"
-    sed -e "s|127.0.0.1:8787:8787|127.0.0.1:${M8_PORT}:8787|" \
-        -e "s|context: \.|context: ${REPO}|" "${BASE_COMPOSE}" > "${COMPOSE_FILE}"
-fi
+# taken (e.g. a live deployment on the same host) it is remapped via a
+# sed-ed copy so the loopback contract still holds.
+COMPOSE_FILE="${M8_ROOT}/compose.yaml"
+cp "${REPO}/compose.yaml" versions.lock "${M8_ROOT}/"
+sed -i.bak \
+    -e "s|127.0.0.1:8787:8787|127.0.0.1:${M8_PORT:-8787}:8787|" \
+    -e "s|context: \.|context: ${REPO}|" "${COMPOSE_FILE}"
 
+# The panel gets the runtime-generated recipient via the override
+# environment (the .env-file mechanism itself is covered by
+# test_m102_env_live.sh); volume lists are NOT overridden.
 cat > "${M8_ROOT}/override.yaml" <<EOF
 services:
   panel:
     environment:
       - AGE_RECIPIENT=${M8_RECIPIENT}
-    volumes:
-      - ${M8_DATA}:/data
-      - ${M8_CONFIG}:/config
-      - ${M8_STATUS}:/status:ro
-      - ${M8_BACKUPS}:/data/backups
-  panel-init:
-    volumes:
-      - ${M8_DATA}:/data
-      - ${M8_CONFIG}:/config
-      - ${M8_BACKUPS}:/data/backups
-  awg:
-    volumes:
-      - ${M8_CONFIG}:/config:ro
-      - ${M8_STATUS}:/status
 EOF
 
-COMPOSE=(docker compose -p "${PROJ}" -f "${COMPOSE_FILE}" -f "${M8_ROOT}/override.yaml")
+COMPOSE=(docker compose -p "${PROJ}" --env-file versions.lock -f "${COMPOSE_FILE}" -f "${M8_ROOT}/override.yaml")
 
 fail() {
     echo "FAIL: $1"

@@ -87,7 +87,7 @@ func TestManifestUnmarshal(t *testing.T) {
 		t.Fatalf("parsed manifest: %+v", ok)
 	}
 	for _, bad := range []string{
-		`{`, // garbage
+		`{`,            // garbage
 		`{"format":1}`, // missing fields
 		fmt.Sprintf(`{"format":1,"application":"x","application_version":"2.0.0","schema_version":%d,"created_at":"2026-08-12T10:30:00Z"}`, testSchemaVersion()), // bad application
 		``, // empty
