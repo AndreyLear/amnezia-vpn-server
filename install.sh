@@ -1,15 +1,19 @@
 #!/bin/bash
 #
-# install.sh — M9.1 production deployment of the AmneziaWG VPN Server
-# stack (contract: AUDITS/M9.1_AUDIT.md, ТЗ v2.0 §9).
+# install.sh — M9.1/M9.2 production deployment of the AmneziaWG VPN
+# Server stack (contract: AUDITS/M9.1_AUDIT.md, AUDITS/M9.2_AUDIT.md,
+# ТЗ v2.0 §9).
 #
 # install.sh is infrastructure state, not application backup (ТЗ §9).
 # It sets up the host (OS check, Docker Engine + Compose plugin from the
 # official Docker Inc. repository, persistent ip_forward) and deploys the
-# compose stack under a deployment root. Full nftables/NAT/forward rules
-# and host networking are NOT part of M9.1 (separate M9 networking task).
+# compose stack under a deployment root. M9.2 adds the host networking
+# part of ТЗ §9 within the constraints of the audit: a managed nftables
+# ruleset (NAT/forward/UDP acceptance) in the single table `ip amnezia`,
+# applied atomically, never flushing foreign rules, persisted through
+# the distro nftables service with an explicit docker boot-order drop-in.
 #
-# Install flow (ТЗ §9 / M9.1 contract):
+# Install flow (ТЗ §9 / M9.1+M9.2 contract):
 #   1. OS check (Debian 12, Ubuntu 22.04, Ubuntu 24.04 only)
 #   2. Docker/Compose installation or verification
 #   3. verify Docker Compose >= 2.20
@@ -19,23 +23,29 @@
 #   7. secure directory permissions
 #   8. install/copy repository deployment files
 #   9. create deployment .env (deployment-specific values)
-#  10. docker compose --env-file versions.lock config --quiet
-#  11. build and start the stack (current compose contract)
-#  12. minimal post-install self-check (never mutates application state)
-#  13. final status + SSH tunnel hint for the loopback-only panel
+#  10. host networking: managed nftables ruleset (M9.2)
+#  11. docker compose --env-file versions.lock config --quiet
+#  12. build and start the stack (current compose contract)
+#  13. minimal post-install self-check (never mutates application state)
+#  14. final status + SSH tunnel hint for the loopback-only panel
 #
 # Arguments (only these are supported):
 #   --root DIR      deployment root (default: /opt/amnezia-vpn)
 #   --awg-port PORT external UDP port of the AWG runtime, 1..65535
 #                   (default: 51820)
+#   --vpn-subnet CIDR  IPv4 subnet of the tunnel (default: 10.8.0.0/24).
+#                   Authoritative source is server.address in the
+#                   database: when the deployed config/awg0.conf exists,
+#                   its Address CIDR wins over this parameter/.env
+#                   (no second source of truth in steady state).
 #   --help          usage
 #
 # Testability hooks (environment, not arguments):
 #   AMNEZIA_INSTALL_TEST=1             skip the root-user check
 #   AMNEZIA_INSTALL_FAKE_DIR=DIR       prefix PATH with DIR so fakes can
 #                                      stand in for docker/apt-get/
-#                                      systemctl/sysctl/curl: tests never
-#                                      touch the real host
+#                                      systemctl/sysctl/nft/curl: tests
+#                                      never touch the real host
 #   AMNEZIA_INSTALL_OS_RELEASE=FILE    os-release source (default
 #                                      /etc/os-release)
 #   AMNEZIA_INSTALL_SYSCTL_DIR=DIR     persistence dir for the ip_forward
@@ -44,22 +54,35 @@
 #                                      (default /etc/apt/keyrings)
 #   AMNEZIA_INSTALL_APT_SOURCES_DIR=DIR   apt sources.d dir
 #                                      (default /etc/apt/sources.list.d)
+#   AMNEZIA_INSTALL_NFTABLES_DIR=DIR   managed nftables fragment dir
+#                                      (default /etc/nftables.d)
+#   AMNEZIA_INSTALL_NFTABLES_CONF=FILE nftables.conf to hook the include
+#                                      into (default /etc/nftables.conf)
+#   AMNEZIA_INSTALL_SYSTEMD_DIR=DIR    systemd unit dir for the docker
+#                                      boot-order drop-in
+#                                      (default /etc/systemd/system)
 #
 # Security contract: no secrets are ever accepted, logged or printed;
 # .env is created only when absent, with 0600; the panel stays
-# loopback-only (127.0.0.1:8787:8787) and is never published.
+# loopback-only (127.0.0.1:8787:8787) and is never published; nftables
+# application never flushes the ruleset, never drops SSH, and is
+# syntax-checked before it is applied.
 
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-/opt/amnezia-vpn}"
 AWG_PORT=51820
+VPN_SUBNET=10.8.0.0/24
 
 OS_RELEASE="${AMNEZIA_INSTALL_OS_RELEASE:-/etc/os-release}"
 SYSCTL_DIR="${AMNEZIA_INSTALL_SYSCTL_DIR:-/etc/sysctl.d}"
 SYSCTL_FILE="${SYSCTL_DIR}/99-amnezia-vpn.conf"
 KEYRING_DIR="${AMNEZIA_INSTALL_KEYRING_DIR:-/etc/apt/keyrings}"
 APT_SOURCES_DIR="${AMNEZIA_INSTALL_APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
+NFTABLES_DIR="${AMNEZIA_INSTALL_NFTABLES_DIR:-/etc/nftables.d}"
+NFTABLES_CONF="${AMNEZIA_INSTALL_NFTABLES_CONF:-/etc/nftables.conf}"
+SYSTEMD_DIR="${AMNEZIA_INSTALL_SYSTEMD_DIR:-/etc/systemd/system}"
 ENV_FILE=".env"
 
 FAIL_STYLE_NONE=0
@@ -68,23 +91,26 @@ FAIL_STYLE_OP=1
 
 usage() {
     cat <<'EOF'
-install.sh — M9.1 deployment of the AmneziaWG VPN Server stack.
+install.sh — M9 deployment of the AmneziaWG VPN Server stack.
 
 Usage:
-  ./install.sh [--root DIR] [--awg-port PORT]
+  ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
 
 Options:
-  --root DIR       deployment root (default: /opt/amnezia-vpn)
-  --awg-port PORT  external UDP port of the AWG runtime,
-                   1..65535 (default: 51820)
-  --help           print this message
+  --root DIR        deployment root (default: /opt/amnezia-vpn)
+  --awg-port PORT   external UDP port of the AWG runtime,
+                    1..65535 (default: 51820)
+  --vpn-subnet CIDR VPN subnet the server assigns clients from;
+                    IPv4 CIDR with prefix 1..32 (default: 10.8.0.0/24)
+  --help            print this message
 
 Installs only supported OSes (Debian 12, Ubuntu 22.04, Ubuntu 24.04),
 Docker Engine + Compose plugin (>= 2.20) from the official Docker Inc.
-repository, persists net.ipv4.ip_forward, then builds and starts the
-stack under the deployment root. nftables/NAT rules are not part of
-M9.1. The panel always stays loopback-only; an SSH tunnel directive is
-printed after a successful install.
+repository, persists net.ipv4.ip_forward, installs a managed nftables
+ruleset (NAT/forward for the VPN subnet, UDP AWG_PORT acceptance),
+then builds and starts the stack under the deployment root. The panel
+always stays loopback-only; an SSH tunnel directive is printed after
+a successful install.
 EOF
 }
 
@@ -98,11 +124,40 @@ die() {
 die_usage() { die "$FAIL_STYLE_USAGE" "$1"; }
 die_op() { die "$FAIL_STYLE_OP" "$1"; }
 
-# --- argument parsing (only --root, --awg-port, --help) ---------------
+# --- argument parsing (only --root, --awg-port, --vpn-subnet, --help) --
 
 validate_port() {
     [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null
 }
+
+# validate_cidr: dotted-quad address + prefix in 1..32.
+validate_cidr() {
+    local addr prefix o1 o2 o3 o4 o
+    addr="${1%/*}"
+    prefix="${1#*/}"
+    [ "$prefix" -ge 1 ] 2>/dev/null && [ "$prefix" -le 32 ] 2>/dev/null || return 1
+    IFS=. read -r o1 o2 o3 o4 <<< "$addr"
+    for o in "$o1" "$o2" "$o3" "$o4"; do
+        [ "$o" -ge 0 ] 2>/dev/null && [ "$o" -le 255 ] 2>/dev/null || return 1
+    done
+    return 0
+}
+
+# network_of_host_cidr: 10.8.0.1/24 -> 10.8.0.0/24 (host bits cleared).
+network_of_host_cidr() {
+    local addr prefix o1 o2 o3 o4 net32 mask out
+    addr="${1%/*}"; prefix="${1#*/}"
+    IFS=. read -r o1 o2 o3 o4 <<< "$addr"
+    net32=$(( (o1 << 24) | (o2 << 16) | (o3 << 8) | o4 ))
+    mask=$(( 0xFFFFFFFF << (32 - prefix) & 0xFFFFFFFF ))
+    out=$(( net32 & mask ))
+    printf '%d.%d.%d.%d/%d\n' \
+        $(( (out >> 24) & 0xFF )) $(( (out >> 16) & 0xFF )) \
+        $(( (out >> 8) & 0xFF )) $(( out & 0xFF )) "$prefix"
+}
+
+AWG_PORT_SET=0
+VPN_SUBNET_SET=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -118,6 +173,13 @@ while [ "$#" -gt 0 ]; do
         --awg-port)
             [ "$#" -ge 2 ] || die_usage "--awg-port requires a port argument"
             AWG_PORT="$2"
+            AWG_PORT_SET=1
+            shift 2
+            ;;
+        --vpn-subnet)
+            [ "$#" -ge 2 ] || die_usage "--vpn-subnet requires a CIDR argument"
+            VPN_SUBNET="$2"
+            VPN_SUBNET_SET=1
             shift 2
             ;;
         *)
@@ -130,6 +192,8 @@ done
 [ "$ROOT_DIR" != "/" ] || die_usage "--root must not be the filesystem root"
 [ -n "$AWG_PORT" ] || die_usage "empty --awg-port"
 validate_port "$AWG_PORT" || die_usage "--awg-port must be an integer in 1..65535 (got: $AWG_PORT)"
+[ -n "$VPN_SUBNET" ] || die_usage "empty --vpn-subnet"
+validate_cidr "$VPN_SUBNET" || die_usage "--vpn-subnet must be an IPv4 CIDR like 10.8.0.0/24 (got: $VPN_SUBNET)"
 
 # --- root requirement (skipped in test mode only) ---------------------
 
@@ -274,26 +338,216 @@ log "deployment files installed (compose.yaml, versions.lock, app/)"
 
 # --- 9. deployment .env (never overwrites an existing file) -----------
 
+env_read() { # env_read KEY — value of KEY in the deployment .env, ""
+    sed -n "s/^${1}=//p" "$ROOT_DIR/$ENV_FILE" 2>/dev/null | tail -1
+}
+
 if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
     log "$ENV_FILE already exists under $ROOT_DIR: keeping it untouched"
+    # deployment-specific values may live only in .env: the flags of
+    # this run fall back to them so the rules match the deployment.
+    if [ "$AWG_PORT_SET" = "0" ]; then
+        AWG_PORT="$(env_read AWG_PORT)"
+        [ -n "$AWG_PORT" ] || die_op "AWG_PORT unset in $(basename "$ENV_FILE") and not given as an argument"
+        validate_port "$AWG_PORT" || die_op "AWG_PORT in $(basename "$ENV_FILE") is out of range"
+    fi
+    if [ "$VPN_SUBNET_SET" = "0" ]; then
+        VPN_SUBNET="$(env_read VPN_SUBNET)"
+        [ -n "$VPN_SUBNET" ] || VPN_SUBNET=10.8.0.0/24
+        validate_cidr "$VPN_SUBNET" || die_op "VPN_SUBNET in $(basename "$ENV_FILE") is not a valid CIDR"
+    fi
 else
     cat > "$ROOT_DIR/$ENV_FILE" <<EOF
 # AmneziaWG VPN Server — deployment-specific values (written by install.sh).
 # versions.lock stays the single source of pinned versions: compose loads
 # it with --env-file and it always wins over this file.
 AWG_PORT=${AWG_PORT}
+VPN_SUBNET=${VPN_SUBNET}
 EOF
     chmod 0600 "$ROOT_DIR/$ENV_FILE"
-    log "$ENV_FILE created with AWG_PORT=${AWG_PORT} (0600)"
+    log "$ENV_FILE created with AWG_PORT=${AWG_PORT}, VPN_SUBNET=${VPN_SUBNET} (0600)"
 fi
 
-# --- 10. compose config validation ------------------------------------
+# --- 10. host networking: managed nftables ruleset (M9.2) --------------
+
+NFT_FRAGMENT="amnezia-vpn.nft"
+NFT_DEPLOY_DIR="$ROOT_DIR/nftables"
+NFT_DEPLOY_FILE="$NFT_DEPLOY_DIR/$NFT_FRAGMENT"
+NFT_SYS_FILE="$NFTABLES_DIR/$NFT_FRAGMENT"
+NFT_BEGIN='# --- amnezia-vpn begin ---'
+NFT_END='# --- amnezia-vpn end ---'
+
+# vpn_subnet_effective: awg0.conf (authoritative server.address) wins
+# over .env/parameter; a missing config falls back to the deployment
+# value. The comments explain the precedence contract (M9.2 audit).
+vpn_subnet_effective() {
+    local addr
+    if [ -f "$ROOT_DIR/config/awg0.conf" ]; then
+        addr="$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$ROOT_DIR/config/awg0.conf" | head -1)"
+        if [ -n "$addr" ] && validate_cidr "$addr"; then
+            log "VPN subnet derived from config/awg0.conf (server.address): $addr" >&2
+            network_of_host_cidr "$addr"
+            return 0
+        fi
+        log "config/awg0.conf exists but has no valid Address: falling back to the deployment value" >&2
+    fi
+    # stdout carries only the CIDR value (validated by net_setup)
+    log "VPN subnet from the deployment value: $VPN_SUBNET" >&2
+    network_of_host_cidr "$VPN_SUBNET"
+}
+
+# render_nftables: the managed ruleset fragment. The table owns only
+# what the ТЗ §9 contract needs: NAT for vpn subnet -> WAN (never to
+# the tunnel itself), forwarding in both directions for the subnet,
+# UDP AWG_PORT acceptance. No policies, no drops: SSH and all foreign
+# traffic are untouched by construction.
+render_nftables() {
+    cat <<EOF
+# Amnezia VPN managed nftables fragment (M9.2) — generated by install.sh.
+# Do not edit; rerun install.sh to regenerate. Applies idempotently in a
+# single batch (add + flush own table + recreate); never flushes foreign
+# rules.
+
+table ip amnezia {
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        ip saddr $1 accept
+        ip daddr $1 accept
+    }
+
+    chain input {
+        type filter hook input priority filter; policy accept;
+        udp dport $2 accept
+    }
+
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr $1 oifname != "awg0" masquerade
+    }
+}
+EOF
+}
+
+# render_nftables_deploy: the same core ruleset, made idempotent in one
+# batch: `table ip amnezia` (add) is a no-op when the table already
+# exists, `flush table ip amnezia` clears only our own previous content,
+# and the definition below re-creates it. Safe on a fresh boot (table
+# absent: add creates it, flushing an empty table is a no-op) and on
+# reinstall (table present: add no-ops, flush clears, rules recreated).
+# Never touches foreign tables and never fails on missing state.
+render_nftables_deploy() {
+    {
+        printf 'table ip amnezia\n'
+        printf 'flush table ip amnezia\n'
+        render_nftables "$1" "$2"
+    }
+}
+
+# nftables_persist: hook the fragment into the distro nftables.conf
+# inside a managed marker block and pin the boot order in front of
+# Docker. Foreign content of nftables.conf is left untouched.
+nftables_persist() {
+    local dir
+    dir="$(dirname "$NFTABLES_CONF")"
+    mkdir -p "$dir" || die_op "cannot create directory for $NFTABLES_CONF"
+    if [ ! -f "$NFTABLES_CONF" ]; then
+        printf '#!/usr/sbin/nft -f\n' > "$NFTABLES_CONF"
+        chmod 0644 "$NFTABLES_CONF"
+        log "$NFTABLES_CONF did not exist: created a minimal managed file"
+    fi
+    # replace the previous managed block, keep everything else
+    BEGIN="$NFT_BEGIN" END="$NFT_END" awk '
+        $0 == ENVIRON["BEGIN"] { skip = 1; next }
+        $0 == ENVIRON["END"]   { skip = 0; next }
+        skip { next }
+        { print }
+    ' "$NFTABLES_CONF" > "$NFTABLES_CONF.new" && mv "$NFTABLES_CONF.new" "$NFTABLES_CONF"
+    {
+        printf '\n%s\ninclude "%s"\n%s\n' "$NFT_BEGIN" "$NFT_SYS_FILE" "$NFT_END"
+    } >> "$NFTABLES_CONF"
+
+    cmd systemctl enable nftables || die_op "systemctl enable nftables failed"
+    # Runtime flush guard: the distro nftables.conf may start with
+    # `flush ruleset`, which wipes docker's own iptables-nft chains if
+    # the service is (re)started while docker runs. Start the service
+    # only when it is not active yet; on an already-active host the
+    # ruleset fragment was applied directly by net_setup() and a reload
+    # would destroy docker state for zero benefit. If we do start it
+    # (fresh host), restart docker afterwards so it rebuilds its chains.
+    if ! cmd systemctl is-active --quiet nftables; then
+        cmd systemctl start nftables || die_op "systemctl start nftables failed"
+        if cmd systemctl is-active --quiet docker; then
+            cmd systemctl restart docker || die_op "systemctl restart docker failed after nftables start"
+            log "docker restarted: rebuilt its iptables state after the nftables flush"
+        fi
+    fi
+    cmd nft list table ip amnezia >/dev/null 2>&1 \
+        || die_op "nftables was applied but the amnezia table is not present after reload"
+
+    mkdir -p "$SYSTEMD_DIR/docker.service.d" || die_op "cannot create systemd drop-in dir"
+    cat > "$SYSTEMD_DIR/docker.service.d/amnezia-vpn-nftables.conf" <<EOF
+# amnezia-vpn managed (M9.2): the NAT/forward rules must exist before
+# Docker and the AWG container start at boot — no tunnel-before-NAT race.
+[Unit]
+After=nftables.service
+EOF
+    chmod 0644 "$SYSTEMD_DIR/docker.service.d/amnezia-vpn-nftables.conf"
+    cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed"
+}
+
+net_setup() {
+    log "host networking (nftables, M9.2): preparing the managed ruleset"
+
+    if ! command -v nft >/dev/null 2>&1; then
+        log "nft(8) missing: installing the nftables package"
+        cmd apt-get install -y nftables || die_op "apt-get install nftables failed"
+    fi
+
+    local subnet port
+    subnet="$(vpn_subnet_effective)"
+    validate_cidr "$subnet" || die_op "effective VPN subnet is invalid: $subnet"
+    port="$AWG_PORT"
+    validate_port "$port" || die_op "effective AWG port is invalid: $port"
+
+    mkdir -p "$NFT_DEPLOY_DIR" || die_op "cannot create $NFT_DEPLOY_DIR"
+    chmod 0750 "$NFT_DEPLOY_DIR"
+    render_nftables_deploy "$subnet" "$port" > "$NFT_DEPLOY_FILE"
+    chmod 0644 "$NFT_DEPLOY_FILE"
+
+    mkdir -p "$NFTABLES_DIR" || die_op "cannot create $NFTABLES_DIR"
+    # system copy is byte-identical to the deploy copy
+    cp "$NFT_DEPLOY_FILE" "$NFT_SYS_FILE"
+    chmod 0644 "$NFT_SYS_FILE"
+
+    # Syntax validation before anything is applied (M9.2 contract).
+    if ! cmd nft -c -f "$NFT_SYS_FILE" >/dev/null 2>&1; then
+        rm -f "$NFT_SYS_FILE" "$NFT_DEPLOY_FILE"
+        die_op "nftables syntax check failed on the generated ruleset; nothing was applied"
+    fi
+    log "nftables: syntax check passed"
+
+    # Idempotent apply: add (no-op when present) + flush own table +
+    # recreate in one batch; on failure the previous rules stay
+    # untouched (nft batches are atomic).
+    if ! cmd nft -f "$NFT_SYS_FILE" >/dev/null 2>&1; then
+        rm -f "$NFT_SYS_FILE" "$NFT_DEPLOY_FILE"
+        die_op "nftables apply failed; the previous rules were not touched"
+    fi
+    log "nftables: ruleset applied (table ip amnezia; no foreign rules touched)"
+
+    nftables_persist
+    log "nftables: persisted via $NFTABLES_CONF + nftables.service; docker ordered after nftables"
+}
+
+net_setup
+
+# --- 11. compose config validation ------------------------------------
 
 log "validating: docker compose --env-file versions.lock config --quiet"
 docker_compose --env-file versions.lock config --quiet \
     || die_op "docker compose config failed under $ROOT_DIR"
 
-# --- 11. build and start the stack ------------------------------------
+# --- 12. build and start the stack ------------------------------------
 
 log "building the stack images (pinned versions from versions.lock)"
 docker_compose --env-file versions.lock build \
@@ -302,7 +556,7 @@ log "starting the stack"
 docker_compose --env-file versions.lock up -d \
     || die_op "docker compose up -d failed"
 
-# --- 12. minimal post-install self-check -------------------------------
+# --- 13. minimal post-install self-check -------------------------------
 # Reads-only: no application state is mutated. Awaiting `panel server
 # init` or a restore, panel-init exits 1 by design (M3.1 contract) and
 # the panel/awg services stay created-but-not-running: this is the
@@ -321,7 +575,7 @@ for svc in panel-init panel awg; do
 done
 log "self-check: services panel-init/panel/awg present in the stack"
 
-# --- 13. final status + SSH tunnel hint --------------------------------
+# --- 14. final status + SSH tunnel hint --------------------------------
 
 HOST_HINT="<server-ip>"
 if command -v hostname >/dev/null 2>&1 && hostname -I 2>/dev/null | grep -q '[0-9]'; then

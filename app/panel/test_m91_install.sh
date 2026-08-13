@@ -38,12 +38,17 @@ setstate() { # portable in-place update: sed(1) -i differs on BSD/GNU
 fakes_reset() {
     : > "$FAKE_CALLS"
     mkdir -p "$FAKE_FS"
-    rm -rf "$ROOT" "$SYSCTL_TEST" "$KEYRING_TEST" "$SOURCES_TEST"
+    rm -rf "$ROOT" "$SYSCTL_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
+        "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST"
+    rm -f "$NFTABLES_CONF_TEST"
     cat > "$FAKE_STATE" <<EOF
 COMPOSE_VERSION=${1:-2.30.1}
 NEW_COMPOSE_VERSION=
 DAEMON=ok
 IP_FORWARD=1
+NFT_CHECK_RC=0
+NFT_APPLY_RC=0
+NFT_APPLIED=0
 EOF
 }
 
@@ -123,6 +128,30 @@ esac
 exit 0
 FAKE_EOF
 
+cat > "$FAKE_DIR/nft" <<'FAKE_EOF'
+#!/bin/bash
+echo "nft $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "-c" ]; then
+    # syntax-only check step (nft -c -f FILE)
+    exit "${NFT_CHECK_RC:-0}"
+fi
+if [ "${1:-}" = "-f" ]; then
+    # atomic apply (nft -f FILE); on failure install.sh rolls back
+    [ "${NFT_APPLY_RC:-0}" = "0" ] || exit "${NFT_APPLY_RC}"
+    sed 's|^NFT_APPLIED=.*|NFT_APPLIED=1|' "$FAKE_STATE" > "$FAKE_STATE.new" \
+        && mv "$FAKE_STATE.new" "$FAKE_STATE"
+    exit 0
+fi
+if [ "${1:-}" = "list" ]; then
+    # post-reload verification (nft list table ip amnezia)
+    [ "${NFT_APPLIED:-0}" = "1" ] || exit 1
+    echo "table ip amnezia {"
+    exit 0
+fi
+exit 0
+FAKE_EOF
+
 cat > "$FAKE_DIR/curl" <<'FAKE_EOF'
 #!/bin/bash
 echo "curl $*" >> "${FAKE_CALLS:?}"
@@ -139,7 +168,7 @@ fi
 exit 0
 FAKE_EOF
 
-chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/curl"
+chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl"
 
 # --- harness plumbing ---------------------------------------------------
 
@@ -156,6 +185,9 @@ ROOT="$TMP_TEST/root"
 SYSCTL_TEST="$TMP_TEST/sysctl.d"
 KEYRING_TEST="$TMP_TEST/apt/keyrings"
 SOURCES_TEST="$TMP_TEST/apt/sources.list.d"
+NFTABLES_DIR_TEST="$TMP_TEST/nftables.d"
+NFTABLES_CONF_TEST="$TMP_TEST/nftables.conf"
+SYSTEMD_DIR_TEST="$TMP_TEST/systemd"
 
 run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_TEST=1 \
@@ -164,6 +196,9 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_SYSCTL_DIR="$SYSCTL_TEST" \
     AMNEZIA_INSTALL_KEYRING_DIR="$KEYRING_TEST" \
     AMNEZIA_INSTALL_APT_SOURCES_DIR="$SOURCES_TEST" \
+    AMNEZIA_INSTALL_NFTABLES_DIR="$NFTABLES_DIR_TEST" \
+    AMNEZIA_INSTALL_NFTABLES_CONF="$NFTABLES_CONF_TEST" \
+    AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
     PATH="$FAKE_DIR:$PATH" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
@@ -326,7 +361,7 @@ test_layout_and_permissions() {
     os_release debian 12 bookworm
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "layout flow: exit $rc"
-    mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+    mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
     [ "$(mode "$ROOT")" = "750" ] && pass "root dir 0750" || fail "root dir perms: $(mode "$ROOT")"
     for sub in data config status backups; do
         [ "$(mode "$ROOT/$sub")" = "700" ] && pass "$sub/ 0700" || fail "$sub/ perms: $(mode "$ROOT/$sub")"
@@ -371,6 +406,27 @@ test_ip_forward_already_enabled() {
     [ "$rc" = "0" ] || fail "ip_forward enabled flow: exit $rc"
     [ -f "$SYSCTL_TEST/99-amnezia-vpn.conf" ] && fail "unrelated sysctl file written although forward=1" \
         || pass "no sysctl file written when already enabled"
+}
+
+test_installed_compose_contract() {
+    # M9.2b: install.sh copies compose.yaml verbatim — the installed
+    # copy must carry the host-mode/restart contract.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "installed compose flow: exit $rc"
+    [ "$(grep -c '^    network_mode: host$' "$ROOT/compose.yaml")" = "1" ] \
+        && pass "installed compose: awg network_mode: host" \
+        || fail "installed compose: awg network_mode: host"
+    [ "$(grep -c '^    restart: unless-stopped$' "$ROOT/compose.yaml")" = "2" ] \
+        && pass "installed compose: restart: unless-stopped on panel+awg" \
+        || fail "installed compose: restart: unless-stopped on panel+awg"
+    [ "$(grep -c '^    sysctls:$' "$ROOT/compose.yaml")" = "0" ] \
+        && pass "installed compose: no awg sysctls" \
+        || fail "installed compose: no awg sysctls"
+    [ "$(grep -c '^    ports:$' "$ROOT/compose.yaml")" = "1" ] \
+        && pass "installed compose: only the panel maps ports" \
+        || fail "installed compose: only the panel maps ports"
 }
 
 test_doctor_failure() {
@@ -441,6 +497,7 @@ test_default_port
 test_custom_port
 test_unknown_argument
 test_panel_loopback_and_no_sock
+test_installed_compose_contract
 test_layout_and_permissions
 test_versions_lock_used
 test_ip_forward_disabled

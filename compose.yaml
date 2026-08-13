@@ -13,6 +13,7 @@ services:
     build:
       context: .
       dockerfile: app/panel/Dockerfile
+      network: host
       args:
         GO_VERSION: ${GO_VERSION:?GO_VERSION must be set via versions.lock}
         ALPINE_VERSION: ${ALPINE_VERSION:?ALPINE_VERSION must be set via versions.lock}
@@ -21,6 +22,9 @@ services:
     depends_on:
       panel-init:
         condition: service_completed_successfully
+    # M9.2b: survives VPS reboots (install.sh manages the systemd boot
+    # order for nftables; the stack itself restarts via Docker).
+    restart: unless-stopped
     ports:
       # M6.4 (DEPLOYMENT.md §Ports): the panel binds 0.0.0.0:8787 inside
       # the container; the host mapping is loopback-only until auth lands
@@ -40,6 +44,7 @@ services:
     build:
       context: .
       dockerfile: app/awg/Dockerfile
+      network: host
       args:
         GO_VERSION: ${GO_VERSION:?GO_VERSION must be set via versions.lock}
         ALPINE_VERSION: ${ALPINE_VERSION:?ALPINE_VERSION must be set via versions.lock}
@@ -48,6 +53,13 @@ services:
         AMNEZIAWG_TOOLS_VERSION: ${AMNEZIAWG_TOOLS_VERSION:?AMNEZIAWG_TOOLS_VERSION must be set via versions.lock}
         AMNEZIAWG_TOOLS_COMMIT: ${AMNEZIAWG_TOOLS_COMMIT:?AMNEZIAWG_TOOLS_COMMIT must be set via versions.lock}
     image: amnezia-vpn-server/awg:2.0.0
+    # M9.2b: awg работает в host network namespace — UDP AWG_PORT
+    # слушается прямо на хосте и управляется host nftables (M9.2);
+    # NAT/forward — host-side contract install.sh, никаких ports: и
+    # никакого Docker netfilter для туннеля. ACCEPTED RISK (M9.2b):
+    # снижение netns-изоляции, гейт — nftables input accept.
+    network_mode: host
+    restart: unless-stopped
     cap_add:
       - NET_ADMIN
     cap_drop:
@@ -56,9 +68,6 @@ services:
     devices:
       # userspace-реализация создаёт tun-интерфейс через /dev/net/tun
       - /dev/net/tun:/dev/net/tun
-    sysctls:
-      # перенаправление трафика между tun и eth0
-      net.ipv4.ip_forward: "1"
     depends_on:
       panel-init:
         condition: service_completed_successfully
