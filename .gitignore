@@ -46,4 +46,3 @@ AUDITS/
 # Internal design documents (spec, architecture, security notes) are
 # kept out of the repository like the audits.
 docs/
-CHANGELOG.md
