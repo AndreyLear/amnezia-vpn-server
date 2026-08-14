@@ -528,7 +528,8 @@ table ip amnezia {
     chain input {
         type filter hook input priority -100; policy accept;
         udp dport $2 accept
-${domain_rules}    }
+${domain_rules}
+    }
 
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
