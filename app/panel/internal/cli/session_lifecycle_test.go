@@ -156,6 +156,63 @@ func TestServeRestartInvalidatesSessions(t *testing.T) {
 	}
 }
 
+func TestCLIChangePasswordInvalidatesLiveServeSessions(t *testing.T) {
+	newCtx(t)
+	if code, _, errb := runInput(strings.NewReader(lifePassword+"\n"),
+		"auth", "add-user", lifeAdmin, "--password-stdin"); code != 0 {
+		t.Fatalf("auth add-user: exit %d, stderr %q", code, errb)
+	}
+	addr := freePort(t)
+	base := &url.URL{Scheme: "http", Host: addr}
+	stop, done := startServe(t, addr, io.Discard)
+	defer func() {
+		stop()
+		<-done
+	}()
+
+	cl := jarClient(t)
+	_, sid := loginOverHTTP(t, cl, base)
+	const newPassword = "life-password-after-cli"
+	code, out, errb := runInput(strings.NewReader(lifePassword+"\n"+newPassword+"\n"),
+		"auth", "change-password", lifeAdmin, "--old-password-stdin", "--new-password-stdin")
+	if code != 0 {
+		t.Fatalf("change-password: exit %d, stdout %q, stderr %q", code, out, errb)
+	}
+
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	req, err := http.NewRequest(http.MethodGet, base.String()+"/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: sid})
+	resp, err := noFollow.Do(req)
+	if err != nil {
+		t.Fatalf("GET / after CLI password change: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
+		t.Fatalf("stolen session after CLI change-password: %d Location %q; want 303 /login",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	cl2 := jarClient(t)
+	resp, err = cl2.PostForm(base.String()+"/login",
+		url.Values{"username": {lifeAdmin}, "password": {newPassword}})
+	if err != nil {
+		t.Fatalf("re-login: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("re-login body: %v", err)
+	}
+	if !strings.Contains(string(body), "Клиенты") {
+		t.Fatalf("re-login with new password did not reach the dashboard: %q", body)
+	}
+}
+
 func TestServeLifecycleLogsSecretFree(t *testing.T) {
 	newCtx(t)
 	if code, _, errb := runInput(strings.NewReader(lifePassword+"\n"),

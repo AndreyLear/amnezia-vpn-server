@@ -110,6 +110,13 @@ func (a *app) cmdAuthChangePassword(args []string) int {
 	if err := db.UpdateAuthPassword(u, username, row.PasswordHash, hash); err != nil {
 		return a.fatal("auth change-password", err)
 	}
+	// The CLI and `panel serve` are separate processes and do not
+	// share the in-memory SessionStore. A sidecar next to the DB
+	// tells serve to drop this user's live sessions on the next
+	// authenticated request.
+	if err := auth.RequestInvalidateSessions(db.DefaultPath(), username); err != nil {
+		return a.fatal("auth change-password", err)
+	}
 	return a.ok("auth change-password", "password changed")
 }
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -79,6 +80,13 @@ func TestAuthChangePasswordCLI(t *testing.T) {
 		t.Fatal("CLI did not replace password")
 	}
 	assertNoSecrets(t, out, errb, "new-password")
+	raw, err := os.ReadFile(auth.InvalidateSessionsPath(db.DefaultPath()))
+	if err != nil {
+		t.Fatalf("invalidate sentinel: %v", err)
+	}
+	if string(raw) != "alice\n" {
+		t.Fatalf("sentinel = %q", raw)
+	}
 }
 
 func TestAuthChangePasswordCLIFailureIsSafe(t *testing.T) {
@@ -91,6 +99,9 @@ func TestAuthChangePasswordCLIFailureIsSafe(t *testing.T) {
 		t.Fatalf("failure: code=%d out=%q err=%q", code, out, errb)
 	}
 	assertNoSecrets(t, out, errb, "wrong-password")
+	if _, err := os.Stat(auth.InvalidateSessionsPath(db.DefaultPath())); !os.IsNotExist(err) {
+		t.Fatalf("failed change-password must not write sentinel, stat err = %v", err)
+	}
 }
 
 func TestAuth2FAStatusAndDisableCLI(t *testing.T) {

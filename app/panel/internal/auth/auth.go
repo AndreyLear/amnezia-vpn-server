@@ -74,7 +74,8 @@ type sessionCtxKey struct{}
 // cookie contract of the panel. One instance per server; it is safe
 // for concurrent use.
 type Auth struct {
-	store *SessionStore
+	store  *SessionStore
+	dbPath string
 }
 
 // NewAuth returns an Auth backed by store. A nil store is a programmer
@@ -85,6 +86,13 @@ func NewAuth(store *SessionStore) *Auth {
 		panic("auth: nil session store")
 	}
 	return &Auth{store: store}
+}
+
+// WithDBPath points Auth at the SQLite path so RequireAuth can consume
+// the CLI invalidate-sessions sidecar written next to the database.
+func (a *Auth) WithDBPath(dbPath string) *Auth {
+	a.dbPath = dbPath
+	return a
 }
 
 // WriteSessionCookie sets the amnezia_session cookie for sid, expiring
@@ -148,6 +156,7 @@ func validSessionIDShape(sid string) bool {
 // unified challenge of this package applies.
 func (a *Auth) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ConsumeInvalidateSessions(a.dbPath, a.store)
 		sid, ok := ReadSessionID(r)
 		if !ok {
 			a.challenge(w, r)

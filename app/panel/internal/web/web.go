@@ -184,7 +184,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("web: parse templates: %w", err)
 	}
-	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl, auth: auth.NewAuth(cfg.Sessions), dbh: cfg.DB, pendingTOTP: make(map[string]string)}
+	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl, auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, pendingTOTP: make(map[string]string)}
 	// Route protection (M7.4/M7.6): every panel route runs behind
 	// RequireAuth; every state-changing POST additionally runs behind
 	// RequireCSRF (auth → csrf → handler). /login is the single public

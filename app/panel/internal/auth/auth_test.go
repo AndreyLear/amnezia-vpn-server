@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -134,6 +135,29 @@ func TestReadSessionID(t *testing.T) {
 				t.Fatalf("ReadSessionID(%q) = %q, true; want false", tc.val, got)
 			}
 		})
+	}
+}
+
+func TestRequireAuthConsumesInvalidateSentinel(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "amnezia.sqlite")
+	store := NewSessionStore(SessionTTL)
+	sess, err := store.Create("alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := RequestInvalidateSessions(dbPath, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sess.ID})
+	NewAuth(store).WithDBPath(dbPath).RequireAuth(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("after sentinel: %d Location %q; want 303 /login", rec.Code, rec.Header().Get("Location"))
 	}
 }
 
