@@ -172,7 +172,7 @@ func classifyExpected(err error) (string, bool) {
 	}
 }
 
-// mutate runs fn under the mutation mutex, then regenerates
+// mutateWith runs fn under the mutation mutex, then regenerates
 // config/awg0.conf. On fn success the flow answers 303 with okFlash
 // (plain POST) or JSON with okFlash + payload (fetch); on an expectable
 // db error it answers the classified flash; on any other error the real
@@ -180,11 +180,6 @@ func classifyExpected(err error) (string, bool) {
 // awgconf.Generate leaves the previous config intact (WriteAtomic) and
 // answers 500. payload (when non-nil) is only built for the fetch
 // channel, after the regeneration succeeded.
-func (s *Server) mutate(w http.ResponseWriter, r *http.Request, okFlash string, fn func() error) {
-	s.mutateWith(w, r, okFlash, nil, fn)
-}
-
-// mutateWith is mutate with an optional payload builder (see mutate).
 func (s *Server) mutateWith(w http.ResponseWriter, r *http.Request, okFlash string, payload func() (mutationPayload, error), fn func() error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
