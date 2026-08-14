@@ -102,7 +102,7 @@ func DefaultConfig() Config {
 //go:embed templates/*.html
 var templateFS embed.FS
 
-//go:embed static/style.css
+//go:embed static/style.css static/app.js
 var staticFS embed.FS
 
 // Server is one panel HTTP server. It is safe to call Handler after
@@ -218,10 +218,13 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("GET /clients/{id}/qr", s.auth.RequireAuth(http.HandlerFunc(s.clientQR)))
 	s.mux.HandleFunc("GET /login", s.loginPage)
 	s.mux.HandleFunc("POST /login", s.loginSubmit)
-	// Public static asset (T-120 design system): plain CSS served from
-	// the embedded FS; CSP default-src 'self' admits it. No auth: the
-	// login page needs it before any session exists.
+	// Public static assets (T-120 design system): plain CSS and the
+	// progressive-enhancement JS served from the embedded FS; CSP
+	// default-src 'self' admits them (external files only — inline
+	// scripts/styles stay forbidden). No auth: the login page needs
+	// them before any session exists.
 	s.mux.HandleFunc("GET /static/style.css", s.staticCSS)
+	s.mux.HandleFunc("GET /static/app.js", s.staticJS)
 	s.mux.HandleFunc("/", s.notFound)
 	return s, nil
 }
@@ -235,6 +238,18 @@ func (s *Server) staticCSS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Write(data)
+}
+
+// staticJS serves the embedded progressive-enhancement script
+// (toasts, native <dialog> modals, fetch-based mutations).
+func (s *Server) staticJS(w http.ResponseWriter, r *http.Request) {
+	data, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Write(data)
 }
 
@@ -348,11 +363,24 @@ func (s *Server) bodyLimit(next http.Handler) http.Handler {
 // rendering can never emit secrets. Username is the authenticated
 // principal from the session context (M7.5); CSRF is the session's
 // CSRF token rendered only into hidden form inputs (M7.6).
+// CardViews wraps each card with the CSRF token its forms need.
 type dashboardData struct {
 	Reconciliation
 	Flash    string
 	Username string
 	CSRF     string
+	// RxTotalText/TxTotalText are the traffic totals summed over all
+	// clients (T-120 round 2 §9), rendered as compact chips.
+	RxTotalText string
+	TxTotalText string
+	CardViews   []clientCardData
+}
+
+// clientCardData is one dashboard card plus the CSRF token its inline
+// forms embed (also used by the fetch-channel card fragments).
+type clientCardData struct {
+	Card ClientCard
+	CSRF string
 }
 
 // Interface-state predicates keep magic numbers out of the templates.
@@ -380,11 +408,21 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, _ := auth.CurrentUser(r.Context())
+	var rxTotal, txTotal uint64
+	views := make([]clientCardData, len(rec.Cards))
+	for i, c := range rec.Cards {
+		rxTotal += c.RxBytes
+		txTotal += c.TxBytes
+		views[i] = clientCardData{Card: c, CSRF: sess.CSRFToken}
+	}
 	s.renderPage(w, http.StatusOK, dashboardData{
 		Reconciliation: rec,
 		Flash:          r.URL.Query().Get("msg"),
 		Username:       sess.Username,
 		CSRF:           sess.CSRFToken,
+		RxTotalText:    bytesText(rxTotal),
+		TxTotalText:    bytesText(txTotal),
+		CardViews:      views,
 	})
 }
 
@@ -403,22 +441,23 @@ func (s *Server) renderPage(w http.ResponseWriter, code int, data any) {
 }
 
 // errorPage renders a generic error page. The message is a fixed
-// string per status code — request details, paths and error text are
-// never echoed (no reflection of hostile input).
+// string per status code (Russian, T-120 round 2) — request details,
+// paths and error text are never echoed (no reflection of hostile
+// input).
 func (s *Server) errorPage(w http.ResponseWriter, code int) {
 	message := ""
 	switch code {
 	case http.StatusNotFound:
-		message = "Page not found."
+		message = "Страница не найдена."
 	case http.StatusRequestEntityTooLarge:
-		message = "Request body too large."
+		message = "Тело запроса слишком большое."
 	case http.StatusMethodNotAllowed:
-		message = "Method not allowed."
+		message = "Метод не поддерживается."
 	case http.StatusBadRequest:
-		message = "Bad request."
+		message = "Некорректный запрос."
 	default:
 		code = http.StatusInternalServerError
-		message = "Internal server error."
+		message = "Внутренняя ошибка сервера."
 	}
 	type errorData struct {
 		Code    int

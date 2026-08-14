@@ -33,8 +33,8 @@ import (
 // loginErrorText is the single failure message of the login form. It is
 // a fixed string: no variant exists for unknown user, wrong password,
 // empty credentials or a damaged hash, so the response can never reveal
-// which of them happened.
-const loginErrorText = "Invalid username or password."
+// which of them happened. Russian (T-120 round 2).
+const loginErrorText = "Неверное имя пользователя или пароль."
 
 // dummyPasswordHash is a precomputed Argon2id hash that login verifies
 // against when the submitted username does not exist in the auth table.

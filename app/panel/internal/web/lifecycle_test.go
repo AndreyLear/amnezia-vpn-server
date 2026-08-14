@@ -57,7 +57,7 @@ func TestAuthFullLifecycle(t *testing.T) {
 	// 2. Wrong password: generic failure, zero sessions, no cookie.
 	rec = httptest.NewRecorder()
 	f.server.ServeHTTP(rec, loginForm(t, "alice", "wrong-password"))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Invalid username or password.") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), loginErrorText) {
 		t.Fatalf("wrong password: code = %d, want 200 + generic error", rec.Code)
 	}
 	if n := activeSessionCount(f, "alice"); n != 0 {
@@ -94,7 +94,7 @@ func TestAuthFullLifecycle(t *testing.T) {
 		t.Fatalf("dashboard: code = %d, want 200", rec.Code)
 	}
 	dash := rec.Body.String()
-	if !strings.Contains(dash, "Signed in as alice") {
+	if !strings.Contains(dash, "Вы вошли как alice") {
 		t.Fatalf("dashboard must show the signed-in principal: %q", dash)
 	}
 	if !strings.Contains(dash, `<input type="hidden" name="_csrf" value="`+sess.CSRFToken+`">`) {
@@ -103,8 +103,11 @@ func TestAuthFullLifecycle(t *testing.T) {
 
 	// 5. Full CRUD over HTTP (PRG 303 everywhere, real token).
 	rec = postAuth(f, "/clients/new", c.Value, sess.CSRFToken, url.Values{"name": {"carol"}})
-	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "msg=Client") {
+	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "/?msg=") {
 		t.Fatalf("add: code = %d, Location = %q; want 303 + flash", rec.Code, rec.Header().Get("Location"))
+	}
+	if !strings.Contains(rec.Header().Get("Location"), url.QueryEscape(flashAdded)) {
+		t.Fatalf("add: Location = %q, want the %q flash", rec.Header().Get("Location"), flashAdded)
 	}
 	clients, err := db.ClientsAll(f.h)
 	if err != nil {

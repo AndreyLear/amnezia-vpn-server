@@ -244,11 +244,12 @@ func TestDashboard200AndCardContent(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"alice",
-		"online",
+		"онлайн",
 		"<article class=" + `"card"`, // template literal
 		"10.8.0.2/32",
-		"Tunnel: up",
-		"/clients/" + fmt.Sprintf("%d", client.ID) + "/enable",
+		"Туннель работает",
+		// an enabled client's menu toggles to disable
+		"/clients/" + fmt.Sprintf("%d", client.ID) + "/disable",
 		"/clients/" + fmt.Sprintf("%d", client.ID) + "/qr",
 		"action=\"/clients/new\"",
 	} {
@@ -263,7 +264,7 @@ func TestDashboardPeerValuesShown(t *testing.T) {
 	c, _, _ := f.addClient("bob")
 	f.setStatus(upStatusWith(peerFor(c.PublicKey)))
 	body := f.get("/").Body.String()
-	for _, want := range []string{"4.9 KiB", "8.8 KiB", "online"} {
+	for _, want := range []string{"4.9 KiB", "8.8 KiB", "онлайн"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in body", want)
 		}
@@ -275,7 +276,7 @@ func TestDashboardClientWithoutPeerOffline(t *testing.T) {
 	f.addClient("no-peer")
 	f.setStatus(upStatusWith())
 	body := f.get("/").Body.String()
-	if !strings.Contains(body, "offline") {
+	if !strings.Contains(body, "офлайн") {
 		t.Errorf("client without peer must render offline: %s", body)
 	}
 }
@@ -305,7 +306,7 @@ func TestDashboardExpiredShownAndDBIntact(t *testing.T) {
 	}
 	f.setStatus(upStatusWith())
 	body := f.get("/").Body.String()
-	if !strings.Contains(body, "expired") {
+	if !strings.Contains(body, "срок истёк") {
 		t.Errorf("expired client must be marked: %s", body)
 	}
 	after, err := db.ClientsAll(f.h)
@@ -322,10 +323,10 @@ func TestDashboardStatusNA(t *testing.T) {
 	f.addClient("x")
 	// no status file written
 	body := f.get("/").Body.String()
-	if !strings.Contains(body, "Tunnel: status not available") {
+	if !strings.Contains(body, "Туннель: статус недоступен") {
 		t.Errorf("NA banner missing: %s", body)
 	}
-	if !strings.Contains(body, "offline") {
+	if !strings.Contains(body, "офлайн") {
 		t.Errorf("NA: clients must render offline")
 	}
 }
@@ -335,7 +336,7 @@ func TestDashboardStatusDown(t *testing.T) {
 	f.addClient("x")
 	f.setStatus(&status.Status{Schema: status.SchemaVersion, GeneratedAt: time.Now().UTC(), Interface: nil, Peers: []status.Peer{}})
 	body := f.get("/").Body.String()
-	if !strings.Contains(body, "Tunnel: interface down") {
+	if !strings.Contains(body, "Туннель: интерфейс выключен") {
 		t.Errorf("down banner missing: %s", body)
 	}
 }
@@ -347,7 +348,7 @@ func TestDashboardStatusErrorGeneric(t *testing.T) {
 	// fails and nothing from the file may leak into the response.
 	f.setRawStatus(`{garbage` + `"private_key":"` + samplePrivateKey + `"` + `}`)
 	body := f.get("/").Body.String()
-	if !strings.Contains(body, "Tunnel: status error") {
+	if !strings.Contains(body, "Туннель: ошибка статуса") {
 		t.Errorf("error banner missing: %s", body)
 	}
 	if strings.Contains(body, samplePrivateKey) {
@@ -393,8 +394,29 @@ func TestDashboardEmptyClients(t *testing.T) {
 	f := newFixture(t)
 	f.setStatus(upStatusWith())
 	body := f.get("/").Body.String()
-	if !strings.Contains(body, "No clients yet.") {
+	if !strings.Contains(body, "Клиентов пока нет.") {
 		t.Errorf("empty state missing: %s", body)
+	}
+}
+
+// TestDashboardTrafficTotals (T-120 round 2 §9): the statsline sums
+// rx/tx over all clients — no history, just the current totals.
+func TestDashboardTrafficTotals(t *testing.T) {
+	f := newFixture(t)
+	a, _, _ := f.addClient("alpha")
+	b, _, _ := f.addClient("beta")
+	pa := peerFor(a.PublicKey)
+	pa.RxBytes = 5000
+	pa.TxBytes = 9000
+	pb := peerFor(b.PublicKey)
+	pb.RxBytes = 5000
+	pb.TxBytes = 9000
+	f.setStatus(upStatusWith(pa, pb))
+	body := f.get("/").Body.String()
+	for _, want := range []string{"Вх:", "Исх:", "9.8 KiB"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("traffic totals missing %q", want)
+		}
 	}
 }
 
@@ -419,11 +441,11 @@ func TestErrorPageGeneric(t *testing.T) {
 		code int
 		want string
 	}{
-		{http.StatusNotFound, "Page not found."},
-		{http.StatusRequestEntityTooLarge, "Request body too large."},
-		{http.StatusMethodNotAllowed, "Method not allowed."},
-		{http.StatusBadRequest, "Bad request."},
-		{999, "Internal server error."},
+		{http.StatusNotFound, "Страница не найдена."},
+		{http.StatusRequestEntityTooLarge, "Тело запроса слишком большое."},
+		{http.StatusMethodNotAllowed, "Метод не поддерживается."},
+		{http.StatusBadRequest, "Некорректный запрос."},
+		{999, "Внутренняя ошибка сервера."},
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()
@@ -450,7 +472,7 @@ func TestPanicRecoveryGeneric500(t *testing.T) {
 		t.Fatalf("panic route: code = %d, want 500", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "Internal server error.") || strings.Contains(body, "boom") {
+	if !strings.Contains(body, "Внутренняя ошибка сервера.") || strings.Contains(body, "boom") {
 		t.Errorf("panic details leaked: %q", body)
 	}
 }
@@ -523,11 +545,13 @@ func TestRedirect303(t *testing.T) {
 	}
 }
 
-// TestStaticCSSAndTemplatePurity (T-120): the embedded stylesheet is
-// served publicly at /static/style.css (the login page needs it before
-// any session exists), and no rendered page carries inline styles or
-// scripts — the CSP "default-src 'self'" forbids them, so the whole
-// design system must stay self-contained.
+// TestStaticCSSAndTemplatePurity (T-120): the embedded stylesheet and
+// the progressive-enhancement script are served publicly at /static/*
+// (the login page needs them before any session exists), and no
+// rendered page carries inline styles, inline scripts or inline event
+// handlers — the CSP "default-src 'self'" forbids them. The ONLY
+// script allowed is the external /static/app.js (round 2 §12); every
+// page embeds it exactly once.
 func TestStaticCSSAndTemplatePurity(t *testing.T) {
 	f := newFixture(t)
 
@@ -543,6 +567,18 @@ func TestStaticCSSAndTemplatePurity(t *testing.T) {
 		t.Fatal("css body is empty")
 	}
 
+	rec = httptest.NewRecorder()
+	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/static/app.js", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /static/app.js: code = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Fatalf("app.js content-type = %q, want javascript", ct)
+	}
+	if strings.TrimSpace(rec.Body.String()) == "" {
+		t.Fatal("app.js body is empty")
+	}
+
 	for _, path := range []string{"/login", "/", "/backups", "/backups/restore"} {
 		rec := httptest.NewRecorder()
 		var req *http.Request
@@ -556,7 +592,13 @@ func TestStaticCSSAndTemplatePurity(t *testing.T) {
 			t.Fatalf("GET %s: code = %d, want 200", path, rec.Code)
 		}
 		body := rec.Body.String()
-		for _, needle := range []string{"<script", "style=", "onclick=", "onerror="} {
+		if n := strings.Count(body, `<script src="/static/app.js" defer></script>`); n != 1 {
+			t.Fatalf("GET %s: app.js script tag count = %d, want exactly 1", path, n)
+		}
+		for _, needle := range []string{
+			"<script>", "style=", "onclick=", "onerror=", "onload=",
+			"onchange=", "oninput=", "onsubmit=", "onmouseover=", "onfocus=",
+		} {
 			if strings.Contains(body, needle) {
 				t.Fatalf("GET %s: page contains %q — CSP-incompatible", path, needle)
 			}

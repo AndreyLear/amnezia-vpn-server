@@ -184,7 +184,7 @@ func TestLoginGenericFailure(t *testing.T) {
 			if got != wantBody {
 				t.Errorf("failure body differs from the baseline:\n%q\nwant:\n%q", got, wantBody)
 			}
-			if !strings.Contains(got, "Invalid username or password.") {
+			if !strings.Contains(got, loginErrorText) {
 				t.Errorf("failure body misses the generic message: %q", got)
 			}
 			if strings.Contains(got, tc.username) && tc.username != "" {
@@ -221,7 +221,7 @@ func TestLoginMalformedHashGeneric(t *testing.T) {
 	f := newFixture(t)
 	addUserRaw(t, f, "hack", "$argon2id$v=19$m=65536,t=1,p=4$broken")
 	body := failedLogin(t, f, "hack", testPassword)
-	if !strings.Contains(body, "Invalid username or password.") {
+	if !strings.Contains(body, loginErrorText) {
 		t.Errorf("malformed hash must answer the generic error, got %q", body)
 	}
 	if strings.Contains(body, "broken") {

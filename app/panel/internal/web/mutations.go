@@ -6,13 +6,19 @@
 // itself, but the regenerate must not interleave with a concurrent
 // mutation.
 //
-// All flows are PRG: success and expected failures answer 303 with a
-// fixed flash message in ?msg= — input is never echoed back. DB errors
+// Response contract (T-120 round 2): a plain form POST answers 303
+// with a fixed flash message in ?msg= (input is never echoed back); a
+// fetch request (X-Requested-With or Accept: application/json) answers
+// JSON — {"ok":bool,"message":...,"html"?:fresh-card-fragment,
+// "count"?:clients} — so the external /static/app.js updates the DOM
+// locally (toasts, badges, cards) without a page reload. DB errors
 // that are not expectable client states are logged server-side and
 // answered with the generic 500 page (M6_AUDIT.md §2.1.10).
 package web
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -21,27 +27,29 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/keys"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
 // Flash messages are fixed strings; they never contain request input,
-// ids or secrets.
+// ids or secrets. The whole panel is Russian (T-120 round 2).
 const (
-	flashInvalidID     = "Invalid client id."
-	flashNotFound      = "Client not found."
-	flashInvalidName   = "Invalid client name."
-	flashNameTaken     = "A client with this name already exists."
-	flashInvalidExpiry = "Expected RFC3339 timestamp or \"none\"."
-	flashNoServer      = "Server not initialized."
-	flashNoAddress     = "No free address in the pool."
-	flashAdded         = "Client added."
-	flashDeleted       = "Client deleted."
-	flashEnabled       = "Client enabled."
-	flashDisabled      = "Client disabled."
-	flashRenamed       = "Client renamed."
-	flashExpirySet     = "Expiry updated."
+	flashInvalidID     = "Некорректный ID клиента."
+	flashNotFound      = "Клиент не найден."
+	flashInvalidName   = "Недопустимое имя клиента."
+	flashNameTaken     = "Клиент с таким именем уже существует."
+	flashInvalidExpiry = "Недопустимый срок. Формат: ГГГГ-ММ-ДДTЧЧ:ММ."
+	flashNoServer      = "Сервер не инициализирован."
+	flashNoAddress     = "Нет свободных адресов в пуле."
+	flashAdded         = "Клиент добавлен."
+	flashDeleted       = "Клиент удалён."
+	flashEnabled       = "Клиент включён."
+	flashDisabled      = "Клиент отключён."
+	flashRenamed       = "Клиент переименован."
+	flashExpirySet     = "Срок действия обновлён."
 )
 
 // clientNameMaxRunes mirrors cli.clientNameMaxRunes: the web layer uses
@@ -64,13 +72,17 @@ func validateName(raw string) (string, error) {
 	return name, nil
 }
 
-// normalizeRFC3339 mirrors cli.normalizeRFC3339: canonical UTC form.
-func normalizeRFC3339(raw string) (string, error) {
-	t, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return "", err
+// normalizeExpiry mirrors cli.normalizeRFC3339: canonical UTC form.
+// The UI submits either a full RFC3339 timestamp (cli parity) or the
+// browser's datetime-local shape "2006-01-02T15:04" (wall time,
+// interpreted as UTC server-side, T-120 round 2 §8).
+func normalizeExpiry(raw string) (string, error) {
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t.UTC().Format(time.RFC3339), nil
+		}
 	}
-	return t.UTC().Format(time.RFC3339), nil
+	return "", errors.New("invalid expiry")
 }
 
 // parseClientID mirrors cli.parseClientID: positive integer only.
@@ -82,9 +94,64 @@ func parseClientID(raw string) (int64, error) {
 	return id, nil
 }
 
-// flash completes the PRG cycle: 303 to / with the fixed message.
-func (s *Server) flash(w http.ResponseWriter, r *http.Request, msg string) {
+// wantsJSON reports whether the request prefers the fetch/JSON channel
+// (T-120 round 2): the headers app.js sends on fetch() mutations. A
+// plain form POST (no-JS fallback) never matches and keeps the 303 PRG
+// flow.
+func wantsJSON(r *http.Request) bool {
+	if r.Header.Get("X-Requested-With") != "" {
+		return true
+	}
+	for _, part := range strings.Split(r.Header.Get("Accept"), ",") {
+		if strings.TrimSpace(strings.SplitN(part, ";", 2)[0]) == "application/json" {
+			return true
+		}
+	}
+	return false
+}
+
+// mutationResponse is the JSON answer of the fetch channel.
+type mutationResponse struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+	HTML    string `json:"html,omitempty"`
+	Count   *int   `json:"count,omitempty"`
+}
+
+// mutationPayload is the optional per-mutation extra data attached to a
+// success answer: the fresh card fragment (add/enable/disable/rename/
+// expiry) and/or the new client count (add/delete).
+type mutationPayload struct {
+	HTML  string
+	Count *int
+}
+
+// answerMutation completes a mutation for both channels: JSON for
+// fetch requests, 303 + ?msg= for plain form POSTs.
+func (s *Server) answerMutation(w http.ResponseWriter, r *http.Request, ok bool, msg string, extra mutationPayload) {
+	if wantsJSON(r) {
+		s.writeMutationJSON(w, ok, msg, extra)
+		return
+	}
 	redirect303(w, r, "/?msg="+url.QueryEscape(msg))
+}
+
+// writeMutationJSON renders the fetch-channel answer. The HTML fragment
+// (when present) was produced by html/template with autoscape — it is
+// safe to insert into the DOM; encoding/json escapes it for transport.
+func (s *Server) writeMutationJSON(w http.ResponseWriter, ok bool, msg string, extra mutationPayload) {
+	resp := mutationResponse{OK: ok, Message: msg, HTML: extra.HTML, Count: extra.Count}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.cfg.Logger.Printf("write mutation json: %v", err)
+	}
+}
+
+// flash completes the PRG cycle: 303 to / with the fixed message (or
+// the JSON error for fetch requests).
+func (s *Server) flash(w http.ResponseWriter, r *http.Request, msg string) {
+	s.answerMutation(w, r, false, msg, mutationPayload{})
 }
 
 // classifyExpected maps known client-state errors to their flash
@@ -106,17 +173,24 @@ func classifyExpected(err error) (string, bool) {
 }
 
 // mutate runs fn under the mutation mutex, then regenerates
-// config/awg0.conf. On fn success the flow answers 303 with okFlash;
-// on an expectable db error it answers 303 with the classified flash;
-// on any other error the real cause is logged and the generic 500 page
-// is rendered. A failure of awgconf.Generate leaves the previous
-// config intact (WriteAtomic) and answers 500.
+// config/awg0.conf. On fn success the flow answers 303 with okFlash
+// (plain POST) or JSON with okFlash + payload (fetch); on an expectable
+// db error it answers the classified flash; on any other error the real
+// cause is logged and the generic 500 page is rendered. A failure of
+// awgconf.Generate leaves the previous config intact (WriteAtomic) and
+// answers 500. payload (when non-nil) is only built for the fetch
+// channel, after the regeneration succeeded.
 func (s *Server) mutate(w http.ResponseWriter, r *http.Request, okFlash string, fn func() error) {
+	s.mutateWith(w, r, okFlash, nil, fn)
+}
+
+// mutateWith is mutate with an optional payload builder (see mutate).
+func (s *Server) mutateWith(w http.ResponseWriter, r *http.Request, okFlash string, payload func() (mutationPayload, error), fn func() error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if err := fn(); err != nil {
 		if msg, ok := classifyExpected(err); ok {
-			s.flash(w, r, msg)
+			s.answerMutation(w, r, false, msg, mutationPayload{})
 		} else {
 			s.cfg.Logger.Printf("mutation: %v", err)
 			s.errorPage(w, http.StatusInternalServerError)
@@ -128,7 +202,17 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, okFlash string, 
 		s.errorPage(w, http.StatusInternalServerError)
 		return
 	}
-	s.flash(w, r, okFlash)
+	var extra mutationPayload
+	if payload != nil && wantsJSON(r) {
+		var err error
+		extra, err = payload()
+		if err != nil {
+			s.cfg.Logger.Printf("mutation: payload: %v", err)
+			s.errorPage(w, http.StatusInternalServerError)
+			return
+		}
+	}
+	s.answerMutation(w, r, true, okFlash, extra)
 }
 
 // requestBodyError maps body read failures: over the limit → 413,
@@ -144,14 +228,78 @@ func requestBodyError(err error, w http.ResponseWriter) {
 	http.Error(w, "Bad request.", http.StatusBadRequest)
 }
 
-// withID validates the {id} path segment and runs the mutation.
-func (s *Server) withID(w http.ResponseWriter, r *http.Request, okFlash string, fn func(id int64) error) {
+// withID validates the {id} path segment and runs the mutation; payload
+// (when non-nil) builds the fetch-channel extras from the id.
+func (s *Server) withID(w http.ResponseWriter, r *http.Request, okFlash string, payload func(id int64) (mutationPayload, error), fn func(id int64) error) {
 	id, err := parseClientID(r.PathValue("id"))
 	if err != nil {
 		s.flash(w, r, flashInvalidID)
 		return
 	}
-	s.mutate(w, r, okFlash, func() error { return fn(id) })
+	s.mutateWith(w, r, okFlash, func() (mutationPayload, error) {
+		if payload == nil {
+			return mutationPayload{}, nil
+		}
+		return payload(id)
+	}, func() error { return fn(id) })
+}
+
+// csrfFromContext returns the session CSRF token for rendering card
+// fragments (the session is guaranteed by RequireAuth).
+func csrfFromContext(r *http.Request) string {
+	sess, ok := auth.CurrentUser(r.Context())
+	if !ok {
+		return ""
+	}
+	return sess.CSRFToken
+}
+
+// cardFragment renders one client card (the same "clientcard" template
+// the dashboard uses) for the fetch-channel HTML updates.
+func (s *Server) cardFragment(csrf string, id int64) (string, error) {
+	rec, err := db.ClientByID(s.db(), id)
+	if err != nil {
+		return "", err
+	}
+	st, readErr := status.ReadStatus(s.cfg.StatusPath)
+	cards := Reconcile([]db.ClientRecord{*rec}, st, readErr, time.Now()).Cards
+	if len(cards) != 1 {
+		return "", errors.New("reconcile produced no card")
+	}
+	var buf bytes.Buffer
+	if err := s.tpl.ExecuteTemplate(&buf, "clientcard", clientCardData{Card: cards[0], CSRF: csrf}); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// clientCount returns the number of client rows (fetch-channel count).
+func (s *Server) clientCount() (int, error) {
+	clients, err := db.ClientsAll(s.db())
+	if err != nil {
+		return 0, err
+	}
+	return len(clients), nil
+}
+
+// cardPayload builds the fetch-channel payload for the mutation of one
+// client: the fresh card fragment.
+func (s *Server) cardPayload(r *http.Request, id int64) (mutationPayload, error) {
+	html, err := s.cardFragment(csrfFromContext(r), id)
+	if err != nil {
+		return mutationPayload{}, err
+	}
+	return mutationPayload{HTML: html}, nil
+}
+
+// countPayload builds the fetch-channel payload carrying the new client
+// count (add/delete).
+func (s *Server) countPayload() (mutationPayload, error) {
+	n, err := s.clientCount()
+	if err != nil {
+		return mutationPayload{}, err
+	}
+	return mutationPayload{Count: &n}, nil
 }
 
 // clientNew handles POST /clients/new: validates name and optional
@@ -169,7 +317,7 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 	}
 	expiresAt := ""
 	if raw := r.FormValue("expires_at"); raw != "" {
-		expiresAt, err = normalizeRFC3339(raw)
+		expiresAt, err = normalizeExpiry(raw)
 		if err != nil {
 			s.flash(w, r, flashInvalidExpiry)
 			return
@@ -185,7 +333,19 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, s, "generate preshared key", err)
 		return
 	}
-	s.mutate(w, r, flashAdded, func() error {
+	var createdID int64
+	payload := func() (mutationPayload, error) {
+		html, err := s.cardFragment(csrfFromContext(r), createdID)
+		if err != nil {
+			return mutationPayload{}, err
+		}
+		n, err := s.clientCount()
+		if err != nil {
+			return mutationPayload{}, err
+		}
+		return mutationPayload{HTML: html, Count: &n}, nil
+	}
+	s.mutateWith(w, r, flashAdded, payload, func() error {
 		server, err := db.ServerRow(s.db())
 		if err != nil {
 			return err
@@ -199,6 +359,7 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		createdID = record.ID
 		if expiresAt != "" {
 			return db.SetClientExpiry(s.db(), record.ID, expiresAt)
 		}
@@ -220,7 +381,9 @@ func (s *Server) clientSetEnabled(enabled bool) http.HandlerFunc {
 		okFlash = flashEnabled
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		s.withID(w, r, okFlash, func(id int64) error {
+		s.withID(w, r, okFlash, func(id int64) (mutationPayload, error) {
+			return s.cardPayload(r, id)
+		}, func(id int64) error {
 			return db.SetClientEnabled(s.db(), id, enabled)
 		})
 	}
@@ -229,7 +392,9 @@ func (s *Server) clientSetEnabled(enabled bool) http.HandlerFunc {
 // clientDelete handles POST /clients/{id}/delete; an unknown id answers
 // the not-found flash (never a silent no-op, M6_AUDIT.md §2.1.10).
 func (s *Server) clientDelete(w http.ResponseWriter, r *http.Request) {
-	s.withID(w, r, flashDeleted, func(id int64) error {
+	s.withID(w, r, flashDeleted, func(id int64) (mutationPayload, error) {
+		return s.countPayload()
+	}, func(id int64) error {
 		return db.DeleteClient(s.db(), id)
 	})
 }
@@ -246,14 +411,17 @@ func (s *Server) clientRename(w http.ResponseWriter, r *http.Request) {
 		s.flash(w, r, flashInvalidName)
 		return
 	}
-	s.withID(w, r, flashRenamed, func(id int64) error {
+	s.withID(w, r, flashRenamed, func(id int64) (mutationPayload, error) {
+		return s.cardPayload(r, id)
+	}, func(id int64) error {
 		return db.UpdateClientName(s.db(), id, name)
 	})
 }
 
-// clientExpiry handles POST /clients/{id}/expiry: an RFC3339 value is
-// stored in canonical UTC form, "none" clears the expiry (parity with
-// cli "set-expiry <id> none").
+// clientExpiry handles POST /clients/{id}/expiry: an RFC3339 or
+// datetime-local value (YYYY-MM-DDTHH:MM) is stored in canonical UTC
+// form; "none" or an empty value clears the expiry (T-120 round 2 §8:
+// empty input = no deadline).
 func (s *Server) clientExpiry(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		requestBodyError(err, w)
@@ -261,20 +429,19 @@ func (s *Server) clientExpiry(w http.ResponseWriter, r *http.Request) {
 	}
 	value := r.FormValue("expires_at")
 	expiresAt := ""
-	switch value {
-	case "none":
-	case "":
-		s.flash(w, r, flashInvalidExpiry)
-		return
+	switch {
+	case value == "none" || value == "":
 	default:
 		var err error
-		expiresAt, err = normalizeRFC3339(value)
+		expiresAt, err = normalizeExpiry(value)
 		if err != nil {
 			s.flash(w, r, flashInvalidExpiry)
 			return
 		}
 	}
-	s.withID(w, r, flashExpirySet, func(id int64) error {
+	s.withID(w, r, flashExpirySet, func(id int64) (mutationPayload, error) {
+		return s.cardPayload(r, id)
+	}, func(id int64) error {
 		return db.SetClientExpiry(s.db(), id, expiresAt)
 	})
 }

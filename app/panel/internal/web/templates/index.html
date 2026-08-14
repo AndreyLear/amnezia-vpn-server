@@ -1,4 +1,4 @@
-{{define "title"}}Panel{{end}}
+{{define "title"}}Панель{{end}}
 
 {{define "body"}}
 <header class="topbar">
@@ -7,101 +7,64 @@
     AmneziaVPN <small>panel</small>
   </div>
   <nav>
-    <span class="who">Signed in as {{.Username}}</span>
-    <a href="/backups">Backups</a>
-    <form action="/logout" method="post">
+    <span class="who">Вы вошли как {{.Username}}</span>
+    <button type="button" class="btn primary" data-dialog-open="add-dialog">Добавить клиента</button>
+    <form action="/backups/download" method="post" class="inline-form">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
-      <button type="submit" class="btn">Log out</button>
+      <button type="submit" class="btn">Скачать бэкап</button>
+    </form>
+    <a href="/backups">Бэкапы</a>
+    <a href="/backups/restore">Загрузить бэкап</a>
+    <form action="/logout" method="post" class="inline-form">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <button type="submit" class="btn">Выйти</button>
     </form>
   </nav>
 </header>
 
-<main>
-  <p class="eyebrow">VPN Server</p>
-  <h1 class="display"><span class="grad">AmneziaVPN Panel</span></h1>
-  <p class="sub">Manage tunnel peers, monitor the runtime and keep encrypted backups.</p>
+<main class="dash">
+  <div class="statsline">
+    {{if .Up}}
+    <span class="chip up"><span class="dot"></span>Туннель работает{{if .GeneratedText}}<span class="chip-note">{{.GeneratedText}}</span>{{end}}</span>
+    {{else if .NA}}
+    <span class="chip na"><span class="dot"></span>Туннель: статус недоступен</span>
+    {{else if .Down}}
+    <span class="chip down"><span class="dot"></span>Туннель: интерфейс выключен</span>
+    {{else}}
+    <span class="chip err"><span class="dot"></span>Туннель: ошибка статуса</span>
+    {{end}}
+    <span class="chip" id="clients-chip">Клиентов: {{len .CardViews}}</span>
+    <span class="chip">Вх: <code>{{.RxTotalText}}</code> · Исх: <code>{{.TxTotalText}}</code></span>
+  </div>
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
 
-  <section class="stats">
-    {{if .Up}}
-    <div class="stat up">
-      <p class="stat-label">Tunnel status</p>
-      <p class="stat-value"><span class="dot"></span>Tunnel: up</p>
-      <p class="stat-note">status generated {{.GeneratedText}}</p>
-    </div>
-    {{else if .NA}}
-    <div class="stat na">
-      <p class="stat-label">Tunnel status</p>
-      <p class="stat-value"><span class="dot"></span>Tunnel: status not available</p>
-    </div>
-    {{else if .Down}}
-    <div class="stat down">
-      <p class="stat-label">Tunnel status</p>
-      <p class="stat-value"><span class="dot"></span>Tunnel: interface down</p>
-    </div>
-    {{else}}
-    <div class="stat">
-      <p class="stat-label">Tunnel status</p>
-      <p class="stat-value"><span class="dot"></span>Tunnel: status error</p>
-    </div>
-    {{end}}
-    <div class="stat">
-      <p class="stat-label">Clients</p>
-      <p class="stat-value">{{len .Cards}}</p>
-    </div>
-    <div class="stat">
-      <p class="stat-label">Interface</p>
-      <p class="stat-value"><code>awg0</code></p>
-    </div>
-  </section>
-
-  <section class="form-card">
-    <h2>Add client</h2>
-    <form action="/clients/new" method="post">
+  <dialog class="modal" id="add-dialog" open>
+    <h2>Добавить клиента</h2>
+    <form action="/clients/new" method="post" data-mutate="add">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
-      <label>Name <input type="text" name="name" maxlength="64" required></label>
-      <label>Expiry (optional, RFC3339) <input type="text" name="expires_at"></label>
-      <button type="submit" class="btn primary">Add</button>
+      <label>Имя
+        <input type="text" name="name" maxlength="64" required>
+      </label>
+      <label>Срок действия (необязательно)
+        <input type="datetime-local" name="expires_at">
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-dialog-close>Отмена</button>
+        <button type="submit" class="btn primary">Добавить</button>
+      </div>
     </form>
-  </section>
+  </dialog>
 
-  <h2>Clients</h2>
-  <section class="grid">
-    {{if not .Cards}}<p class="empty">No clients yet.</p>{{end}}
-    {{range .Cards}}
-    <article class="card">
-      <h3>{{.Name}} <span class="id">#{{.ID}}</span></h3>
-      <div class="row">
-        <span class="badge {{if .Online}}on{{else}}off{{end}}">{{if .Online}}online{{else}}offline{{end}}</span>
-        <span class="badge {{if .Enabled}}enabled{{else}}disabled{{end}}">{{if .Enabled}}enabled{{else}}disabled{{end}}</span>
-        {{if .Expired}}<span class="badge expired">expired</span>{{end}}
-      </div>
-      <div class="meta">
-        <span>address: <code>{{.Address}}</code> · created: {{.CreatedText}}</span>
-        <span>last handshake: {{.LastHandshakeText}} · rx: {{.RxText}} · tx: {{.TxText}}</span>
-      </div>
-      <div class="actions">
-        <form action="/clients/{{.ID}}/enable" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit" class="btn">Enable</button></form>
-        <form action="/clients/{{.ID}}/disable" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit" class="btn">Disable</button></form>
-        <form action="/clients/{{.ID}}/delete" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit" class="btn destructive">Delete</button></form>
-        <a class="btn ghost" href="/clients/{{.ID}}/config">config</a>
-        <a class="btn ghost" href="/clients/{{.ID}}/qr">QR</a>
-      </div>
-      <div class="actions">
-        <form action="/clients/{{.ID}}/rename" method="post">
-          <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-          <input type="text" name="name" maxlength="64" placeholder="new name">
-          <button type="submit" class="btn">Rename</button>
-        </form>
-        <form action="/clients/{{.ID}}/expiry" method="post">
-          <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-          <input type="text" name="expires_at" placeholder="RFC3339 or none">
-          <button type="submit" class="btn">Set expiry</button>
-        </form>
-      </div>
-    </article>
-    {{end}}
+  <section class="clients">
+    <div class="clients-head">
+      <h2>Клиенты</h2>
+      <span class="badge" id="client-count">{{len .CardViews}}</span>
+    </div>
+    {{if not .CardViews}}<p class="empty">Клиентов пока нет.</p>{{end}}
+    <div class="stack" id="clients">
+      {{range .CardViews}}{{template "clientcard" .}}{{end}}
+    </div>
   </section>
 </main>
 {{end}}

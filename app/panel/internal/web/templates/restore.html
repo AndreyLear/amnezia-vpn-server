@@ -1,10 +1,11 @@
 {{define "restore"}}<!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Restore backup</title>
+<title>Восстановление из бэкапа</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -13,46 +14,46 @@
     AmneziaVPN <small>panel</small>
   </div>
   <nav>
-    <span class="who">Signed in as {{.Username}}</span>
-    <a href="/">Dashboard</a>
-    <a href="/backups">Backups</a>
-    <form action="/logout" method="post">
+    <span class="who">Вы вошли как {{.Username}}</span>
+    <a href="/">Панель</a>
+    <a href="/backups">Бэкапы</a>
+    <form action="/logout" method="post" class="inline-form">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
-      <button type="submit" class="btn">Log out</button>
+      <button type="submit" class="btn">Выйти</button>
     </form>
   </nav>
 </header>
 
 <main>
-  <p class="eyebrow">Disaster recovery</p>
-  <h1 class="display"><span class="grad">Restore a backup</span></h1>
-  <p class="sub">The archive (.tar.zst.age) is checked, unpacked into a staging
-     directory and scanned before anything changes. The panel never
-     restarts itself: on success the restore is prepared and waits —
-     restart the panel to apply it. The identity is used only to open
-     the archive, kept in memory, and never stored, logged or shown.</p>
+  <h1 class="page-title">Восстановление из бэкапа</h1>
+  <p class="page-sub">Архив (.tar.zst.age) проверяется, распаковывается во временную директорию
+     и сканируется до внесения изменений. Панель не перезапускает себя
+     сама: после подготовки восстановление применяется сразу (без
+     перезапуска) либо ожидает перезапуска. Ключ используется только
+     для расшифровки архива, хранится в памяти и никогда не
+     записывается, не логируется и не показывается.</p>
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
 
   {{if .Pending}}
-  <p class="pending">A restore is prepared and waiting. The panel never restarts itself: restart it to apply, or the restore cancels on the next serve. Further restores are paused until then.</p>
+  <p class="pending">Восстановление подготовлено и ожидает перезапуска. Панель не перезапускает себя сама: перезапустите её, чтобы применить; иначе восстановление отменится при следующем запуске. Новые восстановления приостановлены до этого.</p>
   {{end}}
 
   <section class="form-card">
     <form action="/backups/restore" method="post" enctype="multipart/form-data">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <p>
-        <label>Backup archive
+        <label>Архив бэкапа
           <input type="file" name="backup" accept=".age" required>
         </label>
       </p>
       <p>
-        <label>Age identity (secret key)
+        <label>Ключ age (секретный)
           <textarea name="identity" rows="5" autocomplete="off"
                     spellcheck="false" placeholder="AGE-SECRET-KEY-1..."></textarea>
         </label>
       </p>
-      <button type="submit" class="btn destructive">Prepare restore</button>
+      <button type="submit" class="btn destructive">Загрузить и восстановить</button>
     </form>
   </section>
 </main>

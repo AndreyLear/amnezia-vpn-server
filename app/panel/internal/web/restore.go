@@ -60,19 +60,20 @@ const (
 )
 
 // Flash messages are fixed strings; they never contain request input,
-// identity material, names, paths or secrets.
+// identity material, names, paths or secrets. The whole panel is
+// Russian (T-120 round 2).
 const (
-	flashRestoreMissingIdentity = "Missing identity."
-	flashRestoreInvalidIdentity = "Invalid identity."
-	flashRestoreMissingFile     = "Missing backup file."
-	flashRestoreInvalidFileName = "Invalid backup file name."
-	flashRestoreFailed          = "Restore failed."
-	flashRestorePending         = "Restore already pending. Restart required."
-	flashRestorePrepared        = "Backup prepared. Restart required."
+	flashRestoreMissingIdentity = "Не указан ключ (identity)."
+	flashRestoreInvalidIdentity = "Недопустимый ключ (identity)."
+	flashRestoreMissingFile     = "Не указан файл бэкапа."
+	flashRestoreInvalidFileName = "Недопустимое имя файла бэкапа."
+	flashRestoreFailed          = "Восстановление не удалось."
+	flashRestorePending         = "Восстановление уже подготовлено. Требуется перезапуск."
+	flashRestorePrepared        = "Бэкап подготовлен. Требуется перезапуск."
 	// T-125: the in-process apply path. The %d is a client count, not
 	// user input; both strings stay fixed.
-	flashRestoreApplied     = "Restore applied. %d clients active."
-	flashRestoreApplyFailed = "Restore prepared but applying it failed. Restart required."
+	flashRestoreApplied     = "Восстановление применено. Активных клиентов: %d."
+	flashRestoreApplyFailed = "Бэкап подготовлен, но применить его не удалось. Требуется перезапуск."
 )
 
 // restoreData is the GET /backups/restore payload. It carries no

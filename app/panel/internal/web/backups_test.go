@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,22 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 	"github.com/klauspost/compress/zstd"
 )
+
+// backupFlashOf extracts the msg value of a /backups PRG Location and
+// returns it decoded — language-independent comparison against the
+// flash constants (the whole panel is Russian since T-120 round 2).
+func backupFlashOf(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/backups?msg=") {
+		t.Fatalf("Location = %q, want /backups?msg=...", loc)
+	}
+	msg, err := url.QueryUnescape(loc[len("/backups?msg="):])
+	if err != nil {
+		t.Fatalf("unescape msg: %v", err)
+	}
+	return msg
+}
 
 // setBackupsPath points AMNEZIA_BACKUPS_PATH at a fresh temp dir and
 // installs a test AGE_RECIPIENT; it returns the dir and the identity
@@ -130,7 +147,7 @@ func TestBackupsPageEmptyDir(t *testing.T) {
 		t.Fatalf("code = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "No backups yet.") {
+	if !strings.Contains(body, "Бэкапов пока нет.") {
 		t.Fatalf("empty state missing: %s", body)
 	}
 	if !strings.Contains(body, `action="/backups/create"`) {
@@ -197,9 +214,8 @@ func TestBackupCreateFlow(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: code = %d, want 303", rec.Code)
 	}
-	loc := rec.Header().Get("Location")
-	if !strings.HasPrefix(loc, "/backups?msg=") || !strings.Contains(loc, "Backup+created.") {
-		t.Fatalf("create: Location = %q", loc)
+	if got := backupFlashOf(t, rec); got != flashBackupCreated {
+		t.Fatalf("create: flash = %q, want %q", got, flashBackupCreated)
 	}
 	name := "backup-" + time.Now().UTC().Format("2006-01-02") + ".tar.zst.age"
 	entries, err := os.ReadDir(dir)
@@ -230,8 +246,8 @@ func TestBackupCreateNothingConfigured(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("code = %d, want 303", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "Backup+encryption+is+not+configured.") {
-		t.Fatalf("Location = %q", rec.Header().Get("Location"))
+	if got := backupFlashOf(t, rec); got != flashBackupUnconfigured {
+		t.Fatalf("flash = %q, want %q", got, flashBackupUnconfigured)
 	}
 	// the pipeline never ran: the directory may not even exist, and if
 	// it does it must be completely empty (no staging, no archives)
@@ -379,9 +395,8 @@ func TestBackupDeleteFlow(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("delete: code = %d, want 303", rec.Code)
 	}
-	loc := rec.Header().Get("Location")
-	if !strings.HasPrefix(loc, "/backups?msg=") || !strings.Contains(loc, "Backup+deleted.") {
-		t.Fatalf("delete: Location = %q", loc)
+	if got := backupFlashOf(t, rec); got != flashBackupDeleted {
+		t.Fatalf("delete: flash = %q, want %q", got, flashBackupDeleted)
 	}
 	if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 		t.Fatal("file still exists after delete")
@@ -391,8 +406,8 @@ func TestBackupDeleteFlow(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("second delete: code = %d, want 303", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "Backup+not+found.") {
-		t.Fatalf("second delete: Location = %q", rec.Header().Get("Location"))
+	if got := backupFlashOf(t, rec); got != flashBackupNotFound {
+		t.Fatalf("second delete: flash = %q, want %q", got, flashBackupNotFound)
 	}
 }
 
@@ -414,8 +429,8 @@ func TestBackupDeleteInvalidNameFixedFlash(t *testing.T) {
 		if strings.Contains(loc, name) {
 			t.Fatalf("%q: flash echoes the submitted name: %s", name, loc)
 		}
-		if !strings.Contains(loc, "Invalid+backup+name.") {
-			t.Fatalf("%q: Location = %q", name, loc)
+		if got := backupFlashOf(t, rec); got != flashBackupInvalidName {
+			t.Fatalf("%q: flash = %q, want %q", name, got, flashBackupInvalidName)
 		}
 	}
 }
@@ -438,8 +453,8 @@ func TestBackupDeleteSymlinkNeverUnlinkTarget(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("symlink delete: code = %d, want 303", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "Backup+not+found.") {
-		t.Fatalf("symlink delete: Location = %q", rec.Header().Get("Location"))
+	if got := backupFlashOf(t, rec); got != flashBackupNotFound {
+		t.Fatalf("symlink delete: flash = %q, want %q", got, flashBackupNotFound)
 	}
 	if _, err := os.Stat(hostage); err != nil {
 		t.Fatalf("symlink delete removed the target file: %v", err)
@@ -615,8 +630,8 @@ func TestBackupDownloadNowGuards(t *testing.T) {
 
 	marker := preparedRestore(t, f, dir, id)
 	rec = csrfPOST(f, "/backups/download", f.csrf)
-	if !strings.Contains(rec.Header().Get("Location"), "Restore+pending.") {
-		t.Fatalf("pending pause: Location = %q", rec.Header().Get("Location"))
+	if got := backupFlashOf(t, rec); got != flashRestoreBlockedByPending {
+		t.Fatalf("pending pause: flash = %q, want %q", got, flashRestoreBlockedByPending)
 	}
 
 	// clear the marker (as a serve restart does), drop the recipient.
@@ -625,8 +640,8 @@ func TestBackupDownloadNowGuards(t *testing.T) {
 	}
 	t.Setenv("AGE_RECIPIENT", "")
 	rec = csrfPOST(f, "/backups/download", f.csrf)
-	if !strings.Contains(rec.Header().Get("Location"), "not+configured") {
-		t.Fatalf("unconfigured: Location = %q", rec.Header().Get("Location"))
+	if got := backupFlashOf(t, rec); got != flashBackupUnconfigured {
+		t.Fatalf("unconfigured: flash = %q, want %q", got, flashBackupUnconfigured)
 	}
 }
 

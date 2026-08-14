@@ -1,0 +1,73 @@
+{{define "clientcard"}}
+<article class="card" id="client-{{.Card.ID}}">
+  <div class="card-head">
+    <h3>{{.Card.Name}} <span class="id">#{{.Card.ID}}</span></h3>
+    <div class="row">
+      <span class="badge {{if .Card.Online}}on{{else}}off{{end}}">{{if .Card.Online}}онлайн{{else}}офлайн{{end}}</span>
+      <span class="badge {{if .Card.Enabled}}enabled{{else}}disabled{{end}}">{{if .Card.Enabled}}включён{{else}}отключён{{end}}</span>
+      {{if .Card.Expired}}<span class="badge expired">срок истёк</span>{{end}}
+    </div>
+  </div>
+  <div class="meta">
+    <span class="meta-item"><span class="meta-label">адрес</span> <code>{{.Card.Address}}</code></span>
+    <span class="meta-sep">·</span>
+    <span class="meta-item"><span class="meta-label">создан</span> {{.Card.CreatedText}}</span>
+    <span class="meta-sep">·</span>
+    <span class="meta-item"><span class="meta-label">handshake</span> {{.Card.LastHandshakeText}}</span>
+    <span class="meta-sep">·</span>
+    <span class="meta-item"><span class="meta-label">вх</span> <code>{{.Card.RxText}}</code></span>
+    <span class="meta-sep">·</span>
+    <span class="meta-item"><span class="meta-label">исх</span> <code>{{.Card.TxText}}</code></span>
+  </div>
+  <div class="actions">
+    <details class="menu">
+      <summary class="btn ghost" aria-label="Действия для {{.Card.Name}}"><span aria-hidden="true">…</span></summary>
+      <div class="menu-panel">
+        <form action="/clients/{{.Card.ID}}/{{if .Card.Enabled}}disable{{else}}enable{{end}}" method="post" data-mutate="toggle" data-client-id="{{.Card.ID}}">
+          <input type="hidden" name="_csrf" value="{{.CSRF}}">
+          <button type="submit" class="menu-item">{{if .Card.Enabled}}Отключить{{else}}Включить{{end}}</button>
+        </form>
+        <a class="menu-item" href="/clients/{{.Card.ID}}/config">Скачать конфиг</a>
+        <button type="button" class="menu-item" data-dialog-open="qr-{{.Card.ID}}">Показать QR</button>
+        <a class="menu-item" href="/clients/{{.Card.ID}}/qr" target="_blank" rel="noopener">QR в новой вкладке</a>
+        <form action="/clients/{{.Card.ID}}/rename" method="post" data-mutate="rename" data-client-id="{{.Card.ID}}">
+          <input type="hidden" name="_csrf" value="{{.CSRF}}">
+          <label class="menu-label">Переименовать
+            <input type="text" name="name" maxlength="64" value="{{.Card.Name}}">
+          </label>
+          <button type="submit" class="btn">Переименовать</button>
+        </form>
+        <form action="/clients/{{.Card.ID}}/expiry" method="post" data-mutate="expiry" data-client-id="{{.Card.ID}}">
+          <input type="hidden" name="_csrf" value="{{.CSRF}}">
+          <label class="menu-label">Срок действия (пусто — без срока)
+            <input type="datetime-local" name="expires_at">
+          </label>
+          <button type="submit" class="btn">Сохранить</button>
+        </form>
+      </div>
+    </details>
+    <button type="button" class="btn destructive" data-dialog-open="del-{{.Card.ID}}">Удалить</button>
+  </div>
+
+  <dialog class="modal" id="qr-{{.Card.ID}}">
+    <h2>QR-код: {{.Card.Name}}</h2>
+    <p class="muted">Отсканируйте код в приложении AmneziaVPN.</p>
+    <img class="qr-img" data-qr-src="/clients/{{.Card.ID}}/qr" alt="QR-код клиента {{.Card.Name}}" width="256" height="256">
+    <div class="dialog-actions">
+      <button type="button" class="btn" data-dialog-close>Закрыть</button>
+    </div>
+  </dialog>
+
+  <dialog class="modal" id="del-{{.Card.ID}}">
+    <h2>Удалить клиента «{{.Card.Name}}»?</h2>
+    <p class="muted">Конфигурация клиента будет убрана из awg0.conf. Действие необратимо.</p>
+    <form action="/clients/{{.Card.ID}}/delete" method="post" data-mutate="delete" data-client-id="{{.Card.ID}}">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-dialog-close>Отмена</button>
+        <button type="submit" class="btn destructive">Удалить</button>
+      </div>
+    </form>
+  </dialog>
+</article>
+{{end}}

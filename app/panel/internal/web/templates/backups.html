@@ -1,10 +1,11 @@
 {{define "backups"}}<!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Backups</title>
+<title>Бэкапы</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -13,73 +14,75 @@
     AmneziaVPN <small>panel</small>
   </div>
   <nav>
-    <span class="who">Signed in as {{.Username}}</span>
-    <a href="/">Dashboard</a>
-    <form action="/logout" method="post">
+    <span class="who">Вы вошли как {{.Username}}</span>
+    <a href="/">Панель</a>
+    <a href="/backups/restore">Загрузить бэкап</a>
+    <form action="/logout" method="post" class="inline-form">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
-      <button type="submit" class="btn">Log out</button>
+      <button type="submit" class="btn">Выйти</button>
     </form>
   </nav>
 </header>
 
 <main>
-  <p class="eyebrow">Disaster recovery</p>
-  <h1 class="display"><span class="grad">Backups</span></h1>
-  <p class="sub">Encrypted age archives of the database, restorable through the documented DR flow.</p>
+  <h1 class="page-title">Бэкапы</h1>
+  <p class="page-sub">Зашифрованные архивы базы данных (age), восстанавливаются через штатный процесс.</p>
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
 
   {{if .Pending}}
-  <p class="pending">A restore is prepared and waiting. The panel never restarts itself: restart it to apply, or the restore cancels on the next serve. Create, delete and further restores are paused until then.</p>
+  <p class="pending">Восстановление подготовлено и ожидает перезапуска. Панель не перезапускает себя сама: перезапустите её, чтобы применить; иначе восстановление отменится при следующем запуске. Создание, удаление и новые восстановления приостановлены до этого.</p>
   {{end}}
 
   <section class="form-card">
-    <form action="/backups/create" method="post">
-      <input type="hidden" name="_csrf" value="{{.CSRF}}">
-      <button type="submit" class="btn primary">Create backup</button>
-    </form>
-    <p class="sub">— or download a fresh archive right now:</p>
-    <form action="/backups/download" method="post">
-      <input type="hidden" name="_csrf" value="{{.CSRF}}">
-      <button type="submit" class="btn">Download backup</button>
-    </form>
+    <h2>Действия</h2>
+    <div class="row-actions">
+      <form action="/backups/create" method="post">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}">
+        <button type="submit" class="btn primary">Создать бэкап</button>
+      </form>
+      <form action="/backups/download" method="post">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}">
+        <button type="submit" class="btn">Скачать свежий бэкап</button>
+      </form>
+    </div>
   </section>
 
   <section class="form-card">
-    <h2>Upload backup</h2>
-    <p class="sub">Restore from an archive (.tar.zst.age): it is checked and unpacked, then applied immediately — all clients from the archive become active without a restart.</p>
+    <h2>Загрузить бэкап</h2>
+    <p class="sub">Восстановление из архива (.tar.zst.age): архив проверяется, распаковывается и применяется сразу — все клиенты из архива становятся активными без перезапуска.</p>
     <form action="/backups/restore" method="post" enctype="multipart/form-data">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <p>
-        <label>Backup archive
+        <label>Архив бэкапа
           <input type="file" name="backup" accept=".age" required>
         </label>
       </p>
       <p>
-        <label>Age identity (secret key)
+        <label>Ключ age (секретный)
           <textarea name="identity" rows="4" autocomplete="off"
                     spellcheck="false" placeholder="AGE-SECRET-KEY-1..."></textarea>
         </label>
       </p>
-      <button type="submit" class="btn destructive">Upload and apply</button>
+      <button type="submit" class="btn destructive">Загрузить и применить</button>
     </form>
-    <p class="sub">Need the full manual flow? <a href="/backups/restore">Go to the restore page</a></p>
+    <p class="sub">Нужен полный ручной процесс? <a href="/backups/restore">Страница восстановления</a></p>
   </section>
 
   <section class="table-wrap">
-    <h2 class="table-title">Archives</h2>
-    {{if not .Backups}}<p class="empty table-empty">No backups yet.</p>{{end}}
+    <h2 class="table-title">Архивы</h2>
+    {{if not .Backups}}<p class="empty table-empty">Бэкапов пока нет.</p>{{end}}
     <table>
       {{range .Backups}}
       <tr>
         <td><code>{{.Name}}</code></td>
         <td>{{.DateText}}</td>
         <td>{{.SizeText}}</td>
-        <td><a class="btn ghost" href="/backups/{{.Name}}/download">download</a></td>
+        <td><a class="btn ghost" href="/backups/{{.Name}}/download">скачать</a></td>
         <td>
           <form action="/backups/{{.Name}}/delete" method="post">
             <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-            <button type="submit" class="btn destructive">Delete</button>
+            <button type="submit" class="btn destructive">Удалить</button>
           </form>
         </td>
       </tr>

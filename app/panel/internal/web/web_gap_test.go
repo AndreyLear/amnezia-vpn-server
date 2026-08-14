@@ -40,7 +40,7 @@ func TestDashboardStatusErrorState(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Tunnel: status error") {
+	if !strings.Contains(rec.Body.String(), "Туннель: ошибка статуса") {
 		t.Fatalf("body missing error state:\n%s", rec.Body.String())
 	}
 	for _, chunk := range []string{"not a status file", "with", "lines"} {
@@ -96,7 +96,7 @@ func TestClientAddNoFreeAddress(t *testing.T) {
 		}
 	}
 	rec := f.post("/clients/new", url.Values{"name": {"overflow"}})
-	if got := f.flashOf(rec); got != "No free address in the pool." {
+	if got := f.flashOf(rec); got != flashNoAddress {
 		t.Fatalf("flash = %q", got)
 	}
 	// Nothing was inserted.

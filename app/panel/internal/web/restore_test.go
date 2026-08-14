@@ -6,9 +6,11 @@ package web
 
 import (
 	"bytes"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +21,22 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 )
+
+// restoreFlashOf extracts the decoded msg value of a /backups PRG
+// Location — language-independent comparison against the flash
+// constants (the whole panel is Russian since T-120 round 2).
+func restoreFlashOf(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/backups?msg=") {
+		t.Fatalf("Location = %q, want /backups?msg=...", loc)
+	}
+	msg, err := url.QueryUnescape(loc[len("/backups?msg="):])
+	if err != nil {
+		t.Fatalf("unescape msg: %v", err)
+	}
+	return msg
+}
 
 // postRestoreUpload builds a multipart body from the given fields (nil
 // parts are omitted) and submits POST /backups/restore.
@@ -131,8 +149,11 @@ func TestRestoreUploadMissingIdentity(t *testing.T) {
 	fields := restoreFields(f, "")
 	delete(fields, "identity")
 	rec := postRestoreUpload(t, f, fields, map[string][]byte{name: archive})
-	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "Missing+identity.") {
-		t.Fatalf("code %d Location %q, want Missing identity. flash", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("code %d Location %q, want %q flash", rec.Code, rec.Header().Get("Location"), flashRestoreMissingIdentity)
+	}
+	if got := restoreFlashOf(t, rec); got != flashRestoreMissingIdentity {
+		t.Fatalf("flash = %q, want %q", got, flashRestoreMissingIdentity)
 	}
 	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
 		t.Fatalf("marker after rejected upload: ok=%v err=%v", ok, err)
@@ -155,8 +176,11 @@ func TestRestoreUploadInvalidIdentity(t *testing.T) {
 	}
 	bad := "not-an-age-identity"
 	rec := postRestoreUpload(t, f, restoreFields(f, bad), map[string][]byte{name: archive})
-	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "Invalid+identity.") {
-		t.Fatalf("code %d Location %q, want Invalid identity. flash", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("code %d Location %q, want %q flash", rec.Code, rec.Header().Get("Location"), flashRestoreInvalidIdentity)
+	}
+	if got := restoreFlashOf(t, rec); got != flashRestoreInvalidIdentity {
+		t.Fatalf("flash = %q, want %q", got, flashRestoreInvalidIdentity)
 	}
 	if strings.Contains(rec.Header().Get("Location"), bad) {
 		t.Fatal("flash echoes the submitted identity")
@@ -172,8 +196,11 @@ func TestRestoreUploadMissingFile(t *testing.T) {
 	f := newFixture(t)
 	dir, id := setBackupsPath(t)
 	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), nil)
-	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "Missing+backup+file.") {
-		t.Fatalf("code %d Location %q, want Missing backup file. flash", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("code %d Location %q, want %q flash", rec.Code, rec.Header().Get("Location"), flashRestoreMissingFile)
+	}
+	if got := restoreFlashOf(t, rec); got != flashRestoreMissingFile {
+		t.Fatalf("flash = %q, want %q", got, flashRestoreMissingFile)
 	}
 	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
 		t.Fatalf("marker after rejected upload: ok=%v err=%v", ok, err)
@@ -195,16 +222,22 @@ func TestRestoreUploadInvalidFileName(t *testing.T) {
 	hostile := []string{"..", `\`}
 	for _, fn := range hostile {
 		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{fn: []byte("x")})
-		if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "Invalid+backup+file+name.") {
+		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("%q: code %d Location %q", fn, rec.Code, rec.Header().Get("Location"))
+		}
+		if got := restoreFlashOf(t, rec); got != flashRestoreInvalidFileName {
+			t.Fatalf("%q: flash = %q, want %q", fn, got, flashRestoreInvalidFileName)
 		}
 	}
 	// normalized traversal names reach the pipeline with a meaningless
 	// upload — the fixed failure flash, nothing written
 	for _, fn := range []string{"../../etc/passwd.age", "a/b.age", "/etc/passwd.age"} {
 		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{fn: []byte("x")})
-		if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "Restore+failed.") {
+		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("%q: code %d Location %q", fn, rec.Code, rec.Header().Get("Location"))
+		}
+		if got := restoreFlashOf(t, rec); got != flashRestoreFailed {
+			t.Fatalf("%q: flash = %q, want %q", fn, got, flashRestoreFailed)
 		}
 	}
 	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
@@ -277,8 +310,11 @@ func TestRestoreWrongIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := postRestoreUpload(t, f, restoreFields(f, other.String()), map[string][]byte{name: archive})
-	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "Restore+failed.") {
-		t.Fatalf("code %d Location %q, want Restore failed. flash", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("code %d Location %q, want %q flash", rec.Code, rec.Header().Get("Location"), flashRestoreFailed)
+	}
+	if got := restoreFlashOf(t, rec); got != flashRestoreFailed {
+		t.Fatalf("flash = %q, want %q", got, flashRestoreFailed)
 	}
 	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
 		t.Fatalf("marker after failed restore: ok=%v err=%v", ok, err)
@@ -338,26 +374,26 @@ func TestRestoreFullFlow(t *testing.T) {
 	}
 
 	body := f.get("/backups").Body.String()
-	if !strings.Contains(body, "A restore is prepared and waiting") {
+	if !strings.Contains(body, "Восстановление подготовлено и ожидает перезапуска") {
 		t.Fatal("pending banner missing on /backups")
 	}
 	body = f.get("/backups/restore").Body.String()
-	if !strings.Contains(body, "A restore is prepared and waiting") {
+	if !strings.Contains(body, "Восстановление подготовлено и ожидает перезапуска") {
 		t.Fatal("pending banner missing on /backups/restore")
 	}
 
 	// create/delete/restore are all blocked while pending
 	rec := csrfPOST(f, "/backups/create", f.csrf)
-	if !strings.Contains(rec.Header().Get("Location"), "Restore+pending.+Restart+required.") {
-		t.Fatalf("create while pending: Location = %q", rec.Header().Get("Location"))
+	if got := restoreFlashOf(t, rec); got != flashRestoreBlockedByPending {
+		t.Fatalf("create while pending: flash = %q, want %q", got, flashRestoreBlockedByPending)
 	}
 	rec = csrfPOST(f, "/backups/backup-2026-08-12.tar.zst.age/delete", f.csrf)
-	if !strings.Contains(rec.Header().Get("Location"), "Restore+pending.+Restart+required.") {
-		t.Fatalf("delete while pending: Location = %q", rec.Header().Get("Location"))
+	if got := restoreFlashOf(t, rec); got != flashRestoreBlockedByPending {
+		t.Fatalf("delete while pending: flash = %q, want %q", got, flashRestoreBlockedByPending)
 	}
 	rec = postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{"backup-2026-08-12.tar.zst.age": []byte("x")})
-	if !strings.Contains(rec.Header().Get("Location"), "Restore+pending.+Restart+required.") {
-		t.Fatalf("second restore while pending: Location = %q", rec.Header().Get("Location"))
+	if got := restoreFlashOf(t, rec); got != flashRestoreBlockedByPending {
+		t.Fatalf("second restore while pending: flash = %q, want %q", got, flashRestoreBlockedByPending)
 	}
 	// the marker survived all refusals
 	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || !ok {
@@ -376,12 +412,12 @@ func TestRestorePreparedStateSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := f.get("/backups").Body.String()
-	if strings.Contains(body, "A restore is prepared and waiting") {
+	if strings.Contains(body, "Восстановление подготовлено и ожидает перезапуска") {
 		t.Fatal("pending banner still shown after marker removal")
 	}
 	rec := csrfPOST(f, "/backups/create", f.csrf)
-	if !strings.Contains(rec.Header().Get("Location"), "Backup+created.") {
-		t.Fatalf("create after marker removal: Location = %q", rec.Header().Get("Location"))
+	if got := restoreFlashOf(t, rec); got != flashBackupCreated {
+		t.Fatalf("create after marker removal: flash = %q, want %q", got, flashBackupCreated)
 	}
 }
 
@@ -492,8 +528,10 @@ func TestRestoreUploadBiggerThanFormLimit(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("code = %d, want 303", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "Backup+prepared.") {
-		t.Fatalf("Location = %q", rec.Header().Get("Location"))
+	// T-125: a successful upload applies in-process — the archive
+	// snapshots an empty client table, so the applied flash reports 0.
+	if got := restoreFlashOf(t, rec); got != fmt.Sprintf(flashRestoreApplied, 0) {
+		t.Fatalf("flash = %q, want %q", got, fmt.Sprintf(flashRestoreApplied, 0))
 	}
 }
 
@@ -512,9 +550,13 @@ func TestRestorePageNoTempLeaks(t *testing.T) {
 	postRestoreUpload(t, f, restoreFields(f, id.String()), nil)
 	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
 	// T-125: the happy-path upload applies in-process — no pending
-	// marker is left behind, so nothing waits for a restart.
-	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "Restore+applied.") {
+	// marker is left behind, so nothing waits for a restart. The
+	// archive snapshots an empty client table (0 active clients).
+	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("final restore: code %d Location %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if got := restoreFlashOf(t, rec); got != fmt.Sprintf(flashRestoreApplied, 0) {
+		t.Fatalf("final restore: flash = %q, want %q", got, fmt.Sprintf(flashRestoreApplied, 0))
 	}
 	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
 		t.Fatalf("pending marker after applied restore: ok=%v err=%v", ok, err)
@@ -570,8 +612,8 @@ func TestRestoreUploadAppliesInProcess(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("upload: code = %d, want 303", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "Restore+applied.+1+clients+active.") {
-		t.Fatalf("upload: Location = %q", rec.Header().Get("Location"))
+	if got := restoreFlashOf(t, rec); got != fmt.Sprintf(flashRestoreApplied, 1) {
+		t.Fatalf("upload: flash = %q, want %q", got, fmt.Sprintf(flashRestoreApplied, 1))
 	}
 	// applied in-process: no pending marker, the live handle sees the
 	// restored state (bob gone), awg0.conf regenerated (alice only).

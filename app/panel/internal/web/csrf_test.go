@@ -348,8 +348,6 @@ func TestCSRFDashboardHiddenFields(t *testing.T) {
 	for _, action := range []string{
 		`action="/logout"`,
 		`action="/clients/new"`,
-		`action="/clients/` + fmt.Sprint(c.ID) + `/enable"`,
-		`action="/clients/` + fmt.Sprint(c.ID) + `/disable"`,
 		`action="/clients/` + fmt.Sprint(c.ID) + `/delete"`,
 		`action="/clients/` + fmt.Sprint(c.ID) + `/rename"`,
 		`action="/clients/` + fmt.Sprint(c.ID) + `/expiry"`,
@@ -357,6 +355,14 @@ func TestCSRFDashboardHiddenFields(t *testing.T) {
 		if !strings.Contains(body, action) {
 			t.Errorf("dashboard misses form %s", action)
 		}
+	}
+	// T-120 round 2 §7: the enable/disable pair collapsed into a single
+	// toggle form — an enabled client renders the disable action.
+	if !strings.Contains(body, `action="/clients/`+fmt.Sprint(c.ID)+`/disable"`) {
+		t.Errorf("dashboard misses the toggle form (enabled client → disable action)")
+	}
+	if strings.Contains(body, `action="/clients/`+fmt.Sprint(c.ID)+`/enable"`) {
+		t.Errorf("enabled client must not render an enable action")
 	}
 	// Every form on the page contains exactly one hidden _csrf input
 	// carrying the session token.

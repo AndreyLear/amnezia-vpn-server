@@ -271,11 +271,53 @@ func TestMutationExpiry(t *testing.T) {
 	if row.ExpiresAt != "" {
 		t.Errorf("expiry not cleared: %q", row.ExpiresAt)
 	}
-	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {""}})); got != flashInvalidExpiry {
-		t.Fatalf("empty expiry flash = %q, want %q", got, flashInvalidExpiry)
+	// T-120 round 2 §8: an empty value also means "no deadline".
+	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {future}})); got != flashExpirySet {
+		t.Fatalf("re-set flash = %q", got)
+	}
+	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {""}})); got != flashExpirySet {
+		t.Fatalf("empty expiry flash = %q, want %q", got, flashExpirySet)
+	}
+	row, _ = db.ClientByID(f.h, c.ID)
+	if row.ExpiresAt != "" {
+		t.Errorf("empty expiry must clear: %q", row.ExpiresAt)
 	}
 	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {"not-a-date"}})); got != flashInvalidExpiry {
 		t.Fatalf("bad expiry flash = %q, want %q", got, flashInvalidExpiry)
+	}
+}
+
+// TestMutationExpiryDatetimeLocal (T-120 round 2 §8): the browser's
+// datetime-local shape (YYYY-MM-DDTHH:MM) is accepted and stored as
+// the canonical UTC RFC3339 timestamp.
+func TestMutationExpiryDatetimeLocal(t *testing.T) {
+	f := newFixture(t)
+	c, _, _ := f.addClient("kate")
+	rec := f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {"2026-09-01T18:30"}})
+	if got := f.flashOf(rec); got != flashExpirySet {
+		t.Fatalf("flash = %q, want %q", got, flashExpirySet)
+	}
+	row, err := db.ClientByID(f.h, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "2026-09-01T18:30:00Z"; row.ExpiresAt != want {
+		t.Fatalf("ExpiresAt = %q, want canonical UTC %q", row.ExpiresAt, want)
+	}
+
+	// the add form accepts the same shape
+	rec = f.post("/clients/new", url.Values{"name": {"lisa"}, "expires_at": {"2026-10-02T09:15"}})
+	if got := f.flashOf(rec); got != flashAdded {
+		t.Fatalf("add flash = %q", got)
+	}
+	clients, err := db.ClientsAll(f.h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cl := range clients {
+		if cl.Name == "lisa" && cl.ExpiresAt != "2026-10-02T09:15:00Z" {
+			t.Errorf("lisa ExpiresAt = %q, want 2026-10-02T09:15:00Z", cl.ExpiresAt)
+		}
 	}
 }
 

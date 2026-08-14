@@ -37,21 +37,21 @@ import (
 )
 
 // Flash messages are fixed strings; they never contain request input,
-// names, paths or secrets.
+// names, paths or secrets. The whole panel is Russian (T-120 round 2).
 const (
-	flashBackupCreated      = "Backup created."
-	flashBackupDeleted      = "Backup deleted."
-	flashBackupNotFound     = "Backup not found."
-	flashBackupInvalidName  = "Invalid backup name."
-	flashBackupCreateFailed = "Backup creation failed."
-	flashBackupDeleteFailed = "Backup deletion failed."
-	flashBackupUnconfigured = "Backup encryption is not configured."
+	flashBackupCreated      = "Бэкап создан."
+	flashBackupDeleted      = "Бэкап удалён."
+	flashBackupNotFound     = "Бэкап не найден."
+	flashBackupInvalidName  = "Недопустимое имя бэкапа."
+	flashBackupCreateFailed = "Не удалось создать бэкап."
+	flashBackupDeleteFailed = "Не удалось удалить бэкап."
+	flashBackupUnconfigured = "Шифрование бэкапов не настроено."
 	// flashRestoreBlockedByPending is also shown when create/delete is
 	// attempted while a restore is pending (M8.6: no mutation while a
 	// restore is prepared).
-	flashRestoreBlockedByPending = "Restore pending. Restart required."
+	flashRestoreBlockedByPending = "Восстановление уже подготовлено. Требуется перезапуск."
 	// T-125 one-click download.
-	flashBackupDownloadFailed = "Backup download failed."
+	flashBackupDownloadFailed = "Не удалось скачать бэкап."
 )
 
 // backupsDir mirrors cli.backupsPath(): the deployment configures the
