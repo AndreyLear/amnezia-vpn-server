@@ -663,14 +663,19 @@ log "starting the stack"
 if ! docker_compose --env-file versions.lock up -d; then
     # M3.1 contract: on a fresh install there is no server row yet, so
     # panel-init exits 1 and `up` fails through depends_on
-    # (service_completed_successfully). This is the expected
-    # post-install state — the stack is left created-but-not-running —
-    # so the failure is tolerated when panel-init's exit code is 1.
-    if docker_compose --env-file versions.lock ps -a 2>/dev/null \
-        | grep -q 'panel-init.*Exited (1)\|panel-init.*exit code: 1'; then
+    # (service_completed_successfully). The failure is tolerated ONLY
+    # when the panel-init log of this very `up` actually reports the
+    # fresh-install state; any other exit-1 (broken pending restore,
+    # corrupted database, boot-snapshot error, sentinel guard) is a real
+    # failure and must surface to the operator (T-111).
+    PI_LOG="$(docker_compose --env-file versions.lock logs --no-color panel-init 2>/dev/null || true)"
+    if printf '%s\n' "$PI_LOG" | grep -q "no server row"; then
         log "fresh-install state: panel-init exited 1 (M3.1, no server row yet); stack created-but-not-running"
     else
-        die_op "docker compose up -d failed"
+        printf '%s\n' \
+            "install: ERROR: docker compose up -d failed (panel-init exited 1 but not the M3.1 no-server-row state)" \
+            "install: panel-init log:" "$PI_LOG" >&2
+        exit "$FAIL_STYLE_OP"
     fi
 fi
 

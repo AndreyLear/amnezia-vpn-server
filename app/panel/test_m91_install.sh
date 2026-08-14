@@ -52,7 +52,13 @@ NFT_APPLIED=0
 MODPROBE_OK=yes
 DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
+UP_RC=0
 EOF
+    # The panel-init log the installer inspects on `up -d` failure
+    # (T-111); a dedicated file so the value with spaces never enters
+    # the sourced state.
+    printf '%s\n' "panel init: no server row (id=1); insert server configuration first" \
+        > "$FAKE_DIR/pi_log.txt"
 }
 
 # fake binaries: bash shims that log to $FAKE_CALLS and answer from state.
@@ -73,7 +79,7 @@ if [ "${1:-}" = "compose" ]; then
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --env-file) shift 2 ;;
-            version | config | build | up | ps) verb="$1"; break ;;
+            version | config | build | up | ps | logs) verb="$1"; break ;;
             *) shift ;;
         esac
     done
@@ -84,12 +90,18 @@ if [ "${1:-}" = "compose" ]; then
         config)
             exit "${COMPOSE_CONFIG_RC:-0}"
             ;;
+        logs)
+            # T-111: install.sh distinguishes the M3.1 fresh-install
+            # state from real panel-init failures via the log text.
+            cat "$FAKE_DIR/pi_log.txt"
+            ;;
         ps)
             echo "amneziavpn-panel-init-1   panel-init   /app/panel init   Exited (1) 0 seconds ago"
             echo "amneziavpn-panel-1        panel        /app/panel serve  Created 0 seconds ago"
             echo "amneziavpn-awg-1          awg          /entrypoint.sh    Created 0 seconds ago"
             ;;
-        build | up) ;;
+        build) exit 0 ;;
+        up) exit "${UP_RC:-0}" ;;
     esac
     exit 0
 fi
@@ -501,6 +513,34 @@ test_installed_compose_contract() {
         || fail "installed compose: only the panel maps ports"
 }
 
+test_m31_fresh_install_tolerated() {
+    # T-111: `up -d` failing with panel-init "no server row" is the
+    # tolerated M3.1 fresh-install state.
+    fakes_reset
+    setstate UP_RC 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "M3.1 tolerance flow: exit $rc"
+    grep -q "fresh-install state" "$TMP_TEST/out" && pass "M3.1: fresh-install state tolerated" \
+        || fail "M3.1: fresh-install message missing"
+}
+
+test_panel_init_failure_not_masked() {
+    # T-111: a real panel-init failure (e.g. broken pending restore)
+    # must abort the install with the actual log, not be masked as the
+    # fresh-install state.
+    fakes_reset
+    setstate UP_RC 1 "$FAKE_STATE"
+    printf '%s\n' "panel init: pending restore apply failed" > "$FAKE_DIR/pi_log.txt"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "1" ] || fail "panel-init failure: exit $rc, want 1"
+    grep -q "docker compose up -d failed" "$TMP_TEST/err" && pass "panel-init failure: installer refused" \
+        || fail "panel-init failure: installer masked it"
+    grep -q "pending restore apply failed" "$TMP_TEST/err" && pass "panel-init failure: real log surfaced" \
+        || fail "panel-init failure: log not surfaced"
+}
+
 test_doctor_failure() {
     fakes_reset
     setstate DAEMON fail "$FAKE_STATE"
@@ -574,6 +614,8 @@ test_layout_and_permissions
 test_versions_lock_used
 test_ip_forward_disabled
 test_ip_forward_already_enabled
+test_m31_fresh_install_tolerated
+test_panel_init_failure_not_masked
 test_doctor_failure
 test_ssh_hint
 test_secrets_absent
