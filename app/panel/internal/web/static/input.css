@@ -295,7 +295,7 @@
 
 @media (max-width: 720px) {
   .topbar { @apply items-start; }
-  .topbar nav { @apply min-w-0 flex-1 justify-end; }
+  .topbar nav { @apply min-w-0 flex-1 justify-start; }
   .page { @apply px-3.5 pt-5; }
   .card .actions { flex-wrap: wrap; }
   .menu-panel { min-width: 230px; }
@@ -303,4 +303,18 @@
   .table-wrap { overflow-x: auto; }
   .table-wrap table { min-width: 620px; }
   .modal { max-height: calc(100vh - 32px); overflow-y: auto; }
+}
+
+@media (max-width: 640px) {
+  .topbar { @apply gap-y-2 px-3.5 py-2.5; }
+  .topbar .brand { flex: 1 0 100%; }
+  .topbar nav { flex: 1 0 100%; gap: 4px; }
+  .topbar nav > .btn,
+  .topbar nav > form .btn,
+  .topbar nav > .menu > summary,
+  .topbar nav > .topnav-link { @apply px-2.5 py-1.5 text-xs; }
+  .topbar .who { display: none; }
+  .menu-panel { left: 0; right: auto; max-width: calc(100vw - 28px); }
+  .card .meta { overflow-wrap: anywhere; }
+  .card .actions { justify-content: flex-start; }
 }
