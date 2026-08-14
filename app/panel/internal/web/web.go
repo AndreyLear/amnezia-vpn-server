@@ -135,8 +135,10 @@ func (s *Server) db() *sql.DB {
 }
 
 // swapDB replaces the live handle with the freshly opened one and
-// returns the previous handle (the caller closes it after the swap is
-// visible). Callers must hold s.mutex.
+// returns the previous handle. The caller must retire it (not Close
+// immediately): db() copies the pointer under RLock and unlocks
+// before the query, so in-flight readers may still use the old
+// handle. Callers must hold s.mutex.
 func (s *Server) swapDB(next *sql.DB) *sql.DB {
 	s.dbMu.Lock()
 	defer s.dbMu.Unlock()
@@ -144,6 +146,20 @@ func (s *Server) swapDB(next *sql.DB) *sql.DB {
 	s.dbh = next
 	s.cfg.DB = next
 	return old
+}
+
+// retiredDBCloseDelay keeps a swapped-out handle open so in-flight
+// db() readers can finish. New traffic must use db() after the swap.
+const retiredDBCloseDelay = 5 * time.Second
+
+func retireDB(old *sql.DB) {
+	if old == nil {
+		return
+	}
+	go func() {
+		time.Sleep(retiredDBCloseDelay)
+		_ = old.Close()
+	}()
 }
 
 // New validates the config and builds the route table. Listen/serve

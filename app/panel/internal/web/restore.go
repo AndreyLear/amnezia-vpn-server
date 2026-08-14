@@ -338,7 +338,7 @@ func (s *Server) applyRestoreNow() (int, error) {
 		return fail(fmt.Errorf("regenerate config: %w", err))
 	}
 	old := s.swapDB(next)
-	old.Close()
+	retireDB(old)
 	s.cfg.Sessions.DeleteAll()
 	s.pendingTOTP = make(map[string]string)
 	clients, err := db.ClientsAll(next)

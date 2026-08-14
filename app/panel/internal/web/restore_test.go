@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -773,5 +775,76 @@ func TestRestoreApplyGenerateFailDoesNotSwap(t *testing.T) {
 	}
 	if strings.Contains(string(cfg), alicePub) && !strings.Contains(string(cfg), bobPub) {
 		t.Fatal("awg0.conf was rewritten from the restored database despite Generate failure")
+	}
+}
+
+// TestRestoreApplyInFlightHandleNotClosed (T-127): db() copies *sql.DB
+// under RLock then unlocks before the query. After swap the old handle
+// must stay usable so a concurrent dashboard Load cannot see
+// "sql: database is closed".
+func TestRestoreApplyInFlightHandleNotClosed(t *testing.T) {
+	f := newFixture(t)
+	dir, id := setBackupsPath(t)
+	f.addClient("alice")
+	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
+	archive, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.addClient("bob")
+
+	old := f.server.db()
+	var stop atomic.Bool
+	var http500 atomic.Int64
+	errCh := make(chan error, 1)
+
+	go func() {
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			if f.server.db() != old {
+				var n int
+				errCh <- old.QueryRow("SELECT COUNT(*) FROM clients").Scan(&n)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		errCh <- errors.New("swap never observed")
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for !stop.Load() {
+				rec := f.get("/")
+				if rec.Code == http.StatusInternalServerError {
+					http500.Add(1)
+				}
+			}
+		}()
+	}
+
+	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+	stop.Store(true)
+	wg.Wait()
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("upload: code = %d, want 303", rec.Code)
+	}
+	if got := restoreFlashOf(t, rec); got != fmt.Sprintf(flashRestoreApplied, 1) {
+		t.Fatalf("upload: flash = %q, want %q", got, fmt.Sprintf(flashRestoreApplied, 1))
+	}
+
+	select {
+	case qerr := <-errCh:
+		if qerr != nil {
+			t.Fatalf("in-flight query on pre-swap handle: %v", qerr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for in-flight query after swap")
+	}
+	if n := http500.Load(); n > 0 {
+		t.Fatalf("GET / returned 500 during restore-apply (%d times)", n)
 	}
 }
