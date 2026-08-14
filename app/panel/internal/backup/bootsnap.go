@@ -18,12 +18,13 @@
 package backup
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -40,13 +41,19 @@ const (
 	sentinelName = ".server-initialized"
 )
 
-// BootSnapshot copies the live database to a timestamped snapshot when
+// BootSnapshot snapshots the live database to a timestamped file when
 // the live file exists, then trims old snapshots down to the rotation
 // bound. A missing live database is a no-op (fresh install). A live
 // path that is not a regular file is refused (no symlink following:
 // the database and its snapshots are 0600 state with a strict
-// security contract). The snapshot is fsynced, so a crash never leaves
-// a torn copy that looks valid.
+// security contract).
+//
+// T-115: the snapshot is taken with `VACUUM INTO`, which produces a
+// consistent database copy even while another process (the running
+// panel) writes — a raw io.Copy of the live file can be torn
+// mid-page. The snapshot file is chmodded to 0600 and the directory is
+// fsynced, so a crash never leaves a torn or mispermissioned copy that
+// looks valid.
 func BootSnapshot(dbPath string) (string, error) {
 	fi, err := os.Lstat(dbPath)
 	if err == nil {
@@ -61,16 +68,16 @@ func BootSnapshot(dbPath string) (string, error) {
 	if !fi.Mode().IsRegular() {
 		return "", fmt.Errorf("backup: boot snapshot: live database is not a regular file (refusing to follow)")
 	}
-	in, err := os.Open(dbPath)
+	handle, err := sql.Open("sqlite", dbPath)
 	if err == nil {
 		if err = fault("snap.open"); err != nil {
-			in.Close()
+			handle.Close()
 		}
 	}
 	if err != nil {
 		return "", fmt.Errorf("backup: boot snapshot: open live database: %w", err)
 	}
-	defer in.Close()
+	defer handle.Close()
 
 	snapshot := ""
 	base := filepath.Join(
@@ -82,56 +89,45 @@ func BootSnapshot(dbPath string) (string, error) {
 		if i > 1 {
 			name = fmt.Sprintf("%s-%d", base, i)
 		}
-		out, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			snapshot = name
-			if err := copyStream(in, out); err != nil {
-				return "", fmt.Errorf("backup: boot snapshot: %w", err)
-			}
-			break
+		if _, err := os.Lstat(name); err == nil {
+			continue // same-second collision: retry with a numeric suffix
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("backup: boot snapshot: stat %s: %w", name, err)
 		}
-		if !errors.Is(err, os.ErrExist) {
-			return "", fmt.Errorf("backup: boot snapshot: create %s: %w", name, err)
+		copyErr := fault("snap.copy")
+		if copyErr == nil {
+			_, copyErr = handle.Exec(
+				"VACUUM INTO '" + strings.ReplaceAll(name, "'", "''") + "'",
+			)
 		}
-		// same-second collision: retry with a numeric suffix
+		if copyErr != nil {
+			return "", fmt.Errorf("backup: boot snapshot: copy to %s: %w", name, copyErr)
+		}
+		snapshot = name
+		break
+	}
+	// VACUUM INTO creates the file with the process umask; enforce the
+	// 0600 state contract explicitly.
+	syncErr := fault("snap.sync")
+	if syncErr == nil {
+		syncErr = os.Chmod(snapshot, 0o600)
+	}
+	if syncErr != nil {
+		_ = os.Remove(snapshot)
+		return "", fmt.Errorf("backup: boot snapshot: sync %s: %w", snapshot, syncErr)
+	}
+	closeErr := fault("snap.close")
+	if closeErr == nil {
+		closeErr = syncDir(filepath.Dir(snapshot))
+	}
+	if closeErr != nil {
+		_ = os.Remove(snapshot)
+		return "", fmt.Errorf("backup: boot snapshot: close %s: %w", snapshot, closeErr)
 	}
 	if err := rotateBootSnapshots(filepath.Dir(dbPath)); err != nil {
 		return "", fmt.Errorf("backup: boot snapshot: %w", err)
 	}
 	return snapshot, nil
-}
-
-// copyStream copies the already-open source to the already-created
-// destination with mode 0600 and fsyncs both the file and the
-// destination directory (atomic-visible after a crash).
-func copyStream(in *os.File, out *os.File) error {
-	err := fault("snap.copy")
-	if err == nil {
-		_, err = io.Copy(out, in)
-	}
-	if err != nil {
-		out.Close()
-		_ = os.Remove(out.Name())
-		return fmt.Errorf("copy to %s: %w", out.Name(), err)
-	}
-	syncErr := fault("snap.sync")
-	if syncErr == nil {
-		syncErr = out.Sync()
-	}
-	if syncErr != nil {
-		out.Close()
-		_ = os.Remove(out.Name())
-		return fmt.Errorf("sync %s: %w", out.Name(), syncErr)
-	}
-	closeErr := fault("snap.close")
-	if closeErr == nil {
-		closeErr = out.Close()
-	}
-	if closeErr != nil {
-		_ = os.Remove(out.Name())
-		return fmt.Errorf("close %s: %w", out.Name(), closeErr)
-	}
-	return syncDir(filepath.Dir(out.Name()))
 }
 
 // rotateBootSnapshots removes all but the newest bootSnapshotKeep

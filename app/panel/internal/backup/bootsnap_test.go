@@ -4,10 +4,13 @@ package backup
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
 
 func testDir(t *testing.T) string {
@@ -16,16 +19,56 @@ func testDir(t *testing.T) string {
 	return filepath.Join(dir, "data")
 }
 
+// writeDB creates a real migrated SQLite database in dir (clients:
+// alice) and returns its path — the boot snapshot is taken with
+// VACUUM INTO, so the fixture must be a real database.
 func writeDB(t *testing.T, dir string, content string) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "amnezia.sqlite")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	handle, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	if err := db.Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateClient(handle, "10.8.0.1/24", db.NewClient{
+		Name: content, PrivateKey: bsnapPriv, PublicKey: bsnapPub,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+const (
+	bsnapPriv = "4OSe6B1rDXdY4RdVJ+eenaEJOqRVZ9kxx25z9bI0t28="
+	bsnapPub  = "qXvOE2SbilF5RNpHXPU8xQCTvUIxYPeTNI6R6p+bqnw="
+	bsnapPub2 = "a1IqKSrVxcXN16cMZIUZ6kof0oU0kvwb0w6Q8bgGggQ="
+)
+
+// readDBNames opens the database at path and returns the client names
+// (used to assert snapshot content without byte equality — VACUUM INTO
+// rebuilds the file).
+func readDBNames(t *testing.T, path string) []string {
+	t.Helper()
+	handle, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	clients, err := db.ClientsAll(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, c := range clients {
+		names = append(names, c.Name)
+	}
+	return names
 }
 
 func snapshots(t *testing.T, dir string) []string {
@@ -37,9 +80,24 @@ func snapshots(t *testing.T, dir string) []string {
 	return matches
 }
 
+// integrityOK runs PRAGMA integrity_check on the database file.
+func integrityOK(t *testing.T, path string) bool {
+	t.Helper()
+	handle, err := db.Open(path)
+	if err != nil {
+		return false
+	}
+	defer handle.Close()
+	var result string
+	if err := handle.QueryRow(`PRAGMA integrity_check`).Scan(&result); err != nil {
+		return false
+	}
+	return result == "ok"
+}
+
 func TestBootSnapshotCopiesLiveDB(t *testing.T) {
 	dir := testDir(t)
-	path := writeDB(t, dir, "live-state-123")
+	path := writeDB(t, dir, "alice")
 
 	snapshot, err := BootSnapshot(path)
 	if err != nil {
@@ -48,12 +106,11 @@ func TestBootSnapshotCopiesLiveDB(t *testing.T) {
 	if !strings.Contains(filepath.Base(snapshot), "amnezia.sqlite.boot-") {
 		t.Fatalf("snapshot name %q", snapshot)
 	}
-	data, err := os.ReadFile(snapshot)
-	if err != nil {
-		t.Fatal(err)
+	if got := readDBNames(t, snapshot); len(got) != 1 || got[0] != "alice" {
+		t.Fatalf("snapshot content = %v, want [alice]", got)
 	}
-	if string(data) != "live-state-123" {
-		t.Fatalf("snapshot content = %q", data)
+	if !integrityOK(t, snapshot) {
+		t.Fatalf("snapshot failed integrity_check")
 	}
 	fi, err := os.Stat(snapshot)
 	if err != nil {
@@ -63,13 +120,46 @@ func TestBootSnapshotCopiesLiveDB(t *testing.T) {
 		t.Fatalf("snapshot mode = %o, want 0600", fi.Mode().Perm())
 	}
 	// the live file is untouched
-	live, err := os.ReadFile(path)
+	if got := readDBNames(t, path); len(got) != 1 || got[0] != "alice" {
+		t.Fatalf("live db content = %v, want [alice]", got)
+	}
+}
+
+// TestBootSnapshotConsistentWhileWriting (T-115): a snapshot taken
+// while another connection keeps writing passes the integrity check —
+// the VACUUM INTO snapshot is consistent where a raw file copy could
+// be torn.
+func TestBootSnapshotConsistentWhileWriting(t *testing.T) {
+	dir := testDir(t)
+	path := writeDB(t, dir, "alice")
+	writer, err := db.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(live) != "live-state-123" {
-		t.Fatalf("live db content = %q", live)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			if _, err := db.CreateClient(writer, "10.8.0.1/24", db.NewClient{
+				Name: fmt.Sprintf("w%d", i), PrivateKey: bsnapPriv, PublicKey: bsnapPub2,
+			}); err != nil {
+				return // address space exhausted — stop writing
+			}
+		}
+	}()
+
+	for i := 0; i < 5; i++ {
+		snapshot, err := BootSnapshot(path)
+		if err != nil {
+			t.Fatalf("BootSnapshot #%d: %v", i, err)
+		}
+		if !integrityOK(t, snapshot) {
+			t.Fatalf("snapshot #%d failed integrity_check", i)
+		}
 	}
+	writer.Close()
+	<-done
 }
 
 func TestBootSnapshotNoLiveDBIsNoop(t *testing.T) {
@@ -171,15 +261,14 @@ func TestBootSnapshotCreateFailure(t *testing.T) {
 	defer os.Chmod(parent, 0o700)
 
 	_, err := BootSnapshot(path)
-	if err == nil || !strings.Contains(err.Error(), "create") {
-		t.Fatalf("BootSnapshot: err = %v, want a create failure", err)
+	if err == nil || !strings.Contains(err.Error(), "copy to") {
+		t.Fatalf("BootSnapshot: err = %v, want a copy/create failure", err)
 	}
 	if got := snapshots(t, dir); len(got) != 0 {
 		t.Fatalf("snapshots left behind: %v", got)
 	}
-	live, err := os.ReadFile(path)
-	if err != nil || string(live) != "state" {
-		t.Fatalf("live db after failure: %q (err %v)", live, err)
+	if got := readDBNames(t, path); len(got) != 1 || got[0] != "state" {
+		t.Fatalf("live db after failure: %v (err %v)", got, err)
 	}
 }
 
@@ -196,9 +285,8 @@ func TestBootSnapshotFaultInjection(t *testing.T) {
 	if got := snapshots(t, dir); len(got) != 0 {
 		t.Fatalf("faulted runs left snapshots behind: %v", got)
 	}
-	live, err := os.ReadFile(path)
-	if err != nil || string(live) != "state" {
-		t.Fatalf("live db after faulted runs: %q (err %v)", live, err)
+	if got := readDBNames(t, path); len(got) != 1 || got[0] != "state" {
+		t.Fatalf("live db after faulted runs: %v", got)
 	}
 }
 
