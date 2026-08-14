@@ -47,6 +47,9 @@ commands:
   client delete <id>
   client config <id>
   auth add-user <username> (--password-stdin | --password-env <ENV>)
+  auth change-password <username> --old-password-stdin --new-password-stdin
+  auth 2fa status <username>
+  auth 2fa disable <username>
   backup create                  create an encrypted database backup
   backup list                    list existing backups
   restore <backup> --identity-stdin   prepare a restore (restart required)

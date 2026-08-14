@@ -137,6 +137,47 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrateLegacyV4AddsTOTPMode(t *testing.T) {
+	handle, _ := openTest(t, "legacy-v4.sqlite")
+	for _, stmt := range []string{
+		`CREATE TABLE auth (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, totp_secret TEXT)`,
+		`CREATE TABLE clients (id INTEGER PRIMARY KEY, name TEXT NOT NULL, private_key TEXT NOT NULL, public_key TEXT NOT NULL UNIQUE, preshared_key TEXT, address TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, expires_at TEXT)`,
+		`CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`INSERT INTO schema_meta (key, value) VALUES ('schema_version', '4')`,
+		`INSERT INTO auth (username, password_hash, totp_secret) VALUES ('legacy', 'hash', 'SECRET')`,
+	} {
+		if _, err := handle.Exec(stmt); err != nil {
+			t.Fatalf("seed legacy schema: %v", err)
+		}
+	}
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate legacy v4: %v", err)
+	}
+	cols := tableColumns(t, handle, "auth")
+	found := false
+	for _, col := range cols {
+		if col == "totp_mode" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("legacy auth columns = %v, missing totp_mode", cols)
+	}
+	var mode string
+	if err := handle.QueryRow(`SELECT totp_mode FROM auth WHERE username = 'legacy'`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "" {
+		t.Fatalf("legacy default totp_mode = %q, want empty", mode)
+	}
+	if got, err := SchemaVersionStored(handle); err != nil || got != SchemaVersion {
+		t.Fatalf("schema version = %q (err %v), want %q", got, err, SchemaVersion)
+	}
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("second Migrate legacy v4: %v", err)
+	}
+}
+
 func TestOpenCreatesParentDirectories(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "state", "amnezia.sqlite")
 	handle, err := Open(path)

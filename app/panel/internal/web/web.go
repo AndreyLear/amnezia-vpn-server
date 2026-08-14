@@ -122,8 +122,9 @@ type Server struct {
 	// swaps the handle in-process after backup.ApplyPending, so every
 	// read/write access goes through db() and never touches cfg.DB
 	// directly.
-	dbMu sync.RWMutex
-	dbh  *sql.DB
+	dbMu        sync.RWMutex
+	dbh         *sql.DB
+	pendingTOTP map[string]string
 }
 
 // db returns the live database handle (RLock-protected swap access).
@@ -183,7 +184,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("web: parse templates: %w", err)
 	}
-	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl, auth: auth.NewAuth(cfg.Sessions), dbh: cfg.DB}
+	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl, auth: auth.NewAuth(cfg.Sessions), dbh: cfg.DB, pendingTOTP: make(map[string]string)}
 	// Route protection (M7.4/M7.6): every panel route runs behind
 	// RequireAuth; every state-changing POST additionally runs behind
 	// RequireCSRF (auth → csrf → handler). /login is the single public
@@ -200,6 +201,13 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /clients/{id}/rename", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientRename))))
 	s.mux.Handle("POST /clients/{id}/expiry", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientExpiry))))
 	s.mux.Handle("POST /logout", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.logout))))
+	s.mux.Handle("GET /account", s.auth.RequireAuth(http.HandlerFunc(s.accountPage)))
+	s.mux.Handle("POST /account/password", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.changePassword))))
+	s.mux.Handle("POST /account/totp/enroll", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpEnroll))))
+	s.mux.Handle("GET /account/totp/qr", s.auth.RequireAuth(http.HandlerFunc(s.totpQR)))
+	s.mux.Handle("POST /account/totp/confirm", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpConfirm))))
+	s.mux.Handle("POST /account/totp/disable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpDisable))))
+	s.mux.Handle("POST /account/totp/mode", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpMode))))
 	s.mux.Handle("GET /backups", s.auth.RequireAuth(http.HandlerFunc(s.backupsPage)))
 	s.mux.Handle("POST /backups/create", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupCreate))))
 	// T-125: one-click download (fresh archive, not stored).

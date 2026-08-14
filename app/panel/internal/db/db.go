@@ -44,7 +44,7 @@ func mapNameConstraint(err error) error {
 // the unique name index. Archives written by older releases are still
 // accepted by restore and migrated here at apply time (T-110 backward
 // compatibility).
-const SchemaVersion = "4"
+const SchemaVersion = "5"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS server (
@@ -142,12 +142,45 @@ func Migrate(handle *sql.DB) error {
 			return err
 		}
 	}
+	if err := migrateTOTPMode(handle); err != nil {
+		return err
+	}
 	if _, err := handle.Exec(
 		`INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)
 		 ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
 		SchemaVersion,
 	); err != nil {
 		return fmt.Errorf("db: record schema_version: %w", err)
+	}
+	return nil
+}
+
+func migrateTOTPMode(handle *sql.DB) error {
+	rows, err := handle.Query(`PRAGMA table_info(auth)`)
+	if err != nil {
+		return fmt.Errorf("db: inspect auth schema: %w", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("db: inspect auth schema: %w", err)
+		}
+		if name == "totp_mode" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("db: inspect auth schema: %w", err)
+	}
+	if !found {
+		if _, err := handle.Exec(`ALTER TABLE auth ADD COLUMN totp_mode TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("db: add auth totp mode: %w", err)
+		}
 	}
 	return nil
 }

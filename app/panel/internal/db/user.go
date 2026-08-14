@@ -27,17 +27,19 @@ type AuthUser struct {
 	ID           int64
 	Username     string
 	PasswordHash string
+	TOTPSecret   string
+	TOTPMode     string
 }
 
 // AuthUserByUsername loads the auth row by exact username match. A
 // missing row is ErrAuthUserNotFound.
 func AuthUserByUsername(handle *sql.DB, username string) (*AuthUser, error) {
 	row := handle.QueryRow(
-		`SELECT id, username, password_hash FROM auth WHERE username = ?`,
+		`SELECT id, username, password_hash, COALESCE(totp_secret,''), COALESCE(totp_mode,'') FROM auth WHERE username = ?`,
 		username,
 	)
 	var u AuthUser
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.TOTPSecret, &u.TOTPMode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrAuthUserNotFound
 	}
@@ -45,6 +47,57 @@ func AuthUserByUsername(handle *sql.DB, username string) (*AuthUser, error) {
 		return nil, fmt.Errorf("db: read auth user: %w", err)
 	}
 	return &u, nil
+}
+
+func GetTotpSecret(handle *sql.DB, username string) (string, error) {
+	u, err := AuthUserByUsername(handle, username)
+	if err != nil {
+		return "", err
+	}
+	return u.TOTPSecret, nil
+}
+
+func SetTotpSecret(handle *sql.DB, username, secret string) error {
+	res, err := handle.Exec(`UPDATE auth SET totp_secret = ? WHERE username = ?`, secret, username)
+	if err != nil {
+		return fmt.Errorf("db: set totp secret: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ErrAuthUserNotFound
+	}
+	return nil
+}
+
+func ClearTotpSecret(handle *sql.DB, username string) error {
+	return SetTotpSecret(handle, username, "")
+}
+
+func SetTotpMode(handle *sql.DB, username, mode string) error {
+	if mode != "" && mode != "2fa" && mode != "passwordless" {
+		return errors.New("db: invalid totp mode")
+	}
+	res, err := handle.Exec(`UPDATE auth SET totp_mode = ? WHERE username = ?`, mode, username)
+	if err != nil {
+		return fmt.Errorf("db: set totp mode: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ErrAuthUserNotFound
+	}
+	return nil
+}
+
+func UpdateAuthPassword(handle *sql.DB, username, oldHash, newHash string) error {
+	res, err := handle.Exec(`UPDATE auth SET password_hash = ? WHERE username = ? AND password_hash = ?`, newHash, username, oldHash)
+	if err != nil {
+		return fmt.Errorf("db: update auth password: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return errors.New("db: old password does not match")
+	}
+	return nil
 }
 
 // CreateAuthUser inserts a user with the already-derived password hash

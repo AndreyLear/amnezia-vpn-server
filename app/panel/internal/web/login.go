@@ -25,6 +25,7 @@ package web
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
@@ -53,7 +54,10 @@ var dummyPasswordHash = func() string {
 // ever rendered. No session id, password, hash or key can reach the
 // template through this type.
 type loginData struct {
-	Error string
+	Error        string
+	Username     string
+	NeedCode     bool
+	Passwordless bool
 }
 
 // loginPage renders the login form (GET /login, public). An already
@@ -93,6 +97,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	username := r.PostForm.Get("username")
 	password := r.PostForm.Get("password")
+	code := r.PostForm.Get("code")
 
 	user, err := db.AuthUserByUsername(s.db(), username)
 	switch {
@@ -106,13 +111,24 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, s, "login: read user", err)
 		return
 	}
-	hash := dummyPasswordHash
-	if user != nil {
-		hash = user.PasswordHash
-	}
-	if !auth.VerifyPassword(password, hash) {
-		s.renderLogin(w, loginData{Error: loginErrorText})
-		return
+	if user != nil && user.TOTPMode == "passwordless" {
+		if !auth.VerifyTOTP(user.TOTPSecret, code, time.Now()) {
+			s.renderLogin(w, loginData{Error: loginErrorText, Username: username, Passwordless: true})
+			return
+		}
+	} else {
+		hash := dummyPasswordHash
+		if user != nil {
+			hash = user.PasswordHash
+		}
+		if !auth.VerifyPassword(password, hash) {
+			s.renderLogin(w, loginData{Error: loginErrorText, Username: username})
+			return
+		}
+		if user != nil && user.TOTPMode == "2fa" && !auth.VerifyTOTP(user.TOTPSecret, code, time.Now()) {
+			s.renderLogin(w, loginData{Error: "Неверный код.", Username: username, NeedCode: true})
+			return
+		}
 	}
 
 	// Issue the session. A presented live session is rotated (old SID

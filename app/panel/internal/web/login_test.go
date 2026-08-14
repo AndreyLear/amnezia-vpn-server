@@ -45,6 +45,25 @@ func loginForm(t *testing.T, username, password string) *http.Request {
 	return req
 }
 
+func loginFields(t *testing.T, fields url.Values) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(fields.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
+}
+
+func configureTOTPUser(t *testing.T, f *fixture, username, mode string) string {
+	t.Helper()
+	secret := "JBSWY3DPEHPK3PXP"
+	if err := db.SetTotpSecret(f.h, username, secret); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetTotpMode(f.h, username, mode); err != nil {
+		t.Fatal(err)
+	}
+	return secret
+}
+
 // lastCookie returns the most recent Set-Cookie for the session cookie.
 func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 	t.Helper()
@@ -115,6 +134,77 @@ func TestLoginSuccess(t *testing.T) {
 		t.Fatal("issued cookie must be a live store session")
 	}
 	assertCookieAttributes(t, c)
+}
+
+func TestLoginPasswordPlusCodeMatrix(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+	secret := configureTOTPUser(t, f, "alice", "2fa")
+	wrong := httptest.NewRecorder()
+	f.server.ServeHTTP(wrong, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {"000000"}}))
+	if wrong.Code != http.StatusOK || !strings.Contains(wrong.Body.String(), "Неверный код.") {
+		t.Fatalf("wrong code response = %d %q", wrong.Code, wrong.Body.String())
+	}
+	code, err := auth.TOTPCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {code}}))
+	if rec.Code != http.StatusSeeOther || sessionCookie(t, rec) == nil {
+		t.Fatalf("valid code login = %d, cookie=%v", rec.Code, sessionCookie(t, rec))
+	}
+}
+
+func TestLoginPasswordlessMatrix(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+	secret := configureTOTPUser(t, f, "alice", "passwordless")
+	code, err := auth.TOTPCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fail := httptest.NewRecorder()
+	f.server.ServeHTTP(fail, loginFields(t, url.Values{"username": {"alice"}, "code": {"000000"}}))
+	if fail.Code != http.StatusOK || !strings.Contains(fail.Body.String(), loginErrorText) {
+		t.Fatalf("passwordless failure = %d %q", fail.Code, fail.Body.String())
+	}
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"alice"}, "code": {code}}))
+	if rec.Code != http.StatusSeeOther || sessionCookie(t, rec) == nil {
+		t.Fatalf("passwordless login = %d, cookie=%v", rec.Code, sessionCookie(t, rec))
+	}
+}
+
+func TestLoginExpiredTOTPCodeHTTP(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+	secret := configureTOTPUser(t, f, "alice", "2fa")
+	expired, err := auth.TOTPCode(secret, time.Now().Add(-3*time.Duration(auth.TOTPPeriod)*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {expired}}))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Неверный код.") {
+		t.Fatalf("expired code response = %d %q", rec.Code, rec.Body.String())
+	}
+	if sessionCookie(t, rec) != nil || activeSessionCount(f, "alice") != 0 {
+		t.Fatal("expired code must not create a session")
+	}
+}
+
+func TestLoginSecureCookie(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "1")
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, loginForm(t, "alice", testPassword))
+	c := sessionCookie(t, rec)
+	if rec.Code != http.StatusSeeOther || c == nil || !c.Secure {
+		t.Fatalf("secure login cookie: code=%d cookie=%+v", rec.Code, c)
+	}
 }
 
 // assertCookieAttributes pins the M7.4/7.5 cookie contract: name,

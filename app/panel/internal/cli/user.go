@@ -17,6 +17,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -39,10 +40,112 @@ func (a *app) cmdAuth(args []string) int {
 	switch args[0] {
 	case "add-user":
 		return a.cmdAuthAddUser(args[1:])
+	case "change-password":
+		return a.cmdAuthChangePassword(args[1:])
+	case "2fa":
+		if len(args) < 2 {
+			a.usage()
+			return 2
+		}
+		switch args[1] {
+		case "status":
+			return a.cmdAuth2FAStatus(args[2:])
+		case "disable":
+			return a.cmdAuth2FADisable(args[2:])
+		default:
+			a.usage()
+			return 2
+		}
 	default:
 		a.usage()
 		return 2
 	}
+}
+
+func readCLISecret(r io.Reader) (string, error) {
+	b, err := r.(*bufio.Reader).ReadString('\n')
+	if err != nil && len(b) == 0 {
+		return "", err
+	}
+	return trimTrailingNewline(b), nil
+}
+
+func (a *app) cmdAuthChangePassword(args []string) int {
+	p, err := parseArgs(args, map[string]bool{"old-password-stdin": false, "new-password-stdin": false})
+	if err != nil {
+		return a.usageError("auth change-password", err.Error())
+	}
+	if len(p.positional) != 1 || len(p.flags) != 2 {
+		return a.usageError("auth change-password", "want <username> --old-password-stdin --new-password-stdin")
+	}
+	username, err := validateNamed(p.positional[0], "username")
+	if err != nil {
+		return a.usageError("auth change-password", err.Error())
+	}
+	reader := bufio.NewReader(a.stdin)
+	old, err := readCLISecret(reader)
+	if err != nil {
+		return a.fatal("auth change-password", err)
+	}
+	newp, err := readCLISecret(reader)
+	if err != nil {
+		return a.fatal("auth change-password", err)
+	}
+	u, err := a.openDB()
+	if err != nil {
+		return a.fatal("auth change-password", err)
+	}
+	defer u.Close()
+	row, err := db.AuthUserByUsername(u, username)
+	if err != nil || !auth.VerifyPassword(old, row.PasswordHash) {
+		return a.fatal("auth change-password", errors.New("invalid credentials"))
+	}
+	hash, err := auth.HashPassword(newp)
+	if err != nil {
+		if errors.Is(err, auth.ErrPasswordTooShort) || errors.Is(err, auth.ErrPasswordTooLong) {
+			return a.usageError("auth change-password", err.Error())
+		}
+		return a.fatal("auth change-password", err)
+	}
+	if err := db.UpdateAuthPassword(u, username, row.PasswordHash, hash); err != nil {
+		return a.fatal("auth change-password", err)
+	}
+	return a.ok("auth change-password", "password changed")
+}
+
+func (a *app) cmdAuth2FAStatus(args []string) int {
+	if len(args) != 1 {
+		return a.usageError("auth 2fa status", "want <username>")
+	}
+	h, err := a.openDB()
+	if err != nil {
+		return a.fatal("auth 2fa status", err)
+	}
+	defer h.Close()
+	u, err := db.AuthUserByUsername(h, args[0])
+	if err != nil {
+		return a.fatal("auth 2fa status", err)
+	}
+	fmt.Fprintf(a.stdout, "enabled: %t\nmode: %s\n", u.TOTPSecret != "", u.TOTPMode)
+	return 0
+}
+
+func (a *app) cmdAuth2FADisable(args []string) int {
+	if len(args) != 1 {
+		return a.usageError("auth 2fa disable", "want <username>")
+	}
+	h, err := a.openDB()
+	if err != nil {
+		return a.fatal("auth 2fa disable", err)
+	}
+	defer h.Close()
+	if err := db.ClearTotpSecret(h, args[0]); err != nil {
+		return a.fatal("auth 2fa disable", err)
+	}
+	if err := db.SetTotpMode(h, args[0], ""); err != nil {
+		return a.fatal("auth 2fa disable", err)
+	}
+	return a.ok("auth 2fa disable", "2FA disabled")
 }
 
 // cmdAuthAddUser creates the first admin user. Exit semantics:
