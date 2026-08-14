@@ -711,6 +711,50 @@ func TestUpdateClientNameDuplicateRejected(t *testing.T) {
 	}
 }
 
+// TestMigrateDedupGateSkipsOnCurrentSchema (T-116): on a database that
+// already carries the current schema version, Migrate must not run the
+// v4 dedup block — dropping the unique index and re-migrating leaves it
+// dropped (observable proof that clients was not scanned). Rewinding
+// schema_meta to 3 restores the v3→v4 migration path.
+func TestMigrateDedupGateSkipsOnCurrentSchema(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := handle.Exec(`DROP INDEX idx_clients_name`); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("second Migrate: %v", err)
+	}
+	var count int
+	if err := handle.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_clients_name'`,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("dedup block ran on current schema: index recreated (%d)", count)
+	}
+	// v3→v4 migration still runs the dedup block and rebuilds the index.
+	if _, err := handle.Exec(
+		`UPDATE schema_meta SET value = '3' WHERE key = 'schema_version'`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("v3->v4 Migrate: %v", err)
+	}
+	if err := handle.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_clients_name'`,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("v3->v4 migration did not rebuild the unique index (%d)", count)
+	}
+}
+
 func TestMigrateDedupesLegacyNames(t *testing.T) {
 	handle, _ := openTest(t, "amnezia.sqlite")
 	// Simulate a v3 database: clients table without the unique name

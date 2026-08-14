@@ -128,8 +128,19 @@ func Migrate(handle *sql.DB) error {
 			return fmt.Errorf("db: migrate: %w", err)
 		}
 	}
-	if err := migrateClientNameUniqueness(handle); err != nil {
+	// v4 dedup gate (T-116): the dedup loop plus index creation is a
+	// no-op once the unique index exists, but it pays a full clients
+	// scan on every panel start and on every CLI invocation (each one
+	// opens and migrates the database). Run it only when the stored
+	// schema version predates v4.
+	stored, err := SchemaVersionStored(handle)
+	if err != nil {
 		return err
+	}
+	if stored != SchemaVersion {
+		if err := migrateClientNameUniqueness(handle); err != nil {
+			return err
+		}
 	}
 	if _, err := handle.Exec(
 		`INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)
