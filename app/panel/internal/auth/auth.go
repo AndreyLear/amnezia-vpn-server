@@ -46,6 +46,7 @@ const CSRFFieldName = "_csrf"
 //   - SameSite=Lax: cross-site POSTs (CSRF carriers) drop the cookie;
 //   - Path=/: the whole panel shares the session;
 //   - lifetime: MaxAge + Expires, aligned with the store's SessionTTL.
+//
 // The Secure attribute is decided by secureCookies() (T-124).
 const (
 	cookiePath      = "/"
