@@ -244,6 +244,26 @@ func TestSessionDeleteByUsernameIdempotent(t *testing.T) {
 	s.DeleteByUsername("nobody", sess.ID)
 }
 
+func TestSessionDeleteAll(t *testing.T) {
+	s := NewSessionStore(SessionTTL)
+	alice, err := s.Create("alice")
+	if err != nil {
+		t.Fatalf("Create alice: %v", err)
+	}
+	bob, err := s.Create("bob")
+	if err != nil {
+		t.Fatalf("Create bob: %v", err)
+	}
+	s.DeleteAll()
+	if _, ok := s.Get(alice.ID); ok {
+		t.Fatal("DeleteAll must drop alice")
+	}
+	if _, ok := s.Get(bob.ID); ok {
+		t.Fatal("DeleteAll must drop bob")
+	}
+	s.DeleteAll()
+}
+
 func TestSessionRotate(t *testing.T) {
 	s := NewSessionStore(SessionTTL)
 	old, err := s.Create("alice")

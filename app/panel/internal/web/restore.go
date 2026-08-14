@@ -273,6 +273,7 @@ func (s *Server) restoreSubmit(w http.ResponseWriter, r *http.Request) {
 		s.flashBackups(w, r, flashRestoreApplyFailed)
 		return
 	}
+	auth.ClearSessionCookie(w)
 	s.flashBackups(w, r, fmt.Sprintf(flashRestoreApplied, appliedN))
 }
 
@@ -307,6 +308,8 @@ func (s *Server) applyRestoreNow() (int, error) {
 	}
 	old := s.swapDB(next)
 	old.Close()
+	s.cfg.Sessions.DeleteAll()
+	s.pendingTOTP = make(map[string]string)
 	clients, err := db.ClientsAll(next)
 	if err != nil {
 		s.cfg.Logger.Printf("restore apply: client count: %v", err)

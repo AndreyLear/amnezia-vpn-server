@@ -172,6 +172,15 @@ func (s *SessionStore) Delete(id string) {
 	delete(s.byID, id)
 }
 
+// DeleteAll drops every live session. Used after an in-process restore
+// swaps the auth table: cookies issued against the previous database
+// must not authorize the restored one.
+func (s *SessionStore) DeleteAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.byID = make(map[string]Session)
+}
+
 // DeleteByUsername removes every session of username except the one
 // whose id equals keep (keep "" deletes all). It enforces the panel's
 // one-active-login-per-user contract (M7.5): after a successful login

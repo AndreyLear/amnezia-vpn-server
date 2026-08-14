@@ -638,12 +638,11 @@ func TestRestoreUploadAppliesInProcess(t *testing.T) {
 	if strings.Contains(string(cfg), "x-test-bob") {
 		t.Fatal("awg0.conf contains a post-snapshot client")
 	}
-	// the dashboard reads through the swapped handle.
-	body := f.get("/").Body.String()
-	if !strings.Contains(body, "alice") {
-		t.Fatal("dashboard does not render the restored client")
+	if _, ok := f.server.cfg.Sessions.Get(f.sid); ok {
+		t.Fatal("pre-restore session must be invalid after apply")
 	}
-	if strings.Contains(body, "bob") {
-		t.Fatal("dashboard renders a post-snapshot client")
+	dash := f.get("/")
+	if dash.Code != http.StatusSeeOther || dash.Header().Get("Location") != "/login" {
+		t.Fatalf("GET / after restore: code=%d loc=%q, want 303 /login", dash.Code, dash.Header().Get("Location"))
 	}
 }
