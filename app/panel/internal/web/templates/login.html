@@ -4,17 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Login</title>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<main>
+<main class="panel">
+  <div class="logo"></div>
   <h1>AmneziaVPN Panel</h1>
+  <p class="sub">Sign in to manage the tunnel</p>
 
   {{if .Error}}<p class="flash error">{{.Error}}</p>{{end}}
 
   <form action="/login" method="post">
     <label>Username <input type="text" name="username" autocomplete="username" required></label>
     <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
-    <button type="submit">Log in</button>
+    <button type="submit" class="btn primary">Log in</button>
   </form>
 </main>
 </body>

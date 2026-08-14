@@ -522,3 +522,44 @@ func TestRedirect303(t *testing.T) {
 		t.Errorf("Location = %q, want /?msg=ok", loc)
 	}
 }
+
+// TestStaticCSSAndTemplatePurity (T-120): the embedded stylesheet is
+// served publicly at /static/style.css (the login page needs it before
+// any session exists), and no rendered page carries inline styles or
+// scripts — the CSP "default-src 'self'" forbids them, so the whole
+// design system must stay self-contained.
+func TestStaticCSSAndTemplatePurity(t *testing.T) {
+	f := newFixture(t)
+
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/static/style.css", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /static/style.css: code = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
+		t.Fatalf("css content-type = %q, want text/css", ct)
+	}
+	if strings.TrimSpace(rec.Body.String()) == "" {
+		t.Fatal("css body is empty")
+	}
+
+	for _, path := range []string{"/login", "/", "/backups", "/backups/restore"} {
+		rec := httptest.NewRecorder()
+		var req *http.Request
+		if path == "/login" {
+			req = sessionRequest(t, http.MethodGet, path, "")
+		} else {
+			req = sessionRequest(t, http.MethodGet, path, f.sid)
+		}
+		f.server.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: code = %d, want 200", path, rec.Code)
+		}
+		body := rec.Body.String()
+		for _, needle := range []string{"<script", "style=", "onclick=", "onerror="} {
+			if strings.Contains(body, needle) {
+				t.Fatalf("GET %s: page contains %q — CSP-incompatible", path, needle)
+			}
+		}
+	}
+}

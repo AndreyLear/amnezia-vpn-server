@@ -102,6 +102,9 @@ func DefaultConfig() Config {
 //go:embed templates/*.html
 var templateFS embed.FS
 
+//go:embed static/style.css
+var staticFS embed.FS
+
 // Server is one panel HTTP server. It is safe to call Handler after
 // construction; Handler wraps the mux (plus middlewares) and allows
 // tests to register extra routes before the first request.
@@ -188,8 +191,24 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("GET /clients/{id}/qr", s.auth.RequireAuth(http.HandlerFunc(s.clientQR)))
 	s.mux.HandleFunc("GET /login", s.loginPage)
 	s.mux.HandleFunc("POST /login", s.loginSubmit)
+	// Public static asset (T-120 design system): plain CSS served from
+	// the embedded FS; CSP default-src 'self' admits it. No auth: the
+	// login page needs it before any session exists.
+	s.mux.HandleFunc("GET /static/style.css", s.staticCSS)
 	s.mux.HandleFunc("/", s.notFound)
 	return s, nil
+}
+
+// staticCSS serves the embedded stylesheet. The response passes through
+// securityHeaders like every other route (nosniff, CSP, no-store).
+func (s *Server) staticCSS(w http.ResponseWriter, r *http.Request) {
+	data, err := staticFS.ReadFile("static/style.css")
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Write(data)
 }
 
 // Handle registers an extra route on the mux. The middlewares (recover,

@@ -4,20 +4,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Backups</title>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<main>
-  <header class="session">
-    <p>Signed in as {{.Username}}
-      <a href="/">Panel dashboard</a>
-      <form action="/logout" method="post">
-        <input type="hidden" name="_csrf" value="{{.CSRF}}">
-        <button type="submit">Log out</button>
-      </form>
-    </p>
-  </header>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    AmneziaVPN <small>panel</small>
+  </div>
+  <nav>
+    <span class="who">Signed in as {{.Username}}</span>
+    <a href="/">Dashboard</a>
+    <form action="/logout" method="post">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <button type="submit" class="btn">Log out</button>
+    </form>
+  </nav>
+</header>
 
-  <h1>Backups</h1>
+<main>
+  <p class="eyebrow">Disaster recovery</p>
+  <h1 class="display"><span class="grad">Backups</span></h1>
+  <p class="sub">Encrypted age archives of the database, restorable through the documented DR flow.</p>
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
 
@@ -25,28 +33,28 @@
   <p class="pending">A restore is prepared and waiting. The panel never restarts itself: restart it to apply, or the restore cancels on the next serve. Create, delete and further restores are paused until then.</p>
   {{end}}
 
-  <section class="create">
+  <section class="form-card">
     <form action="/backups/create" method="post">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
-      <button type="submit">Create backup</button>
+      <button type="submit" class="btn primary">Create backup</button>
     </form>
-    <p><a href="/backups/restore">Restore a backup</a></p>
+    <p class="sub">Restore a backup — <a href="/backups/restore">go to restore</a></p>
   </section>
 
-  <section class="backups">
-    <h2>Archives</h2>
-    {{if not .Backups}}<p>No backups yet.</p>{{end}}
+  <section class="table-wrap">
+    <h2 class="table-title">Archives</h2>
+    {{if not .Backups}}<p class="empty table-empty">No backups yet.</p>{{end}}
     <table>
       {{range .Backups}}
       <tr>
-        <td>{{.Name}}</td>
+        <td><code>{{.Name}}</code></td>
         <td>{{.DateText}}</td>
         <td>{{.SizeText}}</td>
-        <td><a href="/backups/{{.Name}}/download">download</a></td>
+        <td><a class="btn ghost" href="/backups/{{.Name}}/download">download</a></td>
         <td>
           <form action="/backups/{{.Name}}/delete" method="post">
             <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-            <button type="submit">Delete</button>
+            <button type="submit" class="btn destructive">Delete</button>
           </form>
         </td>
       </tr>

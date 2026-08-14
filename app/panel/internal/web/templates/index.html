@@ -1,69 +1,105 @@
 {{define "title"}}Panel{{end}}
 
-{{define "body"}}<main>
-  <header class="session">
-    <p>Signed in as {{.Username}}
-      <a href="/backups">Backups</a>
-      <form action="/logout" method="post">
-        <input type="hidden" name="_csrf" value="{{.CSRF}}">
-        <button type="submit">Log out</button>
-      </form>
-    </p>
-  </header>
+{{define "body"}}
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    AmneziaVPN <small>panel</small>
+  </div>
+  <nav>
+    <span class="who">Signed in as {{.Username}}</span>
+    <a href="/backups">Backups</a>
+    <form action="/logout" method="post">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <button type="submit" class="btn">Log out</button>
+    </form>
+  </nav>
+</header>
 
-  <h1>AmneziaVPN Panel</h1>
+<main>
+  <p class="eyebrow">VPN Server</p>
+  <h1 class="display"><span class="grad">AmneziaVPN Panel</span></h1>
+  <p class="sub">Manage tunnel peers, monitor the runtime and keep encrypted backups.</p>
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
 
-  <section class="status">
-    {{if .Up}}<p>Tunnel: up <span class="muted">(status generated {{.GeneratedText}})</span></p>
-    {{else if .NA}}<p>Tunnel: status not available</p>
-    {{else if .Down}}<p>Tunnel: interface down</p>
-    {{else}}<p>Tunnel: status error</p>{{end}}
+  <section class="stats">
+    {{if .Up}}
+    <div class="stat up">
+      <p class="stat-label">Tunnel status</p>
+      <p class="stat-value"><span class="dot"></span>Tunnel: up</p>
+      <p class="stat-note">status generated {{.GeneratedText}}</p>
+    </div>
+    {{else if .NA}}
+    <div class="stat na">
+      <p class="stat-label">Tunnel status</p>
+      <p class="stat-value"><span class="dot"></span>Tunnel: status not available</p>
+    </div>
+    {{else if .Down}}
+    <div class="stat down">
+      <p class="stat-label">Tunnel status</p>
+      <p class="stat-value"><span class="dot"></span>Tunnel: interface down</p>
+    </div>
+    {{else}}
+    <div class="stat">
+      <p class="stat-label">Tunnel status</p>
+      <p class="stat-value"><span class="dot"></span>Tunnel: status error</p>
+    </div>
+    {{end}}
+    <div class="stat">
+      <p class="stat-label">Clients</p>
+      <p class="stat-value">{{len .Cards}}</p>
+    </div>
+    <div class="stat">
+      <p class="stat-label">Interface</p>
+      <p class="stat-value"><code>awg0</code></p>
+    </div>
   </section>
 
-  <section class="add">
+  <section class="form-card">
     <h2>Add client</h2>
     <form action="/clients/new" method="post">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <label>Name <input type="text" name="name" maxlength="64" required></label>
       <label>Expiry (optional, RFC3339) <input type="text" name="expires_at"></label>
-      <button type="submit">Add</button>
+      <button type="submit" class="btn primary">Add</button>
     </form>
   </section>
 
-  <section class="cards">
-    <h2>Clients</h2>
-    {{if not .Cards}}<p>No clients yet.</p>{{end}}
+  <h2>Clients</h2>
+  <section class="grid">
+    {{if not .Cards}}<p class="empty">No clients yet.</p>{{end}}
     {{range .Cards}}
     <article class="card">
-      <h3>{{.Name}} <span class="muted">#{{.ID}}</span></h3>
-      <p>
-        <span>{{if .Online}}online{{else}}offline{{end}}</span> ·
-        <span>{{if .Enabled}}enabled{{else}}disabled{{end}}</span>
-        {{if .Expired}} · <span>expired</span>{{end}}
-      </p>
-      <p>address: {{.Address}} · created: {{.CreatedText}}</p>
-      <p>last handshake: {{.LastHandshakeText}} · rx: {{.RxText}} · tx: {{.TxText}}</p>
-      <p class="actions">
-        <form action="/clients/{{.ID}}/enable" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit">Enable</button></form>
-        <form action="/clients/{{.ID}}/disable" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit">Disable</button></form>
-        <form action="/clients/{{.ID}}/delete" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit">Delete</button></form>
-        <a href="/clients/{{.ID}}/config">config</a> ·
-        <a href="/clients/{{.ID}}/qr">QR</a>
-      </p>
-      <p class="actions">
+      <h3>{{.Name}} <span class="id">#{{.ID}}</span></h3>
+      <div class="row">
+        <span class="badge {{if .Online}}on{{else}}off{{end}}">{{if .Online}}online{{else}}offline{{end}}</span>
+        <span class="badge {{if .Enabled}}enabled{{else}}disabled{{end}}">{{if .Enabled}}enabled{{else}}disabled{{end}}</span>
+        {{if .Expired}}<span class="badge expired">expired</span>{{end}}
+      </div>
+      <div class="meta">
+        <span>address: <code>{{.Address}}</code> · created: {{.CreatedText}}</span>
+        <span>last handshake: {{.LastHandshakeText}} · rx: {{.RxText}} · tx: {{.TxText}}</span>
+      </div>
+      <div class="actions">
+        <form action="/clients/{{.ID}}/enable" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit" class="btn">Enable</button></form>
+        <form action="/clients/{{.ID}}/disable" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit" class="btn">Disable</button></form>
+        <form action="/clients/{{.ID}}/delete" method="post"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="submit" class="btn destructive">Delete</button></form>
+        <a class="btn ghost" href="/clients/{{.ID}}/config">config</a>
+        <a class="btn ghost" href="/clients/{{.ID}}/qr">QR</a>
+      </div>
+      <div class="actions">
         <form action="/clients/{{.ID}}/rename" method="post">
           <input type="hidden" name="_csrf" value="{{$.CSRF}}">
           <input type="text" name="name" maxlength="64" placeholder="new name">
-          <button type="submit">Rename</button>
+          <button type="submit" class="btn">Rename</button>
         </form>
         <form action="/clients/{{.ID}}/expiry" method="post">
           <input type="hidden" name="_csrf" value="{{$.CSRF}}">
           <input type="text" name="expires_at" placeholder="RFC3339 or none">
-          <button type="submit">Set expiry</button>
+          <button type="submit" class="btn">Set expiry</button>
         </form>
-      </p>
+      </div>
     </article>
     {{end}}
   </section>

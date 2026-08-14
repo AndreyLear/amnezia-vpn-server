@@ -4,20 +4,33 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Restore backup</title>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<main>
-  <header class="session">
-    <p>Signed in as {{.Username}}
-      <a href="/backups">Backups</a>
-      <form action="/logout" method="post">
-        <input type="hidden" name="_csrf" value="{{.CSRF}}">
-        <button type="submit">Log out</button>
-      </form>
-    </p>
-  </header>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    AmneziaVPN <small>panel</small>
+  </div>
+  <nav>
+    <span class="who">Signed in as {{.Username}}</span>
+    <a href="/">Dashboard</a>
+    <a href="/backups">Backups</a>
+    <form action="/logout" method="post">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <button type="submit" class="btn">Log out</button>
+    </form>
+  </nav>
+</header>
 
-  <h1>Restore a backup</h1>
+<main>
+  <p class="eyebrow">Disaster recovery</p>
+  <h1 class="display"><span class="grad">Restore a backup</span></h1>
+  <p class="sub">The archive (.tar.zst.age) is checked, unpacked into a staging
+     directory and scanned before anything changes. The panel never
+     restarts itself: on success the restore is prepared and waits —
+     restart the panel to apply it. The identity is used only to open
+     the archive, kept in memory, and never stored, logged or shown.</p>
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
 
@@ -25,13 +38,7 @@
   <p class="pending">A restore is prepared and waiting. The panel never restarts itself: restart it to apply, or the restore cancels on the next serve. Further restores are paused until then.</p>
   {{end}}
 
-  <p>The archive (.tar.zst.age) is checked, unpacked into a staging
-     directory and scanned before anything changes. The panel never
-     restarts itself: on success the restore is prepared and waits —
-     restart the panel to apply it. The identity is used only to open
-     the archive, kept in memory, and never stored, logged or shown.</p>
-
-  <section class="restore">
+  <section class="form-card">
     <form action="/backups/restore" method="post" enctype="multipart/form-data">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <p>
@@ -45,7 +52,7 @@
                     spellcheck="false" placeholder="AGE-SECRET-KEY-1..."></textarea>
         </label>
       </p>
-      <button type="submit">Prepare restore</button>
+      <button type="submit" class="btn destructive">Prepare restore</button>
     </form>
   </section>
 </main>
