@@ -53,6 +53,10 @@ MODPROBE_OK=yes
 DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
 UP_RC=0
+PUBLIC_IP=2.26.93.192
+DNS_A=2.26.93.192
+DNS_AAAA=
+CERTBOT_RC=0
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -176,12 +180,48 @@ for a in "$@"; do
     [ "$prev" = "-o" ] && oarg="$a"
     prev="$a"
 done
+# T-121: the DNS pre-flight asks the public IP service.
+if printf '%s' "$*" | grep -q "api.ipify.org"; then
+    . "${FAKE_STATE:?}"
+    printf '%s\n' "${PUBLIC_IP}"
+    exit 0
+fi
 if [ -n "$oarg" ]; then
     mkdir -p "$(dirname "$oarg")"
     printf 'FAKE-DOCKER-GPG-KEY\n' > "$oarg"
 fi
 exit 0
 FAKE_EOF
+
+# T-121 domain-mode fakes: DNS pre-flight (dig), reverse proxy (nginx),
+# certificate issuance (certbot).
+cat > "$FAKE_DIR/dig" <<'FAKE_EOF'
+#!/bin/bash
+echo "dig $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+case "$*" in
+    *" A"*) [ -n "${DNS_A}" ] && printf '%s\n' "${DNS_A}" ;;
+    *" AAAA"*) [ -n "${DNS_AAAA}" ] && printf '%s\n' "${DNS_AAAA}" ;;
+esac
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
+#!/bin/bash
+echo "nginx $*" >> "${FAKE_CALLS:?}"
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/certbot" <<'FAKE_EOF'
+#!/bin/bash
+echo "certbot $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+[ "${CERTBOT_RC:-0}" = "0" ] || exit 1
+touch "${FAKE_FS}/certbot-ok"
+exit 0
+FAKE_EOF
+
+chmod +x "$FAKE_DIR/curl" "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot"
 
 chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl"
 
@@ -283,6 +323,7 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_NFTABLES_DIR="$NFTABLES_DIR_TEST" \
     AMNEZIA_INSTALL_NFTABLES_CONF="$NFTABLES_CONF_TEST" \
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
+    AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
     PATH="$FAKE_DIR:$PATH" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
@@ -575,6 +616,81 @@ test_sentinel_guard_not_masked() {
         || fail "sentinel guard: installer masked a data-loss case"
 }
 
+test_domain_default_no_domain() {
+    # T-121: without --domain the loopback-only contract is untouched —
+    # no dig/nginx/certbot, no 80/443 rules, SSH tunnel hint kept.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "no-domain flow: exit $rc"
+    if grep -q "certbot" "$FAKE_CALLS"; then fail "no-domain: certbot was invoked"; else pass "no-domain: certbot not invoked"; fi
+    if grep -q "nginx " "$FAKE_CALLS"; then fail "no-domain: nginx was invoked"; else pass "no-domain: nginx not invoked"; fi
+    if grep -q "dig " "$FAKE_CALLS"; then fail "no-domain: dig was invoked"; else pass "no-domain: dig not invoked"; fi
+    if grep -qE "dport (80|443)" "$ROOT/nftables/amnezia-vpn.nft"; then fail "no-domain: 80/443 opened"; else pass "no-domain: 80/443 stay closed"; fi
+    if grep -q "ssh -L 8787" "$TMP_TEST/out"; then pass "no-domain: SSH tunnel hint kept"; else fail "no-domain: SSH hint missing"; fi
+}
+
+test_domain_mode_flow() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "domain flow: exit $rc"
+    grep -q "dig +short" "$FAKE_CALLS" && pass "domain: DNS pre-flight ran" || fail "domain: DNS pre-flight missing"
+    grep -q "certbot certonly" "$FAKE_CALLS" && pass "domain: certbot invoked" || fail "domain: certbot not invoked"
+    [ -f "$ROOT/nginx/panel.conf" ] || fail "domain: managed nginx config missing"
+    grep -q "listen 443 ssl" "$ROOT/nginx/panel.conf" && pass "domain: TLS site present" || fail "domain: TLS site missing"
+    grep -q "proxy_pass http://127.0.0.1:8787" "$ROOT/nginx/panel.conf" && pass "domain: proxy to loopback panel" || fail "domain: proxy missing"
+    grep -qE "^[[:space:]]*tcp dport (80|443) accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "domain: 80/443 accept in the managed ruleset" \
+        || fail "domain: nft 80/443 accept missing"
+    grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "domain: https hint printed" || fail "domain: https hint missing"
+    grep -q "ssh -L 8787" "$TMP_TEST/out" && fail "domain: SSH tunnel hint still printed" || pass "domain: SSH hint replaced by https"
+}
+
+test_domain_dns_mismatch() {
+    fakes_reset
+    setstate DNS_A 1.2.3.4 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "1" ] || fail "domain DNS mismatch: exit $rc, want 1"
+    grep -q "Create an A record" "$TMP_TEST/err" && pass "domain DNS mismatch: actionable message" \
+        || fail "domain DNS mismatch: message missing"
+    grep -q "certbot" "$FAKE_CALLS" && fail "domain DNS mismatch: certbot was still invoked" \
+        || pass "domain DNS mismatch: certbot not invoked (rate limit safe)"
+}
+
+test_domain_dns_missing() {
+    fakes_reset
+    setstate DNS_A "" "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "1" ] || fail "domain DNS missing: exit $rc, want 1"
+    grep -q "Create an A record" "$TMP_TEST/err" && pass "domain DNS missing: actionable message" \
+        || fail "domain DNS missing: message missing"
+    grep -q "certbot" "$FAKE_CALLS" && fail "domain DNS missing: certbot invoked" \
+        || pass "domain DNS missing: certbot not invoked"
+}
+
+test_domain_certbot_failure() {
+    fakes_reset
+    setstate CERTBOT_RC 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "1" ] || fail "domain certbot fail: exit $rc, want 1"
+    grep -q "Let's Encrypt issuance failed" "$TMP_TEST/err" && pass "domain certbot fail: error surfaced" \
+        || fail "domain certbot fail: message missing"
+}
+
+test_domain_invalid_fqdn() {
+    fakes_reset
+    os_release debian 12 bookworm
+    for bad in "bad domain" "..x" "x..y" "-x.com" "x-.com" "x." "UPPER.com"; do
+        rc="$(run_install --domain "$bad")"
+        [ "$rc" = "2" ] || fail "invalid domain '$bad': exit $rc, want 2 (usage)"
+    done
+    pass "invalid --domain values rejected (exit 2)"
+}
+
 test_doctor_failure() {
     fakes_reset
     setstate DAEMON fail "$FAKE_STATE"
@@ -652,6 +768,12 @@ test_ip_forward_already_enabled
 test_m31_fresh_install_tolerated
 test_panel_init_failure_not_masked
 test_sentinel_guard_not_masked
+test_domain_default_no_domain
+test_domain_mode_flow
+test_domain_dns_mismatch
+test_domain_dns_missing
+test_domain_certbot_failure
+test_domain_invalid_fqdn
 test_doctor_failure
 test_ssh_hint
 test_secrets_absent
