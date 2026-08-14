@@ -211,6 +211,7 @@ func TestUsageErrors(t *testing.T) {
 		{"server init invalid awg-params", []string{"server", "init", "10.8.0.0/24", "51820", "--awg-params", "{broken"}},
 		{"server init semantically bad awg-params", []string{"server", "init", "10.8.0.0/24", "51820", "--awg-params", `{"jc":0}`}},
 		{"server init invalid endpoint", []string{"server", "init", "10.8.0.0/24", "51820", "--endpoint", "noport"}},
+		{"server init invalid dns", []string{"server", "init", "10.8.0.0/24", "51820", "--dns", "not-an-ip"}},
 		{"server init unknown flag", []string{"server", "init", "10.8.0.0/24", "51820", "--mtu", "1400"}},
 		{"server init flag without value", []string{"server", "init", "10.8.0.0/24", "51820", "--endpoint"}},
 		{"add missing name", []string{"client", "add"}},
@@ -367,6 +368,46 @@ func TestServerUpdateDNS(t *testing.T) {
 	}
 }
 
+func TestServerUpdateDNSValid(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	// IPv4 list and IPv6 are accepted and persisted.
+	for _, dns := range []string{"1.1.1.1,8.8.8.8", "2001:db8::1", "1.1.1.1, 2001:db8::1"} {
+		out := c.mustRun("server", "update", "--dns", dns)
+		if !strings.Contains(out, "panel server update: ok; dns = "+dns) {
+			t.Fatalf("stdout = %q", out)
+		}
+		h := c.openDB()
+		server, err := db.ServerRow(h)
+		if err != nil {
+			h.Close()
+			t.Fatalf("server row: %v", err)
+		}
+		if server.DNS != dns {
+			h.Close()
+			t.Fatalf("dns = %q, want %q", server.DNS, dns)
+		}
+		h.Close()
+		if !strings.Contains(c.readConfig(), "DNS = "+dns) {
+			t.Fatal("config missing DNS line after update")
+		}
+	}
+	// An explicit empty --dns clears the value.
+	out := c.mustRun("server", "update", "--dns", "")
+	if !strings.Contains(out, "panel server update: ok; dns = ") {
+		t.Fatalf("clear stdout = %q", out)
+	}
+	h := c.openDB()
+	defer h.Close()
+	server, err := db.ServerRow(h)
+	if err != nil {
+		t.Fatalf("server row: %v", err)
+	}
+	if server.DNS != "" {
+		t.Fatalf("dns = %q, want cleared", server.DNS)
+	}
+}
+
 func TestServerUpdateAWGParamsAndEndpoint(t *testing.T) {
 	c := newCtx(t)
 	c.seedServer("", "")
@@ -397,6 +438,8 @@ func TestServerUpdateUsageErrors(t *testing.T) {
 		{"server", "update", "10.9.0.1/24"},
 		{"server", "update", "--awg-params", `{"jc":0}`},
 		{"server", "update", "--endpoint", "noport"},
+		{"server", "update", "--dns", "foo"},
+		{"server", "update", "--dns", "1.1.1.1,foo"},
 	} {
 		if code, _, _ := c.run(args...); code != 2 {
 			t.Fatalf("panel %v: exit = %d, want 2 (usage)", args, code)

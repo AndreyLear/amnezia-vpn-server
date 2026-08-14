@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
@@ -85,6 +86,11 @@ func (a *app) cmdServerInit(args []string) int {
 			return a.usageError(opServerInit, err.Error())
 		}
 	}
+	if dns := parsed.flags["dns"]; dns != "" {
+		if err := validateDNSArg(dns); err != nil {
+			return a.usageError(opServerInit, err.Error())
+		}
+	}
 
 	var privateKey, publicKey string
 	keyErr := fault("server-init.keys")
@@ -146,6 +152,22 @@ func validateEndpointArg(endpoint string) error {
 	return nil
 }
 
+// validateDNSArg pre-flights --dns the same way the awgconf DNS rules
+// render it: a comma-separated list of IP addresses (IPv4 or IPv6).
+// An empty string is allowed (explicit clear in `server update --dns ""`).
+func validateDNSArg(dns string) error {
+	if dns == "" {
+		return nil
+	}
+	for _, part := range strings.Split(dns, ",") {
+		part = strings.TrimSpace(part)
+		if net.ParseIP(part) == nil {
+			return fmt.Errorf("invalid dns %q: %q is not an IP address", dns, part)
+		}
+	}
+	return nil
+}
+
 // cmdServerUpdate applies server settings on the existing row:
 //
 // `panel server update [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>]`
@@ -187,6 +209,11 @@ func (a *app) cmdServerUpdate(args []string) int {
 	}
 	if hasEndpoint && endpoint != "" {
 		if err := validateEndpointArg(endpoint); err != nil {
+			return a.usageError(opServerUpdate, err.Error())
+		}
+	}
+	if hasDNS && dns != "" {
+		if err := validateDNSArg(dns); err != nil {
 			return a.usageError(opServerUpdate, err.Error())
 		}
 	}
