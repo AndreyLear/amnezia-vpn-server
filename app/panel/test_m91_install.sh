@@ -560,6 +560,21 @@ test_panel_init_failure_not_masked() {
         || fail "panel-init failure: log not surfaced"
 }
 
+test_sentinel_guard_not_masked() {
+    # T-111 rework: the sentinel-guard message ("no server row was
+    # found — the database was lost") contains the loose substring
+    # "no server row" but must NOT be tolerated as the M3.1
+    # fresh-install state — the exact marker is "no server row (id=1)".
+    fakes_reset
+    setstate UP_RC 1 "$FAKE_STATE"
+    printf '%s\n' "panel init: .server-initialized exists but no server row was found — the database was lost or reset, refusing to create a fresh one" > "$FAKE_DIR/pi_log.txt"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "1" ] || fail "sentinel guard: exit $rc, want 1"
+    grep -q "docker compose up -d failed" "$TMP_TEST/err" && pass "sentinel guard: installer refused" \
+        || fail "sentinel guard: installer masked a data-loss case"
+}
+
 test_doctor_failure() {
     fakes_reset
     setstate DAEMON fail "$FAKE_STATE"
@@ -636,6 +651,7 @@ test_ip_forward_disabled
 test_ip_forward_already_enabled
 test_m31_fresh_install_tolerated
 test_panel_init_failure_not_masked
+test_sentinel_guard_not_masked
 test_doctor_failure
 test_ssh_hint
 test_secrets_absent

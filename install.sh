@@ -677,7 +677,11 @@ if ! docker_compose --env-file versions.lock up -d; then
     # corrupted database, boot-snapshot error, sentinel guard) is a real
     # failure and must surface to the operator (T-111).
     PI_LOG="$(docker_compose --env-file versions.lock logs --no-color panel-init 2>/dev/null || true)"
-    if printf '%s\n' "$PI_LOG" | grep -q "no server row"; then
+    # Exact M3.1 marker (awgconf.ErrNoServerRow): "no server row (id=1); ...".
+    # A looser match would also hit the sentinel-guard message
+    # ("no server row was found — the database was lost") and mask a
+    # real data-loss case as a fresh install (T-111 rework).
+    if printf '%s\n' "$PI_LOG" | grep -q "no server row (id=1)"; then
         log "fresh-install state: panel-init exited 1 (M3.1, no server row yet); stack created-but-not-running"
     else
         printf '%s\n' \
