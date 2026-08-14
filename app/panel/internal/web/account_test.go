@@ -28,7 +28,7 @@ func TestAccountTOTPEnrollmentAndPasswordRotation(t *testing.T) {
 		f.server.ServeHTTP(rec, req)
 		return rec
 	}
-	if rec := post("/account/totp/enroll", url.Values{}, f.sid); rec.Code != http.StatusSeeOther {
+	if rec := post("/account/totp/enroll", url.Values{"password": {testPassword}}, f.sid); rec.Code != http.StatusSeeOther {
 		t.Fatalf("enroll = %d", rec.Code)
 	}
 	row, _ := db.AuthUserByUsername(f.h, f.username)
@@ -48,12 +48,15 @@ func TestAccountTOTPEnrollmentAndPasswordRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec := post("/account/totp/confirm", url.Values{"code": {code}}, f.sid); rec.Code != http.StatusSeeOther {
+	if rec := post("/account/totp/confirm", url.Values{"password": {testPassword}, "code": {code}}, f.sid); rec.Code != http.StatusSeeOther {
 		t.Fatalf("confirm = %d", rec.Code)
 	}
 	row, _ = db.AuthUserByUsername(f.h, f.username)
 	if row.TOTPSecret == "" {
 		t.Fatal("secret not saved after confirmation")
+	}
+	if row.TOTPMode != "2fa" {
+		t.Fatalf("totp_mode after confirm = %q, want 2fa", row.TOTPMode)
 	}
 	if _, ok := f.sessions.Get(other.ID); ok {
 		t.Fatal("confirmation must invalidate other sessions")
@@ -177,12 +180,16 @@ func TestAccountTOTPModeTransitions(t *testing.T) {
 		}
 		sid, csrf = sess.ID, sess.CSRFToken
 	}
-	postMode("2fa", "")
+	code, err := auth.TOTPCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	postMode("2fa", code)
 	u, _ := db.AuthUserByUsername(f.h, f.username)
 	if u.TOTPMode != "2fa" {
 		t.Fatalf("mode after 2fa = %q", u.TOTPMode)
 	}
-	code, err := auth.TOTPCode(secret, time.Now())
+	code, err = auth.TOTPCode(secret, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,5 +206,190 @@ func TestAccountTOTPModeTransitions(t *testing.T) {
 	u, _ = db.AuthUserByUsername(f.h, f.username)
 	if u.TOTPMode != "" {
 		t.Fatalf("mode after password-only = %q", u.TOTPMode)
+	}
+}
+
+func TestAccountTOTPEnrollConfirmRequirePassword(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, f.username, testPassword)
+	post := func(path string, values url.Values) *httptest.ResponseRecorder {
+		values.Set(auth.CSRFFieldName, f.csrf)
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(values.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
+		rec := httptest.NewRecorder()
+		f.server.ServeHTTP(rec, req)
+		return rec
+	}
+	enroll := post("/account/totp/enroll", url.Values{})
+	if enroll.Code != http.StatusBadRequest || enroll.Body.String() != accountError+"\n" {
+		t.Fatalf("enroll without password = %d %q", enroll.Code, enroll.Body.String())
+	}
+	if _, ok := f.server.pendingTOTP[f.username]; ok {
+		t.Fatal("enroll without password must not store a pending secret")
+	}
+	if rec := post("/account/totp/enroll", url.Values{"password": {testPassword}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("enroll with password = %d", rec.Code)
+	}
+	secret := f.server.pendingTOTP[f.username]
+	code, err := auth.TOTPCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirm := post("/account/totp/confirm", url.Values{"code": {code}})
+	if confirm.Code != http.StatusBadRequest || confirm.Body.String() != accountError+"\n" {
+		t.Fatalf("confirm without password = %d %q", confirm.Code, confirm.Body.String())
+	}
+	u, _ := db.AuthUserByUsername(f.h, f.username)
+	if u.TOTPSecret != "" || u.TOTPMode != "" {
+		t.Fatalf("confirm without password stored TOTP: %+v", u)
+	}
+}
+
+func TestAccountTOTPEnrollRefusesExistingSecret(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, f.username, testPassword)
+	existing := configureTOTPUser(t, f, f.username, "2fa")
+	form := url.Values{"password": {testPassword}, auth.CSRFFieldName: {f.csrf}}
+	req := httptest.NewRequest(http.MethodPost, "/account/totp/enroll", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != accountError+"\n" {
+		t.Fatalf("enroll with existing secret = %d %q", rec.Code, rec.Body.String())
+	}
+	u, _ := db.AuthUserByUsername(f.h, f.username)
+	if u.TOTPSecret != existing {
+		t.Fatalf("existing secret replaced: %q", u.TOTPSecret)
+	}
+	if _, ok := f.server.pendingTOTP[f.username]; ok {
+		t.Fatal("enroll must not stage a replacement secret")
+	}
+
+	pending, err := auth.NewTOTPSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.server.pendingTOTP[f.username] = pending
+	code, err := auth.TOTPCode(pending, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmForm := url.Values{"password": {testPassword}, "code": {code}, auth.CSRFFieldName: {f.csrf}}
+	creq := httptest.NewRequest(http.MethodPost, "/account/totp/confirm", strings.NewReader(confirmForm.Encode()))
+	creq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	creq.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
+	crec := httptest.NewRecorder()
+	f.server.ServeHTTP(crec, creq)
+	if crec.Code != http.StatusBadRequest {
+		t.Fatalf("confirm replace existing secret = %d", crec.Code)
+	}
+	u, _ = db.AuthUserByUsername(f.h, f.username)
+	if u.TOTPSecret != existing {
+		t.Fatalf("confirm replaced secret: %q", u.TOTPSecret)
+	}
+}
+
+func TestAccountTOTPConfirmEnforcesLoginTOTP(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, f.username, testPassword)
+	post := func(path string, values url.Values) *httptest.ResponseRecorder {
+		values.Set(auth.CSRFFieldName, f.csrf)
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(values.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
+		rec := httptest.NewRecorder()
+		f.server.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := post("/account/totp/enroll", url.Values{"password": {testPassword}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("enroll = %d", rec.Code)
+	}
+	secret := f.server.pendingTOTP[f.username]
+	code, err := auth.TOTPCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := post("/account/totp/confirm", url.Values{"password": {testPassword}, "code": {code}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("confirm = %d", rec.Code)
+	}
+	u, _ := db.AuthUserByUsername(f.h, f.username)
+	if u.TOTPMode != "2fa" || u.TOTPSecret == "" {
+		t.Fatalf("after confirm: mode=%q secret empty=%t", u.TOTPMode, u.TOTPSecret == "")
+	}
+	login := httptest.NewRecorder()
+	f.server.ServeHTTP(login, loginForm(t, f.username, testPassword))
+	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), "Неверный код.") {
+		t.Fatalf("password-only login after confirm = %d %q", login.Code, login.Body.String())
+	}
+	if sessionCookie(t, login) != nil {
+		t.Fatal("password-only login must not issue a session after 2FA confirm")
+	}
+	totp, err := auth.TOTPCode(u.TOTPSecret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	okLogin := httptest.NewRecorder()
+	f.server.ServeHTTP(okLogin, loginFields(t, url.Values{"username": {f.username}, "password": {testPassword}, "code": {totp}}))
+	if okLogin.Code != http.StatusSeeOther || sessionCookie(t, okLogin) == nil {
+		t.Fatalf("password+TOTP login after confirm = %d", okLogin.Code)
+	}
+}
+
+func TestAccountPasswordChangePasswordlessRequiresCode(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, f.username, testPassword)
+	secret := configureTOTPUser(t, f, f.username, "passwordless")
+	page := httptest.NewRecorder()
+	preq := httptest.NewRequest(http.MethodGet, "/account", nil)
+	preq.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
+	f.server.ServeHTTP(page, preq)
+	if !strings.Contains(page.Body.String(), `action="/account/password"`) || !strings.Contains(page.Body.String(), `name="code"`) {
+		t.Fatal("password-change form must include a TOTP code field in passwordless mode")
+	}
+	post := func(values url.Values) *httptest.ResponseRecorder {
+		values.Set(auth.CSRFFieldName, f.csrf)
+		req := httptest.NewRequest(http.MethodPost, "/account/password", strings.NewReader(values.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
+		rec := httptest.NewRecorder()
+		f.server.ServeHTTP(rec, req)
+		return rec
+	}
+	missing := post(url.Values{"old_password": {testPassword}, "new_password": {"new-password"}, "confirm_password": {"new-password"}})
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("passwordless change without code = %d", missing.Code)
+	}
+	code, err := auth.TOTPCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := post(url.Values{"old_password": {testPassword}, "new_password": {"new-password"}, "confirm_password": {"new-password"}, "code": {code}})
+	if ok.Code != http.StatusSeeOther {
+		t.Fatalf("passwordless change with code = %d", ok.Code)
+	}
+	row, _ := db.AuthUserByUsername(f.h, f.username)
+	if !auth.VerifyPassword("new-password", row.PasswordHash) {
+		t.Fatal("passwordless change with code did not store new password")
+	}
+}
+
+func TestAccountTOTPModeRequiresCodeWhenEnabling2FA(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, f.username, testPassword)
+	configureTOTPUser(t, f, f.username, "")
+	form := url.Values{"mode": {"2fa"}, "password": {testPassword}, auth.CSRFFieldName: {f.csrf}}
+	req := httptest.NewRequest(http.MethodPost, "/account/totp/mode", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("enable 2fa without TOTP = %d", rec.Code)
+	}
+	u, _ := db.AuthUserByUsername(f.h, f.username)
+	if u.TOTPMode != "" {
+		t.Fatalf("mode changed without TOTP: %q", u.TOTPMode)
 	}
 }

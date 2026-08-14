@@ -90,6 +90,11 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) totpEnroll(w http.ResponseWriter, r *http.Request) {
 	sess, _ := auth.CurrentUser(r.Context())
+	u, err := db.AuthUserByUsername(s.db(), sess.Username)
+	if err != nil || !auth.VerifyPassword(r.PostForm.Get("password"), u.PasswordHash) || u.TOTPSecret != "" {
+		s.redirectAccountError(w)
+		return
+	}
 	secret, err := auth.NewTOTPSecret()
 	if err != nil {
 		s.errorPage(w, 500)
@@ -103,6 +108,11 @@ func (s *Server) totpEnroll(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) totpConfirm(w http.ResponseWriter, r *http.Request) {
 	sess, _ := auth.CurrentUser(r.Context())
+	u, err := db.AuthUserByUsername(s.db(), sess.Username)
+	if err != nil || !auth.VerifyPassword(r.PostForm.Get("password"), u.PasswordHash) || u.TOTPSecret != "" {
+		s.redirectAccountError(w)
+		return
+	}
 	s.mutex.Lock()
 	secret := s.pendingTOTP[sess.Username]
 	s.mutex.Unlock()
@@ -111,6 +121,10 @@ func (s *Server) totpConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.SetTotpSecret(s.db(), sess.Username, secret); err != nil {
+		s.redirectAccountError(w)
+		return
+	}
+	if err := db.SetTotpMode(s.db(), sess.Username, "2fa"); err != nil {
 		s.redirectAccountError(w)
 		return
 	}
@@ -139,7 +153,8 @@ func (s *Server) totpMode(w http.ResponseWriter, r *http.Request) {
 	sess, _ := auth.CurrentUser(r.Context())
 	u, err := db.AuthUserByUsername(s.db(), sess.Username)
 	mode := r.PostForm.Get("mode")
-	if err != nil || u.TOTPSecret == "" || !auth.VerifyPassword(r.PostForm.Get("password"), u.PasswordHash) || (u.TOTPMode != "" && !auth.VerifyTOTP(u.TOTPSecret, r.PostForm.Get("code"), time.Now())) {
+	needTOTP := u.TOTPSecret != "" && (u.TOTPMode != "" || mode == "2fa" || mode == "passwordless")
+	if err != nil || u.TOTPSecret == "" || !auth.VerifyPassword(r.PostForm.Get("password"), u.PasswordHash) || (needTOTP && !auth.VerifyTOTP(u.TOTPSecret, r.PostForm.Get("code"), time.Now())) {
 		s.redirectAccountError(w)
 		return
 	}
