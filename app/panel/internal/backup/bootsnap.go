@@ -70,6 +70,14 @@ func BootSnapshot(dbPath string) (string, error) {
 	}
 	handle, err := sql.Open("sqlite", dbPath)
 	if err == nil {
+		// T-115 rework: VACUUM INTO contends with an active writer;
+		// without a busy timeout the snapshot dies with SQLITE_BUSY
+		// exactly when the live database is being written.
+		if _, err = handle.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+			handle.Close()
+		}
+	}
+	if err == nil {
 		if err = fault("snap.open"); err != nil {
 			handle.Close()
 		}
