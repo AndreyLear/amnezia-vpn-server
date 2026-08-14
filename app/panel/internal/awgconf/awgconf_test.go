@@ -190,6 +190,8 @@ func TestParseParamsValidation(t *testing.T) {
 		{"r no arg", `{"i1":"<r>"}`, "missing size argument"},
 		{"r bad number", `{"i1":"<r 3.5>"}`, "invalid size"},
 		{"r negative", `{"i1":"<r -3>"}`, "negative size"},
+		{"i1 newline injection", "{\"i1\":\"\\nPreUp = /bin/true\"}", "control character"},
+		{"i1 cr injection", "{\"i1\":\"\\rPostUp = /bin/true\"}", "control character"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,6 +243,10 @@ func TestValidateServer(t *testing.T) {
 	}
 	if err := ValidateServer(ServerConfig{PrivateKey: testKey(1), Address: "not-a-cidr", ListenPort: 51820}); err == nil {
 		t.Fatal("ValidateServer(bad CIDR): expected error")
+	}
+	injected := ServerConfig{PrivateKey: testKey(1), Address: "10.8.0.1/24", ListenPort: 51820, DNS: "1.1.1.1\nPostUp = /bin/true"}
+	if err := ValidateServer(injected); err == nil {
+		t.Fatal("ValidateServer(DNS newline): expected error")
 	}
 }
 

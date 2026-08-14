@@ -59,6 +59,9 @@ func ValidateClient(c ClientConfig) error {
 	if _, _, err := net.ParseCIDR(c.Address); err != nil {
 		return fmt.Errorf("invalid client address %q: not a CIDR network", c.Address)
 	}
+	if err := validateDNS(c.DNS); err != nil {
+		return err
+	}
 	if err := validateEndpoint(c.Endpoint); err != nil {
 		return err
 	}
@@ -68,6 +71,9 @@ func ValidateClient(c ClientConfig) error {
 // validateEndpoint requires a host:port pair with a numeric non-zero
 // port. The endpoint is not secret and may appear in errors.
 func validateEndpoint(endpoint string) error {
+	if err := rejectConfControls(endpoint, "endpoint"); err != nil {
+		return err
+	}
 	if endpoint == "" {
 		return fmt.Errorf("endpoint is empty, want host:port")
 	}

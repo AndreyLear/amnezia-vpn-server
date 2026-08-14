@@ -229,6 +229,9 @@ func validateHeaderSpec(spec string) error {
 // validateObfChain accepts a sequence of <tag ...> blocks. Text outside
 // tags is ignored. Tags must match pinned amneziawg-tools 1.0.20260223.
 func validateObfChain(spec string) error {
+	if err := rejectConfControls(spec, "obf chain"); err != nil {
+		return err
+	}
 	remaining := spec
 	for {
 		start := strings.IndexByte(remaining, '<')
@@ -309,6 +312,39 @@ func ValidateServer(s ServerConfig) error {
 	}
 	if _, _, err := net.ParseCIDR(s.Address); err != nil {
 		return fmt.Errorf("invalid address %q: not a CIDR network", s.Address)
+	}
+	if err := validateDNS(s.DNS); err != nil {
+		return err
+	}
+	return nil
+}
+
+// rejectConfControls refuses CR/LF and other ASCII controls so a value
+// cannot become an extra awg-quick key (PreUp/PostUp) when rendered.
+func rejectConfControls(s, what string) error {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == 0x7f {
+			return fmt.Errorf("awg_params %s contains a control character", what)
+		}
+	}
+	return nil
+}
+
+// validateDNS requires a comma-separated list of IP addresses (IPv4 or
+// IPv6), matching CLI --dns. Empty is allowed (omit the DNS line).
+func validateDNS(dns string) error {
+	if dns == "" {
+		return nil
+	}
+	if err := rejectConfControls(dns, "dns"); err != nil {
+		return err
+	}
+	for _, part := range strings.Split(dns, ",") {
+		part = strings.TrimSpace(part)
+		if net.ParseIP(part) == nil {
+			return fmt.Errorf("invalid dns %q: %q is not an IP address", dns, part)
+		}
 	}
 	return nil
 }

@@ -358,3 +358,35 @@ func TestWriteAtomicTempCreateFailure(t *testing.T) {
 		t.Fatal("target exists after failed create")
 	}
 }
+
+func TestGenerateRejectsDNSLineInjection(t *testing.T) {
+	handle, dir := newTestDB(t)
+	seedServer(t, handle, `{"jc":3,"h1":"1234567","i1":"<t>"}`, "1.1.1.1\nPostUp = /bin/true")
+	target := filepath.Join(dir, "awg0.conf")
+	err := Generate(handle, target)
+	if err == nil {
+		t.Fatal("Generate: expected DNS injection to fail")
+	}
+	if !strings.Contains(err.Error(), "control character") {
+		t.Fatalf("error = %q, want control character", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatal("awg0.conf must not be written on injection")
+	}
+}
+
+func TestGenerateRejectsObfLineInjection(t *testing.T) {
+	handle, dir := newTestDB(t)
+	seedServer(t, handle, "{\"i1\":\"\\nPreUp = /bin/true\"}", "")
+	target := filepath.Join(dir, "awg0.conf")
+	err := Generate(handle, target)
+	if err == nil {
+		t.Fatal("Generate: expected I1 injection to fail")
+	}
+	if !strings.Contains(err.Error(), "control character") {
+		t.Fatalf("error = %q, want control character", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatal("awg0.conf must not be written on injection")
+	}
+}
