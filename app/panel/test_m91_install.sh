@@ -221,7 +221,36 @@ touch "${FAKE_FS}/certbot-ok"
 exit 0
 FAKE_EOF
 
-chmod +x "$FAKE_DIR/curl" "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot"
+# T-124 fakes: openssl req generates the self-signed pair into the
+# requested paths, openssl x509 answers the sha256 fingerprint.
+cat > "$FAKE_DIR/openssl" <<'FAKE_EOF'
+#!/bin/bash
+echo "openssl $*" >> "${FAKE_CALLS:?}"
+if [ "${1:-}" = "req" ]; then
+    key=""; out=""
+    prev=""
+    for a in "$@"; do
+        case "$prev" in
+            -keyout) key="$a" ;;
+            -out) out="$a" ;;
+        esac
+        prev="$a"
+    done
+    [ -n "$key" ] && [ -n "$out" ] || exit 1
+    mkdir -p "$(dirname "$key")" "$(dirname "$out")"
+    printf 'FAKE-PRIVATE-KEY\n' > "$key"
+    printf 'FAKE-CERTIFICATE\n' > "$out"
+    exit 0
+fi
+if [ "${1:-}" = "x509" ]; then
+    printf '%s\n' \
+        "SHA256 Fingerprint=AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67"
+    exit 0
+fi
+exit 0
+FAKE_EOF
+
+chmod +x "$FAKE_DIR/curl" "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot" "$FAKE_DIR/openssl"
 
 chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl"
 
@@ -645,6 +674,9 @@ test_domain_mode_flow() {
         || fail "domain: nft 80/443 accept missing"
     grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "domain: https hint printed" || fail "domain: https hint missing"
     grep -q "ssh -L 8787" "$TMP_TEST/out" && fail "domain: SSH tunnel hint still printed" || pass "domain: SSH hint replaced by https"
+    grep -q "AMNEZIA_SECURE_COOKIES=1" "$ROOT/.env" && pass "domain: AMNEZIA_SECURE_COOKIES=1 in .env" \
+        || fail "domain: AMNEZIA_SECURE_COOKIES missing from .env"
+    if grep -q "openssl" "$FAKE_CALLS"; then fail "domain: openssl was invoked (LE must win)"; else pass "domain: no self-signed certificate"; fi
 }
 
 test_domain_dns_mismatch() {
@@ -689,6 +721,147 @@ test_domain_invalid_fqdn() {
         [ "$rc" = "2" ] || fail "invalid domain '$bad': exit $rc, want 2 (usage)"
     done
     pass "invalid --domain values rejected (exit 2)"
+}
+
+# --- T-124: panel IP:port mode (self-signed TLS) ------------------------
+
+test_panel_port_mode_flow() {
+    # IP mode: openssl generates the pair (key 0600), nginx terminates
+    # TLS on the chosen port and proxies to the loopback panel, nftables
+    # opens tcp 8443 ONLY in this mode, the summary prints the https
+    # URL + sha256 fingerprint, .env carries AMNEZIA_SECURE_COOKIES=1,
+    # and neither dig nor certbot are involved.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "panel-port flow: exit $rc"
+    grep -q "openssl req -x509" "$FAKE_CALLS" && pass "panel-port: openssl req invoked" \
+        || fail "panel-port: openssl req not invoked"
+    grep -q -- "-days 825" "$FAKE_CALLS" && pass "panel-port: ~825-day certificate" \
+        || fail "panel-port: certificate lifetime argument missing"
+    [ -f "$ROOT/tls/panel.crt" ] && [ -f "$ROOT/tls/panel.key" ] \
+        && pass "panel-port: cert+key under the deployment root" \
+        || fail "panel-port: cert/key missing"
+    mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
+    [ "$(mode "$ROOT/tls/panel.key")" = "600" ] && pass "panel-port: TLS key 0600" \
+        || fail "panel-port: TLS key perms: $(mode "$ROOT/tls/panel.key")"
+    grep -q "listen 8443 ssl" "$ROOT/nginx/panel.conf" && pass "panel-port: nginx listens 8443 ssl" \
+        || fail "panel-port: nginx listen missing"
+    grep -q "ssl_certificate $ROOT/tls/panel.crt" "$ROOT/nginx/panel.conf" && pass "panel-port: nginx uses the self-signed cert" \
+        || fail "panel-port: nginx cert directive missing"
+    grep -q "proxy_pass http://127.0.0.1:8787" "$ROOT/nginx/panel.conf" && pass "panel-port: proxy to loopback panel" \
+        || fail "panel-port: proxy missing"
+    grep -qE "^[[:space:]]*tcp dport 8443 accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "panel-port: tcp 8443 accept in the managed ruleset" \
+        || fail "panel-port: nft 8443 accept missing"
+    if grep -qE "dport (80|443)" "$ROOT/nftables/amnezia-vpn.nft"; then fail "panel-port: 80/443 must not be opened"; else pass "panel-port: 80/443 stay closed"; fi
+    grep -q "https://2.26.93.192:8443" "$TMP_TEST/out" && pass "panel-port: https://ip:port printed" \
+        || fail "panel-port: https URL missing from the summary"
+    grep -q "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89" "$TMP_TEST/out" \
+        && pass "panel-port: sha256 fingerprint in the summary" \
+        || fail "panel-port: fingerprint missing from the summary"
+    grep -q "ssh -L 8787" "$TMP_TEST/out" && fail "panel-port: SSH tunnel hint still printed" \
+        || pass "panel-port: SSH hint replaced by https"
+    grep -q "AMNEZIA_SECURE_COOKIES=1" "$ROOT/.env" && pass "panel-port: AMNEZIA_SECURE_COOKIES=1 in .env" \
+        || fail "panel-port: AMNEZIA_SECURE_COOKIES missing from .env"
+    if grep -q "certbot" "$FAKE_CALLS"; then fail "panel-port: certbot was invoked"; else pass "panel-port: certbot not invoked"; fi
+    if grep -q "dig " "$FAKE_CALLS"; then fail "panel-port: dig was invoked"; else pass "panel-port: dig not invoked"; fi
+}
+
+test_panel_port_loopback_matrix() {
+    # Loopback mode (no flags): no tcp panel rule in nft, no openssl,
+    # no AMNEZIA_SECURE_COOKIES in .env, SSH hint kept.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "panel-port loopback flow: exit $rc"
+    if grep -qE "^[[:space:]]*tcp dport" "$ROOT/nftables/amnezia-vpn.nft"; then
+        fail "loopback: a tcp panel port was opened in nftables"
+    else
+        pass "loopback: no tcp panel port in nftables"
+    fi
+    if grep -q "openssl" "$FAKE_CALLS"; then fail "loopback: openssl was invoked"; else pass "loopback: openssl not invoked"; fi
+    if grep -q "AMNEZIA_SECURE_COOKIES" "$ROOT/.env"; then fail "loopback: AMNEZIA_SECURE_COOKIES in .env"; else pass "loopback: no AMNEZIA_SECURE_COOKIES in .env"; fi
+    grep -q "ssh -L 8787" "$TMP_TEST/out" && pass "loopback: SSH tunnel hint kept" \
+        || fail "loopback: SSH hint missing"
+}
+
+test_panel_port_invalid_values() {
+    fakes_reset
+    os_release debian 12 bookworm
+    for bad in 0 65536 abc ""; do
+        rc="$(run_install --panel-port "$bad")"
+        [ "$rc" = "2" ] || fail "invalid panel port '$bad': exit $rc, want 2"
+    done
+    pass "invalid --panel-port values rejected (exit 2)"
+    rc="$(run_install --domain panel.example.com --panel-port 8443)"
+    [ "$rc" = "2" ] || fail "domain+panel-port conflict: exit $rc, want 2"
+    pass "--domain + --panel-port conflict rejected (exit 2)"
+    rc="$(run_install --panel-tls-regen)"
+    [ "$rc" = "2" ] || fail "--panel-tls-regen without --panel-port: exit $rc, want 2"
+    pass "--panel-tls-regen without --panel-port rejected (exit 2)"
+}
+
+test_panel_port_idempotent() {
+    # Second run keeps the certificate (single openssl req overall),
+    # the nft rule stays unique, and .env keeps exactly one cookie line.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "panel-port idempotence: first pass exit $rc"
+    cert_before="$(cat "$ROOT/tls/panel.crt")"
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "panel-port idempotence: second pass exit $rc"
+    [ "$(grep -c "openssl req" "$FAKE_CALLS")" = "1" ] \
+        && pass "panel-port idempotence: certificate generated once" \
+        || fail "panel-port idempotence: certificate regenerated (openssl req count != 1)"
+    [ "$(cat "$ROOT/tls/panel.crt")" = "$cert_before" ] && pass "panel-port idempotence: cert content kept" \
+        || fail "panel-port idempotence: cert content changed"
+    [ "$(grep -c "tcp dport 8443" "$ROOT/nftables/amnezia-vpn.nft")" = "1" ] \
+        && pass "panel-port idempotence: single nft rule" \
+        || fail "panel-port idempotence: nft rule duplicated"
+    [ "$(grep -c "AMNEZIA_SECURE_COOKIES" "$ROOT/.env")" = "1" ] \
+        && pass "panel-port idempotence: single cookie line in .env" \
+        || fail "panel-port idempotence: cookie line duplicated"
+}
+
+test_panel_port_regen_flag() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "panel-port regen: first pass exit $rc"
+    rc="$(run_install --panel-port 8443 --panel-tls-regen)"
+    [ "$rc" = "0" ] || fail "panel-port regen: forced pass exit $rc"
+    [ "$(grep -c "openssl req" "$FAKE_CALLS")" = "2" ] \
+        && pass "panel-port regen: --panel-tls-regen forced a fresh certificate" \
+        || fail "panel-port regen: certificate not regenerated (openssl req count != 2)"
+}
+
+test_panel_port_switch_back_to_loopback() {
+    # Mode convergence: a rerun without --panel-port closes the port in
+    # nftables, drops AMNEZIA_SECURE_COOKIES from .env and restores the
+    # SSH hint; the certificate file itself is left on disk (managed
+    # data, not application state).
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "panel-port switchback: first pass exit $rc"
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "panel-port switchback: second pass exit $rc"
+    if grep -qE "^[[:space:]]*tcp dport 8443" "$ROOT/nftables/amnezia-vpn.nft"; then
+        fail "panel-port switchback: 8443 still open in nftables"
+    else
+        pass "panel-port switchback: 8443 closed in nftables"
+    fi
+    if grep -q "AMNEZIA_SECURE_COOKIES" "$ROOT/.env"; then
+        fail "panel-port switchback: AMNEZIA_SECURE_COOKIES still in .env"
+    else
+        pass "panel-port switchback: AMNEZIA_SECURE_COOKIES removed from .env"
+    fi
+    grep -q "ssh -L 8787" "$TMP_TEST/out" && pass "panel-port switchback: SSH hint restored" \
+        || fail "panel-port switchback: SSH hint missing"
+    [ -f "$ROOT/tls/panel.crt" ] && pass "panel-port switchback: cert file left on disk" \
+        || fail "panel-port switchback: cert file was deleted"
 }
 
 test_doctor_failure() {
@@ -774,6 +947,12 @@ test_domain_dns_mismatch
 test_domain_dns_missing
 test_domain_certbot_failure
 test_domain_invalid_fqdn
+test_panel_port_mode_flow
+test_panel_port_loopback_matrix
+test_panel_port_invalid_values
+test_panel_port_idempotent
+test_panel_port_regen_flag
+test_panel_port_switch_back_to_loopback
 test_doctor_failure
 test_ssh_hint
 test_secrets_absent

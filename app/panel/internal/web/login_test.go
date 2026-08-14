@@ -87,6 +87,7 @@ func TestLoginPageRendersForm(t *testing.T) {
 }
 
 func TestLoginSuccess(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
 	f := newFixture(t)
 	addUser(t, f, "alice", testPassword)
 

@@ -45,6 +45,18 @@
 #                   proxy + certbot, ports 80/443 opened in the managed
 #                   nftables table only in this mode). Without it the
 #                   panel stays loopback-only with an SSH tunnel hint.
+#   --panel-port PORT  panel IP:port mode without a domain (T-124):
+#                   serves the panel on https://<server-ip>:PORT behind
+#                   nginx with a self-signed TLS certificate generated
+#                   once into the deployment root (openssl, CN=<public
+#                   ip>, ~825 days, key 0600); the managed nftables
+#                   table opens tcp PORT only in this mode and the
+#                   summary prints the certificate fingerprint (sha256)
+#                   for verification. Not persisted: a rerun without
+#                   the flag returns the panel to loopback-only.
+#                   Mutually exclusive with --domain.
+#   --panel-tls-regen  with --panel-port: force a fresh self-signed
+#                   certificate instead of keeping an existing one.
 #   --help          usage
 #
 # Testability hooks (environment, not arguments):
@@ -77,9 +89,10 @@
 #
 # Security contract: no secrets are ever accepted, logged or printed;
 # .env is created only when absent, with 0600; the panel stays
-# loopback-only (127.0.0.1:8787:8787) and is never published; nftables
-# application never flushes the ruleset, never drops SSH, and is
-# syntax-checked before it is applied.
+# loopback-only (127.0.0.1:8787:8787) and is never published; the
+# self-signed TLS key of the IP:port mode is created 0600 and its
+# value is never printed; nftables application never flushes the
+# ruleset, never drops SSH, and is syntax-checked before it is applied.
 
 set -u
 
@@ -108,6 +121,7 @@ install.sh — M9 deployment of the AmneziaWG VPN Server stack.
 
 Usage:
   ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR] [--domain FQDN]
+               [--panel-port PORT] [--panel-tls-regen]
 
 Options:
   --root DIR        deployment root (default: /opt/amnezia-vpn)
@@ -119,6 +133,15 @@ Options:
                     provisions HTTPS (nginx + Let's Encrypt) and opens
                     tcp 80/443 in the managed ruleset; without it the
                     panel stays loopback-only (SSH tunnel hint)
+  --panel-port PORT panel without a domain: https://<server-ip>:PORT
+                    with a self-signed TLS certificate (nginx reverse
+                    proxy; opens tcp PORT in the managed ruleset only
+                    in this mode; the sha256 fingerprint is printed in
+                    the summary). Not persisted — rerun without the
+                    flag returns the panel to loopback-only.
+                    Mutually exclusive with --domain.
+  --panel-tls-regen with --panel-port: force a fresh self-signed
+                    certificate (by default an existing one is kept)
   --help            print this message
 
 Installs only supported OSes (Debian 12, Ubuntu 22.04, Ubuntu 24.04),
@@ -141,7 +164,8 @@ die() {
 die_usage() { die "$FAIL_STYLE_USAGE" "$1"; }
 die_op() { die "$FAIL_STYLE_OP" "$1"; }
 
-# --- argument parsing (only --root, --awg-port, --vpn-subnet, --help) --
+# --- argument parsing (only --root, --awg-port, --vpn-subnet, --domain,
+# --- --panel-port, --panel-tls-regen, --help) ---------------------------
 
 validate_port() {
     [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null
@@ -177,6 +201,9 @@ AWG_PORT_SET=0
 VPN_SUBNET_SET=0
 DOMAIN_SET=0
 DOMAIN="${DOMAIN:-}"
+PANEL_PORT_SET=0
+PANEL_PORT=""
+PANEL_TLS_REGEN=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -206,6 +233,16 @@ while [ "$#" -gt 0 ]; do
             DOMAIN="$2"
             DOMAIN_SET=1
             shift 2
+            ;;
+        --panel-port)
+            [ "$#" -ge 2 ] || die_usage "--panel-port requires a port argument"
+            PANEL_PORT="$2"
+            PANEL_PORT_SET=1
+            shift 2
+            ;;
+        --panel-tls-regen)
+            PANEL_TLS_REGEN=1
+            shift
             ;;
         *)
             die_usage "unknown argument: $1"
@@ -245,6 +282,16 @@ validate_fqdn() {
 
 if [ "$DOMAIN_SET" = "1" ]; then
     validate_fqdn "$DOMAIN" || die_usage "--domain must be a valid FQDN (labels of letters/digits/hyphens; got: $DOMAIN)"
+fi
+
+if [ "$PANEL_PORT_SET" = "1" ]; then
+    validate_port "$PANEL_PORT" || die_usage "--panel-port must be an integer in 1..65535 (got: $PANEL_PORT)"
+fi
+if [ "$DOMAIN_SET" = "1" ] && [ "$PANEL_PORT_SET" = "1" ]; then
+    die_usage "--domain and --panel-port are mutually exclusive: --domain uses Let's Encrypt on 80/443, --panel-port serves a self-signed certificate on the given port"
+fi
+if [ "$PANEL_TLS_REGEN" = "1" ] && [ "$PANEL_PORT_SET" = "0" ]; then
+    die_usage "--panel-tls-regen requires --panel-port"
 fi
 
 # --- root requirement (skipped in test mode only) ---------------------
@@ -436,6 +483,22 @@ env_read() { # env_read KEY — value of KEY in the deployment .env, ""
     sed -n "s/^${1}=//p" "$ROOT_DIR/$ENV_FILE" 2>/dev/null | tail -1
 }
 
+env_set() { # env_set KEY VALUE — update or append one line, keep the rest
+    local file="$ROOT_DIR/$ENV_FILE"
+    if grep -q "^${1}=" "$file"; then
+        sed "s|^${1}=.*|${1}=${2}|" "$file" > "$file.new" && mv -f "$file.new" "$file"
+    else
+        printf '%s=%s\n' "$1" "$2" >> "$file"
+    fi
+    chmod 0600 "$file"
+}
+
+env_unset() { # env_unset KEY — remove one line, keep the rest
+    local file="$ROOT_DIR/$ENV_FILE"
+    sed "/^${1}=/d" "$file" > "$file.new" && mv -f "$file.new" "$file"
+    chmod 0600 "$file"
+}
+
 if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
     log "$ENV_FILE already exists under $ROOT_DIR: keeping it untouched"
     # deployment-specific values may live only in .env: the flags of
@@ -460,6 +523,20 @@ VPN_SUBNET=${VPN_SUBNET}
 EOF
     chmod 0600 "$ROOT_DIR/$ENV_FILE"
     log "$ENV_FILE created with AWG_PORT=${AWG_PORT}, VPN_SUBNET=${VPN_SUBNET} (0600)"
+fi
+
+# T-124: the session cookie carries Secure only when the panel is
+# reachable over TLS (--domain or --panel-port mode). The panel reads
+# AMNEZIA_SECURE_COOKIES=1 from this file; in loopback mode the line
+# must be absent again (a Secure cookie would never be sent back over
+# plain HTTP and login would break). Additive: only this one line is
+# ever touched here.
+if [ -n "$DOMAIN" ] || [ -n "$PANEL_PORT" ]; then
+    env_set AMNEZIA_SECURE_COOKIES 1
+    log "AMNEZIA_SECURE_COOKIES=1 set in $ENV_FILE (TLS panel mode)"
+elif grep -q '^AMNEZIA_SECURE_COOKIES=' "$ROOT_DIR/$ENV_FILE"; then
+    env_unset AMNEZIA_SECURE_COOKIES
+    log "AMNEZIA_SECURE_COOKIES removed from $ENV_FILE (loopback panel mode)"
 fi
 
 # --- 11. host networking: managed nftables ruleset (M9.2) --------------
@@ -494,20 +571,13 @@ vpn_subnet_effective() {
 # what the ТЗ §9 contract needs: NAT for vpn subnet -> WAN (never to
 # the tunnel itself), forwarding in both directions for the subnet,
 # UDP AWG_PORT acceptance. No policies, no drops: SSH and all foreign
-# traffic are untouched by construction. With a panel domain (T-121)
-# the input chain also accepts tcp 80/443 for the HTTPS reverse proxy —
-# additively and only in domain mode; loopback-only installs never
-# open them.
+# traffic are untouched by construction. $3 carries pre-rendered extra
+# input-chain accepts, additively and only for a panel TLS mode: with
+# a panel domain (T-121) tcp 80/443 for the HTTPS reverse proxy, with
+# --panel-port (T-124) only that tcp port. Loopback-only installs
+# never open any of them.
 render_nftables() {
-    local domain_rules=""
-    if [ -n "${3:-}" ]; then
-        domain_rules=$(
-            cat <<'RULES'
-        tcp dport 80 accept
-        tcp dport 443 accept
-RULES
-        )
-    fi
+    local input_rules="${3:-}"
     cat <<EOF
 # Amnezia VPN managed nftables fragment (M9.2) — generated by install.sh.
 # Do not edit; rerun install.sh to regenerate. Applies idempotently in a
@@ -528,7 +598,7 @@ table ip amnezia {
     chain input {
         type filter hook input priority -100; policy accept;
         udp dport $2 accept
-${domain_rules}
+${input_rules}
     }
 
     chain postrouting {
@@ -614,15 +684,30 @@ net_setup() {
         cmd apt-get install -y nftables || die_op "apt-get install nftables failed"
     fi
 
-    local subnet port
+    local subnet port input_rules
     subnet="$(vpn_subnet_effective)"
     validate_cidr "$subnet" || die_op "effective VPN subnet is invalid: $subnet"
     port="$AWG_PORT"
     validate_port "$port" || die_op "effective AWG port is invalid: $port"
 
+    # Panel TLS modes open their tcp ports additively and ONLY in that
+    # mode (T-121: 80/443 for the domain proxy; T-124: the chosen port
+    # for the self-signed IP mode). Loopback-only installs add nothing.
+    input_rules=""
+    if [ -n "$DOMAIN" ]; then
+        input_rules=$(
+            cat <<'RULES'
+        tcp dport 80 accept
+        tcp dport 443 accept
+RULES
+        )
+    elif [ -n "$PANEL_PORT" ]; then
+        input_rules="        tcp dport ${PANEL_PORT} accept"
+    fi
+
     mkdir -p "$NFT_DEPLOY_DIR" || die_op "cannot create $NFT_DEPLOY_DIR"
     chmod 0750 "$NFT_DEPLOY_DIR"
-    render_nftables_deploy "$subnet" "$port" "$DOMAIN" > "$NFT_DEPLOY_FILE"
+    render_nftables_deploy "$subnet" "$port" "$input_rules" > "$NFT_DEPLOY_FILE"
     chmod 0644 "$NFT_DEPLOY_FILE"
 
     mkdir -p "$NFTABLES_DIR" || die_op "cannot create $NFTABLES_DIR"
@@ -857,6 +942,109 @@ domain_setup() {
 
 domain_setup
 
+# --- 13c. panel IP:port mode: self-signed TLS (T-124) ------------------
+# No domain, but --panel-port given: the panel stays loopback-only in
+# compose; nginx terminates TLS in front of it with a self-signed
+# certificate (Let's Encrypt does not issue for bare IPs) and proxies
+# to 127.0.0.1:8787. The managed nftables table opens tcp PANEL_PORT
+# only in this mode (net_setup). The certificate (RSA 2048, CN=<public
+# ip>, ~825 days, key 0600) lives in the deployment root and is
+# generated once: a rerun keeps it, --panel-tls-regen forces a fresh
+# one. Without --panel-port this whole section is a no-op.
+#
+# The summary prints the sha256 fingerprint: browsers reject the
+# untrusted certificate once and the operator verifies the fingerprint
+# before proceeding.
+
+PANEL_TLS_DIR="$ROOT_DIR/tls"
+PANEL_TLS_CERT="$PANEL_TLS_DIR/panel.crt"
+PANEL_TLS_KEY="$PANEL_TLS_DIR/panel.key"
+PANEL_TLS_IP=""
+PANEL_TLS_FINGERPRINT=""
+
+render_nginx_ip_conf() { # render_nginx_ip_conf PORT CERT KEY
+    cat <<EOF
+# Amnezia VPN panel reverse proxy (T-124) — managed by install.sh.
+# The panel stays loopback-only (127.0.0.1:8787); TLS terminates here
+# with the self-signed certificate.
+server {
+    listen $1 ssl;
+    listen [::]:$1 ssl;
+    ssl_certificate $2;
+    ssl_certificate_key $3;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+}
+
+panel_port_setup() {
+    [ -n "$PANEL_PORT" ] || return 0
+
+    log "panel IP:port mode: nginx TLS on port $PANEL_PORT (self-signed)"
+    if ! command -v openssl >/dev/null 2>&1; then
+        cmd apt-get install -y openssl || die_op "apt-get install openssl failed"
+    fi
+    local pub_ip
+    pub_ip="$(cmd curl -fsS https://api.ipify.org 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$pub_ip" ] || die_op "cannot determine the public IP of this server (curl api.ipify.org)"
+    PANEL_TLS_IP="$pub_ip"
+
+    mkdir -p "$PANEL_TLS_DIR" || die_op "cannot create $PANEL_TLS_DIR"
+    chmod 0700 "$PANEL_TLS_DIR"
+
+    if [ "$PANEL_TLS_REGEN" = "1" ] || [ ! -f "$PANEL_TLS_CERT" ] || [ ! -f "$PANEL_TLS_KEY" ]; then
+        if [ "$PANEL_TLS_REGEN" = "1" ]; then
+            log "regenerating the self-signed TLS certificate (--panel-tls-regen)"
+        else
+            log "generating a self-signed TLS certificate (CN=$pub_ip, ~825 days)"
+        fi
+        # openssl refuses to overwrite an existing key non-interactively:
+        # remove any stale half-pair first, then write both files fresh.
+        rm -f "$PANEL_TLS_CERT" "$PANEL_TLS_KEY"
+        if ! cmd openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 825 \
+            -keyout "$PANEL_TLS_KEY" -out "$PANEL_TLS_CERT" -subj "/CN=$pub_ip" \
+            >/dev/null 2>&1; then
+            rm -f "$PANEL_TLS_CERT" "$PANEL_TLS_KEY"
+            die_op "openssl self-signed certificate generation failed"
+        fi
+        chmod 0600 "$PANEL_TLS_KEY"
+        chmod 0644 "$PANEL_TLS_CERT"
+        log "TLS certificate written: cert $PANEL_TLS_CERT (0644), key $PANEL_TLS_KEY (0600)"
+    else
+        log "TLS certificate already present under $PANEL_TLS_DIR: keeping it"
+    fi
+
+    if ! command -v nginx >/dev/null 2>&1; then
+        cmd apt-get install -y nginx || die_op "apt-get install nginx failed"
+    fi
+    mkdir -p "$NGINX_CONF_DIR" || die_op "cannot create nginx conf dir"
+    chmod 0750 "$NGINX_CONF_DIR"
+    render_nginx_ip_conf "$PANEL_PORT" "$PANEL_TLS_CERT" "$PANEL_TLS_KEY" > "$NGINX_CONF_DIR/panel.conf"
+    chmod 0644 "$NGINX_CONF_DIR/panel.conf"
+    ln -sf "$NGINX_CONF_DIR/panel.conf" "/etc/nginx/sites-enabled/$NGINX_SITE"
+    rm -f /etc/nginx/sites-enabled/default
+    cmd nginx -t >/dev/null 2>&1 || die_op "nginx configuration test failed"
+    cmd systemctl enable nginx >/dev/null 2>&1 || die_op "systemctl enable nginx failed"
+    if ! cmd systemctl is-active --quiet nginx; then
+        cmd systemctl start nginx || die_op "systemctl start nginx failed"
+    else
+        cmd nginx -s reload >/dev/null 2>&1 || true
+    fi
+
+    PANEL_TLS_FINGERPRINT="$(cmd openssl x509 -in "$PANEL_TLS_CERT" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')"
+    [ -n "$PANEL_TLS_FINGERPRINT" ] || die_op "cannot compute the certificate fingerprint (openssl x509 -fingerprint)"
+    log "panel IP:port mode: https://$pub_ip:$PANEL_PORT ready (fingerprint $PANEL_TLS_FINGERPRINT)"
+}
+
+panel_port_setup
+
 # --- 14. minimal post-install self-check -------------------------------
 # Reads-only: no application state is mutated. Awaiting `panel server
 # init` or a restore, panel-init exits 1 by design (M3.1 contract) and
@@ -901,6 +1089,16 @@ EOF
 if [ -n "$DOMAIN" ]; then
     cat <<EOF
 install: Panel: https://${DOMAIN} (Let's Encrypt, auto-renewed by certbot.timer)
+EOF
+elif [ -n "$PANEL_PORT" ]; then
+    cat <<EOF
+install: Panel: https://${PANEL_TLS_IP}:${PANEL_PORT} (self-signed TLS certificate)
+install:   TLS fingerprint (SHA256): ${PANEL_TLS_FINGERPRINT}
+install:   The browser will warn about the untrusted certificate on first
+install:   connect: compare the fingerprint above with the one the browser
+install:   shows, then proceed. Verify it yourself at any time:
+install:     openssl s_client -connect ${PANEL_TLS_IP}:${PANEL_PORT} </dev/null 2>/dev/null \\
+install:       | openssl x509 -noout -fingerprint -sha256
 EOF
 else
     cat <<EOF

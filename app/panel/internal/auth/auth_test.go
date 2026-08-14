@@ -25,6 +25,7 @@ func cookieStub(sid string, expires time.Time) http.HandlerFunc {
 }
 
 func TestWriteSessionCookieAttributes(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
 	rec := httptest.NewRecorder()
 	expires := time.Now().UTC().Add(25 * time.Minute)
 	cookieStub("sid-43-chars-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expires)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -61,6 +62,26 @@ func TestWriteSessionCookieAttributes(t *testing.T) {
 	}
 	if !strings.Contains(raw, "HttpOnly") || !strings.Contains(raw, "SameSite=Lax") {
 		t.Errorf("raw cookie misses attributes: %q", raw)
+	}
+}
+
+// TestWriteSessionCookieSecureFlag (T-124): behind a TLS proxy the
+// deployment sets AMNEZIA_SECURE_COOKIES=1 and the session cookie must
+// carry the Secure attribute (including the raw Set-Cookie header).
+func TestWriteSessionCookieSecureFlag(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "1")
+	rec := httptest.NewRecorder()
+	expires := time.Now().UTC().Add(25 * time.Minute)
+	cookieStub("sid-43-chars-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expires)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("got %d cookies, want 1", len(cookies))
+	}
+	if !cookies[0].Secure {
+		t.Error("Secure must be set when AMNEZIA_SECURE_COOKIES=1")
+	}
+	if !strings.Contains(rec.Header().Get("Set-Cookie"), "Secure") {
+		t.Errorf("raw cookie must contain Secure: %q", rec.Header().Get("Set-Cookie"))
 	}
 }
 

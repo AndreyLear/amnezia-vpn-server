@@ -26,6 +26,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -44,17 +45,25 @@ const CSRFFieldName = "_csrf"
 //   - HttpOnly: the SID must never be readable by page scripts;
 //   - SameSite=Lax: cross-site POSTs (CSRF carriers) drop the cookie;
 //   - Path=/: the whole panel shares the session;
-//   - Secure=false: the panel serves plain HTTP on loopback
-//     (127.0.0.1:8787 in compose); flip to true together with TLS in a
-//     later milestone;
 //   - lifetime: MaxAge + Expires, aligned with the store's SessionTTL.
+// The Secure attribute is decided by secureCookies() (T-124).
 const (
 	cookiePath      = "/"
 	cookieSameSite  = http.SameSiteLaxMode
 	cookieHTTPOnly  = true
-	cookieSecure    = false
 	cookieMaxAgeOff = -1 // immediate deletion (ClearSessionCookie)
 )
+
+// secureCookies reports whether session cookies must carry the Secure
+// attribute (T-124). The panel defaults to plain HTTP on loopback
+// (127.0.0.1:8787 in compose), where a Secure cookie would never be
+// sent back by the browser and login would break; behind a TLS reverse
+// proxy (install.sh --domain or --panel-port modes) the deployment
+// sets AMNEZIA_SECURE_COOKIES=1 in the deployment .env so the session
+// id never travels in clear.
+func secureCookies() bool {
+	return os.Getenv("AMNEZIA_SECURE_COOKIES") == "1"
+}
 
 // sessionCtxKey is the private context key for the authenticated
 // identity.
@@ -87,7 +96,7 @@ func WriteSessionCookie(w http.ResponseWriter, sid string, expiresAt time.Time) 
 		Path:     cookiePath,
 		HttpOnly: cookieHTTPOnly,
 		SameSite: cookieSameSite,
-		Secure:   cookieSecure,
+		Secure:   secureCookies(),
 		Expires:  expiresAt,
 		MaxAge:   int(time.Until(expiresAt).Seconds()),
 	})
@@ -101,7 +110,7 @@ func ClearSessionCookie(w http.ResponseWriter) {
 		Path:     cookiePath,
 		HttpOnly: cookieHTTPOnly,
 		SameSite: cookieSameSite,
-		Secure:   cookieSecure,
+		Secure:   secureCookies(),
 		Expires:  time.Unix(1, 0),
 		MaxAge:   cookieMaxAgeOff,
 	})
