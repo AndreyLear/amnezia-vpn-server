@@ -7,19 +7,26 @@
 <link rel="stylesheet" href="/static/tailwind.css">
 <script src="/static/app.js" defer></script>
 </head>
-<body>
-<main class="panel">
-  <div class="panel-logo"></div>
-  <h1>AmneziaVPN Panel</h1>
-  <p class="sub">Войдите, чтобы управлять туннелем</p>
+<body class="login-page">
+<main class="login-shell">
+  <section class="panel login-card" aria-labelledby="login-title">
+    <div class="login-brand">
+      <span class="panel-logo"></span>
+      <span>AmneziaVPN <small>panel</small></span>
+    </div>
+    <p class="eyebrow">Администрирование VPN</p>
+    <h1 id="login-title">Вход в панель</h1>
+    <p class="sub">Управляйте туннелем, клиентами и резервными копиями.</p>
 
-  {{if .Error}}<p class="flash flash-error">{{.Error}}</p>{{end}}
+    {{if .Error}}<p class="flash flash-error" role="alert">{{.Error}}</p>{{end}}
 
-  <form action="/login" method="post">
-    <label class="label">Имя пользователя <input class="input" type="text" name="username" autocomplete="username" required></label>
-    <label class="label">Пароль <input class="input" type="password" name="password" autocomplete="current-password" required></label>
-    <button type="submit" class="btn btn-primary">Войти</button>
-  </form>
+    <form action="/login" method="post">
+      <label class="label">Имя пользователя <input class="input" type="text" name="username" autocomplete="username" required></label>
+      <label class="label">Пароль <input class="input" type="password" name="password" autocomplete="current-password" required></label>
+      <button type="submit" class="btn btn-primary">Войти</button>
+    </form>
+    <p class="login-footnote">Сессия защищена и действует ограниченное время.</p>
+  </section>
 </main>
 </body>
 </html>

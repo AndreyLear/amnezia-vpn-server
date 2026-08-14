@@ -86,8 +86,9 @@ func loginOverHTTP(t *testing.T, cl *http.Client, base *url.URL) (dashBody, sid 
 		t.Fatalf("login body: %v", err)
 	}
 	// The client follows the 303 / to the dashboard; a failure would
-	// land on the login form with the generic error.
-	if !strings.Contains(string(body), "Вы вошли как "+lifeAdmin) {
+	// land on the login form with the generic error. The dashboard does
+	// not expose the username in its navigation chrome.
+	if !strings.Contains(string(body), "Клиенты") {
 		t.Fatalf("login did not reach the dashboard: %q", body)
 	}
 	return string(body), sessionIDFromJar(t, cl, base)

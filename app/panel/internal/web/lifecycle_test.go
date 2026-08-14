@@ -86,16 +86,16 @@ func TestAuthFullLifecycle(t *testing.T) {
 		t.Fatalf("sessions after login = %d, want 1", n)
 	}
 
-	// 4. Dashboard: 200, the principal shown, the CSRF token rendered
-	//    only inside a hidden form input.
+	// 4. Dashboard: 200, without exposing the signed-in principal in the
+	//    chrome, and the CSRF token rendered only inside a hidden form input.
 	rec = httptest.NewRecorder()
 	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/", c.Value))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("dashboard: code = %d, want 200", rec.Code)
 	}
 	dash := rec.Body.String()
-	if !strings.Contains(dash, "Вы вошли как alice") {
-		t.Fatalf("dashboard must show the signed-in principal: %q", dash)
+	if strings.Contains(dash, "Вы вошли как alice") {
+		t.Fatalf("dashboard must not expose the signed-in principal: %q", dash)
 	}
 	if !strings.Contains(dash, `<input type="hidden" name="_csrf" value="`+sess.CSRFToken+`">`) {
 		t.Fatal("dashboard must embed the session CSRF token in a hidden input")

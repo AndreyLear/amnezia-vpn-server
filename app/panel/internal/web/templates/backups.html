@@ -14,9 +14,17 @@
     AmneziaVPN <small class="ml-0.5 text-[13px] font-medium text-ink-muted">panel</small>
   </div>
   <nav class="ml-auto flex flex-wrap items-center gap-1">
-    <span class="who">Вы вошли как {{.Username}}</span>
     <a class="topnav-link" href="/">Панель</a>
-    <a class="topnav-link" href="/backups/restore">Загрузить бэкап</a>
+    <details class="menu">
+      <summary class="btn btn-primary">Бэкап</summary>
+      <div class="menu-panel">
+        <form action="/backups/download" method="post">
+          <input type="hidden" name="_csrf" value="{{.CSRF}}">
+          <button type="submit" class="menu-item">Скачать бэкап</button>
+        </form>
+        <a class="menu-item" href="#upload">Загрузить бэкап</a>
+      </div>
+    </details>
     <form action="/logout" method="post" class="inline-form">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <button type="submit" class="btn">Выйти</button>
@@ -34,7 +42,7 @@
   <p class="pending">Восстановление подготовлено и ожидает перезапуска. Панель не перезапускает себя сама: перезапустите её, чтобы применить; иначе восстановление отменится при следующем запуске. Создание, удаление и новые восстановления приостановлены до этого.</p>
   {{end}}
 
-  <section class="form-card">
+  <section class="form-card" id="upload">
     <h2 class="section-title">Действия</h2>
     <div class="row-actions">
       <form action="/backups/create" method="post">

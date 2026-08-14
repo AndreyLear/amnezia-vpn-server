@@ -7,14 +7,17 @@
     AmneziaVPN <small class="ml-0.5 text-[13px] font-medium text-ink-muted">panel</small>
   </div>
   <nav class="ml-auto flex flex-wrap items-center gap-1">
-    <span class="who">Вы вошли как {{.Username}}</span>
     <button type="button" class="btn btn-primary" data-dialog-open="add-dialog">Добавить клиента</button>
-    <form action="/backups/download" method="post" class="inline-form">
-      <input type="hidden" name="_csrf" value="{{.CSRF}}">
-      <button type="submit" class="btn">Скачать бэкап</button>
-    </form>
-    <a class="topnav-link" href="/backups">Бэкапы</a>
-    <a class="topnav-link" href="/backups/restore">Загрузить бэкап</a>
+    <details class="menu">
+      <summary class="btn">Бэкап</summary>
+      <div class="menu-panel">
+        <form action="/backups/download" method="post">
+          <input type="hidden" name="_csrf" value="{{.CSRF}}">
+          <button type="submit" class="menu-item">Скачать бэкап</button>
+        </form>
+        <a class="menu-item" href="/backups">Загрузить бэкап</a>
+      </div>
+    </details>
     <form action="/logout" method="post" class="inline-form">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <button type="submit" class="btn">Выйти</button>

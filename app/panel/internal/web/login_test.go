@@ -533,9 +533,10 @@ func TestLoginLogoutResponseSecretFree(t *testing.T) {
 	if strings.Contains(dashRec.Body.String(), sid) {
 		t.Error("dashboard response leaks the SID")
 	}
-	// The dashboard shows the principal.
-	if !strings.Contains(dashRec.Body.String(), "alice") {
-		t.Error("dashboard must render the signed-in username")
+	// The dashboard authenticates the session without displaying the
+	// username in the navigation chrome.
+	if strings.Contains(dashRec.Body.String(), "Вы вошли как") {
+		t.Error("dashboard must not render the signed-in username")
 	}
 }
 

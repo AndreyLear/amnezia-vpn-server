@@ -44,9 +44,9 @@
           </label>
           <button type="submit" class="btn">Сохранить</button>
         </form>
+        <button type="button" class="menu-item menu-danger" data-dialog-open="del-{{.Card.ID}}">Удалить</button>
       </div>
     </details>
-    <button type="button" class="btn btn-destructive" data-dialog-open="del-{{.Card.ID}}">Удалить</button>
   </div>
 
   <dialog class="modal" id="qr-{{.Card.ID}}">
