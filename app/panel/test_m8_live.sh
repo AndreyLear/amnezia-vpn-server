@@ -287,6 +287,36 @@ curl -fsS -c "${M8_ROOT}/cookies.txt" \
 curl -fsS -b "${M8_ROOT}/cookies.txt" -o /dev/null "http://127.0.0.1:${M8_PORT}/" || fail "post-restore dashboard GET"
 echo "OK: restore applied, awg0.conf regenerated, auth user works"
 
+echo "==> [7] T-125: HTTP upload applies in-process (no restart)"
+# Mutate after the CLI restore, then upload the panel-created snapshot
+# through the web form: the restore must be applied immediately — the
+# pending marker is consumed, awg0.conf regenerated, no restart.
+"${COMPOSE[@]}" exec -T panel /app/panel client add charlie >/dev/null 2>&1 || fail "client add charlie"
+"${COMPOSE[@]}" exec -T panel /app/panel backup create >/dev/null 2>&1 || fail "snapshot2 backup create"
+SNAP2="$("${COMPOSE[@]}" exec -T panel /app/panel backup list | head -1)"
+[ -n "${SNAP2}" ] || fail "snapshot2 backup list empty"
+"${COMPOSE[@]}" exec -T panel /app/panel client add dave >/dev/null 2>&1 || fail "client add dave"
+
+M8_CSRF="$(curl -fsS -b "${M8_ROOT}/cookies.txt" -c "${M8_ROOT}/cookies.txt" \
+    "http://127.0.0.1:${M8_PORT}/backups" \
+    | grep -oE 'name="_csrf" value="[^"]+"' | head -1 | cut -d\" -f4)"
+[ -n "${M8_CSRF}" ] || fail "no CSRF token on /backups"
+UPLOC="$(curl -s -b "${M8_ROOT}/cookies.txt" -c "${M8_ROOT}/cookies.txt" \
+    -e "http://127.0.0.1:${M8_PORT}/backups" \
+    -F "_csrf=${M8_CSRF}" \
+    -F "backup=@${M8_BACKUPS}/${SNAP2};filename=${SNAP2}" \
+    -F "identity=${M8_IDENT}" \
+    -D- -o /dev/null "http://127.0.0.1:${M8_PORT}/backups/restore" \
+    | grep -i '^location' | tr -d '\r' | awk '{print $2}')"
+printf '%s\n' "${UPLOC}" | grep -q "Restore+applied." || fail "upload did not apply in-process: ${UPLOC}"
+[ ! -e "${M8_DATA}/.restore-pending" ] || fail "pending marker survived the in-process apply"
+CLIENTS2="$("${COMPOSE[@]}" exec -T panel /app/panel client list)"
+printf '%s\n' "${CLIENTS2}" | grep -q charlie || fail "in-process restore lost charlie"
+printf '%s\n' "${CLIENTS2}" | grep -q dave && fail "post-upload mutation dave survived the in-process restore"
+grep -q "${ALICE_PUB}" "${M8_CONFIG}/awg0.conf" || fail "awg0.conf missing alice after in-process restore"
+grep -q "^\[Peer\]" "${M8_CONFIG}/awg0.conf" || fail "awg0.conf has no peers after in-process restore"
+echo "OK: upload applied in-process — clients active, no restart"
+
 echo
 echo "==> e2e OK: compose config, panel rw backups, 0700/0600, awg isolated, restore cycle"
 exit 0
