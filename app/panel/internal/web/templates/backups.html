@@ -38,7 +38,32 @@
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <button type="submit" class="btn primary">Create backup</button>
     </form>
-    <p class="sub">Restore a backup — <a href="/backups/restore">go to restore</a></p>
+    <p class="sub">— or download a fresh archive right now:</p>
+    <form action="/backups/download" method="post">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <button type="submit" class="btn">Download backup</button>
+    </form>
+  </section>
+
+  <section class="form-card">
+    <h2>Upload backup</h2>
+    <p class="sub">Restore from an archive (.tar.zst.age): it is checked and unpacked, then applied immediately — all clients from the archive become active without a restart.</p>
+    <form action="/backups/restore" method="post" enctype="multipart/form-data">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <p>
+        <label>Backup archive
+          <input type="file" name="backup" accept=".age" required>
+        </label>
+      </p>
+      <p>
+        <label>Age identity (secret key)
+          <textarea name="identity" rows="4" autocomplete="off"
+                    spellcheck="false" placeholder="AGE-SECRET-KEY-1..."></textarea>
+        </label>
+      </p>
+      <button type="submit" class="btn destructive">Upload and apply</button>
+    </form>
+    <p class="sub">Need the full manual flow? <a href="/backups/restore">Go to the restore page</a></p>
   </section>
 
   <section class="table-wrap">

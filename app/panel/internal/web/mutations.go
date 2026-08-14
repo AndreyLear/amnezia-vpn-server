@@ -123,7 +123,7 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, okFlash string, 
 		}
 		return
 	}
-	if err := awgconf.Generate(s.cfg.DB, s.cfg.ConfPath); err != nil {
+	if err := awgconf.Generate(s.db(), s.cfg.ConfPath); err != nil {
 		s.cfg.Logger.Printf("mutation: regenerate config: %v", err)
 		s.errorPage(w, http.StatusInternalServerError)
 		return
@@ -186,11 +186,11 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mutate(w, r, flashAdded, func() error {
-		server, err := db.ServerRow(s.cfg.DB)
+		server, err := db.ServerRow(s.db())
 		if err != nil {
 			return err
 		}
-		record, err := db.CreateClient(s.cfg.DB, server.Address, db.NewClient{
+		record, err := db.CreateClient(s.db(), server.Address, db.NewClient{
 			Name:         name,
 			PrivateKey:   privateKey,
 			PublicKey:    publicKey,
@@ -200,7 +200,7 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if expiresAt != "" {
-			return db.SetClientExpiry(s.cfg.DB, record.ID, expiresAt)
+			return db.SetClientExpiry(s.db(), record.ID, expiresAt)
 		}
 		return nil
 	})
@@ -221,7 +221,7 @@ func (s *Server) clientSetEnabled(enabled bool) http.HandlerFunc {
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.withID(w, r, okFlash, func(id int64) error {
-			return db.SetClientEnabled(s.cfg.DB, id, enabled)
+			return db.SetClientEnabled(s.db(), id, enabled)
 		})
 	}
 }
@@ -230,7 +230,7 @@ func (s *Server) clientSetEnabled(enabled bool) http.HandlerFunc {
 // the not-found flash (never a silent no-op, M6_AUDIT.md §2.1.10).
 func (s *Server) clientDelete(w http.ResponseWriter, r *http.Request) {
 	s.withID(w, r, flashDeleted, func(id int64) error {
-		return db.DeleteClient(s.cfg.DB, id)
+		return db.DeleteClient(s.db(), id)
 	})
 }
 
@@ -247,7 +247,7 @@ func (s *Server) clientRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.withID(w, r, flashRenamed, func(id int64) error {
-		return db.UpdateClientName(s.cfg.DB, id, name)
+		return db.UpdateClientName(s.db(), id, name)
 	})
 }
 
@@ -275,6 +275,6 @@ func (s *Server) clientExpiry(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.withID(w, r, flashExpirySet, func(id int64) error {
-		return db.SetClientExpiry(s.cfg.DB, id, expiresAt)
+		return db.SetClientExpiry(s.db(), id, expiresAt)
 	})
 }

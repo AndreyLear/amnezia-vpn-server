@@ -43,12 +43,12 @@ func (s *Server) clientConfigDownload(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, http.StatusNotFound)
 		return
 	}
-	rec, err := db.ClientByID(s.cfg.DB, id)
+	rec, err := db.ClientByID(s.db(), id)
 	if err != nil {
 		s.clientIDError(w, err)
 		return
 	}
-	cfg, err := awgconf.GenerateClient(s.cfg.DB, id)
+	cfg, err := awgconf.GenerateClient(s.db(), id)
 	if err != nil {
 		s.cfg.Logger.Printf("client config: generate: %v", err)
 		s.errorPage(w, http.StatusInternalServerError)
@@ -68,7 +68,7 @@ func (s *Server) clientQR(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, http.StatusNotFound)
 		return
 	}
-	cfg, err := awgconf.GenerateClient(s.cfg.DB, id)
+	cfg, err := awgconf.GenerateClient(s.db(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrClientNotFound) {
 			s.errorPage(w, http.StatusNotFound)

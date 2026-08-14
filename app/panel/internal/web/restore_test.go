@@ -56,21 +56,16 @@ func restoreFields(f *fixture, identity string) map[string]string {
 	return map[string]string{"_csrf": f.csrf, "identity": identity}
 }
 
-// preparedRestore drives a full happy-path restore and returns the
-// marker path. It is used by the pending-state tests.
+// preparedRestore drives a full happy-path restore through the
+// pipeline DIRECTLY (the CLI path — not the web upload, which now
+// applies in-process, T-125) and returns the marker path. It is used
+// by the pending-state tests.
 func preparedRestore(t *testing.T, f *fixture, dir string, id *age.X25519Identity) string {
 	t.Helper()
 	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
-	archive, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("restore: code = %d, want 303", rec.Code)
-	}
-	if !strings.Contains(rec.Header().Get("Location"), "Backup+prepared.+Restart+required.") {
-		t.Fatalf("restore: Location = %q", rec.Header().Get("Location"))
+	archive := filepath.Join(dir, name)
+	if _, err := backup.Restore(f.h, f.dbPath, archive, dir, os.Getenv("AGE_RECIPIENT"), []age.Identity{id}, nil); err != nil {
+		t.Fatalf("restore prepare: %v", err)
 	}
 	marker, ok, err := backup.PendingPath(f.dbPath)
 	if err != nil || !ok {
@@ -411,8 +406,11 @@ func TestRestoreNoIdentityLeakInResponses(t *testing.T) {
 		t.Fatal("flash redirect leaks the padded identity")
 	}
 
-	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || !ok {
-		t.Fatalf("marker after double restore: ok=%v err=%v", ok, err)
+	// T-125: both uploads applied in-process — the pending marker is
+	// consumed, so nothing waits for a restart and nothing on disk
+	// holds the identity.
+	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
+		t.Fatalf("marker after applied restores: ok=%v err=%v", ok, err)
 	}
 	// no file anywhere holds the identity (temp uploads and staging are
 	// cleaned; the pending dir, marker and safety backup are pipeline
@@ -513,8 +511,13 @@ func TestRestorePageNoTempLeaks(t *testing.T) {
 	postRestoreUpload(t, f, restoreFields(f, "garbage-identity"), map[string][]byte{name: archive})
 	postRestoreUpload(t, f, restoreFields(f, id.String()), nil)
 	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
-	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "Backup+prepared.") {
+	// T-125: the happy-path upload applies in-process — no pending
+	// marker is left behind, so nothing waits for a restart.
+	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "Restore+applied.") {
 		t.Fatalf("final restore: code %d Location %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
+		t.Fatalf("pending marker after applied restore: ok=%v err=%v", ok, err)
 	}
 	if got := countTempRestoreDirs(); got != before {
 		t.Fatalf("temp dirs leaked: before %d, after %d", before, got)
@@ -542,5 +545,63 @@ func TestRestorePageReachableFromBackups(t *testing.T) {
 	body := f.get("/backups").Body.String()
 	if !strings.Contains(body, `href="/backups/restore"`) {
 		t.Fatalf("backups page missing restore link: %s", body)
+	}
+}
+
+// TestRestoreUploadAppliesInProcess (T-125): uploading an archive
+// through the panel applies it immediately — the live handle is
+// swapped, awg0.conf is regenerated from the restored state, and no
+// restart is needed (no pending marker left).
+func TestRestoreUploadAppliesInProcess(t *testing.T) {
+	f := newFixture(t)
+	dir, id := setBackupsPath(t)
+
+	// live state: alice only; archive = snapshot of alice.
+	_, _, pub := f.addClient("alice")
+	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
+	archive, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// mutate the live state after the snapshot: bob joins.
+	f.addClient("bob")
+
+	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("upload: code = %d, want 303", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("Location"), "Restore+applied.+1+clients+active.") {
+		t.Fatalf("upload: Location = %q", rec.Header().Get("Location"))
+	}
+	// applied in-process: no pending marker, the live handle sees the
+	// restored state (bob gone), awg0.conf regenerated (alice only).
+	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
+		t.Fatalf("pending marker after in-process apply: ok=%v err=%v", ok, err)
+	}
+	live := f.server.db()
+	var n int
+	if err := live.QueryRow("SELECT COUNT(*) FROM clients").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("clients after applied restore = %d, want 1", n)
+	}
+	cfg, err := os.ReadFile(f.confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cfg), pub) {
+		t.Fatal("awg0.conf missing the restored client peer")
+	}
+	if strings.Contains(string(cfg), "x-test-bob") {
+		t.Fatal("awg0.conf contains a post-snapshot client")
+	}
+	// the dashboard reads through the swapped handle.
+	body := f.get("/").Body.String()
+	if !strings.Contains(body, "alice") {
+		t.Fatal("dashboard does not render the restored client")
+	}
+	if strings.Contains(body, "bob") {
+		t.Fatal("dashboard renders a post-snapshot client")
 	}
 }

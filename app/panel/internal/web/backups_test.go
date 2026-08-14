@@ -565,3 +565,78 @@ func TestBackupsPageLinkFromDashboard(t *testing.T) {
 		t.Fatalf("dashboard missing Backups link: %s", body)
 	}
 }
+
+// TestBackupDownloadNowFlow (T-125): POST /backups/download streams a
+// fresh archive as an attachment and stores nothing — no new file in
+// the backups dir, no temp dirs left behind.
+func TestBackupDownloadNowFlow(t *testing.T) {
+	f := newFixture(t)
+	dir, id := setBackupsPath(t)
+	f.addClient("alice")
+	before := countTempRestoreDirs()
+
+	rec := csrfPOST(f, "/backups/download", f.csrf)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("download: code = %d, want 200", rec.Code)
+	}
+	cd := rec.Header().Get("Content-Disposition")
+	if !strings.HasPrefix(cd, "attachment; filename=\"backup-") || !strings.HasSuffix(cd, ".tar.zst.age\"") {
+		t.Fatalf("download: Content-Disposition = %q", cd)
+	}
+	entries := decryptEntries(t, writeTempArchive(t, rec.Body.Bytes()), id)
+	if _, ok := entries["manifest.json"]; !ok {
+		t.Fatalf("downloaded archive missing manifest: %v", entries)
+	}
+	// nothing stored: the backups dir has no new archive.
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range names {
+		if strings.HasPrefix(e.Name(), "backup-") {
+			t.Fatalf("download stored an archive in the backups dir: %s", e.Name())
+		}
+	}
+	if got := countTempRestoreDirs(); got != before {
+		t.Fatalf("temp dirs leaked: before %d, after %d", before, got)
+	}
+}
+
+// TestBackupDownloadNowGuards (T-125): CSRF 403, pause while a restore
+// is pending, and the unconfigured flash without AGE_RECIPIENT.
+func TestBackupDownloadNowGuards(t *testing.T) {
+	f := newFixture(t)
+	dir, id := setBackupsPath(t)
+
+	rec := csrfPOST(f, "/backups/download", "wrong-token")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("bad csrf: code = %d, want 403", rec.Code)
+	}
+
+	marker := preparedRestore(t, f, dir, id)
+	rec = csrfPOST(f, "/backups/download", f.csrf)
+	if !strings.Contains(rec.Header().Get("Location"), "Restore+pending.") {
+		t.Fatalf("pending pause: Location = %q", rec.Header().Get("Location"))
+	}
+
+	// clear the marker (as a serve restart does), drop the recipient.
+	if err := os.RemoveAll(marker); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGE_RECIPIENT", "")
+	rec = csrfPOST(f, "/backups/download", f.csrf)
+	if !strings.Contains(rec.Header().Get("Location"), "not+configured") {
+		t.Fatalf("unconfigured: Location = %q", rec.Header().Get("Location"))
+	}
+}
+
+// writeTempArchive persists raw archive bytes to a temp file and
+// returns its path (inverse of the download stream).
+func writeTempArchive(t *testing.T, data []byte) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "dl.age")
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}

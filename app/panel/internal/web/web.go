@@ -118,6 +118,31 @@ type Server struct {
 	// but the awg0.conf regeneration must not interleave with concurrent
 	// requests. Reads (dashboard) stay lock-free.
 	mutex sync.Mutex
+	// dbMu guards the live database handle: restore-apply (T-125)
+	// swaps the handle in-process after backup.ApplyPending, so every
+	// read/write access goes through db() and never touches cfg.DB
+	// directly.
+	dbMu sync.RWMutex
+	dbh  *sql.DB
+}
+
+// db returns the live database handle (RLock-protected swap access).
+func (s *Server) db() *sql.DB {
+	s.dbMu.RLock()
+	defer s.dbMu.RUnlock()
+	return s.dbh
+}
+
+// swapDB replaces the live handle with the freshly opened one and
+// returns the previous handle (the caller closes it after the swap is
+// visible). Callers must hold s.mutex.
+func (s *Server) swapDB(next *sql.DB) *sql.DB {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+	old := s.dbh
+	s.dbh = next
+	s.cfg.DB = next
+	return old
 }
 
 // New validates the config and builds the route table. Listen/serve
@@ -158,7 +183,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("web: parse templates: %w", err)
 	}
-	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl, auth: auth.NewAuth(cfg.Sessions)}
+	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl, auth: auth.NewAuth(cfg.Sessions), dbh: cfg.DB}
 	// Route protection (M7.4/M7.6): every panel route runs behind
 	// RequireAuth; every state-changing POST additionally runs behind
 	// RequireCSRF (auth → csrf → handler). /login is the single public
@@ -177,6 +202,8 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /logout", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.logout))))
 	s.mux.Handle("GET /backups", s.auth.RequireAuth(http.HandlerFunc(s.backupsPage)))
 	s.mux.Handle("POST /backups/create", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupCreate))))
+	// T-125: one-click download (fresh archive, not stored).
+	s.mux.Handle("POST /backups/download", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupDownloadNow))))
 	s.mux.Handle("GET /backups/{name}/download", s.auth.RequireAuth(http.HandlerFunc(s.backupDownload)))
 	s.mux.Handle("POST /backups/{name}/delete", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupDelete))))
 	// The restore pair is the one multipart route of the panel: the
@@ -346,7 +373,7 @@ func (d dashboardData) GeneratedText() string {
 // reconciled with the runtime status. The mutation forms point at the
 // M6.3 routes but their handlers land in M6.3.
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	rec, err := Load(s.cfg.DB, s.cfg.StatusPath, time.Now())
+	rec, err := Load(s.db(), s.cfg.StatusPath, time.Now())
 	if err != nil {
 		s.cfg.Logger.Printf("dashboard: %v", err)
 		s.errorPage(w, http.StatusInternalServerError)

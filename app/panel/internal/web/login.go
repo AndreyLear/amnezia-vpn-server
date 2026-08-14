@@ -94,7 +94,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	username := r.PostForm.Get("username")
 	password := r.PostForm.Get("password")
 
-	user, err := db.AuthUserByUsername(s.cfg.DB, username)
+	user, err := db.AuthUserByUsername(s.db(), username)
 	switch {
 	case err == nil:
 		// Stored hash verified below.

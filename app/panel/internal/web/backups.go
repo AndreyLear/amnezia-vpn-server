@@ -50,6 +50,8 @@ const (
 	// attempted while a restore is pending (M8.6: no mutation while a
 	// restore is prepared).
 	flashRestoreBlockedByPending = "Restore pending. Restart required."
+	// T-125 one-click download.
+	flashBackupDownloadFailed = "Backup download failed."
 )
 
 // backupsDir mirrors cli.backupsPath(): the deployment configures the
@@ -177,12 +179,68 @@ func (s *Server) backupCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if _, err := backup.Create(s.cfg.DB, backupsDir(), recipient, time.Now); err != nil {
+	if _, err := backup.Create(s.db(), backupsDir(), recipient, time.Now); err != nil {
 		s.cfg.Logger.Printf("backup create: %v", err)
 		s.flashBackups(w, r, flashBackupCreateFailed)
 		return
 	}
 	s.flashBackups(w, r, flashBackupCreated)
+}
+
+// backupDownloadNow handles POST /backups/download (T-125): a fresh
+// encrypted archive of the live database is created in a private temp
+// directory, streamed as an attachment and removed — nothing is stored
+// in the backups listing. CSRF-protected; paused while a restore is
+// pending; requires AGE_RECIPIENT like backup create.
+func (s *Server) backupDownloadNow(w http.ResponseWriter, r *http.Request) {
+	if pending, ok := s.pendingExists(w); !ok {
+		return
+	} else if pending {
+		s.flashBackups(w, r, flashRestoreBlockedByPending)
+		return
+	}
+	recipient, err := backup.RecipientFromEnv()
+	if err != nil {
+		s.cfg.Logger.Printf("backup download: recipient: %v", err)
+		s.flashBackups(w, r, flashBackupUnconfigured)
+		return
+	}
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	tmp, err := os.MkdirTemp("", "panel-download-*")
+	if err != nil {
+		s.cfg.Logger.Printf("backup download: temp dir: %v", err)
+		s.flashBackups(w, r, flashBackupDownloadFailed)
+		return
+	}
+	defer os.RemoveAll(tmp)
+	archive, err := backup.Create(s.db(), tmp, recipient, time.Now)
+	if err != nil {
+		s.cfg.Logger.Printf("backup download: create: %v", err)
+		s.flashBackups(w, r, flashBackupDownloadFailed)
+		return
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		s.cfg.Logger.Printf("backup download: open: %v", err)
+		s.flashBackups(w, r, flashBackupDownloadFailed)
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		s.cfg.Logger.Printf("backup download: stat: %v", err)
+		s.flashBackups(w, r, flashBackupDownloadFailed)
+		return
+	}
+	// backup.Create returns a bare archive name (backup-YYYY-MM-DD.tar.zst.age).
+	name := filepath.Base(archive)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+	if _, err := io.Copy(w, f); err != nil {
+		s.cfg.Logger.Printf("backup download: stream: %v", err)
+	}
 }
 
 // backupDownload handles GET /backups/{name}/download: the name must

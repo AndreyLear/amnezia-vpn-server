@@ -29,6 +29,7 @@ package web
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -38,7 +39,9 @@ import (
 
 	"filippo.io/age"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
 
 const (
@@ -66,6 +69,10 @@ const (
 	flashRestoreFailed          = "Restore failed."
 	flashRestorePending         = "Restore already pending. Restart required."
 	flashRestorePrepared        = "Backup prepared. Restart required."
+	// T-125: the in-process apply path. The %d is a client count, not
+	// user input; both strings stay fixed.
+	flashRestoreApplied     = "Restore applied. %d clients active."
+	flashRestoreApplyFailed = "Restore prepared but applying it failed. Restart required."
 )
 
 // restoreData is the GET /backups/restore payload. It carries no
@@ -240,9 +247,15 @@ func (s *Server) restoreSubmit(w http.ResponseWriter, r *http.Request) {
 	// manifest → integrity_check → schema compatibility → safety
 	// backup → pending. The live database is never modified before the
 	// safety backup exists; the marker is exclusive (a second restore
-	// answers ErrRestorePending).
+	// answers ErrRestorePending). On success the restore is applied
+	// in-process (T-125) — the panel restarts nothing.
 	s.mutex.Lock()
-	_, err = backup.Restore(s.cfg.DB, s.cfg.DBPath, uploadPath, backupsDir(), recipient, ids, nil)
+	_, err = backup.Restore(s.db(), s.cfg.DBPath, uploadPath, backupsDir(), recipient, ids, nil)
+	var appliedN int
+	var applyErr error
+	if err == nil {
+		appliedN, applyErr = s.applyRestoreNow()
+	}
 	s.mutex.Unlock()
 	clear(identity)
 	if errors.Is(err, backup.ErrRestorePending) {
@@ -254,7 +267,51 @@ func (s *Server) restoreSubmit(w http.ResponseWriter, r *http.Request) {
 		s.flashBackups(w, r, flashRestoreFailed)
 		return
 	}
-	s.flashBackups(w, r, flashRestorePrepared)
+	if applyErr != nil {
+		s.cfg.Logger.Printf("restore apply: %v", applyErr)
+		s.flashBackups(w, r, flashRestoreApplyFailed)
+		return
+	}
+	s.flashBackups(w, r, fmt.Sprintf(flashRestoreApplied, appliedN))
+}
+
+// applyRestoreNow applies a prepared restore in-process (T-125):
+// backup.ApplyPending swaps the database file, a fresh handle is
+// opened and migrated, and awg0.conf is regenerated so the awg runtime
+// activates the restored peers on its next hot reload (syncconf).
+// Callers must hold s.mutex. On error the restore may already be
+// applied (the pending marker is consumed by ApplyPending); the caller
+// falls back to the restart-required flash.
+func (s *Server) applyRestoreNow() (int, error) {
+	applied, err := backup.ApplyPending(s.cfg.DBPath)
+	if err != nil {
+		return 0, err
+	}
+	if !applied {
+		return 0, errors.New("no pending restore to apply")
+	}
+	next, err := db.Open(s.cfg.DBPath)
+	if err != nil {
+		return 0, fmt.Errorf("open restored database: %w", err)
+	}
+	if err := db.Migrate(next); err != nil {
+		next.Close()
+		return 0, fmt.Errorf("migrate restored database: %w", err)
+	}
+	// Config is derived state: generate it from the restored data
+	// before the swap; a failure is logged and the swap still happens
+	// (the next mutation or panel restart regenerates it).
+	if err := awgconf.Generate(next, s.cfg.ConfPath); err != nil {
+		s.cfg.Logger.Printf("restore apply: regenerate config: %v", err)
+	}
+	old := s.swapDB(next)
+	old.Close()
+	clients, err := db.ClientsAll(next)
+	if err != nil {
+		s.cfg.Logger.Printf("restore apply: client count: %v", err)
+		return 0, nil
+	}
+	return len(clients), nil
 }
 
 // readPartText drains a small form-field part into a string.
