@@ -82,7 +82,9 @@ func (m Manifest) Validate() error {
 		return fmt.Errorf("backup: manifest application %q", m.Application)
 	case m.ApplicationVersion != applicationVersion:
 		return fmt.Errorf("backup: manifest application_version %q", m.ApplicationVersion)
-	case m.SchemaVersion != schemaVersion():
+	// Older releases (schema_version >= 1) are accepted: the restored
+	// database is migrated to the current schema at apply time (T-110).
+	case m.SchemaVersion < 1 || m.SchemaVersion > schemaVersion():
 		return fmt.Errorf("backup: manifest schema_version %d", m.SchemaVersion)
 	}
 	if _, err := time.Parse(manifestTimeLayout, m.CreatedAt); err != nil {
@@ -91,8 +93,11 @@ func (m Manifest) Validate() error {
 	return nil
 }
 
-// schemaVersion is the only schema_version the M8 contract admits
-// (manifest.schema_version = 3, §5). It mirrors db.SchemaVersion.
+// schemaVersion is the schema_version of the current binary (§5). It
+// mirrors db.SchemaVersion. Archives written by older releases (>= 1)
+// are accepted by Validate: the restored database is migrated to the
+// current schema by db.Migrate at apply time (T-110 backward
+// compatibility).
 func schemaVersion() int {
 	v, _ := strconv.Atoi(db.SchemaVersion)
 	return v

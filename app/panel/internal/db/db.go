@@ -18,9 +18,10 @@ import (
 )
 
 // SchemaVersion matches manifest.schema_version in §5. Bumped to 4 when
-// client names became unique (M4.10): v4 adds the dedup migration plus
-// the unique name index; backups taken before the bump are restored
-// only by the v3 binary.
+// client names became unique (M10.1): v4 adds the dedup migration plus
+// the unique name index. Archives written by older releases are still
+// accepted by restore and migrated here at apply time (T-110 backward
+// compatibility).
 const SchemaVersion = "4"
 
 var schemaStatements = []string{

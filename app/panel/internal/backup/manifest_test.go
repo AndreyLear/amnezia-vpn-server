@@ -50,6 +50,17 @@ func TestManifestValidate(t *testing.T) {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}
 
+	// T-110 backward compatibility: archives written by older releases
+	// (schema_version >= 1) are accepted — the restored database is
+	// migrated at apply time.
+	for _, old := range []int{1, testSchemaVersion() - 1} {
+		m := base
+		m.SchemaVersion = old
+		if err := m.Validate(); err != nil {
+			t.Fatalf("older schema_version %d rejected: %v", old, err)
+		}
+	}
+
 	cases := []struct {
 		name string
 		mut  func(*Manifest)

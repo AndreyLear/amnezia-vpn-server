@@ -40,7 +40,14 @@ import (
 // binary schema_version (the exact value is the M8 contract mirror of
 // db.SchemaVersion, so it must track the binary).
 func validManifestJSON() string {
-	return fmt.Sprintf(`{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":%d,"created_at":"2026-08-12T10:30:00Z"}`+"\n", schemaVersion())
+	return validManifestJSONWithSchema(schemaVersion())
+}
+
+// validManifestJSONWithSchema is validManifestJSON for an arbitrary
+// schema_version — used to craft archives as an older release would
+// have written them (T-110 backward compatibility).
+func validManifestJSONWithSchema(schema int) string {
+	return fmt.Sprintf(`{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":%d,"created_at":"2026-08-12T10:30:00Z"}`+"\n", schema)
 }
 
 // archiveEntry is a raw tar entry for buildArchive.
@@ -108,8 +115,16 @@ func buildArchive(t *testing.T, id *age.X25519Identity, entries []archiveEntry) 
 // (stored schema_version set to wantStored; "" for tampered none).
 func validEntries(t *testing.T, wantStored string) []archiveEntry {
 	t.Helper()
+	return validEntriesWithSchema(t, wantStored, schemaVersion())
+}
+
+// validEntriesWithSchema is validEntries for an archive as an older
+// release wrote it: manifest schema_version and stored value both carry
+// the given version (T-110 backward compatibility).
+func validEntriesWithSchema(t *testing.T, wantStored string, schema int) []archiveEntry {
+	t.Helper()
 	return []archiveEntry{
-		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
+		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSONWithSchema(schema))},
 		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, wantStored)},
 	}
 }
@@ -381,6 +396,59 @@ func TestRestoreValid(t *testing.T) {
 	// the surviving state tells the operator what to do next
 	if _, ok, err := PendingPath(c.dbPath); err != nil || !ok {
 		t.Fatalf("marker after valid restore: %v", err)
+	}
+}
+
+// TestRestoreOlderSchemaMigratedOnApply (T-110): an archive written by
+// the previous release (manifest schema_version 3, stored 3) is
+// accepted by restore; after ApplyPending the live database is migrated
+// to the current schema by db.Migrate (the exact sequence panel-init
+// runs), so an operator who upgraded to v2.0.0 can restore their last
+// pre-upgrade backup.
+func TestRestoreOlderSchemaMigratedOnApply(t *testing.T) {
+	c := newRestoreCtx(t)
+	c.seedClient("alice", testClientKey)
+	archive := buildArchive(t, c.id, validEntriesWithSchema(t, "3", 3))
+
+	res, err := c.doRestore(archive)
+	if err != nil {
+		t.Fatalf("Restore of a v3 archive: %v", err)
+	}
+	if _, ok, err := PendingPath(c.dbPath); err != nil || !ok {
+		t.Fatalf("pending marker after v3 restore: %v", err)
+	}
+	if res.SafetyBackup == "" {
+		t.Fatal("no safety backup for a v3 restore")
+	}
+
+	applied, err := ApplyPending(c.dbPath)
+	if err != nil {
+		t.Fatalf("ApplyPending: %v", err)
+	}
+	if !applied {
+		t.Fatal("v3 restore was not applied")
+	}
+
+	// panel-init sequence: open + Migrate, then the schema is current.
+	handle, err := db.Open(c.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	if err := db.Migrate(handle); err != nil {
+		t.Fatalf("migrate restored v3 database: %v", err)
+	}
+	stored, err := db.SchemaVersionStored(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != db.SchemaVersion {
+		t.Fatalf("restored schema_version = %s, want %s", stored, db.SchemaVersion)
+	}
+
+	// The v4 unique name index is live on the migrated database.
+	if _, err := handle.Exec(`INSERT INTO clients (name) VALUES ('alice')`); err == nil {
+		t.Fatal("duplicate client name accepted after migration")
 	}
 }
 
