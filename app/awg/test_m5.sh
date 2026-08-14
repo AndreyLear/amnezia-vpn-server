@@ -342,24 +342,38 @@ check "producer: timestamps differ across runs" [ "${raw1}" != "${raw2}" ]
 CONC_STATUS="${TMP}/conc/status.json"
 mkdir -p "${TMP}/conc"
 # two distinct dump inputs so concurrent writers produce conflicting content
+# T-118: each writer gets its own stub dump file. With a single shared
+# STUB_DUMP the two `cp` loops race on it and the producer can read a
+# hybrid dump (start of A, end of B) and write "mixed" contents to
+# status.json — a test-harness race, not a producer defect.
 CONC_A="${TMP}/dump-a"
 CONC_B="${TMP}/dump-b"
+STUB_DUMP_A="${TMP}/dump-a-stub"
+STUB_DUMP_B="${TMP}/dump-b-stub"
 dump_v1 > "${CONC_A}"
 dump_v2 > "${CONC_B}"
+cp "${CONC_A}" "${STUB_DUMP_A}"
+cp "${CONC_B}" "${STUB_DUMP_B}"
 
 READER_ERR="${TMP}/reader.err"
 : > "${READER_ERR}"
 (
     for i in $(seq 1 600); do
         if [ -f "${CONC_STATUS}" ]; then
-            first_char="$(head -c 1 "${CONC_STATUS}")"
-            last_char="$(tail -c 1 "${CONC_STATUS}")"
+            # T-118: take ONE snapshot and run every check against it.
+            # Per-check opens race with the writers: the file can change
+            # between two greps, so "mixed" was observed on files that
+            # were never actually mixed. `cat` on a rename-atomic target
+            # yields exactly one complete payload.
+            snap="$(cat "${CONC_STATUS}" 2>/dev/null)" || continue
+            first_char="$(printf '%s' "$snap" | head -c 1)"
+            last_char="$(printf '%s' "$snap" | tail -c 1)"
             if [ "${first_char}" != "{" ] || [ "${last_char}" != "}" ]; then
                 echo "partial file (first=[${first_char}] last=[${last_char}]) at iteration $i" >> "${READER_ERR}"
                 cp "${CONC_STATUS}" "${TMP}/reader-caught.json" 2>/dev/null
                 break
             fi
-            if ! grep -q '"schema":"v1"' "${CONC_STATUS}"; then
+            if ! printf '%s' "$snap" | grep -q '"schema":"v1"'; then
                 echo "corrupt file at iteration $i" >> "${READER_ERR}"
                 cp "${CONC_STATUS}" "${TMP}/reader-caught.json" 2>/dev/null
                 break
@@ -367,13 +381,13 @@ READER_ERR="${TMP}/reader.err"
             # every observation must be one complete payload: either the
             # dump-A run (peers A/B/Z) or the dump-B run (peer C), never
             # a mix or a fragment
-            if grep -q "${PEER_A}\|${PEER_B}\|${PEER_Z}" "${CONC_STATUS}" \
-                && grep -q "${PEER_C}" "${CONC_STATUS}"; then
+            if printf '%s' "$snap" | grep -q "${PEER_A}\|${PEER_B}\|${PEER_Z}" \
+                && printf '%s' "$snap" | grep -q "${PEER_C}"; then
                 echo "mixed contents at iteration $i" >> "${READER_ERR}"
                 cp "${CONC_STATUS}" "${TMP}/reader-caught.json" 2>/dev/null
                 break
             fi
-            if ! grep -q "${PEER_A}\|${PEER_B}\|${PEER_Z}\|${PEER_C}" "${CONC_STATUS}"; then
+            if ! printf '%s' "$snap" | grep -q "${PEER_A}\|${PEER_B}\|${PEER_Z}\|${PEER_C}"; then
                 echo "unknown contents at iteration $i" >> "${READER_ERR}"
                 cp "${CONC_STATUS}" "${TMP}/reader-caught.json" 2>/dev/null
                 break
@@ -389,15 +403,17 @@ WRITER_A="${TMP}/writer-a.log"
 WRITER_B="${TMP}/writer-b.log"
 (
     for i in $(seq 1 25); do
-        cp "${CONC_A}" "${STUB_DUMP}"
-        PATH="${TMP}/bin:$PATH" "${PRODUCER}" awg0 "${CONC_STATUS}" >/dev/null 2>&1 || true
+        cp "${CONC_A}" "${STUB_DUMP_A}"
+        PATH="${TMP}/bin:$PATH" AWG_STUB_DUMP_FILE="${STUB_DUMP_A}" \
+            "${PRODUCER}" awg0 "${CONC_STATUS}" >/dev/null 2>&1 || true
     done
 ) >/dev/null 2>&1 &
 WR_A=$!
 (
     for i in $(seq 1 25); do
-        cp "${CONC_B}" "${STUB_DUMP}"
-        PATH="${TMP}/bin:$PATH" "${PRODUCER}" awg0 "${CONC_STATUS}" >/dev/null 2>&1 || true
+        cp "${CONC_B}" "${STUB_DUMP_B}"
+        PATH="${TMP}/bin:$PATH" AWG_STUB_DUMP_FILE="${STUB_DUMP_B}" \
+            "${PRODUCER}" awg0 "${CONC_STATUS}" >/dev/null 2>&1 || true
     done
 ) >/dev/null 2>&1 &
 WR_B=$!
