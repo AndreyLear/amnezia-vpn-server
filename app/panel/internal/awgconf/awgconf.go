@@ -170,8 +170,8 @@ func ParseParams(raw string) (*Params, error) {
 	return p, nil
 }
 
-// validateParams applies the ranges/relations enforced by the pinned
-// amneziawg-go UAPI parser (device/uapi.go) and magic-header/obf parsers.
+// validateParams applies the ranges/relations enforced by pinned
+// amneziawg-tools 1.0.20260223 (H 7-digit; I-tags t/r/rc/rd/b).
 func validateParams(p *Params) error {
 	if p.Jc != nil && *p.Jc < 1 {
 		return fmt.Errorf("awg_params.jc must be >= 1")
@@ -204,36 +204,30 @@ func validateParams(p *Params) error {
 	return nil
 }
 
-// validateHeaderSpec mirrors amneziawg-go device/magic-header.go
-// newMagicHeader: "N" or "N-M" with N <= M, both uint32 decimals.
+// validateHeaderSpec mirrors pinned amneziawg-tools 1.0.20260223:
+// a single 7-digit decimal in [1000000, 9999999]. "N-M" is rejected.
 func validateHeaderSpec(spec string) error {
 	if spec == "" {
 		return nil
 	}
-	parts := strings.Split(spec, "-")
-	if len(parts) < 1 || len(parts) > 2 {
-		return fmt.Errorf("awg_params header %q: bad format, want N or N-M", spec)
+	if strings.Contains(spec, "-") {
+		return fmt.Errorf("awg_params header %q: bad format, want 7-digit N in [1000000, 9999999]", spec)
 	}
-	start, err := strconv.ParseUint(parts[0], 10, 32)
+	n, err := strconv.ParseUint(spec, 10, 32)
 	if err != nil {
-		return fmt.Errorf("awg_params header %q: failed to parse %q", spec, parts[0])
+		return fmt.Errorf("awg_params header %q: failed to parse %q", spec, spec)
 	}
-	end := start
-	if len(parts) > 1 {
-		end, err = strconv.ParseUint(parts[1], 10, 32)
-		if err != nil {
-			return fmt.Errorf("awg_params header %q: failed to parse %q", spec, parts[1])
-		}
+	if strconv.FormatUint(n, 10) != spec {
+		return fmt.Errorf("awg_params header %q: bad format, want 7-digit N in [1000000, 9999999]", spec)
 	}
-	if end < start {
-		return fmt.Errorf("awg_params header %q: wrong range specified", spec)
+	if n < 1000000 || n > 9999999 {
+		return fmt.Errorf("awg_params header %q: out of range, want 7-digit N in [1000000, 9999999]", spec)
 	}
 	return nil
 }
 
-// validateObfChain mirrors amneziawg-go device/obf.go newObfChain: the
-// signature-packet format is a sequence of <tag ...> blocks; text outside
-// tags is ignored, tags must be known and well-formed.
+// validateObfChain accepts a sequence of <tag ...> blocks. Text outside
+// tags is ignored. Tags must match pinned amneziawg-tools 1.0.20260223.
 func validateObfChain(spec string) error {
 	remaining := spec
 	for {
@@ -258,9 +252,13 @@ func validateObfChain(spec string) error {
 	}
 }
 
-// validateObfTag validates one <tag [arg]> block against the upstream
-// obfBuilders table (device/obf.go): b, t, r, rc, rd, d, ds, dz.
+// validateObfTag validates one <tag [arg]> block against pinned
+// amneziawg-tools 1.0.20260223: t (no arg), r/rc/rd (int), b (hex).
+// d, ds, and dz are rejected (those tools fail setconf on them).
 func validateObfTag(fields []string) error {
+	if len(fields) > 2 {
+		return fmt.Errorf("unknown tag <%s>", strings.Join(fields, " "))
+	}
 	key, val := fields[0], ""
 	if len(fields) > 1 {
 		val = fields[1]
@@ -291,9 +289,12 @@ func validateObfTag(fields []string) error {
 			return fmt.Errorf("invalid hex %q", hexStr)
 		}
 		return nil
-	case "t", "d", "ds":
+	case "t":
+		if val != "" {
+			return fmt.Errorf("unknown tag <%s>", strings.Join(fields, " "))
+		}
 		return nil
-	case "r", "rc", "rd", "dz":
+	case "r", "rc", "rd":
 		return requireInt()
 	default:
 		return fmt.Errorf("unknown tag <%s>", key)

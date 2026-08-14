@@ -110,7 +110,7 @@ func TestRenderDeterministic(t *testing.T) {
 }
 
 func TestParseParams(t *testing.T) {
-	got, err := ParseParams(`{"jc":3,"jmin":1,"jmax":5,"s1":1,"s4":4,"h1":"3-5","i1":"<t><r 4><b 0x01>"}`)
+	got, err := ParseParams(`{"jc":3,"jmin":1,"jmax":5,"s1":1,"s4":4,"h1":"1234567","i1":"<t><r 4><b 0x01>"}`)
 	if err != nil {
 		t.Fatalf("ParseParams() error: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestParseParams(t *testing.T) {
 	if got.S2 != nil || got.S3 != nil {
 		t.Errorf("s2/s3 = %v/%v, want unset", got.S2, got.S3)
 	}
-	if got.H1 != "3-5" || got.I1 != "<t><r 4><b 0x01>" {
+	if got.H1 != "1234567" || got.I1 != "<t><r 4><b 0x01>" {
 		t.Errorf("h1/i1 = %q/%q", got.H1, got.I1)
 	}
 }
@@ -141,15 +141,15 @@ func TestParseParamsEmpty(t *testing.T) {
 }
 
 func TestParseParamsNullsAreSkipped(t *testing.T) {
-	got, err := ParseParams(`{"jc":null,"h1":"3-5","i1":null}`)
+	got, err := ParseParams(`{"jc":null,"h1":"1234567","i1":null}`)
 	if err != nil {
 		t.Fatalf("ParseParams() error: %v", err)
 	}
 	if got.Jc != nil || got.I1 != "" {
 		t.Errorf("null fields must stay unset, got %+v", got)
 	}
-	if got.H1 != "3-5" {
-		t.Errorf("h1 = %q, want 3-5", got.H1)
+	if got.H1 != "1234567" {
+		t.Errorf("h1 = %q, want 1234567", got.H1)
 	}
 }
 
@@ -169,12 +169,19 @@ func TestParseParamsValidation(t *testing.T) {
 		{"negative s", `{"s2":-1}`, "not an integer"},
 		{"overflow s", `{"s2":70000}`, "not an integer"},
 		{"string for jc", `{"jc":"3"}`, "not an integer"},
-		{"bad header range", `{"h1":"10-5"}`, "wrong range"},
+		{"header range inverted", `{"h1":"10-5"}`, "bad format"},
 		{"bad header token", `{"h1":"abc"}`, "failed to parse"},
-		{"bad header arity", `{"h1":"1-2-3"}`, "bad format"},
+		{"header range form", `{"h1":"1-2-3"}`, "bad format"},
+		{"header N-M", `{"h1":"3-5"}`, "bad format"},
 		{"bad header hex", `{"h2":"0x10"}`, "failed to parse"},
 		{"huge header", `{"h1":"4294967296"}`, "failed to parse"},
+		{"header below 7 digits", `{"h1":"999999"}`, "out of range"},
+		{"header 8 digits", `{"h1":"10000000"}`, "out of range"},
+		{"header leading zero", `{"h1":"01000000"}`, "bad format"},
 		{"unknown tag", `{"i1":"<xor 4>"}`, "unknown tag"},
+		{"rejected tag d", `{"i1":"<d>"}`, "unknown tag"},
+		{"rejected tag ds", `{"i1":"<ds>"}`, "unknown tag"},
+		{"rejected tag dz", `{"i1":"<dz 8>"}`, "unknown tag"},
 		{"unclosed tag", `{"i1":"<b 0x01"}`, "missing enclosing >"},
 		{"empty tag", `{"i1":"<>"}`, "empty tag"},
 		{"b no arg", `{"i1":"<b>"}`, "empty argument"},
@@ -197,23 +204,20 @@ func TestParseParamsValidation(t *testing.T) {
 	}
 }
 
-func TestParseParamsAcceptsUpstreamFormats(t *testing.T) {
+func TestParseParamsAcceptsPinnedToolsFormats(t *testing.T) {
 	oKs := []string{
 		`{"i1":"<t>"}`,
 		`{"i1":"<r 3>"}`,
 		`{"i1":"<rc 0>"}`,
 		`{"i1":"<rd 6>"}`,
-		`{"i1":"<dz 8>"}`,
-		`{"i1":"<d>"}`,
-		`{"i1":"<ds>"}`,
 		`{"i1":"<b 0x01>"}`,
 		`{"i1":"<b 01020304>"}`,
 		`{"i1":"garbage with no tags"}`,
 		`{"i1":"<r 3>trailing text"}`,
 		`{"i1":"<b 0x01><r 4><t><b 0x0002>"}`,
-		`{"h1":"7"}`,
-		`{"h2":"0"}`,
-		`{"h3":"3-5"}`,
+		`{"h1":"1000000"}`,
+		`{"h2":"9999999"}`,
+		`{"h3":"1234567"}`,
 	}
 	for _, raw := range oKs {
 		if _, err := ParseParams(raw); err != nil {

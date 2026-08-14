@@ -76,7 +76,7 @@ func TestEmptyServerRow(t *testing.T) {
 
 func TestGenerateIntegration(t *testing.T) {
 	handle, dir := newTestDB(t)
-	seedServer(t, handle, `{"jc":3,"jmin":1,"jmax":5,"s1":1,"s2":2,"s3":3,"s4":4,"h1":"3-5","i1":"<t><r 4>"}`, "1.1.1.1")
+	seedServer(t, handle, `{"jc":3,"jmin":1,"jmax":5,"s1":1,"s2":2,"s3":3,"s4":4,"h1":"1234567","i1":"<t><r 4>"}`, "1.1.1.1")
 	seedClient(t, handle, 1, testKey(4), true, "10.8.0.2/32")
 	seedClient(t, handle, 2, "", true, "10.8.0.3/32")
 
@@ -99,7 +99,7 @@ func TestGenerateIntegration(t *testing.T) {
 		"Jmin = 1",
 		"Jmax = 5",
 		"S1 = 1", "S2 = 2", "S3 = 3", "S4 = 4",
-		"H1 = 3-5",
+		"H1 = 1234567",
 		"I1 = <t><r 4>",
 	}
 	for _, want := range expect {
@@ -168,7 +168,7 @@ func TestGenerateAtomicWrite(t *testing.T) {
 
 func TestGenerateIdempotentReinit(t *testing.T) {
 	handle, dir := newTestDB(t)
-	seedServer(t, handle, `{"jc":3,"h1":"3-5","i1":"<r 4>"}`, "")
+	seedServer(t, handle, `{"jc":3,"h1":"1234567","i1":"<r 4>"}`, "")
 	seedClient(t, handle, 1, testKey(4), true, "10.8.0.2/32")
 
 	target := filepath.Join(dir, "awg0.conf")

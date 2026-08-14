@@ -3,8 +3,8 @@
 //
 // Everything here draws from crypto/rand and every generated value lies
 // inside the ranges enforced by validateParams/validateHeaderSpec/
-// validateObfChain (awgconf.go), which mirror the pinned
-// amneziawg-go 0.2.19 / amneziawg-tools 1.0.20260223 parsers.
+// validateObfChain (awgconf.go), which mirror pinned
+// amneziawg-tools 1.0.20260223 (not the wider amneziawg-go parsers).
 package awgconf
 
 import (
@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -33,6 +32,8 @@ const (
 	genTagSizeMax   = 32
 	genBBytesMin    = 1
 	genBBytesMax    = 2
+	genHMin         = 1000000
+	genHMax         = 9999999
 )
 
 // GenerateParams builds a full random AWG obfuscation parameter set
@@ -62,7 +63,7 @@ func GenerateParams() (*Params, error) {
 	}
 	headers := make([]string, 4)
 	for i := range headers {
-		h, err := randRange(0, math.MaxUint32)
+		h, err := randRange(genHMin, genHMax)
 		if err != nil {
 			return nil, err
 		}
@@ -135,9 +136,9 @@ type paramsJSON struct {
 	I5   string  `json:"i5,omitempty"`
 }
 
-// genObfTags is the pool for random obf chains: the complete upstream
-// obfBuilders table (b, t, r, rc, rd, d, ds, dz, device/obf.go).
-var genObfTags = []string{"t", "d", "ds", "r", "rc", "rd", "dz", "b"}
+// genObfTags is the pool accepted by pinned amneziawg-tools 1.0.20260223:
+// t (no arg), r/rc/rd (int), b (hex). d/ds/dz are rejected by those tools.
+var genObfTags = []string{"t", "r", "rc", "rd", "b"}
 
 // randomObfChain builds one random signature-packet obfuscation chain:
 // 1..3 well-formed <tag ...> blocks, e.g. "<t><r 4><b 0x1a>".
@@ -156,7 +157,7 @@ func randomObfChain() (string, error) {
 		b.WriteByte('<')
 		b.WriteString(tag)
 		switch tag {
-		case "r", "rc", "rd", "dz":
+		case "r", "rc", "rd":
 			size, err := randRange(genTagSizeMin, genTagSizeMax)
 			if err != nil {
 				return "", err

@@ -39,6 +39,9 @@ func TestGenerateParamsRangesAndValidity(t *testing.T) {
 			if err := validateHeaderSpec(h); err != nil {
 				t.Fatalf("%s = %q: %v", name, h, err)
 			}
+			if len(h) != 7 {
+				t.Fatalf("%s = %q: want 7-digit header", name, h)
+			}
 		}
 		for name, chain := range map[string]string{
 			"i1": p.I1, "i2": p.I2, "i3": p.I3, "i4": p.I4, "i5": p.I5,
@@ -76,7 +79,7 @@ func TestGenerateParamsRandomness(t *testing.T) {
 
 func TestGenerateParamsCoversAllTagKinds(t *testing.T) {
 	// The random chain generator must be able to produce every
-	// permitted tag kind (b/t/r/rc/rd/d/ds/dz): drive it 500 times and
+	// permitted tag kind (t/r/rc/rd/b): drive it 500 times and
 	// collect the tags seen in the five chains.
 	tags := make(map[string]bool)
 	for i := 0; i < 500; i++ {

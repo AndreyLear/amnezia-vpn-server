@@ -20,7 +20,7 @@ const (
 	testServerCIDR = "10.8.0.1/24"
 	testEndpoint   = "vpn.example.com:51820"
 	testDNS        = "8.8.8.8"
-	testAWGParams  = `{"jc":5,"s1":80,"h1":"1-10","i1":"<b 0x1a2b><t>"}`
+	testAWGParams  = `{"jc":5,"s1":80,"h1":"1234567","i1":"<b 0x1a2b><t>"}`
 )
 
 type ctx struct {
@@ -879,7 +879,7 @@ func TestClientConfigGolden(t *testing.T) {
 	line("DNS", server.DNS)
 	line("Jc", "5")
 	line("S1", "80")
-	line("H1", "1-10")
+	line("H1", "1234567")
 	line("I1", "<b 0x1a2b><t>")
 	want.WriteString("\n")
 	want.WriteString("[Peer]\n")

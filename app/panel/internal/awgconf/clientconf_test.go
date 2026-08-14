@@ -20,8 +20,8 @@ func seedEndpoint(t *testing.T, handle *sql.DB, endpoint string) {
 }
 
 const fullParams = `{"jc":3,"jmin":21,"jmax":31,"s1":904,"s2":737,"s3":128,"s4":857,` +
-	`"h1":"3-5","h2":"1-2","h3":"7","h4":"2-10",` +
-	`"i1":"<t><r 4><b 0x01>","i2":"<r 8>","i3":"<d><ds 18><dz 5>","i4":"<rc 7>","i5":"<rd 16>"}`
+	`"h1":"1234567","h2":"2345678","h3":"3456789","h4":"4567890",` +
+	`"i1":"<t><r 4><b 0x01>","i2":"<r 8>","i3":"<t><b 0xab>","i4":"<rc 7>","i5":"<rd 16>"}`
 
 func TestGenerateClientMinimal(t *testing.T) {
 	handle, _ := newTestDB(t)
@@ -64,8 +64,8 @@ func TestGenerateClientFull(t *testing.T) {
 		"DNS = 1.1.1.1,9.9.9.9",
 		"Jc = 3", "Jmin = 21", "Jmax = 31",
 		"S1 = 904", "S2 = 737", "S3 = 128", "S4 = 857",
-		"H1 = 3-5", "H2 = 1-2", "H3 = 7", "H4 = 2-10",
-		"I1 = <t><r 4><b 0x01>", "I2 = <r 8>", "I3 = <d><ds 18><dz 5>", "I4 = <rc 7>", "I5 = <rd 16>",
+		"H1 = 1234567", "H2 = 2345678", "H3 = 3456789", "H4 = 4567890",
+		"I1 = <t><r 4><b 0x01>", "I2 = <r 8>", "I3 = <t><b 0xab>", "I4 = <rc 7>", "I5 = <rd 16>",
 		"[Peer]",
 		"PublicKey = " + testKey(2),
 		"PresharedKey = " + testKey(4),
@@ -89,13 +89,13 @@ func TestGenerateClientFull(t *testing.T) {
 		"S2 = 737\n"+
 		"S3 = 128\n"+
 		"S4 = 857\n"+
-		"H1 = 3-5\n"+
-		"H2 = 1-2\n"+
-		"H3 = 7\n"+
-		"H4 = 2-10\n"+
+		"H1 = 1234567\n"+
+		"H2 = 2345678\n"+
+		"H3 = 3456789\n"+
+		"H4 = 4567890\n"+
 		"I1 = <t><r 4><b 0x01>\n"+
 		"I2 = <r 8>\n"+
-		"I3 = <d><ds 18><dz 5>\n"+
+		"I3 = <t><b 0xab>\n"+
 		"I4 = <rc 7>\n"+
 		"I5 = <rd 16>\n"+
 		"\n"+
