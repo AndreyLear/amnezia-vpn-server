@@ -4,17 +4,17 @@
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark"></span>
-    AmneziaVPN <small>panel</small>
+    AmneziaVPN <small class="ml-0.5 text-[13px] font-medium text-ink-muted">panel</small>
   </div>
-  <nav>
+  <nav class="ml-auto flex flex-wrap items-center gap-1">
     <span class="who">Вы вошли как {{.Username}}</span>
-    <button type="button" class="btn primary" data-dialog-open="add-dialog">Добавить клиента</button>
+    <button type="button" class="btn btn-primary" data-dialog-open="add-dialog">Добавить клиента</button>
     <form action="/backups/download" method="post" class="inline-form">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <button type="submit" class="btn">Скачать бэкап</button>
     </form>
-    <a href="/backups">Бэкапы</a>
-    <a href="/backups/restore">Загрузить бэкап</a>
+    <a class="topnav-link" href="/backups">Бэкапы</a>
+    <a class="topnav-link" href="/backups/restore">Загрузить бэкап</a>
     <form action="/logout" method="post" class="inline-form">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <button type="submit" class="btn">Выйти</button>
@@ -22,16 +22,16 @@
   </nav>
 </header>
 
-<main class="dash">
+<main class="page">
   <div class="statsline">
     {{if .Up}}
-    <span class="chip up"><span class="dot"></span>Туннель работает{{if .GeneratedText}}<span class="chip-note">{{.GeneratedText}}</span>{{end}}</span>
+    <span class="chip chip-up"><span class="chip-dot"></span>Туннель работает{{if .GeneratedText}}<span class="chip-note">{{.GeneratedText}}</span>{{end}}</span>
     {{else if .NA}}
-    <span class="chip na"><span class="dot"></span>Туннель: статус недоступен</span>
+    <span class="chip chip-na"><span class="chip-dot"></span>Туннель: статус недоступен</span>
     {{else if .Down}}
-    <span class="chip down"><span class="dot"></span>Туннель: интерфейс выключен</span>
+    <span class="chip chip-down"><span class="chip-dot"></span>Туннель: интерфейс выключен</span>
     {{else}}
-    <span class="chip err"><span class="dot"></span>Туннель: ошибка статуса</span>
+    <span class="chip chip-err"><span class="chip-dot"></span>Туннель: ошибка статуса</span>
     {{end}}
     <span class="chip" id="clients-chip">Клиентов: {{len .CardViews}}</span>
     <span class="chip">Вх: <code>{{.RxTotalText}}</code> · Исх: <code>{{.TxTotalText}}</code></span>
@@ -43,22 +43,22 @@
     <h2>Добавить клиента</h2>
     <form action="/clients/new" method="post" data-mutate="add">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
-      <label>Имя
-        <input type="text" name="name" maxlength="64" required>
+      <label class="label">Имя
+        <input class="input" type="text" name="name" maxlength="64" required>
       </label>
-      <label>Срок действия (необязательно)
-        <input type="datetime-local" name="expires_at">
+      <label class="label">Срок действия (необязательно)
+        <input class="input" type="datetime-local" name="expires_at">
       </label>
       <div class="dialog-actions">
         <button type="button" class="btn" data-dialog-close>Отмена</button>
-        <button type="submit" class="btn primary">Добавить</button>
+        <button type="submit" class="btn btn-primary">Добавить</button>
       </div>
     </form>
   </dialog>
 
-  <section class="clients">
+  <section>
     <div class="clients-head">
-      <h2>Клиенты</h2>
+      <h2 class="text-[15px] font-semibold tracking-wide">Клиенты</h2>
       <span class="badge" id="client-count">{{len .CardViews}}</span>
     </div>
     {{if not .CardViews}}<p class="empty">Клиентов пока нет.</p>{{end}}

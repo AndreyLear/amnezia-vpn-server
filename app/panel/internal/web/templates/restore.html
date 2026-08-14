@@ -4,19 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Восстановление из бэкапа</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/tailwind.css">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark"></span>
-    AmneziaVPN <small>panel</small>
+    AmneziaVPN <small class="ml-0.5 text-[13px] font-medium text-ink-muted">panel</small>
   </div>
-  <nav>
+  <nav class="ml-auto flex flex-wrap items-center gap-1">
     <span class="who">Вы вошли как {{.Username}}</span>
-    <a href="/">Панель</a>
-    <a href="/backups">Бэкапы</a>
+    <a class="topnav-link" href="/">Панель</a>
+    <a class="topnav-link" href="/backups">Бэкапы</a>
     <form action="/logout" method="post" class="inline-form">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <button type="submit" class="btn">Выйти</button>
@@ -24,7 +24,7 @@
   </nav>
 </header>
 
-<main>
+<main class="page">
   <h1 class="page-title">Восстановление из бэкапа</h1>
   <p class="page-sub">Архив (.tar.zst.age) проверяется, распаковывается во временную директорию
      и сканируется до внесения изменений. Панель не перезапускает себя
@@ -43,17 +43,17 @@
     <form action="/backups/restore" method="post" enctype="multipart/form-data">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <p>
-        <label>Архив бэкапа
-          <input type="file" name="backup" accept=".age" required>
+        <label class="label">Архив бэкапа
+          <input class="input" type="file" name="backup" accept=".age" required>
         </label>
       </p>
       <p>
-        <label>Ключ age (секретный)
-          <textarea name="identity" rows="5" autocomplete="off"
+        <label class="label">Ключ age (секретный)
+          <textarea class="input textarea" name="identity" rows="5" autocomplete="off"
                     spellcheck="false" placeholder="AGE-SECRET-KEY-1..."></textarea>
         </label>
       </p>
-      <button type="submit" class="btn destructive">Загрузить и восстановить</button>
+      <button type="submit" class="btn btn-destructive">Загрузить и восстановить</button>
     </form>
   </section>
 </main>

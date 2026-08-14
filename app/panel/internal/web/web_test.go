@@ -545,26 +545,32 @@ func TestRedirect303(t *testing.T) {
 	}
 }
 
-// TestStaticCSSAndTemplatePurity (T-120): the embedded stylesheet and
-// the progressive-enhancement script are served publicly at /static/*
-// (the login page needs them before any session exists), and no
-// rendered page carries inline styles, inline scripts or inline event
-// handlers — the CSP "default-src 'self'" forbids them. The ONLY
-// script allowed is the external /static/app.js (round 2 §12); every
-// page embeds it exactly once.
+// TestStaticCSSAndTemplatePurity (T-120): the embedded compiled
+// Tailwind stylesheet and the progressive-enhancement script are served
+// publicly at /static/* (the login page needs them before any session
+// exists), and no rendered page carries inline styles, inline scripts
+// or inline event handlers — the CSP "default-src 'self'" forbids
+// them. The ONLY script allowed is the external /static/app.js (round 2
+// §12); every page embeds it exactly once and links the single
+// committed /static/tailwind.css stylesheet.
 func TestStaticCSSAndTemplatePurity(t *testing.T) {
 	f := newFixture(t)
 
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/static/style.css", ""))
+	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/static/tailwind.css", ""))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /static/style.css: code = %d, want 200", rec.Code)
+		t.Fatalf("GET /static/tailwind.css: code = %d, want 200", rec.Code)
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
 		t.Fatalf("css content-type = %q, want text/css", ct)
 	}
 	if strings.TrimSpace(rec.Body.String()) == "" {
 		t.Fatal("css body is empty")
+	}
+	for _, needle := range []string{"--tw-", ".btn", ".badge", ".card", ".modal"} {
+		if !strings.Contains(rec.Body.String(), needle) {
+			t.Fatalf("compiled tailwind.css misses %q — artifact is stale", needle)
+		}
 	}
 
 	rec = httptest.NewRecorder()
@@ -594,6 +600,9 @@ func TestStaticCSSAndTemplatePurity(t *testing.T) {
 		body := rec.Body.String()
 		if n := strings.Count(body, `<script src="/static/app.js" defer></script>`); n != 1 {
 			t.Fatalf("GET %s: app.js script tag count = %d, want exactly 1", path, n)
+		}
+		if n := strings.Count(body, `<link rel="stylesheet" href="/static/tailwind.css">`); n != 1 {
+			t.Fatalf("GET %s: tailwind.css link count = %d, want exactly 1", path, n)
 		}
 		for _, needle := range []string{
 			"<script>", "style=", "onclick=", "onerror=", "onload=",

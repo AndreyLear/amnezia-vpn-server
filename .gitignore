@@ -30,6 +30,10 @@ restore/
 # local binary from `go build ./...` in app/panel (name = basename of module path)
 /app/panel/amnezia-vpn-server
 
+# Node toolchain (panel design system, T-120): the compiled
+# internal/web/static/tailwind.css IS committed, dependencies are not.
+node_modules/
+
 # IDE / OS
 .idea/
 .vscode/

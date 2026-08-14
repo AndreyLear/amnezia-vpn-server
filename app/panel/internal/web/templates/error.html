@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ошибка {{.Code}}</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/tailwind.css">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
-<main class="panel error-panel">
-  <div class="logo"></div>
+<main class="panel">
+  <div class="panel-logo"></div>
   <h1>Ошибка {{.Code}}</h1>
   <p class="sub">{{.Message}}</p>
-  <a class="btn" href="/">На панель</a>
+  <a class="btn mt-3.5" href="/">На панель</a>
 </main>
 </body>
 </html>

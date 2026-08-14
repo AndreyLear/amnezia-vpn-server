@@ -24,16 +24,21 @@
   /* ---- toasts ----------------------------------------------------- */
 
   const toasts = doc.createElement("div");
-  toasts.className = "toasts";
+  toasts.className =
+    "fixed right-5 bottom-5 z-[100] flex max-w-[min(360px,calc(100vw_-_40px))] flex-col gap-2.5";
   doc.body.appendChild(toasts);
 
   function showToast(message, kind) {
     const el = doc.createElement("div");
-    el.className = "toast " + (kind === "error" ? "error" : "ok");
+    el.className =
+      "animate-toast-in rounded-btn border px-4 py-3 text-[13.5px] font-medium break-words shadow-lg transition duration-300 " +
+      (kind === "error"
+        ? "border-error/40 bg-error/10 text-[#ffb3b4]"
+        : "border-success/40 bg-success/10 text-[#9ef0c6]");
     el.textContent = message;
     toasts.appendChild(el);
     window.setTimeout(() => {
-      el.classList.add("leaving");
+      el.classList.add("opacity-0", "translate-y-1.5");
       window.setTimeout(() => el.remove(), 300);
     }, 4000);
   }

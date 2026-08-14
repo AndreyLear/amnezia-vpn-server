@@ -42,3 +42,8 @@ QRDECODE_GO_VERSION=v0.1.1
 # Panel: Argon2id password hashing (M7 authentication), pinned
 XCRYPTO_GO=golang.org/x/crypto
 XCRYPTO_GO_VERSION=v0.54.0
+
+# Panel: Tailwind CSS design-system toolchain (T-120 round 3), pinned.
+# Build-only (npm); the compiled artifact static/tailwind.css is committed,
+# Go builds/tests stay offline without Node.
+TAILWINDCSS_VERSION=4.3.3

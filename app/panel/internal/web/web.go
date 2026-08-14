@@ -102,7 +102,7 @@ func DefaultConfig() Config {
 //go:embed templates/*.html
 var templateFS embed.FS
 
-//go:embed static/style.css static/app.js
+//go:embed static/tailwind.css static/app.js
 var staticFS embed.FS
 
 // Server is one panel HTTP server. It is safe to call Handler after
@@ -218,21 +218,23 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("GET /clients/{id}/qr", s.auth.RequireAuth(http.HandlerFunc(s.clientQR)))
 	s.mux.HandleFunc("GET /login", s.loginPage)
 	s.mux.HandleFunc("POST /login", s.loginSubmit)
-	// Public static assets (T-120 design system): plain CSS and the
-	// progressive-enhancement JS served from the embedded FS; CSP
-	// default-src 'self' admits them (external files only — inline
+	// Public static assets (T-120 design system): the compiled Tailwind
+	// stylesheet (committed artifact, see internal/web/static/input.css)
+	// and the progressive-enhancement JS served from the embedded FS;
+	// CSP default-src 'self' admits them (external files only — inline
 	// scripts/styles stay forbidden). No auth: the login page needs
 	// them before any session exists.
-	s.mux.HandleFunc("GET /static/style.css", s.staticCSS)
+	s.mux.HandleFunc("GET /static/tailwind.css", s.staticCSS)
 	s.mux.HandleFunc("GET /static/app.js", s.staticJS)
 	s.mux.HandleFunc("/", s.notFound)
 	return s, nil
 }
 
-// staticCSS serves the embedded stylesheet. The response passes through
-// securityHeaders like every other route (nosniff, CSP, no-store).
+// staticCSS serves the embedded compiled Tailwind stylesheet. The
+// response passes through securityHeaders like every other route
+// (nosniff, CSP, no-store).
 func (s *Server) staticCSS(w http.ResponseWriter, r *http.Request) {
-	data, err := staticFS.ReadFile("static/style.css")
+	data, err := staticFS.ReadFile("static/tailwind.css")
 	if err != nil {
 		s.notFound(w, r)
 		return

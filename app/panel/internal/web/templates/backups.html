@@ -4,19 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Бэкапы</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/tailwind.css">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark"></span>
-    AmneziaVPN <small>panel</small>
+    AmneziaVPN <small class="ml-0.5 text-[13px] font-medium text-ink-muted">panel</small>
   </div>
-  <nav>
+  <nav class="ml-auto flex flex-wrap items-center gap-1">
     <span class="who">Вы вошли как {{.Username}}</span>
-    <a href="/">Панель</a>
-    <a href="/backups/restore">Загрузить бэкап</a>
+    <a class="topnav-link" href="/">Панель</a>
+    <a class="topnav-link" href="/backups/restore">Загрузить бэкап</a>
     <form action="/logout" method="post" class="inline-form">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <button type="submit" class="btn">Выйти</button>
@@ -24,7 +24,7 @@
   </nav>
 </header>
 
-<main>
+<main class="page">
   <h1 class="page-title">Бэкапы</h1>
   <p class="page-sub">Зашифрованные архивы базы данных (age), восстанавливаются через штатный процесс.</p>
 
@@ -35,11 +35,11 @@
   {{end}}
 
   <section class="form-card">
-    <h2>Действия</h2>
+    <h2 class="section-title">Действия</h2>
     <div class="row-actions">
       <form action="/backups/create" method="post">
         <input type="hidden" name="_csrf" value="{{.CSRF}}">
-        <button type="submit" class="btn primary">Создать бэкап</button>
+        <button type="submit" class="btn btn-primary">Создать бэкап</button>
       </form>
       <form action="/backups/download" method="post">
         <input type="hidden" name="_csrf" value="{{.CSRF}}">
@@ -49,28 +49,28 @@
   </section>
 
   <section class="form-card">
-    <h2>Загрузить бэкап</h2>
+    <h2 class="section-title">Загрузить бэкап</h2>
     <p class="sub">Восстановление из архива (.tar.zst.age): архив проверяется, распаковывается и применяется сразу — все клиенты из архива становятся активными без перезапуска.</p>
     <form action="/backups/restore" method="post" enctype="multipart/form-data">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <p>
-        <label>Архив бэкапа
-          <input type="file" name="backup" accept=".age" required>
+        <label class="label">Архив бэкапа
+          <input class="input" type="file" name="backup" accept=".age" required>
         </label>
       </p>
       <p>
-        <label>Ключ age (секретный)
-          <textarea name="identity" rows="4" autocomplete="off"
+        <label class="label">Ключ age (секретный)
+          <textarea class="input textarea" name="identity" rows="4" autocomplete="off"
                     spellcheck="false" placeholder="AGE-SECRET-KEY-1..."></textarea>
         </label>
       </p>
-      <button type="submit" class="btn destructive">Загрузить и применить</button>
+      <button type="submit" class="btn btn-destructive">Загрузить и применить</button>
     </form>
     <p class="sub">Нужен полный ручной процесс? <a href="/backups/restore">Страница восстановления</a></p>
   </section>
 
   <section class="table-wrap">
-    <h2 class="table-title">Архивы</h2>
+    <h2 class="section-title table-title">Архивы</h2>
     {{if not .Backups}}<p class="empty table-empty">Бэкапов пока нет.</p>{{end}}
     <table>
       {{range .Backups}}
@@ -78,11 +78,11 @@
         <td><code>{{.Name}}</code></td>
         <td>{{.DateText}}</td>
         <td>{{.SizeText}}</td>
-        <td><a class="btn ghost" href="/backups/{{.Name}}/download">скачать</a></td>
+        <td><a class="btn btn-ghost" href="/backups/{{.Name}}/download">скачать</a></td>
         <td>
           <form action="/backups/{{.Name}}/delete" method="post">
             <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-            <button type="submit" class="btn destructive">Удалить</button>
+            <button type="submit" class="btn btn-destructive">Удалить</button>
           </form>
         </td>
       </tr>

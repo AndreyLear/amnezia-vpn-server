@@ -1,11 +1,11 @@
 {{define "clientcard"}}
 <article class="card" id="client-{{.Card.ID}}">
   <div class="card-head">
-    <h3>{{.Card.Name}} <span class="id">#{{.Card.ID}}</span></h3>
-    <div class="row">
-      <span class="badge {{if .Card.Online}}on{{else}}off{{end}}">{{if .Card.Online}}онлайн{{else}}офлайн{{end}}</span>
-      <span class="badge {{if .Card.Enabled}}enabled{{else}}disabled{{end}}">{{if .Card.Enabled}}включён{{else}}отключён{{end}}</span>
-      {{if .Card.Expired}}<span class="badge expired">срок истёк</span>{{end}}
+    <h3 class="flex flex-wrap items-center gap-2 text-[15.5px] font-semibold">{{.Card.Name}} <span class="font-mono text-[13px] font-medium text-ink-faint">#{{.Card.ID}}</span></h3>
+    <div class="flex flex-wrap items-center gap-1.5">
+      <span class="badge {{if .Card.Online}}badge-on{{else}}badge-off{{end}}">{{if .Card.Online}}онлайн{{else}}офлайн{{end}}</span>
+      <span class="badge {{if .Card.Enabled}}badge-on{{else}}badge-off{{end}}">{{if .Card.Enabled}}включён{{else}}отключён{{end}}</span>
+      {{if .Card.Expired}}<span class="badge badge-expired">срок истёк</span>{{end}}
     </div>
   </div>
   <div class="meta">
@@ -21,7 +21,7 @@
   </div>
   <div class="actions">
     <details class="menu">
-      <summary class="btn ghost" aria-label="Действия для {{.Card.Name}}"><span aria-hidden="true">…</span></summary>
+      <summary class="btn btn-ghost" aria-label="Действия для {{.Card.Name}}"><span aria-hidden="true">…</span></summary>
       <div class="menu-panel">
         <form action="/clients/{{.Card.ID}}/{{if .Card.Enabled}}disable{{else}}enable{{end}}" method="post" data-mutate="toggle" data-client-id="{{.Card.ID}}">
           <input type="hidden" name="_csrf" value="{{.CSRF}}">
@@ -33,20 +33,20 @@
         <form action="/clients/{{.Card.ID}}/rename" method="post" data-mutate="rename" data-client-id="{{.Card.ID}}">
           <input type="hidden" name="_csrf" value="{{.CSRF}}">
           <label class="menu-label">Переименовать
-            <input type="text" name="name" maxlength="64" value="{{.Card.Name}}">
+            <input class="input" type="text" name="name" maxlength="64" value="{{.Card.Name}}">
           </label>
           <button type="submit" class="btn">Переименовать</button>
         </form>
         <form action="/clients/{{.Card.ID}}/expiry" method="post" data-mutate="expiry" data-client-id="{{.Card.ID}}">
           <input type="hidden" name="_csrf" value="{{.CSRF}}">
           <label class="menu-label">Срок действия (пусто — без срока)
-            <input type="datetime-local" name="expires_at">
+            <input class="input" type="datetime-local" name="expires_at">
           </label>
           <button type="submit" class="btn">Сохранить</button>
         </form>
       </div>
     </details>
-    <button type="button" class="btn destructive" data-dialog-open="del-{{.Card.ID}}">Удалить</button>
+    <button type="button" class="btn btn-destructive" data-dialog-open="del-{{.Card.ID}}">Удалить</button>
   </div>
 
   <dialog class="modal" id="qr-{{.Card.ID}}">
@@ -65,7 +65,7 @@
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <div class="dialog-actions">
         <button type="button" class="btn" data-dialog-close>Отмена</button>
-        <button type="submit" class="btn destructive">Удалить</button>
+        <button type="submit" class="btn btn-destructive">Удалить</button>
       </div>
     </form>
   </dialog>
