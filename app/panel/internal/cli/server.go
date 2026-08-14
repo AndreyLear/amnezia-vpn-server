@@ -31,6 +31,8 @@ func (a *app) cmdServer(args []string) int {
 		return a.cmdServerInit(args[1:])
 	case "update":
 		return a.cmdServerUpdate(args[1:])
+	case "gen-awg-params":
+		return a.cmdServerGenAWGParams(args[1:])
 	default:
 		a.usage()
 		return 2
@@ -49,6 +51,12 @@ func (a *app) cmdServer(args []string) int {
 // intact (WriteAtomic); the database is not rolled back (the config is
 // derived state). Without --endpoint the command still succeeds but warns
 // on stderr. A repeated init fails with db.ErrServerExists.
+//
+// Without --awg-params a full random obfuscation parameter set
+// (Jc/Jmin/Jmax/S1/S2/H1-H4/I1-I5) is generated from crypto/rand
+// (awgconf.GenerateParams), like the AmneziaVPN app does when creating
+// a server. An explicit --awg-params is stored verbatim, including "{}"
+// — a deliberate opt-out of obfuscation (bare WireGuard).
 func (a *app) cmdServerInit(args []string) int {
 	parsed, err := parseArgs(args, map[string]bool{
 		"dns":        true,
@@ -73,8 +81,17 @@ func (a *app) cmdServerInit(args []string) int {
 	if err != nil {
 		return a.usageError(opServerInit, fmt.Sprintf("invalid listen port %q: must be an unsigned 16-bit value", parsed.positional[1]))
 	}
-	awgParams := parsed.flags["awg-params"]
-	if awgParams == "" {
+	awgParams, hasParams := parsed.flags["awg-params"]
+	if !hasParams {
+		params, err := awgconf.GenerateParams()
+		if err != nil {
+			return a.fatal(opServerInit, fmt.Errorf("generate awg params: %w", err))
+		}
+		awgParams, err = awgconf.MarshalParams(params)
+		if err != nil {
+			return a.fatal(opServerInit, err)
+		}
+	} else if awgParams == "" {
 		awgParams = "{}"
 	}
 	if _, err := awgconf.ParseParams(awgParams); err != nil {
@@ -258,4 +275,28 @@ func (a *app) cmdServerUpdate(args []string) int {
 		message += "; endpoint = " + endpoint
 	}
 	return a.ok(opServerUpdate, message)
+}
+
+const opServerGenAWGParams = "server gen-awg-params"
+
+// cmdServerGenAWGParams prints one freshly generated random AWG
+// obfuscation parameter set (Jc/Jmin/Jmax/S1/S2/H1-H4/I1-I5) as a JSON
+// object to stdout, ready to be pasted verbatim into
+// `panel server update --awg-params '<json>'` — the upgrade path for
+// deployments initialized with an empty "{}" set. It touches no
+// database and no files.
+func (a *app) cmdServerGenAWGParams(args []string) int {
+	if len(args) != 0 {
+		return a.usageError(opServerGenAWGParams, "unexpected arguments")
+	}
+	params, err := awgconf.GenerateParams()
+	if err != nil {
+		return a.fatal(opServerGenAWGParams, err)
+	}
+	raw, err := awgconf.MarshalParams(params)
+	if err != nil {
+		return a.fatal(opServerGenAWGParams, err)
+	}
+	fmt.Fprintln(a.stdout, raw)
+	return 0
 }

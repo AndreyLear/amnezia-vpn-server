@@ -34,6 +34,9 @@ commands:
   status                        print the runtime AWG status (status/status.json)
   server init <address> <listen-port> [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>]
   server update [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>]
+  server gen-awg-params          print a fresh random AWG obfuscation params JSON to stdout
+    (init without --awg-params generates a random full set automatically;
+    an explicit --awg-params '{}' is a deliberate opt-out of obfuscation)
   client add <name> [--expires-at <RFC3339>]
   client list
   client show <id>
