@@ -30,6 +30,7 @@ Production deployment is performed through `install.sh` (Ubuntu/Debian
 
 ```sh
 ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
+             [--domain FQDN] [--client-domain FQDN]
 ```
 
 The installer creates the deployment layout (data/config/status/backups),
@@ -43,6 +44,18 @@ docker compose --env-file versions.lock run --rm panel-init \
   /app/panel server init 10.8.0.1/24 51820 --endpoint <public-ip>:51820 --dns 1.1.1.1,8.8.8.8
 ssh -L 8787:127.0.0.1:8787 root@<server-ip>
 ```
+
+With a domain (`--domain`, T-121) the panel also gets HTTPS (nginx +
+Let's Encrypt, ports 80/443). `--client-domain FQDN` (defaults to
+`--domain`) binds client configs to `<fqdn>:<awg-port>` instead of the
+public IP: clients resolve the domain at connect time, so **moving the
+server to another host is an A-record change** — clients reconnect
+themselves, configs are never re-issued. The installer pre-flights the
+DNS record before proceeding. Migration flow: on the new host restore
+the database from an age backup (Backup & restore below), then point
+the A-record at the new host; on the old host `install.sh` refuses to
+run when the record no longer matches (until the domain is re-pointed
+back or the new host finishes installing).
 
 To restore an existing database on a fresh install, pass the age identity
 (only the `AGE-SECRET-KEY-1...` line) to the documented restore flow — see

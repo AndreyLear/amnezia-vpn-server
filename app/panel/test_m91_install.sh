@@ -864,6 +864,149 @@ test_panel_port_switch_back_to_loopback() {
         || fail "panel-port switchback: cert file was deleted"
 }
 
+# --- T-129: client endpoint domain ---------------------------------------
+
+test_client_domain_defaults_to_domain() {
+    # --domain without --client-domain: the panel domain doubles as the
+    # client endpoint — the next-steps hint carries <domain>:<port> and
+    # the migration note, the IP endpoint line is gone, and the DNS
+    # record is pre-flighted only once (shared hostname).
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "client-domain default flow: exit $rc"
+    grep -q "endpoint panel.example.com:51820" "$TMP_TEST/out" \
+        && pass "client-domain: hint carries domain:port endpoint" \
+        || fail "client-domain: hint missing domain:port endpoint"
+    grep -q "A-record change" "$TMP_TEST/out" && pass "client-domain: migration note printed" \
+        || fail "client-domain: migration note missing"
+    if grep -q "endpoint <public-ip>" "$TMP_TEST/out"; then
+        fail "client-domain: IP endpoint hint still printed"
+    else
+        pass "client-domain: IP endpoint hint replaced"
+    fi
+    grep -q "CLIENT_DOMAIN=panel.example.com" "$ROOT/.env" \
+        && pass "client-domain: CLIENT_DOMAIN persisted in .env" \
+        || fail "client-domain: CLIENT_DOMAIN missing from .env"
+    [ "$(grep -c "dig " "$FAKE_CALLS")" = "2" ] \
+        && pass "client-domain: shared domain pre-flighted once (A+AAAA)" \
+        || fail "client-domain: dig count $(grep -c "dig " "$FAKE_CALLS"), want 2"
+}
+
+test_client_domain_standalone() {
+    # --client-domain without --domain: validated, DNS pre-flight runs,
+    # hint carries vpn.example.com:PORT, no certbot (no panel domain),
+    # and the panel keeps its loopback SSH hint.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --client-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "client-domain standalone flow: exit $rc"
+    grep -q "endpoint vpn.example.com:51820" "$TMP_TEST/out" \
+        && pass "client-domain standalone: hint carries vpn.example.com:51820" \
+        || fail "client-domain standalone: hint missing endpoint"
+    grep -q "A-record change" "$TMP_TEST/out" && pass "client-domain standalone: migration note printed" \
+        || fail "client-domain standalone: migration note missing"
+    grep -q "dig +short" "$FAKE_CALLS" && pass "client-domain standalone: DNS pre-flight ran" \
+        || fail "client-domain standalone: DNS pre-flight missing"
+    if grep -q "certbot" "$FAKE_CALLS"; then fail "client-domain standalone: certbot was invoked (no panel domain)"; else pass "client-domain standalone: certbot not invoked"; fi
+    grep -q "CLIENT_DOMAIN=vpn.example.com" "$ROOT/.env" \
+        && pass "client-domain standalone: CLIENT_DOMAIN persisted in .env" \
+        || fail "client-domain standalone: CLIENT_DOMAIN missing from .env"
+    grep -q "ssh -L 8787" "$TMP_TEST/out" && pass "client-domain standalone: panel loopback hint kept" \
+        || fail "client-domain standalone: SSH hint missing"
+}
+
+test_client_domain_overrides_domain() {
+    # --client-domain wins over the --domain default: the hint carries
+    # vpn.example.com while the panel stays on panel.example.com; both
+    # records are pre-flighted (2 dig calls each).
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com --client-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "client-domain override flow: exit $rc"
+    grep -q "endpoint vpn.example.com:51820" "$TMP_TEST/out" \
+        && pass "client-domain override: hint carries vpn.example.com:51820" \
+        || fail "client-domain override: hint missing the client domain"
+    grep -q "endpoint panel.example.com" "$TMP_TEST/out" && fail "client-domain override: panel domain leaked into the endpoint" \
+        || pass "client-domain override: panel domain not used as endpoint"
+    grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "client-domain override: panel https hint kept" \
+        || fail "client-domain override: panel https hint missing"
+    [ "$(grep -c "dig " "$FAKE_CALLS")" = "4" ] \
+        && pass "client-domain override: both domains pre-flighted" \
+        || fail "client-domain override: dig count $(grep -c "dig " "$FAKE_CALLS"), want 4"
+}
+
+test_client_domain_preflight_before_certbot() {
+    # A mismatched --client-domain (different from --domain) fails the
+    # install BEFORE any certbot attempt — the Let's Encrypt rate limit
+    # stays untouched.
+    fakes_reset
+    setstate DNS_A 1.2.3.4 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com --client-domain vpn.example.com)"
+    [ "$rc" = "1" ] || fail "client-domain pre-flight order: exit $rc, want 1"
+    grep -q "Create an A record" "$TMP_TEST/err" && pass "client-domain pre-flight: actionable message" \
+        || fail "client-domain pre-flight: message missing"
+    grep -q "certbot" "$FAKE_CALLS" && fail "client-domain pre-flight: certbot was invoked" \
+        || pass "client-domain pre-flight: certbot not invoked (rate limit safe)"
+}
+
+test_client_domain_dns_mismatch_standalone() {
+    fakes_reset
+    setstate DNS_A 1.2.3.4 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install --client-domain vpn.example.com)"
+    [ "$rc" = "1" ] || fail "client-domain DNS mismatch: exit $rc, want 1"
+    grep -q "Create an A record" "$TMP_TEST/err" && pass "client-domain DNS mismatch: actionable message" \
+        || fail "client-domain DNS mismatch: message missing"
+}
+
+test_client_domain_env_reuse() {
+    # CLIENT_DOMAIN persists in the deployment .env (env_read pattern
+    # like AWG_PORT) and is reused on a rerun without any domain flag:
+    # the hint keeps the domain endpoint and the pre-flight reruns.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --client-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "client-domain reuse: first pass exit $rc"
+    dig_after_first="$(grep -c "dig " "$FAKE_CALLS")"
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "client-domain reuse: second pass exit $rc"
+    grep -q "endpoint vpn.example.com:51820" "$TMP_TEST/out" \
+        && pass "client-domain reuse: endpoint from .env in the rerun hint" \
+        || fail "client-domain reuse: .env CLIENT_DOMAIN not reused"
+    [ "$(grep -c "dig " "$FAKE_CALLS")" -gt "$dig_after_first" ] \
+        && pass "client-domain reuse: pre-flight reran on the second pass" \
+        || fail "client-domain reuse: pre-flight missing on rerun"
+}
+
+test_client_domain_invalid_fqdn() {
+    fakes_reset
+    os_release debian 12 bookworm
+    for bad in "bad domain" "..x" "x..y" "-x.com" "x-.com" "x." "UPPER.com"; do
+        rc="$(run_install --client-domain "$bad")"
+        [ "$rc" = "2" ] || fail "invalid client-domain '$bad': exit $rc, want 2 (usage)"
+    done
+    pass "invalid --client-domain values rejected (exit 2)"
+}
+
+test_no_domain_ip_endpoint_hint() {
+    # No domain anywhere: the next-steps hint keeps the public-IP
+    # endpoint exactly as before T-129, without the migration note.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "no-domain IP endpoint flow: exit $rc"
+    grep -q "endpoint <public-ip>:51820" "$TMP_TEST/out" \
+        && pass "no-domain: IP endpoint hint kept" \
+        || fail "no-domain: IP endpoint hint missing"
+    grep -q "A-record change" "$TMP_TEST/out" && fail "no-domain: migration note printed without a domain" \
+        || pass "no-domain: no migration note"
+    if grep -q "dig " "$FAKE_CALLS"; then fail "no-domain: dig was invoked"; else pass "no-domain: no DNS pre-flight"; fi
+    grep -q '^CLIENT_DOMAIN=' "$ROOT/.env" && pass "no-domain: empty CLIENT_DOMAIN= line in .env" \
+        || fail "no-domain: CLIENT_DOMAIN line missing from .env"
+}
+
 test_doctor_failure() {
     fakes_reset
     setstate DAEMON fail "$FAKE_STATE"
@@ -953,6 +1096,14 @@ test_panel_port_invalid_values
 test_panel_port_idempotent
 test_panel_port_regen_flag
 test_panel_port_switch_back_to_loopback
+test_client_domain_defaults_to_domain
+test_client_domain_standalone
+test_client_domain_overrides_domain
+test_client_domain_preflight_before_certbot
+test_client_domain_dns_mismatch_standalone
+test_client_domain_env_reuse
+test_client_domain_invalid_fqdn
+test_no_domain_ip_endpoint_hint
 test_doctor_failure
 test_ssh_hint
 test_secrets_absent

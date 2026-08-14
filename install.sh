@@ -45,6 +45,13 @@
 #                   proxy + certbot, ports 80/443 opened in the managed
 #                   nftables table only in this mode). Without it the
 #                   panel stays loopback-only with an SSH tunnel hint.
+#   --client-domain FQDN  client endpoint domain (T-129): client configs
+#                   carry <fqdn>:<awg-port> as their endpoint, so clients
+#                   resolve the domain at connect time and moving the
+#                   server to another host is a plain A-record change
+#                   (configs are never re-issued). Defaults to the
+#                   --domain value; the DNS record is pre-flighted like
+#                   the panel domain, before any certificate attempt.
 #   --panel-port PORT  panel IP:port mode without a domain (T-124):
 #                   serves the panel on https://<server-ip>:PORT behind
 #                   nginx with a self-signed TLS certificate generated
@@ -121,7 +128,7 @@ install.sh — M9 deployment of the AmneziaWG VPN Server stack.
 
 Usage:
   ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR] [--domain FQDN]
-               [--panel-port PORT] [--panel-tls-regen]
+               [--client-domain FQDN] [--panel-port PORT] [--panel-tls-regen]
 
 Options:
   --root DIR        deployment root (default: /opt/amnezia-vpn)
@@ -133,6 +140,12 @@ Options:
                     provisions HTTPS (nginx + Let's Encrypt) and opens
                     tcp 80/443 in the managed ruleset; without it the
                     panel stays loopback-only (SSH tunnel hint)
+  --client-domain FQDN  client endpoint domain: client configs carry
+                    <fqdn>:<awg-port> as their endpoint, clients resolve
+                    the domain at connect time, so a server move is an
+                    A-record change without re-issuing configs. Defaults
+                    to --domain when given; the DNS record is verified
+                    before the install proceeds.
   --panel-port PORT panel without a domain: https://<server-ip>:PORT
                     with a self-signed TLS certificate (nginx reverse
                     proxy; opens tcp PORT in the managed ruleset only
@@ -165,7 +178,7 @@ die_usage() { die "$FAIL_STYLE_USAGE" "$1"; }
 die_op() { die "$FAIL_STYLE_OP" "$1"; }
 
 # --- argument parsing (only --root, --awg-port, --vpn-subnet, --domain,
-# --- --panel-port, --panel-tls-regen, --help) ---------------------------
+# --- --client-domain, --panel-port, --panel-tls-regen, --help) ----------
 
 validate_port() {
     [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null
@@ -201,6 +214,8 @@ AWG_PORT_SET=0
 VPN_SUBNET_SET=0
 DOMAIN_SET=0
 DOMAIN="${DOMAIN:-}"
+CLIENT_DOMAIN_SET=0
+CLIENT_DOMAIN="${CLIENT_DOMAIN:-}"
 PANEL_PORT_SET=0
 PANEL_PORT=""
 PANEL_TLS_REGEN=0
@@ -232,6 +247,12 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || die_usage "--domain requires a FQDN argument"
             DOMAIN="$2"
             DOMAIN_SET=1
+            shift 2
+            ;;
+        --client-domain)
+            [ "$#" -ge 2 ] || die_usage "--client-domain requires a FQDN argument"
+            CLIENT_DOMAIN="$2"
+            CLIENT_DOMAIN_SET=1
             shift 2
             ;;
         --panel-port)
@@ -282,6 +303,14 @@ validate_fqdn() {
 
 if [ "$DOMAIN_SET" = "1" ]; then
     validate_fqdn "$DOMAIN" || die_usage "--domain must be a valid FQDN (labels of letters/digits/hyphens; got: $DOMAIN)"
+fi
+
+if [ "$CLIENT_DOMAIN_SET" = "1" ]; then
+    validate_fqdn "$CLIENT_DOMAIN" || die_usage "--client-domain must be a valid FQDN (labels of letters/digits/hyphens; got: $CLIENT_DOMAIN)"
+elif [ -n "$DOMAIN" ]; then
+    # T-129: one domain by default — the panel domain doubles as the
+    # client endpoint domain unless --client-domain overrides it.
+    CLIENT_DOMAIN="$DOMAIN"
 fi
 
 if [ "$PANEL_PORT_SET" = "1" ]; then
@@ -513,6 +542,12 @@ if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
         [ -n "$VPN_SUBNET" ] || VPN_SUBNET=10.8.0.0/24
         validate_cidr "$VPN_SUBNET" || die_op "VPN_SUBNET in $(basename "$ENV_FILE") is not a valid CIDR"
     fi
+    if [ "$CLIENT_DOMAIN_SET" = "0" ] && [ -z "$CLIENT_DOMAIN" ]; then
+        CLIENT_DOMAIN="$(env_read CLIENT_DOMAIN)"
+        if [ -n "$CLIENT_DOMAIN" ]; then
+            validate_fqdn "$CLIENT_DOMAIN" || die_op "CLIENT_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
+        fi
+    fi
 else
     cat > "$ROOT_DIR/$ENV_FILE" <<EOF
 # AmneziaWG VPN Server — deployment-specific values (written by install.sh).
@@ -520,6 +555,7 @@ else
 # it with --env-file and it always wins over this file.
 AWG_PORT=${AWG_PORT}
 VPN_SUBNET=${VPN_SUBNET}
+CLIENT_DOMAIN=${CLIENT_DOMAIN}
 EOF
     chmod 0600 "$ROOT_DIR/$ENV_FILE"
     log "$ENV_FILE created with AWG_PORT=${AWG_PORT}, VPN_SUBNET=${VPN_SUBNET} (0600)"
@@ -538,6 +574,42 @@ elif grep -q '^AMNEZIA_SECURE_COOKIES=' "$ROOT_DIR/$ENV_FILE"; then
     env_unset AMNEZIA_SECURE_COOKIES
     log "AMNEZIA_SECURE_COOKIES removed from $ENV_FILE (loopback panel mode)"
 fi
+
+# --- 10b. client endpoint domain (T-129): DNS pre-flight --------------
+# Optional --client-domain (defaulting to --domain): the endpoint baked
+# into client configs becomes <client-domain>:<AWG_PORT>, so clients
+# resolve the domain at connect time and a server move is a plain
+# A-record change without re-issuing configs. The record is verified
+# like the panel domain — early, before any certificate attempt, so a
+# mismatch never burns the Let's Encrypt rate limit.
+
+# dns_preflight FQDN: the A/AAAA records of FQDN must resolve to the
+# public IP of this server; dies with an actionable message otherwise.
+dns_preflight() {
+    local fqdn="$1" pub_ip dns_a dns_aaaa
+    if ! command -v dig >/dev/null 2>&1; then
+        cmd apt-get install -y dnsutils || die_op "apt-get install dnsutils failed (DNS pre-flight)"
+    fi
+    pub_ip="$(cmd curl -fsS https://api.ipify.org 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$pub_ip" ] || die_op "cannot determine the public IP of this server (curl api.ipify.org)"
+    dns_a="$(cmd dig +short @1.1.1.1 "$fqdn" A 2>/dev/null | tr -d '[:space:]')"
+    dns_aaaa="$(cmd dig +short @1.1.1.1 "$fqdn" AAAA 2>/dev/null | tr -d '[:space:]')"
+    if [ "$dns_a" != "$pub_ip" ] && [ "$dns_aaaa" != "$pub_ip" ]; then
+        die_op "DNS pre-flight failed for $fqdn: public record '${dns_a} ${dns_aaaa}' does not match this server ($pub_ip). Create an A record $fqdn -> $pub_ip and rerun install.sh"
+    fi
+    log "DNS pre-flight ok: $fqdn -> $pub_ip"
+}
+
+client_domain_setup() {
+    [ -n "$CLIENT_DOMAIN" ] || return 0
+    # The panel-domain pre-flight (13b) already covers the same
+    # hostname; a separate dig would be redundant.
+    [ -n "$DOMAIN" ] && [ "$CLIENT_DOMAIN" = "$DOMAIN" ] && return 0
+    log "client domain $CLIENT_DOMAIN: DNS pre-flight (endpoint of client configs)"
+    dns_preflight "$CLIENT_DOMAIN"
+}
+
+client_domain_setup
 
 # --- 11. host networking: managed nftables ruleset (M9.2) --------------
 
@@ -891,19 +963,7 @@ domain_setup() {
     [ -n "$DOMAIN" ] || return 0
 
     log "panel domain $DOMAIN: DNS pre-flight before any certificate attempt"
-
-    if ! command -v dig >/dev/null 2>&1; then
-        cmd apt-get install -y dnsutils || die_op "apt-get install dnsutils failed (DNS pre-flight)"
-    fi
-    local pub_ip dns_a dns_aaaa
-    pub_ip="$(cmd curl -fsS https://api.ipify.org 2>/dev/null | tr -d '[:space:]')"
-    [ -n "$pub_ip" ] || die_op "cannot determine the public IP of this server (curl api.ipify.org)"
-    dns_a="$(cmd dig +short @1.1.1.1 "$DOMAIN" A 2>/dev/null | tr -d '[:space:]')"
-    dns_aaaa="$(cmd dig +short @1.1.1.1 "$DOMAIN" AAAA 2>/dev/null | tr -d '[:space:]')"
-    if [ "$dns_a" != "$pub_ip" ] && [ "$dns_aaaa" != "$pub_ip" ]; then
-        die_op "DNS pre-flight failed for $DOMAIN: public record '${dns_a} ${dns_aaaa}' does not match this server ($pub_ip). Create an A record $DOMAIN -> $pub_ip and rerun install.sh"
-    fi
-    log "DNS pre-flight ok: $DOMAIN -> $pub_ip"
+    dns_preflight "$DOMAIN"
 
     if ! command -v nginx >/dev/null 2>&1; then
         cmd apt-get install -y nginx || die_op "apt-get install nginx failed"
@@ -1076,14 +1136,28 @@ cat <<EOF
 install: DONE — the AmneziaWG VPN Server stack is deployed under $ROOT_DIR.
 install: Next steps (application bootstrap is intentionally manual):
 install:   panel-init needs a server row: run inside the deployed stack
-install:     docker compose --env-file versions.lock run --rm panel-init \
+EOF
+if [ -n "$CLIENT_DOMAIN" ]; then
+    cat <<EOF
+install:     docker compose --env-file versions.lock run --rm panel-init \\
+install:       /app/panel server init 10.8.0.1/24 51820 --endpoint ${CLIENT_DOMAIN}:${AWG_PORT} --dns 1.1.1.1,8.8.8.8
+install:   (clients are bound to ${CLIENT_DOMAIN}: moving to another server
+install:   is an A-record change — clients reconnect themselves, configs are
+install:   not re-issued; migrate the database with the backup buttons)
+EOF
+else
+    cat <<EOF
+install:     docker compose --env-file versions.lock run --rm panel-init \\
 install:       /app/panel server init 10.8.0.1/24 51820 --endpoint <public-ip>:${AWG_PORT} --dns 1.1.1.1,8.8.8.8
+EOF
+fi
+cat <<EOF
 install:   (--dns is recommended: client configs only get a DNS line when the
 install:   server has one; without it a full-tunnel client (AllowedIPs
 install:   0.0.0.0/0) loses the local network's DNS, and internet goes dark.
 install:   DNS can also be set later with: /app/panel server update --dns ...)
 install:   or restore an existing database:
-install:     docker compose --env-file versions.lock run --rm panel-init \
+install:     docker compose --env-file versions.lock run --rm panel-init \\
 install:       /app/panel restore <archive> --identity-stdin  (M8 restore flow)
 EOF
 if [ -n "$DOMAIN" ]; then
