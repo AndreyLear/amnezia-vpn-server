@@ -26,7 +26,7 @@ Self-hosted VPN server based on AmneziaWG 2.0+.
 ## Install
 
 Production deployment is performed through `install.sh` (Ubuntu/Debian
-24.04/22.04, Docker Compose v2.20+):
+24.04/22.04, Docker Compose v2.24.2+):
 
 ```sh
 ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
