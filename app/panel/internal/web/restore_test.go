@@ -6,6 +6,7 @@ package web
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"filippo.io/age"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
 
 // restoreFlashOf extracts the decoded msg value of a /backups PRG
@@ -644,5 +646,132 @@ func TestRestoreUploadAppliesInProcess(t *testing.T) {
 	dash := f.get("/")
 	if dash.Code != http.StatusSeeOther || dash.Header().Get("Location") != "/login" {
 		t.Fatalf("GET / after restore: code=%d loc=%q, want 303 /login", dash.Code, dash.Header().Get("Location"))
+	}
+}
+
+// withRestoreFault injects an error at the named in-process apply step
+// for the duration of fn (T-141).
+func withRestoreFault(t *testing.T, step string, fn func()) {
+	t.Helper()
+	prev := testFault
+	testFault = func(s string) error {
+		if s == step {
+			return errors.New("injected: " + step)
+		}
+		return nil
+	}
+	defer func() { testFault = prev }()
+	fn()
+}
+
+// restoreApplyFailClosedFixture snapshots alice, then adds bob so a
+// failed apply can prove disk, memory and awg0.conf stayed on bob.
+func restoreApplyFailClosedFixture(t *testing.T) (*fixture, *age.X25519Identity, string, []byte, string, string) {
+	t.Helper()
+	f := newFixture(t)
+	dir, id := setBackupsPath(t)
+	alice, _, _ := f.addClient("alice")
+	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
+	archive, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, _, _ := f.addClient("bob")
+	if err := os.WriteFile(f.confPath, []byte("[Peer]\nPublicKey = "+bob.PublicKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f, id, name, archive, alice.PublicKey, bob.PublicKey
+}
+
+func assertRestoreApplyFailClosed(t *testing.T, f *fixture, bobPub string) {
+	t.Helper()
+	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || !ok {
+		t.Fatalf("pending marker missing after failed apply: ok=%v err=%v", ok, err)
+	}
+	live := f.server.db()
+	var n int
+	if err := live.QueryRow("SELECT COUNT(*) FROM clients").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("memory handle clients = %d, want 2 (alice+bob)", n)
+	}
+	disk, err := db.Open(f.dbPath)
+	if err != nil {
+		t.Fatalf("open live database: %v", err)
+	}
+	defer disk.Close()
+	if err := disk.QueryRow("SELECT COUNT(*) FROM clients").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("disk clients = %d, want 2 (alice+bob); disk diverged from memory", n)
+	}
+	cfg, err := os.ReadFile(f.confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cfg), bobPub) {
+		t.Fatal("awg0.conf lost the pre-apply peer after a failed apply")
+	}
+	if _, ok := f.server.cfg.Sessions.Get(f.sid); !ok {
+		t.Fatal("failed apply must not wipe sessions")
+	}
+}
+
+// TestRestoreApplyOpenFailKeepsPending (T-141): Open failing after
+// ApplyPending must restore the pending marker and leave disk equal to
+// the still-live handle — not a restored file with a restart-required flash.
+func TestRestoreApplyOpenFailKeepsPending(t *testing.T) {
+	f, id, name, archive, _, bobPub := restoreApplyFailClosedFixture(t)
+	withRestoreFault(t, "restore.apply.open", func() {
+		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("code = %d, want 303", rec.Code)
+		}
+		if got := restoreFlashOf(t, rec); got != flashRestoreApplyFailed {
+			t.Fatalf("flash = %q, want %q", got, flashRestoreApplyFailed)
+		}
+	})
+	assertRestoreApplyFailClosed(t, f, bobPub)
+}
+
+// TestRestoreApplyMigrateFailKeepsPending (T-141): same fail-closed
+// contract when Migrate fails after the file swap.
+func TestRestoreApplyMigrateFailKeepsPending(t *testing.T) {
+	f, id, name, archive, _, bobPub := restoreApplyFailClosedFixture(t)
+	withRestoreFault(t, "restore.apply.migrate", func() {
+		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("code = %d, want 303", rec.Code)
+		}
+		if got := restoreFlashOf(t, rec); got != flashRestoreApplyFailed {
+			t.Fatalf("flash = %q, want %q", got, flashRestoreApplyFailed)
+		}
+	})
+	assertRestoreApplyFailClosed(t, f, bobPub)
+}
+
+// TestRestoreApplyGenerateFailDoesNotSwap (T-141): Generate failure
+// must not leave SQLite on the restored peers while awg0.conf still
+// describes the old ones.
+func TestRestoreApplyGenerateFailDoesNotSwap(t *testing.T) {
+	f, id, name, archive, alicePub, bobPub := restoreApplyFailClosedFixture(t)
+	withRestoreFault(t, "restore.apply.generate", func() {
+		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("code = %d, want 303", rec.Code)
+		}
+		if got := restoreFlashOf(t, rec); got != flashRestoreApplyFailed {
+			t.Fatalf("flash = %q, want %q", got, flashRestoreApplyFailed)
+		}
+	})
+	assertRestoreApplyFailClosed(t, f, bobPub)
+	cfg, err := os.ReadFile(f.confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(cfg), alicePub) && !strings.Contains(string(cfg), bobPub) {
+		t.Fatal("awg0.conf was rewritten from the restored database despite Generate failure")
 	}
 }

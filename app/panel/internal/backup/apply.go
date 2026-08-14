@@ -13,15 +13,18 @@
 // rename(2)):
 //
 //  1. claim:   marker → marker+".applying"   (rename, atomic)
-//  2. retire:  live → live+".pre-restore"
+//  2. retire:  live → live+".pre-restore" (replaces a stale retired
+//     copy when this apply still has an image to install)
 //  3. install: applying/amnezia.sqlite → live
 //  4. commit:  fsync, remove the now-empty applying dir, fsync
 //
 // Safety model:
 //
 //   - Concurrency: the flock is exclusive and non-blocking; only one
-//     apply runs at a time, a concurrent caller no-ops. No rollback
-//     logic exists, so a process can never destroy another's swap.
+//     apply runs at a time, a concurrent caller no-ops. Crash recovery
+//     is forward-only so a process can never destroy another's swap.
+//     RevertApply is a deliberate in-process undo after a completed
+//     swap, not crash rollback.
 //   - Crash: the claim step leaves visible progress on disk, so the
 //     next init RESUMES forward from any crash window (the steps are
 //     renames, each is atomic): claim-then-crash retries the swap,
@@ -144,9 +147,14 @@ func finishApply(dbPath, marker, applying string) (bool, error) {
 		return false, fmt.Errorf("backup: apply: inconsistent state: restored image missing and no retired database at %s", retired)
 	}
 
-	// Retire (step 2) if the crash fell between claim and retire, or on
-	// a first run with an existing live database.
-	if haveLive && !haveRetired {
+	// Retire (step 2) when a restored image is still waiting and a live
+	// database exists. rename(2) replaces a leftover .pre-restore so a
+	// second sequential apply keeps the immediately previous live DB
+	// rather than destroying it and leaving the older generation.
+	// Crash resume after install (image already gone) must not refresh
+	// the retired copy: that would overwrite the previous live DB with
+	// the already-installed restored image.
+	if haveImage && haveLive {
 		if err := os.Rename(live, retired); err != nil {
 			return false, fmt.Errorf("backup: apply: retire live database: %w", err)
 		}
@@ -182,6 +190,70 @@ func finishApply(dbPath, marker, applying string) (bool, error) {
 		return false, fmt.Errorf("backup: apply: sync commit: %w", err)
 	}
 	return true, nil
+}
+
+// RevertApply undoes a completed ApplyPending: the restored live file
+// is moved back into a pending marker and the retired .pre-restore
+// copy becomes live again. In-process apply uses this when
+// Open/Migrate/Generate fails after the file swap so disk, memory and
+// the pending marker stay consistent (fail closed). Crash recovery in
+// ApplyPending remains forward-only; panel-init never calls this.
+func RevertApply(dbPath string) error {
+	dir := filepath.Dir(dbPath)
+	marker := filepath.Join(dir, pendingDirName)
+	live := dbPath
+	retired := live + preRestoreSuffix
+	image := filepath.Join(marker, pendingDBName)
+
+	lock, err := os.OpenFile(filepath.Join(dir, applyLockName), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("backup: revert apply: open lock: %w", err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return errors.New("backup: revert apply: apply lock busy")
+		}
+		return fmt.Errorf("backup: revert apply: lock: %w", err)
+	}
+
+	if _, ok, err := PendingPath(dbPath); err != nil {
+		return err
+	} else if ok {
+		return errors.New("backup: revert apply: pending marker already present")
+	}
+
+	haveLive, err := exists(live)
+	if err != nil {
+		return fmt.Errorf("backup: revert apply: stat live database: %w", err)
+	}
+	haveRetired, err := exists(retired)
+	if err != nil {
+		return fmt.Errorf("backup: revert apply: stat retired database: %w", err)
+	}
+	if !haveLive {
+		return fmt.Errorf("backup: revert apply: live database missing at %s", live)
+	}
+	if !haveRetired {
+		return fmt.Errorf("backup: revert apply: no retired database at %s", retired)
+	}
+
+	if err := os.Mkdir(marker, 0o700); err != nil {
+		return fmt.Errorf("backup: revert apply: create pending: %w", err)
+	}
+	if err := os.Rename(live, image); err != nil {
+		_ = os.Remove(marker)
+		return fmt.Errorf("backup: revert apply: park restored database: %w", err)
+	}
+	if err := os.Rename(retired, live); err != nil {
+		_ = os.Rename(image, live)
+		_ = os.Remove(marker)
+		return fmt.Errorf("backup: revert apply: restore retired database: %w", err)
+	}
+	if err := syncDir(dir); err != nil {
+		return fmt.Errorf("backup: revert apply: sync: %w", err)
+	}
+	return nil
 }
 
 // exists reports whether the path exists.

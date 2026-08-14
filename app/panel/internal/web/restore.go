@@ -277,13 +277,28 @@ func (s *Server) restoreSubmit(w http.ResponseWriter, r *http.Request) {
 	s.flashBackups(w, r, fmt.Sprintf(flashRestoreApplied, appliedN))
 }
 
+// testFault, when set by tests, injects the named failure into the
+// in-process apply path after ApplyPending (nil in production).
+var testFault func(step string) error
+
+func fault(step string) error {
+	if testFault == nil {
+		return nil
+	}
+	return testFault(step)
+}
+
 // applyRestoreNow applies a prepared restore in-process (T-125):
 // backup.ApplyPending swaps the database file, a fresh handle is
 // opened and migrated, and awg0.conf is regenerated so the awg runtime
 // activates the restored peers on its next hot reload (syncconf).
-// Callers must hold s.mutex. On error the restore may already be
-// applied (the pending marker is consumed by ApplyPending); the caller
-// falls back to the restart-required flash.
+// Callers must hold s.mutex.
+//
+// Open, Migrate and Generate must all succeed before the apply is
+// considered done (T-141). On any of those failures the file swap is
+// reverted and the pending marker is restored so disk matches the
+// still-live handle and a restart can retry. Sessions are wiped only
+// after a successful apply (T-138).
 func (s *Server) applyRestoreNow() (int, error) {
 	applied, err := backup.ApplyPending(s.cfg.DBPath)
 	if err != nil {
@@ -292,19 +307,35 @@ func (s *Server) applyRestoreNow() (int, error) {
 	if !applied {
 		return 0, errors.New("no pending restore to apply")
 	}
+	fail := func(err error) (int, error) {
+		if rerr := backup.RevertApply(s.cfg.DBPath); rerr != nil {
+			return 0, fmt.Errorf("%w (also revert apply: %v)", err, rerr)
+		}
+		return 0, err
+	}
+
+	if err := fault("restore.apply.open"); err != nil {
+		return fail(fmt.Errorf("open restored database: %w", err))
+	}
 	next, err := db.Open(s.cfg.DBPath)
 	if err != nil {
-		return 0, fmt.Errorf("open restored database: %w", err)
+		return fail(fmt.Errorf("open restored database: %w", err))
+	}
+	if err := fault("restore.apply.migrate"); err != nil {
+		next.Close()
+		return fail(fmt.Errorf("migrate restored database: %w", err))
 	}
 	if err := db.Migrate(next); err != nil {
 		next.Close()
-		return 0, fmt.Errorf("migrate restored database: %w", err)
+		return fail(fmt.Errorf("migrate restored database: %w", err))
 	}
-	// Config is derived state: generate it from the restored data
-	// before the swap; a failure is logged and the swap still happens
-	// (the next mutation or panel restart regenerates it).
+	if err := fault("restore.apply.generate"); err != nil {
+		next.Close()
+		return fail(fmt.Errorf("regenerate config: %w", err))
+	}
 	if err := awgconf.Generate(next, s.cfg.ConfPath); err != nil {
-		s.cfg.Logger.Printf("restore apply: regenerate config: %v", err)
+		next.Close()
+		return fail(fmt.Errorf("regenerate config: %w", err))
 	}
 	old := s.swapDB(next)
 	old.Close()

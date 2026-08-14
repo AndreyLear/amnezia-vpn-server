@@ -429,3 +429,125 @@ func TestApplyPendingConcurrent(t *testing.T) {
 		}
 	}
 }
+
+func archiveWithClient(t *testing.T, id *age.X25519Identity, name, key string) string {
+	t.Helper()
+	return buildArchive(t, id, []archiveEntry{
+		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
+		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileWithClient(t, name, key)},
+	})
+}
+
+// TestApplyPendingSequentialRefreshesPreRestore (T-141): a second
+// restore+apply must replace .pre-restore with the immediately previous
+// live database, not leave the older generation and destroy the current
+// live file.
+func TestApplyPendingSequentialRefreshesPreRestore(t *testing.T) {
+	c := applyCtx(t)
+	firstLive, _ := c.liveState()
+
+	applied, err := ApplyPending(c.dbPath)
+	if err != nil {
+		t.Fatalf("first ApplyPending: %v", err)
+	}
+	if !applied {
+		t.Fatal("first apply not applied")
+	}
+	firstRetired, err := os.ReadFile(c.dbPath + preRestoreSuffix)
+	if err != nil {
+		t.Fatalf("first pre-restore missing: %v", err)
+	}
+	if !bytes.Equal(firstRetired, firstLive) {
+		t.Fatal("first pre-restore is not the original live database")
+	}
+
+	c.seedClient("carol", "x-test-client-private-key-carol")
+	secondLive, _ := c.liveState()
+	if bytes.Equal(secondLive, firstLive) {
+		t.Fatal("live database was not mutated between applies")
+	}
+
+	if _, err := c.doRestore(archiveWithClient(t, c.id, "charlie", "x-archive-client-private-key-charlie")); err != nil {
+		t.Fatal(err)
+	}
+	applied, err = ApplyPending(c.dbPath)
+	if err != nil {
+		t.Fatalf("second ApplyPending: %v", err)
+	}
+	if !applied {
+		t.Fatal("second apply not applied")
+	}
+
+	retired, err := os.ReadFile(c.dbPath + preRestoreSuffix)
+	if err != nil {
+		t.Fatalf("second pre-restore missing: %v", err)
+	}
+	if !bytes.Equal(retired, secondLive) {
+		t.Fatal("pre-restore is not the immediately previous live database")
+	}
+	if bytes.Equal(retired, firstRetired) {
+		t.Fatal("pre-restore was left as the older generation")
+	}
+
+	h := c.reopen()
+	var charlie, carol int
+	if err := h.QueryRow(`SELECT COUNT(*) FROM clients WHERE name = 'charlie'`).Scan(&charlie); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.QueryRow(`SELECT COUNT(*) FROM clients WHERE name = 'carol'`).Scan(&carol); err != nil {
+		t.Fatal(err)
+	}
+	if charlie != 1 || carol != 0 {
+		t.Fatalf("second restored state wrong: charlie=%d carol=%d", charlie, carol)
+	}
+}
+
+// TestRevertApplyRestoresPendingAndLive (T-141): after a successful
+// file swap, RevertApply puts the restored image back behind a pending
+// marker and reinstates the retired live database.
+func TestRevertApplyRestoresPendingAndLive(t *testing.T) {
+	c := applyCtx(t)
+	before, _ := c.liveState()
+	pendingDir, ok, err := PendingPath(c.dbPath)
+	if err != nil || !ok {
+		t.Fatalf("no marker: ok=%v err=%v", ok, err)
+	}
+	wantImage, err := os.ReadFile(filepath.Join(pendingDir, pendingDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied, err := ApplyPending(c.dbPath)
+	if err != nil {
+		t.Fatalf("ApplyPending: %v", err)
+	}
+	if !applied {
+		t.Fatal("not applied")
+	}
+
+	if err := RevertApply(c.dbPath); err != nil {
+		t.Fatalf("RevertApply: %v", err)
+	}
+
+	after, err := os.ReadFile(c.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("live database was not restored from .pre-restore")
+	}
+	pendingDir, ok, err = PendingPath(c.dbPath)
+	if err != nil || !ok {
+		t.Fatalf("pending marker missing after revert: ok=%v err=%v", ok, err)
+	}
+	gotImage, err := os.ReadFile(filepath.Join(pendingDir, pendingDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotImage, wantImage) {
+		t.Fatal("pending image is not the restored database")
+	}
+	if _, err := os.Lstat(c.dbPath + preRestoreSuffix); !os.IsNotExist(err) {
+		t.Fatalf("retired copy survived revert: %v", err)
+	}
+}
