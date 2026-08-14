@@ -56,15 +56,31 @@ check() {
 }
 
 # ---- build the real producer binary -------------------------------------
+# A local Go toolchain is preferred; when absent (e.g. the VPS), the
+# producer is built in the versions.lock-pinned golang image (T-107).
+
+M5_REPO="$(cd ../.. && pwd)"
 
 if ! go version >/dev/null 2>&1; then
-    echo "FAIL: go toolchain required for M5 producer tests" >&2
-    exit 1
-fi
-mkdir -p "${TMP}/bin"
-if ! (cd ../panel && CGO_ENABLED=0 go build -o "${TMP}/bin/awgstatus" ./cmd/awgstatus); then
-    echo "FAIL: awgstatus build" >&2
-    exit 1
+    # shellcheck disable=SC1091
+    set -a; . "${M5_REPO}/versions.lock"; set +a
+    mkdir -p "${TMP}/bin"
+    if ! docker run --rm \
+        -v "${M5_REPO}/app/panel:/work" \
+        -w /work \
+        -e CGO_ENABLED=0 \
+        "golang:${GO_VERSION}" \
+        go build -o /work/awgstatus ./cmd/awgstatus 2>/dev/null; then
+        echo "FAIL: awgstatus build (containerized go)" >&2
+        exit 1
+    fi
+    mv "${M5_REPO}/app/panel/awgstatus" "${TMP}/bin/awgstatus"
+else
+    mkdir -p "${TMP}/bin"
+    if ! (cd ../panel && CGO_ENABLED=0 go build -o "${TMP}/bin/awgstatus" ./cmd/awgstatus); then
+        echo "FAIL: awgstatus build" >&2
+        exit 1
+    fi
 fi
 PASSED=$((PASSED + 1))
 echo "PASS: awgstatus builds (CGO_ENABLED=0)"
