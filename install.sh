@@ -16,7 +16,7 @@
 # Install flow (ТЗ §9 / M9.1+M9.2 contract):
 #   1. OS check (Debian 12, Ubuntu 22.04, Ubuntu 24.04 only)
 #   2. Docker/Compose installation or verification
-#   3. verify Docker Compose >= 2.20
+#   3. verify Docker Compose >= 2.24.2
 #   4. enable/start the Docker service
 #   5. verify/persist host net.ipv4.ip_forward
 #   6. AmneziaWG client stack (kernel module + tools, official PPA)
@@ -112,7 +112,7 @@ Options:
   --help            print this message
 
 Installs only supported OSes (Debian 12, Ubuntu 22.04, Ubuntu 24.04),
-Docker Engine + Compose plugin (>= 2.20) from the official Docker Inc.
+Docker Engine + Compose plugin (>= 2.24.2) from the official Docker Inc.
 repository, persists net.ipv4.ip_forward, installs a managed nftables
 ruleset (NAT/forward for the VPN subnet, UDP AWG_PORT acceptance),
 then builds and starts the stack under the deployment root. The panel
@@ -242,17 +242,25 @@ log "OS check: $os_id $os_version ($os_codename)"
 
 cmd() { command "$@"; }
 
-compose_version_min() { # docker compose version -> "X.Y" when >= 2.20
-    local ver major minor out
+compose_version_min() { # docker compose version -> true when >= 2.24.2
+    # The compose.yaml contract (env_file long syntax with
+    # `path`/`required`) needs Compose >= 2.24.2 — older 2.20–2.23
+    # accept the file but fail at `config --quiet` with an unclear
+    # error (T-112).
+    local ver major minor patch out
     out="$("$@" version 2>/dev/null | head -1)"
     [ -n "$out" ] || return 1
     # portable extraction (BSD/GNU sed): drop the prefix, keep digits/dots
-    ver="$(printf '%s\n' "$out" | sed 's/.*version[[:space:]]*//' | sed 's/[^0-9.]*//' | cut -d. -f1,2)"
+    ver="$(printf '%s\n' "$out" | sed 's/.*version[[:space:]]*//' | sed 's/[^0-9.]*//' | cut -d. -f1-3)"
     [ -n "$ver" ] || return 1
     major="${ver%%.*}"
-    minor="${ver#*.}"
-    minor="${minor%%.*}"
-    [ "$major" -ge 2 ] && { [ "$major" -gt 2 ] || [ "$minor" -ge 20 ]; }
+    minor="$(printf '%s\n' "$ver" | cut -d. -f2)"
+    patch="$(printf '%s\n' "$ver" | cut -d. -f3)"
+    [ "$major" -gt 2 ] && return 0
+    [ "$major" -lt 2 ] && return 1
+    [ "$minor" -gt 24 ] && return 0
+    [ "$minor" -lt 24 ] && return 1
+    [ "$patch" -ge 2 ]
 }
 
 docker_compose() { # runs `docker compose <args>` from the deployment root
@@ -283,14 +291,14 @@ docker_install() {
 }
 
 if docker_compose_ok; then
-    log "Docker Compose: already present and >= 2.20"
+    log "Docker Compose: already present and >= 2.24.2"
 else
-    log "Docker Compose missing or < 2.20: installing from the official repository"
+    log "Docker Compose missing or < 2.24.2: installing from the official repository"
     docker_install
     if docker_compose_ok; then
         log "Docker Compose installed: $(docker compose version)"
     else
-        die_op "Docker Compose is still missing or < 2.20 after installation; refusing to continue (deployment contract)"
+        die_op "Docker Compose is still missing or < 2.24.2 after installation; refusing to continue (deployment contract)"
     fi
 fi
 

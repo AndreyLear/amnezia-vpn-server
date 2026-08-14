@@ -339,11 +339,11 @@ test_compose_current_skips_apt() {
     fakes_reset
     os_release debian 12 bookworm
     rc="$(run_install)"
-    [ "$rc" = "0" ] || fail "compose>=2.20 flow: exit $rc"
+    [ "$rc" = "0" ] || fail "compose>=2.24.2 flow: exit $rc"
     if grep -q "apt-get" "$FAKE_CALLS"; then
-        fail "compose>=2.20: apt-get was invoked although Docker was complete"
+        fail "compose>=2.24.2: apt-get was invoked although Docker was complete"
     else
-        pass "compose>=2.20: apt-get not invoked"
+        pass "compose>=2.24.2: apt-get not invoked"
     fi
 }
 
@@ -363,7 +363,7 @@ test_docker_missing_installs() {
         || fail "docker missing: apt installation did not run"
     [ -f "$KEYRING_TEST/docker.asc" ] && pass "docker missing: keyring written via injected dir" \
         || fail "docker missing: keyring not written"
-    grep -q "still missing or < 2.20" "$TMP_TEST/err" && pass "docker missing: refusal message" \
+    grep -q "still missing or < 2.24.2" "$TMP_TEST/err" && pass "docker missing: refusal message" \
         || fail "docker missing: refusal message"
 }
 
@@ -373,19 +373,38 @@ test_compose_old_upgraded() {
     os_release ubuntu 22.04 jammy
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "compose upgrade path: exit $rc"
-    grep -q "apt-get.*install.*docker-ce" "$FAKE_CALLS" && pass "compose<2.20: official repo install ran" \
-        || fail "compose<2.20: official repo install did not run"
-    grep -q "docker-compose-plugin" "$FAKE_CALLS" && pass "compose<2.20: compose plugin in install set" \
-        || fail "compose<2.20: compose plugin missing from install set"
+    grep -q "apt-get.*install.*docker-ce" "$FAKE_CALLS" && pass "compose<2.24.2: official repo install ran" \
+        || fail "compose<2.24.2: official repo install did not run"
+    grep -q "docker-compose-plugin" "$FAKE_CALLS" && pass "compose<2.24.2: compose plugin in install set" \
+        || fail "compose<2.24.2: compose plugin missing from install set"
 }
 
 test_compose_old_still_old() {
     fakes_reset "2.19.6"
     os_release debian 12 bookworm
     rc="$(run_install)"
-    [ "$rc" = "1" ] || fail "compose still <2.20: exit $rc, want 1"
-    grep -q "still missing or < 2.20" "$TMP_TEST/err" && pass "compose still <2.20: refusal message" \
-        || fail "compose still <2.20: refusal message"
+    [ "$rc" = "1" ] || fail "compose still <2.24.2: exit $rc, want 1"
+    grep -q "still missing or < 2.24.2" "$TMP_TEST/err" && pass "compose still <2.24.2: refusal message" \
+        || fail "compose still <2.24.2: refusal message"
+}
+
+test_compose_minimum_boundary() {
+    # T-112: the compose.yaml env_file long syntax needs >= 2.24.2;
+    # 2.24.2 passes, 2.24.1 and 2.23.x stop with a clear refusal.
+    for v in "2.24.2" "2.30.1"; do
+        fakes_reset "$v"
+        os_release debian 12 bookworm
+        rc="$(run_install)"
+        [ "$rc" = "0" ] || fail "compose $v accepted: exit $rc"
+    done
+    pass "compose 2.24.2+ accepted"
+    for v in "2.23.4" "2.24.1" "2.19.6"; do
+        fakes_reset "$v"
+        os_release debian 12 bookworm
+        rc="$(run_install)"
+        [ "$rc" = "1" ] || fail "compose $v rejected: exit $rc, want 1"
+    done
+    pass "compose < 2.24.2 rejected with a clear message"
 }
 
 test_invalid_port() {
@@ -604,6 +623,7 @@ test_compose_current_skips_apt
 test_docker_missing_installs
 test_compose_old_upgraded
 test_compose_old_still_old
+test_compose_minimum_boundary
 test_invalid_port
 test_default_port
 test_custom_port
