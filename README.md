@@ -23,11 +23,39 @@ Self-hosted VPN server based on AmneziaWG 2.0+.
 - Backups are created/restored through the web panel UI as well
   (Backups section), with the same CLI pipeline underneath.
 
+## Install
+
+Production deployment is performed through `install.sh` (Ubuntu/Debian
+24.04/22.04, Docker Compose v2.20+):
+
+```sh
+./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
+```
+
+The installer creates the deployment layout (data/config/status/backups),
+installs the host nftables ruleset and the forward-accept unit, builds and
+starts the stack, and keeps the panel loopback-only. Bootstrap is manual by
+design (M3.1): create the server row, then reach the panel over an SSH
+tunnel:
+
+```sh
+docker compose --env-file versions.lock run --rm panel-init \
+  /app/panel server init 10.8.0.1/24 51820 --endpoint <public-ip>:51820 --dns 1.1.1.1,8.8.8.8
+ssh -L 8787:127.0.0.1:8787 root@<server-ip>
+```
+
+To restore an existing database on a fresh install, pass the age identity
+(only the `AGE-SECRET-KEY-1...` line) to the documented restore flow — see
+`docs/DEPLOYMENT.md` (Backup & restore). The deployment `.env` must carry
+`AGE_RECIPIENT` for web/CLI backups (the `panel` and `panel-init` services
+load it; `awg` never does).
+
 ## Development
 
 Development is performed locally.
 
-Production deployment is performed separately through `install.sh`.
+Production deployment is performed separately through `install.sh` (see
+Install).
 
 ## Testing
 
@@ -47,4 +75,11 @@ Production deployment is performed separately through `install.sh`.
 
 ## Status
 
-Project is currently in M0 — repository bootstrap.
+**v2.0.0** (tag `v2.0.0`) — production-ready. Milestones M1–M10.2
+completed; full regression green (`go test -race`, all scripted and live
+harnesses) and verified on a clean VPS: fresh install, external full-tunnel
+client, backup/restore DR cycle, reboot survival.
+
+Known accepted risks (future milestones, out of scope for v2.0.0): no TLS
+for the panel (loopback + SSH tunnel), no login rate limiting,
+TOTP/RBAC/password reset not implemented.
