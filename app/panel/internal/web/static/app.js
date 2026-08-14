@@ -36,11 +36,14 @@
         ? "border-error/40 bg-error/10 text-[#ffb3b4]"
         : "border-success/40 bg-success/10 text-[#9ef0c6]");
     el.textContent = message;
-    toasts.appendChild(el);
-    window.setTimeout(() => {
+    el.setAttribute("role", "status");
+    const dismiss = () => {
       el.classList.add("opacity-0", "translate-y-1.5");
       window.setTimeout(() => el.remove(), 300);
-    }, 4000);
+    };
+    el.addEventListener("click", dismiss);
+    toasts.appendChild(el);
+    window.setTimeout(dismiss, 4000);
   }
 
   /* ---- dialogs ----------------------------------------------------- */
@@ -48,8 +51,10 @@
   function openDialog(id) {
     const dlg = doc.getElementById(id);
     if (!dlg) return;
+    const target = dlg.querySelector("button, input, textarea, select, a");
     if (typeof dlg.showModal === "function") dlg.showModal();
     else dlg.setAttribute("open", "");
+    if (target) target.focus();
     const img = dlg.querySelector("img[data-qr-src]");
     if (img && !img.src) img.src = img.getAttribute("data-qr-src");
   }

@@ -71,7 +71,7 @@
 
   <section class="table-wrap">
     <h2 class="section-title table-title">Архивы</h2>
-    {{if not .Backups}}<p class="empty table-empty">Бэкапов пока нет.</p>{{end}}
+    {{if not .Backups}}<p class="empty table-empty"><strong>Бэкапов пока нет.</strong><span>Создайте зашифрованный архив или загрузите его из резервной копии.</span></p>{{end}}
     <table>
       {{range .Backups}}
       <tr>

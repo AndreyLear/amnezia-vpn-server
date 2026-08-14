@@ -61,7 +61,7 @@
       <h2 class="text-[15px] font-semibold tracking-wide">Клиенты</h2>
       <span class="badge" id="client-count">{{len .CardViews}}</span>
     </div>
-    {{if not .CardViews}}<p class="empty">Клиентов пока нет.</p>{{end}}
+    {{if not .CardViews}}<p class="empty"><strong>Клиентов пока нет.</strong><span>Нажмите «Добавить клиента», чтобы создать первый профиль.</span></p>{{end}}
     <div class="stack" id="clients">
       {{range .CardViews}}{{template "clientcard" .}}{{end}}
     </div>

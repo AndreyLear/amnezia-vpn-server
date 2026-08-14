@@ -273,11 +273,22 @@
   html:not(.js) dialog[open]::backdrop { display: none; }
 
   /* ---- toasts (built by app.js: classes are static utilities) ---- */
-  .empty { @apply text-sm text-ink-muted; }
+  .empty {
+    @apply rounded-card border border-dashed border-white/10 bg-surface px-5 py-6 text-sm text-ink-muted;
+  }
+  .empty strong { @apply block text-[15px] font-semibold text-ink-soft; }
+  .empty span { @apply mt-1 block; }
   .muted { @apply text-ink-muted; }
 }
 
 @media (max-width: 720px) {
+  .topbar { @apply items-start; }
+  .topbar nav { @apply min-w-0 flex-1 justify-end; }
+  .page { @apply px-3.5 pt-5; }
   .card .actions { flex-wrap: wrap; }
   .menu-panel { min-width: 230px; }
+  .meta-sep { display: none; }
+  .table-wrap { overflow-x: auto; }
+  .table-wrap table { min-width: 620px; }
+  .modal { max-height: calc(100vh - 32px); overflow-y: auto; }
 }
