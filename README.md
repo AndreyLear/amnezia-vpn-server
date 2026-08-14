@@ -25,7 +25,18 @@ Self-hosted VPN server based on AmneziaWG 2.0+.
 
 ## Install
 
-Production deployment is performed through `install.sh` (Ubuntu/Debian
+From the operator machine, one-shot install is `bootstrap.sh` (T-123):
+SSH to the VPS, run `install.sh`, create admin, print panel URL +
+temporary password. CI flags: `--ip` `--domain` / `--panel-port`
+(`--panel-port` defaults to 8443; do not use 8787 — that port is the
+loopback panel). `--domain` binds VPN clients to that hostname unless
+`--client-domain` overrides.
+
+```sh
+./bootstrap.sh --ip <server-ip> --domain panel.example.com
+```
+
+`install.sh` remains the on-server installer (Ubuntu/Debian
 24.04/22.04, Docker Compose v2.24.2+):
 
 ```sh
@@ -35,9 +46,8 @@ Production deployment is performed through `install.sh` (Ubuntu/Debian
 
 The installer creates the deployment layout (data/config/status/backups),
 installs the host nftables ruleset and the forward-accept unit, builds and
-starts the stack, and keeps the panel loopback-only. Bootstrap is manual by
-design (M3.1): create the server row, then reach the panel over an SSH
-tunnel:
+starts the stack, and keeps the panel loopback-only. Without `bootstrap.sh`,
+application init is still:
 
 ```sh
 docker compose --env-file versions.lock run --rm panel-init \
@@ -72,7 +82,8 @@ Install).
 
 ## Testing
 
-- Scripted harnesses (no Docker required): `app/panel/test_m91_install.sh`,
+- Scripted harnesses (no Docker required): `app/panel/test_m123_bootstrap.sh`,
+  `app/panel/test_m91_install.sh`,
   `app/panel/test_m92b_compose.sh`, `app/panel/test_m92_network.sh`,
   `app/awg/test_m32.sh`, `app/awg/test_m5.sh` — `test_m5.sh` needs a local Go
   toolchain.
