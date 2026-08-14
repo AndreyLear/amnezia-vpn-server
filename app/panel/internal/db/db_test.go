@@ -486,6 +486,54 @@ func TestClientCRUDAndNotFound(t *testing.T) {
 	}
 }
 
+// TestNameConstraintMappedFromRawSQL (T-114): a raw UNIQUE-constraint
+// failure on the clients.name index (as produced by a concurrent CLI
+// process racing the pre-check) maps to ErrClientNameExists instead of
+// surfacing as a generic constraint error.
+func TestNameConstraintMappedFromRawSQL(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := handle.Exec(
+		`INSERT INTO clients (name, private_key, public_key, address, enabled, created_at, updated_at)
+		 VALUES ('alice', ?, ?, '10.8.0.2/32', 1, '2026-08-12T10:00:00Z', '2026-08-12T10:00:00Z')`,
+		testPriv, testPub,
+	); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, err := handle.Exec(
+		`INSERT INTO clients (name, private_key, public_key, address, enabled, created_at, updated_at)
+		 VALUES ('alice', ?, ?, '10.8.0.3/32', 1, '2026-08-12T10:00:00Z', '2026-08-12T10:00:00Z')`,
+		testPriv, testPub2,
+	)
+	if err == nil {
+		t.Fatal("duplicate raw insert must fail")
+	}
+	if !errors.Is(mapNameConstraint(err), ErrClientNameExists) {
+		t.Fatalf("mapNameConstraint(%v) is not ErrClientNameExists", err)
+	}
+}
+
+// TestUpdateClientNameMissingIDWinsOverTakenName (T-114): renaming a
+// non-existent id onto a taken name must answer ErrClientNotFound, not
+// ErrClientNameExists.
+func TestUpdateClientNameMissingIDWinsOverTakenName(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := seedServerM4(t, handle, "10.8.0.1/24"); err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+	if _, err := CreateClient(handle, "10.8.0.1/24", NewClient{Name: "alice", PrivateKey: testPriv, PublicKey: testPub}); err != nil {
+		t.Fatalf("CreateClient alice: %v", err)
+	}
+	if err := UpdateClientName(handle, 999, "alice"); !errors.Is(err, ErrClientNotFound) {
+		t.Fatalf("rename missing id = %v, want ErrClientNotFound", err)
+	}
+}
+
 func TestExpirySemantics(t *testing.T) {
 	handle, _ := openTest(t, "amnezia.sqlite")
 	if err := Migrate(handle); err != nil {

@@ -14,8 +14,30 @@ import (
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/keys"
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 )
+
+// mapNameConstraint maps a UNIQUE-constraint failure on the clients.name
+// index to ErrClientNameExists (T-114). The web process serializes
+// mutations with a mutex, but the CLI is a separate process: the
+// SELECT COUNT(name) pre-check races with a concurrent INSERT/UPDATE
+// and the unique index answers a raw constraint error (SQLite
+// 1555/2067/19) that the pre-check path never returns.
+func mapNameConstraint(err error) error {
+	if err == nil {
+		return nil
+	}
+	var se *sqlite.Error
+	if errors.As(err, &se) {
+		switch se.Code() {
+		case 1555, 2067, 19:
+			if strings.Contains(err.Error(), "clients.name") {
+				return ErrClientNameExists
+			}
+		}
+	}
+	return err
+}
 
 // SchemaVersion matches manifest.schema_version in §5. Bumped to 4 when
 // client names became unique (M10.1): v4 adds the dedup migration plus
@@ -557,6 +579,9 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now,
 	)
 	if err != nil {
+		if mapped := mapNameConstraint(err); errors.Is(mapped, ErrClientNameExists) {
+			return nil, ErrClientNameExists
+		}
 		return nil, fmt.Errorf("db: insert client: %w", err)
 	}
 	id, err := res.LastInsertId()
@@ -687,7 +712,16 @@ func scanClient(row rowScanner) (*ClientRecord, error) {
 
 // UpdateClientName renames a client. ErrClientNotFound when the id is
 // unknown; ErrClientNameExists when the new name is already taken.
+// The id check runs first: renaming a missing id onto a taken name
+// answers ErrClientNotFound, not ErrClientNameExists (T-114).
 func UpdateClientName(handle *sql.DB, id int64, name string) error {
+	var exists int
+	if err := handle.QueryRow(`SELECT COUNT(*) FROM clients WHERE id = ?`, id).Scan(&exists); err != nil {
+		return fmt.Errorf("db: check client id: %w", err)
+	}
+	if exists == 0 {
+		return ErrClientNotFound
+	}
 	var taken int
 	if err := handle.QueryRow(`SELECT COUNT(*) FROM clients WHERE name = ? AND id != ?`, name, id).Scan(&taken); err != nil {
 		return fmt.Errorf("db: check client name: %w", err)
@@ -695,9 +729,16 @@ func UpdateClientName(handle *sql.DB, id int64, name string) error {
 	if taken > 0 {
 		return ErrClientNameExists
 	}
-	return mutateClient(handle, id,
+	err := mutateClient(handle, id,
 		`UPDATE clients SET name = ?, updated_at = ? WHERE id = ?`,
 		name, stamp(), id)
+	if err != nil {
+		if mapped := mapNameConstraint(err); errors.Is(mapped, ErrClientNameExists) {
+			return ErrClientNameExists
+		}
+		return err
+	}
+	return nil
 }
 
 // SetClientEnabled sets the enabled flag. ErrClientNotFound when the id
