@@ -492,8 +492,8 @@ test_default_port() {
     os_release debian 12 bookworm
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "default port flow: exit $rc"
-    grep -q "AWG_PORT=51820" "$ROOT/.env" && pass "default AWG_PORT=51820 in .env" \
-        || fail "default AWG_PORT=51820 in .env"
+    grep -q "AWG_PORT=443" "$ROOT/.env" && pass "default AWG_PORT=443 in .env" \
+        || fail "default AWG_PORT=443 in .env"
 }
 
 test_custom_port() {
@@ -655,7 +655,7 @@ test_domain_default_no_domain() {
     if grep -q "certbot" "$FAKE_CALLS"; then fail "no-domain: certbot was invoked"; else pass "no-domain: certbot not invoked"; fi
     if grep -q "nginx " "$FAKE_CALLS"; then fail "no-domain: nginx was invoked"; else pass "no-domain: nginx not invoked"; fi
     if grep -q "dig " "$FAKE_CALLS"; then fail "no-domain: dig was invoked"; else pass "no-domain: dig not invoked"; fi
-    if grep -qE "dport (80|443)" "$ROOT/nftables/amnezia-vpn.nft"; then fail "no-domain: 80/443 opened"; else pass "no-domain: 80/443 stay closed"; fi
+    if grep -qE "tcp dport (80|443)" "$ROOT/nftables/amnezia-vpn.nft"; then fail "no-domain: 80/443 opened"; else pass "no-domain: 80/443 stay closed"; fi
     if grep -q "ssh -L 8787" "$TMP_TEST/out"; then pass "no-domain: SSH tunnel hint kept"; else fail "no-domain: SSH hint missing"; fi
 }
 
@@ -754,7 +754,7 @@ test_panel_port_mode_flow() {
     grep -qE "^[[:space:]]*tcp dport 8443 accept" "$ROOT/nftables/amnezia-vpn.nft" \
         && pass "panel-port: tcp 8443 accept in the managed ruleset" \
         || fail "panel-port: nft 8443 accept missing"
-    if grep -qE "dport (80|443)" "$ROOT/nftables/amnezia-vpn.nft"; then fail "panel-port: 80/443 must not be opened"; else pass "panel-port: 80/443 stay closed"; fi
+    if grep -qE "tcp dport (80|443)" "$ROOT/nftables/amnezia-vpn.nft"; then fail "panel-port: 80/443 must not be opened"; else pass "panel-port: 80/443 stay closed"; fi
     grep -q "https://2.26.93.192:8443" "$TMP_TEST/out" && pass "panel-port: https://ip:port printed" \
         || fail "panel-port: https URL missing from the summary"
     grep -q "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89" "$TMP_TEST/out" \
@@ -875,7 +875,7 @@ test_client_domain_defaults_to_domain() {
     os_release debian 12 bookworm
     rc="$(run_install --domain panel.example.com)"
     [ "$rc" = "0" ] || fail "client-domain default flow: exit $rc"
-    grep -q "endpoint panel.example.com:51820" "$TMP_TEST/out" \
+    grep -q "endpoint panel.example.com:443" "$TMP_TEST/out" \
         && pass "client-domain: hint carries domain:port endpoint" \
         || fail "client-domain: hint missing domain:port endpoint"
     grep -q "A-record change" "$TMP_TEST/out" && pass "client-domain: migration note printed" \
@@ -901,8 +901,8 @@ test_client_domain_standalone() {
     os_release debian 12 bookworm
     rc="$(run_install --client-domain vpn.example.com)"
     [ "$rc" = "0" ] || fail "client-domain standalone flow: exit $rc"
-    grep -q "endpoint vpn.example.com:51820" "$TMP_TEST/out" \
-        && pass "client-domain standalone: hint carries vpn.example.com:51820" \
+    grep -q "endpoint vpn.example.com:443" "$TMP_TEST/out" \
+        && pass "client-domain standalone: hint carries vpn.example.com:443" \
         || fail "client-domain standalone: hint missing endpoint"
     grep -q "A-record change" "$TMP_TEST/out" && pass "client-domain standalone: migration note printed" \
         || fail "client-domain standalone: migration note missing"
@@ -924,8 +924,8 @@ test_client_domain_overrides_domain() {
     os_release debian 12 bookworm
     rc="$(run_install --domain panel.example.com --client-domain vpn.example.com)"
     [ "$rc" = "0" ] || fail "client-domain override flow: exit $rc"
-    grep -q "endpoint vpn.example.com:51820" "$TMP_TEST/out" \
-        && pass "client-domain override: hint carries vpn.example.com:51820" \
+    grep -q "endpoint vpn.example.com:443" "$TMP_TEST/out" \
+        && pass "client-domain override: hint carries vpn.example.com:443" \
         || fail "client-domain override: hint missing the client domain"
     grep -q "endpoint panel.example.com" "$TMP_TEST/out" && fail "client-domain override: panel domain leaked into the endpoint" \
         || pass "client-domain override: panel domain not used as endpoint"
@@ -972,7 +972,7 @@ test_client_domain_env_reuse() {
     dig_after_first="$(grep -c "dig " "$FAKE_CALLS")"
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "client-domain reuse: second pass exit $rc"
-    grep -q "endpoint vpn.example.com:51820" "$TMP_TEST/out" \
+    grep -q "endpoint vpn.example.com:443" "$TMP_TEST/out" \
         && pass "client-domain reuse: endpoint from .env in the rerun hint" \
         || fail "client-domain reuse: .env CLIENT_DOMAIN not reused"
     [ "$(grep -c "dig " "$FAKE_CALLS")" -gt "$dig_after_first" ] \
@@ -997,7 +997,7 @@ test_no_domain_ip_endpoint_hint() {
     os_release debian 12 bookworm
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "no-domain IP endpoint flow: exit $rc"
-    grep -q "endpoint <public-ip>:51820" "$TMP_TEST/out" \
+    grep -q "endpoint <public-ip>:443" "$TMP_TEST/out" \
         && pass "no-domain: IP endpoint hint kept" \
         || fail "no-domain: IP endpoint hint missing"
     grep -q "A-record change" "$TMP_TEST/out" && fail "no-domain: migration note printed without a domain" \

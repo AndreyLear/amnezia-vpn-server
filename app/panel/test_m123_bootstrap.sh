@@ -303,7 +303,7 @@ test_password_env_panel_port() {
         || fail "password-env: IP:port URL missing"
     grep -q "AB:CD:EF:01:23:45:67:89" "$TMP_TEST/out" && pass "password-env: cert fingerprint in summary" \
         || fail "password-env: fingerprint missing from summary"
-    grep -q -- "--endpoint '2.26.93.192:51820'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
         && pass "password-env: server init uses the public IP endpoint" \
         || fail "password-env: IP endpoint missing from server init"
     grep -q "BatchMode=yes" "$FAKE_CALLS" && fail "password-env: BatchMode=yes used with password auth" \
@@ -317,10 +317,10 @@ test_flags_domain_without_client_domain_binds_panel_domain() {
     rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
         --domain panel.example.com)"
     [ "$rc" = "0" ] || { fail "domain-default-bind: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
-    grep -q -- "--endpoint 'panel.example.com:51820'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint 'panel.example.com:443'" "$FAKE_CALLS" \
         && pass "domain-default-bind: server init endpoint is the panel domain" \
         || fail "domain-default-bind: server init endpoint missing/wrong"
-    grep -q "Endpoint:  panel.example.com:51820" "$TMP_TEST/out" \
+    grep -q "Endpoint:  panel.example.com:443" "$TMP_TEST/out" \
         && pass "domain-default-bind: summary endpoint is the panel domain" \
         || fail "domain-default-bind: summary endpoint missing/wrong"
     grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "domain-default-bind: panel URL is the domain" \
@@ -332,10 +332,10 @@ test_flags_panel_port_uses_ip_endpoint() {
     fakes_reset
     rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" --panel-port 8443)"
     [ "$rc" = "0" ] || { fail "panel-port IP endpoint: exit $rc"; return 0; }
-    grep -q -- "--endpoint '2.26.93.192:51820'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
         && pass "panel-port IP endpoint: server init uses PUBLIC_IP:awg-port" \
         || fail "panel-port IP endpoint: server init endpoint missing/wrong"
-    grep -q "Endpoint:  2.26.93.192:51820" "$TMP_TEST/out" \
+    grep -q "Endpoint:  2.26.93.192:443" "$TMP_TEST/out" \
         && pass "panel-port IP endpoint: summary uses the public IP" \
         || fail "panel-port IP endpoint: summary endpoint missing/wrong"
 }
@@ -350,7 +350,7 @@ root
 panel.example.com
 y
 
-51820
+
 /opt/amnezia-vpn
 ANSWERS
         echo $?
@@ -361,7 +361,7 @@ ANSWERS
     grep -q -- "--client-domain 'panel.example.com'" "$FAKE_CALLS" \
         && pass "interactive bind: client domain defaults to the panel domain" \
         || fail "interactive bind: --client-domain missing"
-    grep -q "Endpoint:  panel.example.com:51820" "$TMP_TEST/out" \
+    grep -q "Endpoint:  panel.example.com:443" "$TMP_TEST/out" \
         && pass "interactive bind: endpoint in summary" \
         || fail "interactive bind: endpoint missing"
 }
@@ -375,7 +375,7 @@ test_interactive_bind_no_uses_ip_endpoint() {
 root
 panel.example.com
 n
-51820
+
 /opt/amnezia-vpn
 ANSWERS
         echo $?
@@ -383,10 +383,10 @@ ANSWERS
     [ "$rc" = "0" ] || { fail "interactive no-bind: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
     grep -q -- "--domain 'panel.example.com'" "$FAKE_CALLS" && pass "interactive no-bind: --domain passed" \
         || fail "interactive no-bind: --domain missing"
-    grep -q -- "--endpoint '2.26.93.192:51820'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
         && pass "interactive no-bind: server init uses PUBLIC_IP:awg-port" \
         || fail "interactive no-bind: IP endpoint missing from server init"
-    grep -q "Endpoint:  2.26.93.192:51820" "$TMP_TEST/out" \
+    grep -q "Endpoint:  2.26.93.192:443" "$TMP_TEST/out" \
         && pass "interactive no-bind: summary uses the public IP" \
         || fail "interactive no-bind: summary endpoint missing/wrong"
 }
@@ -400,7 +400,7 @@ test_interactive_no_domain_panel_port() {
 root
 
 8443
-51820
+
 /opt/amnezia-vpn
 ANSWERS
         echo $?
@@ -505,7 +505,7 @@ test_default_panel_port_without_domain() {
     [ "$rc" = "0" ] || fail "default panel-port: exit $rc"
     grep -q -- "--panel-port '8443'" "$FAKE_CALLS" && pass "default panel-port: 8443 in IP mode" \
         || fail "default panel-port: 8443 not passed"
-    grep -q -- "--endpoint '2.26.93.192:51820'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
         && pass "default panel-port: server init uses the public IP endpoint" \
         || fail "default panel-port: IP endpoint missing"
 }

@@ -26,7 +26,7 @@ DEFAULT_USER=root
 # Host nginx TLS port for IP:port mode (T-124). Must not be 8787: compose
 # already binds the panel to 127.0.0.1:8787.
 DEFAULT_PANEL_PORT=8443
-DEFAULT_AWG_PORT=51820
+DEFAULT_AWG_PORT=443
 DEFAULT_ROOT=/opt/amnezia-vpn
 SSH_CONNECT_TIMEOUT="${AMNEZIA_BOOTSTRAP_SSH_TIMEOUT:-15}"
 CURL_TIMEOUT=20
@@ -87,7 +87,7 @@ Options:
                        clients to the panel domain (install.sh default);
                        this flag overrides. IP endpoint only when there
                        is no panel domain and no --client-domain.
-  --awg-port PORT      AmneziaWG UDP port (default: 51820)
+  --awg-port PORT      AmneziaWG UDP port (default: 443; avoid 51820)
   --root DIR           deployment root on the server (default: /opt/amnezia-vpn)
   --source URL         download a release tarball instead of packing the
                        local repository

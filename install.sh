@@ -33,7 +33,8 @@
 # Arguments (only these are supported):
 #   --root DIR      deployment root (default: /opt/amnezia-vpn)
 #   --awg-port PORT external UDP port of the AWG runtime, 1..65535
-#                   (default: 51820)
+#                   (default: 443; not 51820 — that is the well-known
+#                   WireGuard port and is an easy DPI/block target)
 #   --vpn-subnet CIDR  IPv4 subnet of the tunnel (default: 10.8.0.0/24).
 #                   Authoritative source is server.address in the
 #                   database: when the deployed config/awg0.conf exists,
@@ -105,7 +106,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-/opt/amnezia-vpn}"
-AWG_PORT=51820
+AWG_PORT=443
 VPN_SUBNET=10.8.0.0/24
 
 OS_RELEASE="${AMNEZIA_INSTALL_OS_RELEASE:-/etc/os-release}"
@@ -133,7 +134,7 @@ Usage:
 Options:
   --root DIR        deployment root (default: /opt/amnezia-vpn)
   --awg-port PORT   external UDP port of the AWG runtime,
-                    1..65535 (default: 51820)
+                    1..65535 (default: 443; avoid 51820)
   --vpn-subnet CIDR VPN subnet the server assigns clients from;
                     IPv4 CIDR with prefix 1..32 (default: 10.8.0.0/24)
   --domain FQDN     panel domain with a public DNS record to this server:
@@ -1140,7 +1141,7 @@ EOF
 if [ -n "$CLIENT_DOMAIN" ]; then
     cat <<EOF
 install:     docker compose --env-file versions.lock run --rm panel-init \\
-install:       /app/panel server init 10.8.0.1/24 51820 --endpoint ${CLIENT_DOMAIN}:${AWG_PORT} --dns 1.1.1.1,8.8.8.8
+install:       /app/panel server init 10.8.0.1/24 ${AWG_PORT} --endpoint ${CLIENT_DOMAIN}:${AWG_PORT} --dns 1.1.1.1,8.8.8.8
 install:   (clients are bound to ${CLIENT_DOMAIN}: moving to another server
 install:   is an A-record change — clients reconnect themselves, configs are
 install:   not re-issued; migrate the database with the backup buttons)
@@ -1148,7 +1149,7 @@ EOF
 else
     cat <<EOF
 install:     docker compose --env-file versions.lock run --rm panel-init \\
-install:       /app/panel server init 10.8.0.1/24 51820 --endpoint <public-ip>:${AWG_PORT} --dns 1.1.1.1,8.8.8.8
+install:       /app/panel server init 10.8.0.1/24 ${AWG_PORT} --endpoint <public-ip>:${AWG_PORT} --dns 1.1.1.1,8.8.8.8
 EOF
 fi
 cat <<EOF
@@ -1158,7 +1159,7 @@ install:   0.0.0.0/0) loses the local network's DNS, and internet goes dark.
 install:   DNS can also be set later with: /app/panel server update --dns ...)
 install:   or restore an existing database:
 install:     docker compose --env-file versions.lock run --rm panel-init \\
-install:       /app/panel restore <archive> --identity-stdin  (M8 restore flow)
+install:       /app/panel restore <archive>
 EOF
 if [ -n "$DOMAIN" ]; then
     cat <<EOF

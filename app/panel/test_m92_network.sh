@@ -372,7 +372,7 @@ test_default_rules() {
     assert_in "^table ip amnezia {" "$NFT_SYS_FILE" "table ip amnezia declared"
     assert_in "ip saddr 10.8.0.0/24 accept" "$NFT_SYS_FILE" "forward: vpn subnet saddr accepted"
     assert_in "ip daddr 10.8.0.0/24 accept" "$NFT_SYS_FILE" "forward: vpn subnet daddr accepted"
-    assert_in "udp dport 51820 accept" "$NFT_SYS_FILE" "input: default UDP 51820 accepted"
+    assert_in "udp dport 443 accept" "$NFT_SYS_FILE" "input: default UDP 443 accepted"
     assert_in 'ip saddr 10.8.0.0/24 oifname != "awg0" masquerade' "$NFT_SYS_FILE" "postrouting: NAT for subnet, never into the tunnel"
 }
 
