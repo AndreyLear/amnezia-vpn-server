@@ -21,7 +21,7 @@ const (
 	applicationVersion = "2.0.0"
 	manifestFilename   = "manifest.json"
 	snapshotFilename   = "amnezia.sqlite"
-	archiveSuffix      = ".tar.zst.age"
+	archiveSuffix      = ".tar.zst"
 	filenameTimeLayout = "2006-01-02"
 	// filenameTimeOfDayLayout disambiguates safety backups taken the
 	// same day (they must never overwrite each other).

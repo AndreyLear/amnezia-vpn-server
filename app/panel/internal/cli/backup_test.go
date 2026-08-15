@@ -1,8 +1,7 @@
 package cli
 
 // M8.3 CLI backup tests:
-//   - backup create produces a valid .tar.zst.age (decryptable with the
-//     matching identity, exactly the M8 entries)
+//   - backup create produces a valid .tar.zst (exactly the M8 entries)
 //   - a second create the same day succeeds and replaces the archive
 //     atomically (M8.2 same-day overwrite, Q8 open)
 //   - backup list prints only real backups, sorted; empty/missing
@@ -11,7 +10,7 @@ package cli
 //     symlinks pointing outside, nested paths) never appear in the
 //     output and are never followed
 //   - usage errors exit 2, runtime errors exit 1
-//   - stdout/stderr never carry secrets (keys, hash, AGE_RECIPIENT)
+//   - stdout/stderr never carry secrets (keys, hash)
 
 import (
 	"archive/tar"
@@ -25,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"filippo.io/age"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/klauspost/compress/zstd"
@@ -39,32 +37,16 @@ func setBackupsPath(t *testing.T, c *ctx) string {
 	return dir
 }
 
-// setRecipient installs a fresh test identity as AGE_RECIPIENT and
-// returns it (identity is test-only, never produced in production).
-func setRecipient(t *testing.T) *age.X25519Identity {
-	t.Helper()
-	id, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatalf("GenerateX25519Identity: %v", err)
-	}
-	t.Setenv("AGE_RECIPIENT", id.Recipient().String())
-	return id
-}
-
-// decryptEntries is the inverse of backup.Create for tests: age →
-// zstd → tar, returning entry name → content.
-func decryptEntries(t *testing.T, path string, id *age.X25519Identity) map[string][]byte {
+// unpackArchive is the inverse of backup.Create for tests: zstd →
+// tar, returning entry name → content.
+func unpackArchive(t *testing.T, path string) map[string][]byte {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open archive: %v", err)
 	}
 	defer f.Close()
-	rd, err := age.Decrypt(f, id)
-	if err != nil {
-		t.Fatalf("age.Decrypt: %v", err)
-	}
-	zr, err := zstd.NewReader(rd)
+	zr, err := zstd.NewReader(f)
 	if err != nil {
 		t.Fatalf("zstd.NewReader: %v", err)
 	}
@@ -89,29 +71,24 @@ func decryptEntries(t *testing.T, path string, id *age.X25519Identity) map[strin
 }
 
 // assertSecretFree fails when secret material appears in the given
-// output streams. recipient is the value of AGE_RECIPIENT, which must
-// never be echoed.
-func assertSecretFree(t *testing.T, streams string, secret string, recipient string) {
+// output streams.
+func assertSecretFree(t *testing.T, streams string, secret string) {
 	t.Helper()
 	if secret != "" && strings.Contains(streams, secret) {
 		t.Fatalf("output leaks secret %q", secret)
-	}
-	if recipient != "" && strings.Contains(streams, recipient) {
-		t.Fatal("output leaks the AGE_RECIPIENT value")
 	}
 }
 
 func TestBackupCreateValidArchive(t *testing.T) {
 	c := newCtx(t)
 	backups := setBackupsPath(t, c)
-	id := setRecipient(t)
 	// seed a client with marked keys so the snapshot provably contains
 	// live data
 	c.seedServer("", "")
 	_, pub, priv, _ := c.seedClient("alice")
 
 	out := c.mustRun("backup", "create")
-	name := time.Now().UTC().Format("2006-01-02") + ".tar.zst.age"
+	name := time.Now().UTC().Format("2006-01-02") + ".tar.zst"
 	want := "panel backup create: " + filepath.Join(backups, "backup-"+name) + "\n"
 	if out != want {
 		t.Fatalf("stdout = %q, want %q", out, want)
@@ -125,7 +102,7 @@ func TestBackupCreateValidArchive(t *testing.T) {
 		t.Fatalf("archive mode = %o, want 600", perm)
 	}
 
-	entries := decryptEntries(t, archive, id)
+	entries := unpackArchive(t, archive)
 	if len(entries) != 2 {
 		t.Fatalf("entries = %d, want exactly 2", len(entries))
 	}
@@ -160,7 +137,6 @@ func TestBackupCreateValidArchive(t *testing.T) {
 func TestBackupCreateSecondRunOverwrites(t *testing.T) {
 	c := newCtx(t)
 	backups := setBackupsPath(t, c)
-	id := setRecipient(t)
 	c.seedServer("", "")
 
 	if out := c.mustRun("backup", "create"); !strings.HasPrefix(out, "panel backup create: ") {
@@ -177,7 +153,7 @@ func TestBackupCreateSecondRunOverwrites(t *testing.T) {
 		t.Fatalf("backups dir has %d entries, want exactly 1 (same-day overwrite)", len(entries))
 	}
 	// the surviving archive is complete and valid
-	if got := decryptEntries(t, filepath.Join(backups, entries[0].Name()), id); len(got) != 2 {
+	if got := unpackArchive(t, filepath.Join(backups, entries[0].Name())); len(got) != 2 {
 		t.Fatalf("surviving archive has %d entries", len(got))
 	}
 }
@@ -191,9 +167,9 @@ func TestBackupListShowsOnlyBackupsSorted(t *testing.T) {
 	// three archives on different days (raw copies: list never reads
 	// content) plus one odd-shaped file
 	for _, name := range []string{
-		"backup-2026-08-11.tar.zst.age",
-		"backup-2026-08-12.tar.zst.age",
-		"backup-2026-08-13.tar.zst.age",
+		"backup-2026-08-11.tar.zst",
+		"backup-2026-08-12.tar.zst",
+		"backup-2026-08-13.tar.zst",
 		"backup-2026-08-11.tar.zst",
 	} {
 		if err := os.WriteFile(filepath.Join(backups, name), []byte("x"), 0o600); err != nil {
@@ -202,9 +178,9 @@ func TestBackupListShowsOnlyBackupsSorted(t *testing.T) {
 	}
 	out := c.mustRun("backup", "list")
 	want := []string{
-		"backup-2026-08-11.tar.zst.age",
-		"backup-2026-08-12.tar.zst.age",
-		"backup-2026-08-13.tar.zst.age",
+		"backup-2026-08-11.tar.zst",
+		"backup-2026-08-12.tar.zst",
+		"backup-2026-08-13.tar.zst",
 	}
 	sort.Strings(want)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
@@ -243,7 +219,7 @@ func TestBackupListIgnoresSuspiciousEntries(t *testing.T) {
 	}
 	// the only real backup
 	if err := os.WriteFile(
-		filepath.Join(backups, "backup-2026-08-12.tar.zst.age"),
+		filepath.Join(backups, "backup-2026-08-12.tar.zst"),
 		[]byte("real"), 0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -255,10 +231,10 @@ func TestBackupListIgnoresSuspiciousEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries := []string{
-		"backup-2026-13-99.tar.zst.age",   // impossible date
-		"backup-evil.tar.zst.age",         // wrong date shape
-		"evil.tar.zst.age",                // wrong prefix
-		"backup-2026-08-12.tar.zst.age.x", // wrong suffix
+		"backup-2026-13-99.tar.zst",   // impossible date
+		"backup-evil.tar.zst",         // wrong date shape
+		"evil.tar.zst",                // wrong prefix
+		"backup-2026-08-12.tar.zst.x", // wrong suffix
 	}
 	for _, name := range entries {
 		if err := os.WriteFile(filepath.Join(backups, name), []byte("x"), 0o600); err != nil {
@@ -269,17 +245,17 @@ func TestBackupListIgnoresSuspiciousEntries(t *testing.T) {
 	// entries; the directory entry below simulates the deepest such
 	// attack: an entry carrying a path that must never be printed
 	// a directory and a nested file with a valid-looking name
-	if err := os.MkdirAll(filepath.Join(backups, "backup-2026-08-10.tar.zst.age"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(backups, "backup-2026-08-10.tar.zst"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(backups, "backup-2026-08-10.tar.zst.age", "inner"),
+		filepath.Join(backups, "backup-2026-08-10.tar.zst", "inner"),
 		[]byte("x"), 0o600,
 	); err != nil {
 		t.Fatal(err)
 	}
 	// a symlink with a valid name pointing outside
-	if err := os.Symlink(outside, filepath.Join(backups, "backup-2026-08-09.tar.zst.age")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(backups, "backup-2026-08-09.tar.zst")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -287,7 +263,7 @@ func TestBackupListIgnoresSuspiciousEntries(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, errb)
 	}
-	if out != "backup-2026-08-12.tar.zst.age\n" {
+	if out != "backup-2026-08-12.tar.zst\n" {
 		t.Fatalf("stdout = %q, want only the real backup", out)
 	}
 	if strings.Contains(out, "TOP-SECRET-CONTENT") {
@@ -325,42 +301,11 @@ func TestBackupUsageErrors(t *testing.T) {
 	}
 }
 
-func TestBackupCreateMissingRecipient(t *testing.T) {
-	c := newCtx(t)
-	setBackupsPath(t, c)
-	t.Setenv("AGE_RECIPIENT", "")
-	code, out, errb := c.run("backup", "create")
-	if code != 1 {
-		t.Fatalf("exit = %d, want 1", code)
-	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want empty", out)
-	}
-	if !strings.Contains(errb, "AGE_RECIPIENT") {
-		t.Fatalf("stderr = %q, want AGE_RECIPIENT diagnostic", errb)
-	}
-}
 
-func TestBackupCreateInvalidRecipient(t *testing.T) {
-	c := newCtx(t)
-	setBackupsPath(t, c)
-	t.Setenv("AGE_RECIPIENT", "not-an-age-key")
-	code, out, errb := c.run("backup", "create")
-	if code != 1 {
-		t.Fatalf("exit = %d, want 1", code)
-	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want empty", out)
-	}
-	if !strings.Contains(errb, "panel backup create:") || !strings.Contains(errb, "recipient") {
-		t.Fatalf("stderr = %q", errb)
-	}
-}
 
 func TestBackupCreateClosedDatabaseFails(t *testing.T) {
 	c := newCtx(t)
 	setBackupsPath(t, c)
-	setRecipient(t)
 	// a path that can never be a database: parent is a regular file
 	blocker := filepath.Join(c.dir, "blocker")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
@@ -388,7 +333,6 @@ func TestBackupSecretFreeStreams(t *testing.T) {
 	markedHash := "$argon2id$v=19$m=65536,t=1,p=4$" + formKey(0xEF)
 	c := newCtx(t)
 	backups := setBackupsPath(t, c)
-	id := setRecipient(t)
 	c.seedServer("", "")
 	h := c.openDB()
 	defer h.Close()
@@ -410,9 +354,9 @@ func TestBackupSecretFreeStreams(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("create: exit = %d, stderr = %s", code, errb)
 	}
-	assertSecretFree(t, out+errb, markedPriv, id.Recipient().String())
-	assertSecretFree(t, out+errb, markedPSK, "")
-	assertSecretFree(t, out+errb, markedHash, "")
+	assertSecretFree(t, out+errb, markedPriv)
+	assertSecretFree(t, out+errb, markedPSK)
+	assertSecretFree(t, out+errb, markedHash)
 	if !strings.HasPrefix(out, "panel backup create: "+backups) {
 		t.Fatalf("create stdout = %q", out)
 	}
@@ -421,9 +365,9 @@ func TestBackupSecretFreeStreams(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("list: exit = %d, stderr = %s", code, errb)
 	}
-	assertSecretFree(t, out+errb, markedPriv, id.Recipient().String())
-	assertSecretFree(t, out+errb, markedPSK, "")
-	assertSecretFree(t, out+errb, markedHash, "")
+	assertSecretFree(t, out+errb, markedPriv)
+	assertSecretFree(t, out+errb, markedPSK)
+	assertSecretFree(t, out+errb, markedHash)
 
 	// the archive file itself must not carry plaintext markers either
 	entries, err := os.ReadDir(backups)
@@ -450,11 +394,11 @@ func TestBackupListDoesNotOpenDatabase(t *testing.T) {
 	if err := os.MkdirAll(backups, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(backups, "backup-2026-08-12.tar.zst.age"), []byte("x"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(backups, "backup-2026-08-12.tar.zst"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AMNEZIA_DB_PATH", filepath.Join(c.dir, "blocked", "x.sqlite"))
-	if out := c.mustRun("backup", "list"); out != "backup-2026-08-12.tar.zst.age\n" {
+	if out := c.mustRun("backup", "list"); out != "backup-2026-08-12.tar.zst\n" {
 		t.Fatalf("stdout = %q", out)
 	}
 }
@@ -464,7 +408,6 @@ func TestBackupListDoesNotOpenDatabase(t *testing.T) {
 func TestBackupCreatePreservesDatabase(t *testing.T) {
 	c := newCtx(t)
 	setBackupsPath(t, c)
-	setRecipient(t)
 	c.seedServer("", "")
 	c.seedClient("alice")
 	before, err := os.ReadFile(c.dbPath)

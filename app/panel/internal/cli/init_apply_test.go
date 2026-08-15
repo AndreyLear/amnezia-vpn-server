@@ -17,19 +17,18 @@ import (
 func TestInitAppliesPendingRestore(t *testing.T) {
 	c := newCtx(t)
 	setBackupsPath(t, c)
-	id := setRecipient(t)
 	c.seedServer("", "")
 	_, alicePub, _, _ := c.seedClient("alice")
 	out := c.mustRun("backup", "create")
 	name := filepath.Base(strings.TrimSuffix(strings.TrimSpace(out), "\n"))
 	_, bobPub, _, _ := c.seedClient("bob")
 
-	// prepare the restore (identity via stdin only)
-	code, out, errb := runInput(strings.NewReader(id.String()+"\n"), "restore", name, "--identity-stdin")
+	// prepare the restore (CLI stops at the pending marker)
+	code, out, errb := c.run("restore", name)
 	if code != 0 {
 		t.Fatalf("restore exit = %d, stderr = %s", code, errb)
 	}
-	assertSecretFree(t, out+errb, id.String(), id.Recipient().String())
+	assertSecretFree(t, out+errb, "")
 
 	// stack restart: panel-init runs `panel init`
 	code, out, errb = c.run("init")

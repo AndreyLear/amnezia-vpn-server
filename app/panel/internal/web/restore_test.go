@@ -1,7 +1,7 @@
-// M8.6 restore UI tests: GET/POST /backups/restore behind auth,
-// multipart upload with own CSRF check, generic fixed failures that
-// never echo input, the pending state (marker + banner + blocked
-// create/delete/restore), and the full pipeline round-trip.
+// M8.6 restore UI tests: POST /backups/restore behind auth, multipart
+// upload with own CSRF check, generic fixed failures that never echo
+// input, the pending state (marker + banner + blocked download/restore),
+// and the full pipeline round-trip. GET /backups is the upload page.
 package web
 
 import (
@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"filippo.io/age"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
@@ -74,19 +73,19 @@ func postRestoreUpload(t *testing.T, f *fixture, fields map[string]string, files
 }
 
 // restoreFields is the minimal field set every happy-path upload needs.
-func restoreFields(f *fixture, identity string) map[string]string {
-	return map[string]string{"_csrf": f.csrf, "identity": identity}
+func restoreFields(f *fixture) map[string]string {
+	return map[string]string{"_csrf": f.csrf}
 }
 
 // preparedRestore drives a full happy-path restore through the
 // pipeline DIRECTLY (the CLI path — not the web upload, which now
 // applies in-process, T-125) and returns the marker path. It is used
 // by the pending-state tests.
-func preparedRestore(t *testing.T, f *fixture, dir string, id *age.X25519Identity) string {
+func preparedRestore(t *testing.T, f *fixture, dir string) string {
 	t.Helper()
 	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
 	archive := filepath.Join(dir, name)
-	if _, err := backup.Restore(f.h, f.dbPath, archive, dir, os.Getenv("AGE_RECIPIENT"), []age.Identity{id}, nil); err != nil {
+	if _, err := backup.Restore(f.h, f.dbPath, archive, dir, nil); err != nil {
 		t.Fatalf("restore prepare: %v", err)
 	}
 	marker, ok, err := backup.PendingPath(f.dbPath)
@@ -97,14 +96,15 @@ func preparedRestore(t *testing.T, f *fixture, dir string, id *age.X25519Identit
 }
 
 // TestRestoreRequireAuth: unauthenticated requests hit the M7.4
-// challenge — GET redirects to /login, POST answers the fixed 401.
+// challenge — GET /backups redirects to /login, POST restore answers
+// the fixed 401.
 func TestRestoreRequireAuth(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/backups/restore", nil)
+	req := httptest.NewRequest(http.MethodGet, "/backups", nil)
 	rec := httptest.NewRecorder()
 	f.server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("GET restore: code %d location %q, want 303 /login", rec.Code, rec.Header().Get("Location"))
+		t.Fatalf("GET /backups: code %d location %q, want 303 /login", rec.Code, rec.Header().Get("Location"))
 	}
 	req = httptest.NewRequest(http.MethodPost, "/backups/restore", nil)
 	rec = httptest.NewRecorder()
@@ -114,17 +114,16 @@ func TestRestoreRequireAuth(t *testing.T) {
 	}
 }
 
-// TestRestorePageRendersForm: the GET page carries the multipart form
-// (fields backup + identity), the CSRF token and no secrets.
+// TestRestorePageRendersForm: GET /backups carries the multipart form
+// (file field backup), the CSRF token and no identity field.
 func TestRestorePageRendersForm(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 	makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
-	body := f.get("/backups/restore").Body.String()
+	body := f.get("/backups").Body.String()
 	for _, want := range []string{
 		`enctype="multipart/form-data"`,
 		`name="backup"`,
-		`name="identity"`,
 		`/backups/restore`,
 	} {
 		if !strings.Contains(body, want) {
@@ -134,63 +133,8 @@ func TestRestorePageRendersForm(t *testing.T) {
 	if !strings.Contains(body, `name="_csrf" value="`+f.csrf+`"`) {
 		t.Error("restore page missing CSRF token")
 	}
-	if strings.Contains(body, id.String()) || strings.Contains(body, id.Recipient().String()) {
-		t.Error("restore page leaks identity material")
-	}
-}
-
-// TestRestoreUploadMissingIdentity: an upload without the identity
-// field is refused with the fixed flash and nothing is written
-// (marker, safety backup, staging).
-func TestRestoreUploadMissingIdentity(t *testing.T) {
-	f := newFixture(t)
-	dir, _ := setBackupsPath(t)
-	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
-	archive, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fields := restoreFields(f, "")
-	delete(fields, "identity")
-	rec := postRestoreUpload(t, f, fields, map[string][]byte{name: archive})
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("code %d Location %q, want %q flash", rec.Code, rec.Header().Get("Location"), flashRestoreMissingIdentity)
-	}
-	if got := restoreFlashOf(t, rec); got != flashRestoreMissingIdentity {
-		t.Fatalf("flash = %q, want %q", got, flashRestoreMissingIdentity)
-	}
-	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
-		t.Fatalf("marker after rejected upload: ok=%v err=%v", ok, err)
-	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
-		t.Fatalf("backups dir after rejected upload = %v, want only the archive", entries)
-	}
-}
-
-// TestRestoreUploadInvalidIdentity: garbage in the identity field is
-// refused with the fixed flash, and no identity string ever appears in
-// the response.
-func TestRestoreUploadInvalidIdentity(t *testing.T) {
-	f := newFixture(t)
-	dir, _ := setBackupsPath(t)
-	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
-	archive, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	bad := "not-an-age-identity"
-	rec := postRestoreUpload(t, f, restoreFields(f, bad), map[string][]byte{name: archive})
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("code %d Location %q, want %q flash", rec.Code, rec.Header().Get("Location"), flashRestoreInvalidIdentity)
-	}
-	if got := restoreFlashOf(t, rec); got != flashRestoreInvalidIdentity {
-		t.Fatalf("flash = %q, want %q", got, flashRestoreInvalidIdentity)
-	}
-	if strings.Contains(rec.Header().Get("Location"), bad) {
-		t.Fatal("flash echoes the submitted identity")
-	}
-	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
-		t.Fatalf("marker after rejected upload: ok=%v err=%v", ok, err)
+	if strings.Contains(body, `name="identity"`) {
+		t.Error("restore page still asks for an identity")
 	}
 }
 
@@ -198,8 +142,8 @@ func TestRestoreUploadInvalidIdentity(t *testing.T) {
 // fixed flash.
 func TestRestoreUploadMissingFile(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
-	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), nil)
+	dir := setBackupsPath(t)
+	rec := postRestoreUpload(t, f, restoreFields(f), nil)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("code %d Location %q, want %q flash", rec.Code, rec.Header().Get("Location"), flashRestoreMissingFile)
 	}
@@ -222,10 +166,10 @@ func TestRestoreUploadMissingFile(t *testing.T) {
 // temp path that never uses the client-supplied name.
 func TestRestoreUploadInvalidFileName(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 	hostile := []string{"..", `\`}
 	for _, fn := range hostile {
-		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{fn: []byte("x")})
+		rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{fn: []byte("x")})
 		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("%q: code %d Location %q", fn, rec.Code, rec.Header().Get("Location"))
 		}
@@ -235,8 +179,8 @@ func TestRestoreUploadInvalidFileName(t *testing.T) {
 	}
 	// normalized traversal names reach the pipeline with a meaningless
 	// upload — the fixed failure flash, nothing written
-	for _, fn := range []string{"../../etc/passwd.age", "a/b.age", "/etc/passwd.age"} {
-		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{fn: []byte("x")})
+	for _, fn := range []string{"../../etc/passwd.tar.zst", "a/b.tar.zst", "/etc/passwd.tar.zst"} {
+		rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{fn: []byte("x")})
 		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("%q: code %d Location %q", fn, rec.Code, rec.Header().Get("Location"))
 		}
@@ -258,14 +202,14 @@ func TestRestoreUploadInvalidFileName(t *testing.T) {
 // token value is never echoed.
 func TestRestoreUploadBadCSRF(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
 	archive, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, token := range []string{"", "wrong-token-value"} {
-		rec := postRestoreUpload(t, f, map[string]string{"_csrf": token, "identity": id.String()},
+		rec := postRestoreUpload(t, f, map[string]string{"_csrf": token},
 			map[string][]byte{name: archive})
 		if rec.Code != http.StatusForbidden || rec.Body.String() != "Forbidden.\n" {
 			t.Fatalf("token %q: code %d body %q, want 403 fixed", token, rec.Code, rec.Body.String())
@@ -283,9 +227,9 @@ func TestRestoreUploadBadCSRF(t *testing.T) {
 // answers the fixed 413 and nothing is written.
 func TestRestoreOversizedUpload(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 	blob := bytes.Repeat([]byte("z"), MaxRestoreBodyBytes+1<<20)
-	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{"backup-2026-08-12.tar.zst.age": blob})
+	rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{"backup-2026-08-12.tar.zst": blob})
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("code = %d, want 413", rec.Code)
 	}
@@ -297,53 +241,15 @@ func TestRestoreOversizedUpload(t *testing.T) {
 	}
 }
 
-// TestRestoreWrongIdentity: an archive encrypted for another identity
-// fails inside the pipeline — generic flash, no marker, no safety
-// backup, no staging leftovers, and the DB is untouched.
-func TestRestoreWrongIdentity(t *testing.T) {
-	f := newFixture(t)
-	dir, _ := setBackupsPath(t)
-	other, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientsBefore := clientCount(f)
-	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
-	archive, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := postRestoreUpload(t, f, restoreFields(f, other.String()), map[string][]byte{name: archive})
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("code %d Location %q, want %q flash", rec.Code, rec.Header().Get("Location"), flashRestoreFailed)
-	}
-	if got := restoreFlashOf(t, rec); got != flashRestoreFailed {
-		t.Fatalf("flash = %q, want %q", got, flashRestoreFailed)
-	}
-	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
-		t.Fatalf("marker after failed restore: ok=%v err=%v", ok, err)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Name() != name {
-		t.Fatalf("backups dir after failed restore = %v, want only the original archive", entries)
-	}
-	if got := clientCount(f); got != clientsBefore {
-		t.Fatalf("clients after failed restore = %d, want %d (untouched)", got, clientsBefore)
-	}
-}
-
-// TestRestoreFullFlow: a valid archive with the matching identity runs
-// the whole pipeline — pending marker next to the DB, safety backup in
-// the backups dir, the panel still live (never restarted), the pending
-// banner on both pages, and every mutation blocked.
+// TestRestoreFullFlow: a valid archive runs the CLI prepare path —
+// pending marker next to the DB, safety backup in the backups dir, the
+// panel still live (never restarted), the pending banner on the upload
+// page, and download/restore blocked.
 func TestRestoreFullFlow(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 	clientsBefore := clientCount(f)
-	marker := preparedRestore(t, f, dir, id)
+	marker := preparedRestore(t, f, dir)
 
 	// the pending marker is the exclusive 0700 directory next to the
 	// DB holding the unpacked restore image (Q7a)
@@ -381,21 +287,13 @@ func TestRestoreFullFlow(t *testing.T) {
 	if !strings.Contains(body, "Восстановление подготовлено и ожидает перезапуска") {
 		t.Fatal("pending banner missing on /backups")
 	}
-	body = f.get("/backups/restore").Body.String()
-	if !strings.Contains(body, "Восстановление подготовлено и ожидает перезапуска") {
-		t.Fatal("pending banner missing on /backups/restore")
-	}
 
-	// create/delete/restore are all blocked while pending
-	rec := csrfPOST(f, "/backups/create", f.csrf)
+	// download/restore are blocked while pending
+	rec := csrfPOST(f, "/backups/download", f.csrf)
 	if got := restoreFlashOf(t, rec); got != flashRestoreBlockedByPending {
-		t.Fatalf("create while pending: flash = %q, want %q", got, flashRestoreBlockedByPending)
+		t.Fatalf("download while pending: flash = %q, want %q", got, flashRestoreBlockedByPending)
 	}
-	rec = csrfPOST(f, "/backups/backup-2026-08-12.tar.zst.age/delete", f.csrf)
-	if got := restoreFlashOf(t, rec); got != flashRestoreBlockedByPending {
-		t.Fatalf("delete while pending: flash = %q, want %q", got, flashRestoreBlockedByPending)
-	}
-	rec = postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{"backup-2026-08-12.tar.zst.age": []byte("x")})
+	rec = postRestoreUpload(t, f, restoreFields(f), map[string][]byte{"backup-2026-08-12.tar.zst": []byte("x")})
 	if got := restoreFlashOf(t, rec); got != flashRestoreBlockedByPending {
 		t.Fatalf("second restore while pending: flash = %q, want %q", got, flashRestoreBlockedByPending)
 	}
@@ -410,8 +308,8 @@ func TestRestoreFullFlow(t *testing.T) {
 // banner and unblocks mutations (M8.4 contract).
 func TestRestorePreparedStateSurvivesRestart(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
-	marker := preparedRestore(t, f, dir, id)
+	dir := setBackupsPath(t)
+	marker := preparedRestore(t, f, dir)
 	if err := os.RemoveAll(marker); err != nil {
 		t.Fatal(err)
 	}
@@ -419,90 +317,12 @@ func TestRestorePreparedStateSurvivesRestart(t *testing.T) {
 	if strings.Contains(body, "Восстановление подготовлено и ожидает перезапуска") {
 		t.Fatal("pending banner still shown after marker removal")
 	}
-	rec := csrfPOST(f, "/backups/create", f.csrf)
-	if got := restoreFlashOf(t, rec); got != flashBackupCreated {
-		t.Fatalf("create after marker removal: flash = %q, want %q", got, flashBackupCreated)
+	rec := csrfPOST(f, "/backups/download", f.csrf)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("download after marker removal: code = %d, want 200", rec.Code)
 	}
 }
 
-// TestRestoreNoIdentityLeakInResponses: the identity submitted to the
-// upload form never appears in any response (flash redirect, page,
-// 403), in temp files or in the backups directory.
-func TestRestoreNoIdentityLeakInResponses(t *testing.T) {
-	f := newFixture(t)
-	dir, id := setBackupsPath(t)
-	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
-	archive, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
-	if strings.Contains(rec.Header().Get("Location"), id.String()) {
-		t.Fatal("flash redirect leaks the identity")
-	}
-	rec = postRestoreUpload(t, f, restoreFields(f, id.String()+"\n"), map[string][]byte{name: archive})
-	if strings.Contains(rec.Header().Get("Location"), id.String()) {
-		t.Fatal("flash redirect leaks the padded identity")
-	}
-
-	// T-125: both uploads applied in-process — the pending marker is
-	// consumed, so nothing waits for a restart and nothing on disk
-	// holds the identity.
-	if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
-		t.Fatalf("marker after applied restores: ok=%v err=%v", ok, err)
-	}
-	// no file anywhere holds the identity (temp uploads and staging are
-	// cleaned; the pending dir, marker and safety backup are pipeline
-	// outputs)
-	found, err := scanForString(f.dbPath, dir, id.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if found != "" {
-		t.Fatalf("identity material found in %s", found)
-	}
-}
-
-// scanForString looks for s inside the pending marker tree next to
-// dbPath and every file under backupsDir; returns the first path that
-// contains it.
-func scanForString(dbPath, backupsDir, s string) (string, error) {
-	var paths []string
-	marker, ok, err := backup.PendingPath(dbPath)
-	if err != nil {
-		return "", err
-	}
-	if ok {
-		entries, err := os.ReadDir(marker)
-		if err != nil {
-			return "", err
-		}
-		for _, e := range entries {
-			paths = append(paths, filepath.Join(marker, e.Name()))
-		}
-	}
-	entries, err := os.ReadDir(backupsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	for _, e := range entries {
-		paths = append(paths, filepath.Join(backupsDir, e.Name()))
-	}
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return "", err
-		}
-		if bytes.Contains(data, []byte(s)) {
-			return p, nil
-		}
-	}
-	return "", nil
-}
 
 // clientCount queries the fixture DB directly.
 func clientCount(f *fixture) int {
@@ -519,7 +339,7 @@ func clientCount(f *fixture) int {
 // larger limit.
 func TestRestoreUploadBiggerThanFormLimit(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
 	archive, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
@@ -528,7 +348,7 @@ func TestRestoreUploadBiggerThanFormLimit(t *testing.T) {
 	if len(archive) <= MaxBodyBytes {
 		t.Skipf("archive (%d bytes) not bigger than the form limit", len(archive))
 	}
-	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+	rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{name: archive})
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("code = %d, want 303", rec.Code)
 	}
@@ -543,16 +363,15 @@ func TestRestoreUploadBiggerThanFormLimit(t *testing.T) {
 // temp directories behind.
 func TestRestorePageNoTempLeaks(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
 	archive, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := countTempRestoreDirs()
-	postRestoreUpload(t, f, restoreFields(f, "garbage-identity"), map[string][]byte{name: archive})
-	postRestoreUpload(t, f, restoreFields(f, id.String()), nil)
-	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+	postRestoreUpload(t, f, restoreFields(f), nil)
+	rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{name: archive})
 	// T-125: the happy-path upload applies in-process — no pending
 	// marker is left behind, so nothing waits for a restart. The
 	// archive snapshots an empty client table (0 active clients).
@@ -589,8 +408,8 @@ func countTempRestoreDirs() int {
 func TestRestorePageReachableFromBackups(t *testing.T) {
 	f := newFixture(t)
 	body := f.get("/backups").Body.String()
-	if !strings.Contains(body, `href="/backups/restore"`) {
-		t.Fatalf("backups page missing restore link: %s", body)
+	if !strings.Contains(body, `action="/backups/restore"`) {
+		t.Fatalf("backups page missing restore form: %s", body)
 	}
 }
 
@@ -600,7 +419,7 @@ func TestRestorePageReachableFromBackups(t *testing.T) {
 // restart is needed (no pending marker left).
 func TestRestoreUploadAppliesInProcess(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 
 	// live state: alice only; archive = snapshot of alice.
 	_, _, pub := f.addClient("alice")
@@ -612,7 +431,7 @@ func TestRestoreUploadAppliesInProcess(t *testing.T) {
 	// mutate the live state after the snapshot: bob joins.
 	f.addClient("bob")
 
-	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+	rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{name: archive})
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("upload: code = %d, want 303", rec.Code)
 	}
@@ -668,10 +487,10 @@ func withRestoreFault(t *testing.T, step string, fn func()) {
 
 // restoreApplyFailClosedFixture snapshots alice, then adds bob so a
 // failed apply can prove disk, memory and awg0.conf stayed on bob.
-func restoreApplyFailClosedFixture(t *testing.T) (*fixture, *age.X25519Identity, string, []byte, string, string) {
+func restoreApplyFailClosedFixture(t *testing.T) (*fixture, string, []byte, string, string) {
 	t.Helper()
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 	alice, _, _ := f.addClient("alice")
 	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
 	archive, err := os.ReadFile(filepath.Join(dir, name))
@@ -682,7 +501,7 @@ func restoreApplyFailClosedFixture(t *testing.T) (*fixture, *age.X25519Identity,
 	if err := os.WriteFile(f.confPath, []byte("[Peer]\nPublicKey = "+bob.PublicKey+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return f, id, name, archive, alice.PublicKey, bob.PublicKey
+	return f, name, archive, alice.PublicKey, bob.PublicKey
 }
 
 func assertRestoreApplyFailClosed(t *testing.T, f *fixture, bobPub string) {
@@ -725,9 +544,9 @@ func assertRestoreApplyFailClosed(t *testing.T, f *fixture, bobPub string) {
 // ApplyPending must restore the pending marker and leave disk equal to
 // the still-live handle — not a restored file with a restart-required flash.
 func TestRestoreApplyOpenFailKeepsPending(t *testing.T) {
-	f, id, name, archive, _, bobPub := restoreApplyFailClosedFixture(t)
+	f, name, archive, _, bobPub := restoreApplyFailClosedFixture(t)
 	withRestoreFault(t, "restore.apply.open", func() {
-		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+		rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{name: archive})
 		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("code = %d, want 303", rec.Code)
 		}
@@ -741,9 +560,9 @@ func TestRestoreApplyOpenFailKeepsPending(t *testing.T) {
 // TestRestoreApplyMigrateFailKeepsPending (T-141): same fail-closed
 // contract when Migrate fails after the file swap.
 func TestRestoreApplyMigrateFailKeepsPending(t *testing.T) {
-	f, id, name, archive, _, bobPub := restoreApplyFailClosedFixture(t)
+	f, name, archive, _, bobPub := restoreApplyFailClosedFixture(t)
 	withRestoreFault(t, "restore.apply.migrate", func() {
-		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+		rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{name: archive})
 		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("code = %d, want 303", rec.Code)
 		}
@@ -758,9 +577,9 @@ func TestRestoreApplyMigrateFailKeepsPending(t *testing.T) {
 // must not leave SQLite on the restored peers while awg0.conf still
 // describes the old ones.
 func TestRestoreApplyGenerateFailDoesNotSwap(t *testing.T) {
-	f, id, name, archive, alicePub, bobPub := restoreApplyFailClosedFixture(t)
+	f, name, archive, alicePub, bobPub := restoreApplyFailClosedFixture(t)
 	withRestoreFault(t, "restore.apply.generate", func() {
-		rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+		rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{name: archive})
 		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("code = %d, want 303", rec.Code)
 		}
@@ -784,7 +603,7 @@ func TestRestoreApplyGenerateFailDoesNotSwap(t *testing.T) {
 // "sql: database is closed".
 func TestRestoreApplyInFlightHandleNotClosed(t *testing.T) {
 	f := newFixture(t)
-	dir, id := setBackupsPath(t)
+	dir := setBackupsPath(t)
 	f.addClient("alice")
 	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
 	archive, err := os.ReadFile(filepath.Join(dir, name))
@@ -825,7 +644,7 @@ func TestRestoreApplyInFlightHandleNotClosed(t *testing.T) {
 		}()
 	}
 
-	rec := postRestoreUpload(t, f, restoreFields(f, id.String()), map[string][]byte{name: archive})
+	rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{name: archive})
 	stop.Store(true)
 	wg.Wait()
 

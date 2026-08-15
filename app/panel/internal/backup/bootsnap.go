@@ -1,8 +1,7 @@
 // M9.3 data-loss guards for the panel-init restart workflow.
 //
 // Two mechanisms live here, both operating on the data directory next
-// to the live database (db.DefaultPath), deliberately without any
-// dependency on the age identity used by the encrypted backups/:
+// to the live database (db.DefaultPath), with no extra secrets:
 //
 //  1. BootSnapshot: before panel-init opens the database, the live
 //     file is copied to amnezia.sqlite.boot-<UTC timestamp> (0600,

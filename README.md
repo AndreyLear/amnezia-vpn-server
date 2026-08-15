@@ -9,19 +9,18 @@ Self-hosted VPN server based on AmneziaWG 2.0+.
 - AmneziaWG runtime in a separate container
 - Docker Compose
 - Server-side HTML
-- Encrypted backups with age
+- Database backups as tar.zst (download / upload in the panel)
 
 ## Backup and restore (M8)
 
-- `panel backup create` — encrypted snapshot (manifest + SQLite) in the
-  configured backups directory, `panel backup list/download` to list and
-  fetch, `panel backup restore` to restore from an encrypted archive.
-- A restore prepares the database and waits: `panel-init` applies it on
-  the next restart (before opening the panel database), regenerates
-  `awg0.conf` and re-initializes the tunnel. The pre-restore database is
-  kept on disk as a recovery copy.
-- Backups are created/restored through the web panel UI as well
-  (Backups section), with the same CLI pipeline underneath.
+- In the panel, **Бэкап** is a dropdown: **Скачать** streams a fresh
+  `backup-YYYY-MM-DD.tar.zst` (manifest + SQLite), **Загрузить** restores
+  from an uploaded archive. No passwords or age keys.
+- `panel backup create` / `panel backup list` write and list archives in
+  the backups directory. `panel restore <archive>` prepares a restore
+  that `panel-init` applies on the next restart.
+- A restore keeps the pre-restore database on disk as a recovery copy.
+  The web upload path applies in-process (no restart) when it can.
 
 ## Install
 
@@ -51,7 +50,7 @@ application init is still:
 
 ```sh
 docker compose --env-file versions.lock run --rm panel-init \
-  /app/panel server init 10.8.0.1/24 51820 --endpoint <public-ip>:51820 --dns 1.1.1.1,8.8.8.8
+  /app/panel server init 10.8.0.1/24 443 --endpoint <public-ip>:443 --dns 1.1.1.1,8.8.8.8
 ssh -L 8787:127.0.0.1:8787 root@<server-ip>
 ```
 
@@ -62,16 +61,13 @@ public IP: clients resolve the domain at connect time, so **moving the
 server to another host is an A-record change** — clients reconnect
 themselves, configs are never re-issued. The installer pre-flights the
 DNS record before proceeding. Migration flow: on the new host restore
-the database from an age backup (Backup & restore below), then point
+the database from a tar.zst backup (Backup and restore above), then point
 the A-record at the new host; on the old host `install.sh` refuses to
 run when the record no longer matches (until the domain is re-pointed
 back or the new host finishes installing).
 
-To restore an existing database on a fresh install, pass the age identity
-(only the `AGE-SECRET-KEY-1...` line) to the documented restore flow — see
-`docs/DEPLOYMENT.md` (Backup & restore). The deployment `.env` must carry
-`AGE_RECIPIENT` for web/CLI backups (the `panel` and `panel-init` services
-load it; `awg` never does).
+To restore an existing database on a fresh install, copy the archive into
+`backups/` and run `panel restore <archive>` (see Backup and restore).
 
 ## Development
 

@@ -35,9 +35,8 @@
 //
 // The retire copy (live+".pre-restore") is deliberately KEPT after a
 // successful apply: it is 0600, root-owned (the same security class as
-// the live database) and gives an in-place recovery net that does not
-// depend on the age identity used at restore time. The restore-time
-// safety backup (backups/) remains the encrypted copy; ApplyPending
+// the live database) and gives an in-place recovery net. The restore-time
+// safety backup (backups/) remains a tar.zst copy; ApplyPending
 // never writes outside the database directory, and a leftover applying
 // directory that fails the consistency check is left in place for
 // operator inspection.

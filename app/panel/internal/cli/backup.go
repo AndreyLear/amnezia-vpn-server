@@ -2,7 +2,7 @@ package cli
 
 // `panel backup` — M8.3 commands (docs/TECHNICAL_SPEC_v2.0.md §5, §6):
 //
-//	backup create   create an age-encrypted backup of the database
+//	backup create   create a tar.zst backup of the database
 //	backup list     list the existing backup archives
 //
 // The heavy lifting lives in internal/backup (M8.2); this file only
@@ -11,8 +11,8 @@ package cli
 //
 // The command output is strictly diagnostic: create prints the path of
 // the installed archive, list prints bare file names. It never prints
-// database content, keys, the password hash or the AGE_RECIPIENT value;
-// the archive itself is never read, decrypted or unpacked by list.
+// database content, keys or the password hash; the archive itself is
+// never read or unpacked by list.
 
 import (
 	"errors"
@@ -37,13 +37,13 @@ func backupsPath() string {
 }
 
 // backupNameRe matches exactly the archive naming contract (§5):
-// backup-YYYY-MM-DD.tar.zst.age. Only names matching this shape are
+// backup-YYYY-MM-DD.tar.zst. Only names matching this shape are
 // listed, so no entry can smuggle path separators or traversal
 // sequences into the output (a name containing "/" or ".." can never
 // match).
-var backupNameRe = regexp.MustCompile(`^backup-(\d{4}-\d{2}-\d{2})\.tar\.zst\.age$`)
+var backupNameRe = regexp.MustCompile(`^backup-(\d{4}-\d{2}-\d{2})\.tar\.zst$`)
 
-// validBackupName reports whether name is a backup-<date>.tar.zst.age
+// validBackupName reports whether name is a backup-<date>.tar.zst
 // file with a real calendar date (backup-2026-13-99 is not ours).
 func validBackupName(name string) bool {
 	m := backupNameRe.FindStringSubmatch(name)
@@ -69,8 +69,7 @@ func (a *app) cmdBackup(args []string) int {
 	}
 }
 
-// cmdBackupCreate snapshots the database, encrypts it with the
-// deployment recipient (AGE_RECIPIENT, Q2) and installs the archive
+// cmdBackupCreate snapshots the database and installs the archive
 // into backups/. On success the absolute path of the installed archive
 // is printed — the only output, and it carries no secrets.
 func (a *app) cmdBackupCreate(args []string) int {
@@ -86,11 +85,7 @@ func (a *app) cmdBackupCreate(args []string) int {
 		return a.fatal(opBackupCreate, err)
 	}
 	defer handle.Close()
-	recipient, err := backup.RecipientFromEnv()
-	if err != nil {
-		return a.fatal(opBackupCreate, err)
-	}
-	path, err := backup.Create(handle, backupsPath(), recipient, nil)
+	path, err := backup.Create(handle, backupsPath(), nil)
 	if err != nil {
 		return a.fatal(opBackupCreate, err)
 	}

@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"filippo.io/age"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/klauspost/compress/zstd"
 )
@@ -34,7 +33,7 @@ const (
 
 // newTestDB seeds a migrated temp database with a server row, a client
 // row (with keys) and an auth user, so tests prove secrets survive the
-// round trip inside the encrypted archive.
+// round trip inside the archive.
 func newTestDB(t *testing.T) (*sql.DB, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -72,31 +71,15 @@ func newTestDB(t *testing.T) (*sql.DB, string) {
 	return handle, dir
 }
 
-// newRecipient returns a fresh age identity (test-only; an identity is
-// never created or stored on the VPS in production).
-func newRecipient(t *testing.T) (*age.X25519Identity, string) {
-	t.Helper()
-	id, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatalf("GenerateX25519Identity: %v", err)
-	}
-	return id, id.Recipient().String()
-}
-
-// decryptArchive is the inverse of Create for tests: age → zstd → tar,
-// returning a map of entry name to content.
-func decryptArchive(t *testing.T, path string, id *age.X25519Identity) map[string][]byte {
+// unpackTestArchive is the inverse of Create for tests: zstd → tar.
+func unpackTestArchive(t *testing.T, path string) map[string][]byte {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open archive: %v", err)
 	}
 	defer f.Close()
-	rd, err := age.Decrypt(f, id)
-	if err != nil {
-		t.Fatalf("age.Decrypt: %v", err)
-	}
-	zr, err := zstd.NewReader(rd)
+	zr, err := zstd.NewReader(f)
 	if err != nil {
 		t.Fatalf("zstd.NewReader: %v", err)
 	}
@@ -122,18 +105,17 @@ func decryptArchive(t *testing.T, path string, id *age.X25519Identity) map[strin
 
 func TestCreateRoundTrip(t *testing.T) {
 	handle, dir := newTestDB(t)
-	id, recipient := newRecipient(t)
 	backupsDir := filepath.Join(dir, "backups")
 
-	path, err := Create(handle, backupsDir, recipient, func() time.Time { return fakeNow })
+	path, err := Create(handle, backupsDir, func() time.Time { return fakeNow })
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if want := filepath.Join(backupsDir, "backup-2026-08-12.tar.zst.age"); path != want {
+	if want := filepath.Join(backupsDir, "backup-2026-08-12.tar.zst"); path != want {
 		t.Fatalf("path = %q, want %q", path, want)
 	}
 
-	entries := decryptArchive(t, path, id)
+	entries := unpackTestArchive(t, path)
 	// The archive contains exactly the M8 files.
 	if len(entries) != 2 {
 		t.Fatalf("archive entries = %d (%v), want exactly 2", len(entries), keys(entries))
@@ -190,13 +172,11 @@ func TestCreateRoundTrip(t *testing.T) {
 	}
 }
 
-// TestCreateArchiveIsEncrypted asserts that no plaintext from the
-// backup ever appears in the .age file: not the manifest, not the
-// SQLite header, not keys, not the password hash.
+// TestCreateArchiveIsEncrypted asserts that uncompressed SQLite/key
+// plaintext does not appear in the tar.zst blob.
 func TestCreateArchiveIsEncrypted(t *testing.T) {
 	handle, dir := newTestDB(t)
-	_, recipient := newRecipient(t)
-	path, err := Create(handle, filepath.Join(dir, "backups"), recipient, func() time.Time { return fakeNow })
+	path, err := Create(handle, filepath.Join(dir, "backups"), func() time.Time { return fakeNow })
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -222,9 +202,8 @@ func TestCreateArchiveIsEncrypted(t *testing.T) {
 
 func TestCreatePermissions(t *testing.T) {
 	handle, dir := newTestDB(t)
-	_, recipient := newRecipient(t)
 	backupsDir := filepath.Join(dir, "backups")
-	path, err := Create(handle, backupsDir, recipient, func() time.Time { return fakeNow })
+	path, err := Create(handle, backupsDir, func() time.Time { return fakeNow })
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -248,23 +227,7 @@ func TestCreatePermissions(t *testing.T) {
 // the plaintext staging directory never survives and the working
 // backups directory is never polluted.
 func TestCreateFailureCleanup(t *testing.T) {
-	t.Run("invalid recipient", func(t *testing.T) {
-		handle, dir := newTestDB(t)
-		backupsDir := filepath.Join(dir, "backups")
-		_, err := Create(handle, backupsDir, "not-an-age-key", func() time.Time { return fakeNow })
-		if err == nil {
-			t.Fatal("invalid recipient must fail")
-		}
-		assertClean(t, backupsDir)
-	})
 
-	t.Run("empty recipient", func(t *testing.T) {
-		handle, dir := newTestDB(t)
-		_, err := Create(handle, filepath.Join(dir, "backups"), "  ", func() time.Time { return fakeNow })
-		if err == nil {
-			t.Fatal("empty recipient must fail")
-		}
-	})
 
 	t.Run("unmigrated database", func(t *testing.T) {
 		dir := t.TempDir()
@@ -274,8 +237,7 @@ func TestCreateFailureCleanup(t *testing.T) {
 		}
 		defer handle.Close()
 		backupsDir := filepath.Join(dir, "backups")
-		_, recipient := newRecipient(t)
-		if _, err := Create(handle, backupsDir, recipient, func() time.Time { return fakeNow }); err == nil {
+			if _, err := Create(handle, backupsDir, func() time.Time { return fakeNow }); err == nil {
 			t.Fatal("unmigrated database must fail")
 		}
 		assertClean(t, backupsDir)
@@ -284,14 +246,13 @@ func TestCreateFailureCleanup(t *testing.T) {
 	t.Run("rename blocked by directory", func(t *testing.T) {
 		handle, dir := newTestDB(t)
 		backupsDir := filepath.Join(dir, "backups")
-		_, recipient := newRecipient(t)
-		// A directory with the exact target name makes the final
+			// A directory with the exact target name makes the final
 		// rename fail after the archive was fully written.
-		blocker := filepath.Join(backupsDir, "backup-2026-08-12.tar.zst.age")
+		blocker := filepath.Join(backupsDir, "backup-2026-08-12.tar.zst")
 		if err := os.MkdirAll(blocker, 0o700); err != nil {
 			t.Fatalf("MkdirAll blocker: %v", err)
 		}
-		_, err := Create(handle, backupsDir, recipient, func() time.Time { return fakeNow })
+		_, err := Create(handle, backupsDir, func() time.Time { return fakeNow })
 		if err == nil {
 			t.Fatal("blocked rename must fail")
 		}
@@ -323,7 +284,6 @@ func assertClean(t *testing.T, backupsDir string) {
 // archive must be valid. Runs under -race.
 func TestCreateConcurrent(t *testing.T) {
 	handle, dir := newTestDB(t)
-	id, recipient := newRecipient(t)
 	backupsDir := filepath.Join(dir, "backups")
 
 	const n = 8
@@ -334,7 +294,7 @@ func TestCreateConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			paths[i], errs[i] = Create(handle, backupsDir, recipient, func() time.Time { return fakeNow })
+			paths[i], errs[i] = Create(handle, backupsDir, func() time.Time { return fakeNow })
 		}(i)
 	}
 	wg.Wait()
@@ -342,15 +302,15 @@ func TestCreateConcurrent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("concurrent create %d: %v", i, err)
 		}
-		if !strings.HasSuffix(paths[i], "backup-2026-08-12.tar.zst.age") {
+		if !strings.HasSuffix(paths[i], "backup-2026-08-12.tar.zst") {
 			t.Fatalf("concurrent create %d: unexpected path %q", i, paths[i])
 		}
 	}
 	assertClean(t, backupsDir)
 
 	// The surviving archive (last rename wins) must be complete.
-	finalPath := filepath.Join(backupsDir, "backup-2026-08-12.tar.zst.age")
-	entries := decryptArchive(t, finalPath, id)
+	finalPath := filepath.Join(backupsDir, "backup-2026-08-12.tar.zst")
+	entries := unpackTestArchive(t, finalPath)
 	if len(entries) != 2 {
 		t.Fatalf("surviving archive has %d entries", len(entries))
 	}
@@ -369,8 +329,7 @@ func TestCreateErrorsDoNotLeakSecrets(t *testing.T) {
 		t.Fatalf("db.Open: %v", err)
 	}
 	ch.Close()
-	_, recipient := newRecipient(t)
-	_, err = Create(ch, backupsDir, recipient, func() time.Time { return fakeNow })
+	_, err = Create(ch, backupsDir, func() time.Time { return fakeNow })
 	if err == nil {
 		t.Fatal("closed database must fail")
 	}
@@ -378,28 +337,6 @@ func TestCreateErrorsDoNotLeakSecrets(t *testing.T) {
 		if strings.Contains(err.Error(), secret) {
 			t.Fatalf("error leaks %q: %v", secret, err)
 		}
-	}
-}
-
-// TestRecipientFromEnv covers the deployment-configuration source of
-// the age recipient (Q2).
-func TestRecipientFromEnv(t *testing.T) {
-	t.Setenv(envRecipient, "not-a-real-key")
-	if _, err := RecipientFromEnv(); err == nil {
-		t.Fatal("invalid recipient must fail")
-	}
-	id, _ := age.GenerateX25519Identity()
-	t.Setenv(envRecipient, id.Recipient().String())
-	got, err := RecipientFromEnv()
-	if err != nil {
-		t.Fatalf("RecipientFromEnv: %v", err)
-	}
-	if got != id.Recipient().String() {
-		t.Fatalf("recipient mismatch")
-	}
-	t.Setenv(envRecipient, "")
-	if _, err := RecipientFromEnv(); err == nil {
-		t.Fatal("unset recipient must fail")
 	}
 }
 

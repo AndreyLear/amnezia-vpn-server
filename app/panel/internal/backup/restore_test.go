@@ -2,7 +2,7 @@ package backup
 
 // M8.4 restore preparation tests:
 //   - valid restore: pending image, safety backup, marker, untouched DB
-//   - wrong identity / corrupted .age / corrupted tar-zstd body
+//   - corrupted archive / corrupted tar-zstd body
 //   - missing manifest.json / missing amnezia.sqlite / extra file /
 //     duplicate entry
 //   - path traversal, absolute paths, nested names, symlinks, hard
@@ -15,7 +15,7 @@ package backup
 //   - safety-backup failure leaves the state untouched
 //   - a pending restore blocks a second one (Q14)
 //   - concurrent restores: exactly one wins, no corruption (Q14)
-//   - the identity never lands on disk; errors never leak secrets
+//   - errors never leak secrets
 
 import (
 	"archive/tar"
@@ -23,7 +23,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +30,6 @@ import (
 	"testing"
 	"time"
 
-	"filippo.io/age"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/klauspost/compress/zstd"
 )
@@ -58,20 +56,16 @@ type archiveEntry struct {
 	data []byte
 }
 
-// buildArchive produces a .tar.zst.age file with exactly the given
+// buildArchive produces a .tar.zst file with exactly the given
 // entries (any names/types/links — used to craft hostile archives).
-func buildArchive(t *testing.T, id *age.X25519Identity, entries []archiveEntry) string {
+func buildArchive(t *testing.T, entries []archiveEntry) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "crafted.tar.zst.age")
+	path := filepath.Join(t.TempDir(), "crafted.tar.zst")
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	enc, err := age.Encrypt(f, id.Recipient())
-	if err != nil {
-		t.Fatal(err)
-	}
-	zw, err := zstd.NewWriter(enc)
+	zw, err := zstd.NewWriter(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,9 +94,6 @@ func buildArchive(t *testing.T, id *age.X25519Identity, entries []archiveEntry) 
 		t.Fatal(err)
 	}
 	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := enc.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.Close(); err != nil {
@@ -159,14 +150,12 @@ func sqliteFileBytes(t *testing.T, schemaVersion string) []byte {
 	return data
 }
 
-// restoreCtx is the shared fixture: a seeded live database, its path,
-// the backups directory and the age identity/recipient pair.
+// restoreCtx is the shared fixture: a seeded live database, its path
+// and the backups directory.
 type restoreCtx struct {
 	t           *testing.T
 	dbPath      string
 	backupsDir  string
-	id          *age.X25519Identity
-	recipient   string
 	seedCounter int
 }
 
@@ -188,13 +177,10 @@ func newRestoreCtx(t *testing.T) *restoreCtx {
 	); err != nil {
 		t.Fatal(err)
 	}
-	id, recipient := newRecipient(t)
 	return &restoreCtx{
 		t:          t,
 		dbPath:     filepath.Join(dir, "amnezia.sqlite"),
 		backupsDir: filepath.Join(dir, "backups"),
-		id:         id,
-		recipient:  recipient,
 	}
 }
 
@@ -227,11 +213,11 @@ func (c *restoreCtx) seedClient(name, key string) {
 	}
 }
 
-// doRestore runs the pipeline with the fixture identity.
+// doRestore runs the restore pipeline on srcPath.
 func (c *restoreCtx) doRestore(srcPath string) (RestoreResult, error) {
 	c.t.Helper()
 	h := c.reopen()
-	return Restore(h, c.dbPath, srcPath, c.backupsDir, c.recipient, []age.Identity{c.id}, func() time.Time { return fakeNow })
+	return Restore(h, c.dbPath, srcPath, c.backupsDir, func() time.Time { return fakeNow })
 }
 
 func (c *restoreCtx) assertUntouched(before []byte) {
@@ -353,9 +339,8 @@ func (c *restoreCtx) checkValidPending(res RestoreResult, before []byte, wantCli
 		}
 	}
 
-	// the safety backup decrypts with the same identity and contains
-	// the *new* live state
-	entries := decryptArchive(c.t, res.SafetyBackup, c.id)
+	// the safety backup unpacks and contains the *new* live state
+	entries := unpackTestArchive(c.t, res.SafetyBackup)
 	if len(entries) != 2 {
 		c.t.Fatalf("safety backup entries = %d", len(entries))
 	}
@@ -381,7 +366,7 @@ func (c *restoreCtx) checkValidPending(res RestoreResult, before []byte, wantCli
 func TestRestoreValid(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", testClientKey)
-	archive, err := Create(c.reopen(), c.backupsDir, c.recipient, func() time.Time { return fakeNow })
+	archive, err := Create(c.reopen(), c.backupsDir, func() time.Time { return fakeNow })
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -408,7 +393,7 @@ func TestRestoreValid(t *testing.T) {
 func TestRestoreOlderSchemaMigratedOnApply(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", testClientKey)
-	archive := buildArchive(t, c.id, validEntriesWithSchema(t, "3", 3))
+	archive := buildArchive(t, validEntriesWithSchema(t, "3", 3))
 
 	res, err := c.doRestore(archive)
 	if err != nil {
@@ -452,26 +437,6 @@ func TestRestoreOlderSchemaMigratedOnApply(t *testing.T) {
 	}
 }
 
-// TestRestoreWrongIdentity: a different identity cannot decrypt.
-func TestRestoreWrongIdentity(t *testing.T) {
-	c := newRestoreCtx(t)
-	c.seedClient("alice", testClientKey)
-	archive, err := Create(c.reopen(), c.backupsDir, c.recipient, func() time.Time { return fakeNow })
-	if err != nil {
-		t.Fatal(err)
-	}
-	other, _ := newRecipient(t)
-	before, names := c.liveState()
-	h := c.reopen()
-	_, err = Restore(h, c.dbPath, archive, c.backupsDir, c.recipient, []age.Identity{other}, func() time.Time { return fakeNow })
-	if err == nil {
-		t.Fatal("wrong identity must fail")
-	}
-	c.assertUntouched(before)
-	c.assertNoMarker()
-	c.assertNoNewBackups(names)
-}
-
 // corruptFile flips the byte at position i (mod len) in place.
 func corruptFile(t *testing.T, path string, i int) {
 	t.Helper()
@@ -485,62 +450,15 @@ func corruptFile(t *testing.T, path string, i int) {
 	}
 }
 
-// TestRestoreCorruptedAgeFile: a flipped byte inside the .age
-// container must fail without touching anything.
-func TestRestoreCorruptedAgeFile(t *testing.T) {
+// TestRestoreCorruptedArchive: a flipped byte inside the tar.zst
+// must fail without touching anything.
+func TestRestoreCorruptedArchive(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
-	corruptFile(t, archive, 7)
+	archive := buildArchive(t, validEntries(t, db.SchemaVersion))
+	corruptFile(t, archive, 0)
 	before, names := c.liveState()
 	if _, err := c.doRestore(archive); err == nil {
-		t.Fatal("corrupted .age must fail")
-	}
-	c.assertUntouched(before)
-	c.assertNoMarker()
-	c.assertNoNewBackups(names)
-}
-
-// TestRestoreCorruptedBody: the .age container decrypts fine, but the
-// zstd/tar payload inside is corrupted.
-func TestRestoreCorruptedBody(t *testing.T) {
-	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
-	f, err := os.Open(archive)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain, err := age.Decrypt(f, c.id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := io.ReadAll(plain)
-	f.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	data[700] ^= 0xff
-	crafted := filepath.Join(t.TempDir(), "corrupt-body.tar.zst.age")
-	out, err := os.OpenFile(crafted, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	enc, err := age.Encrypt(out, c.id.Recipient())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := enc.Write(data); err != nil {
-		t.Fatal(err)
-	}
-	if err := enc.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := out.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	before, names := c.liveState()
-	if _, err := c.doRestore(crafted); err == nil {
-		t.Fatal("corrupted zstd/tar body must fail")
+		t.Fatal("corrupted archive must fail")
 	}
 	c.assertUntouched(before)
 	c.assertNoMarker()
@@ -550,7 +468,7 @@ func TestRestoreCorruptedBody(t *testing.T) {
 // TestRestoreMissingManifest: archive with only the database.
 func TestRestoreMissingManifest(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, []archiveEntry{
+	archive := buildArchive(t, []archiveEntry{
 		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, db.SchemaVersion)},
 	})
 	before, names := c.liveState()
@@ -566,7 +484,7 @@ func TestRestoreMissingManifest(t *testing.T) {
 // TestRestoreMissingSQLite: archive with only the manifest.
 func TestRestoreMissingSQLite(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, []archiveEntry{
+	archive := buildArchive(t, []archiveEntry{
 		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 	})
 	before, names := c.liveState()
@@ -582,7 +500,7 @@ func TestRestoreMissingSQLite(t *testing.T) {
 // TestRestoreExtraFile: a third entry is rejected (Q15).
 func TestRestoreExtraFile(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, append(validEntries(t, db.SchemaVersion),
+	archive := buildArchive(t, append(validEntries(t, db.SchemaVersion),
 		archiveEntry{name: "evil.txt", typ: tar.TypeReg, data: []byte("x")}))
 	before, names := c.liveState()
 	_, err := c.doRestore(archive)
@@ -597,7 +515,7 @@ func TestRestoreExtraFile(t *testing.T) {
 // TestRestoreDuplicate: a second manifest.json is rejected.
 func TestRestoreDuplicate(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, []archiveEntry{
+	archive := buildArchive(t, []archiveEntry{
 		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, db.SchemaVersion)},
@@ -627,7 +545,7 @@ func TestRestoreTraversalAndSpecial(t *testing.T) {
 	}
 	for _, e := range hostile {
 		c := newRestoreCtx(t)
-		archive := buildArchive(t, c.id, []archiveEntry{e})
+		archive := buildArchive(t, []archiveEntry{e})
 		before, names := c.liveState()
 		if _, err := c.doRestore(archive); err == nil {
 			t.Fatalf("entry %q type %d must be rejected", e.name, e.typ)
@@ -649,7 +567,7 @@ func TestRestoreInvalidManifest(t *testing.T) {
 	}
 	for _, m := range bad {
 		c := newRestoreCtx(t)
-		archive := buildArchive(t, c.id, []archiveEntry{
+		archive := buildArchive(t, []archiveEntry{
 			{name: manifestFilename, typ: tar.TypeReg, data: []byte(m)},
 			{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, db.SchemaVersion)},
 		})
@@ -670,7 +588,7 @@ func TestRestoreWrongSchemaVersion(t *testing.T) {
 	c := newRestoreCtx(t)
 	// manifest 77 → contract rejection before any state change
 	badManifest := `{"format":1,"application":"amnezia-vpn-server","application_version":"2.0.0","schema_version":77,"created_at":"2026-08-12T10:30:00Z"}` + "\n"
-	archive := buildArchive(t, c.id, []archiveEntry{
+	archive := buildArchive(t, []archiveEntry{
 		{name: manifestFilename, typ: tar.TypeReg, data: []byte(badManifest)},
 		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileBytes(t, db.SchemaVersion)},
 	})
@@ -685,7 +603,7 @@ func TestRestoreWrongSchemaVersion(t *testing.T) {
 	// a valid manifest but the image stores a different version →
 	// stored/manifest disagreement
 	c2 := newRestoreCtx(t)
-	archive2 := buildArchive(t, c2.id, validEntries(t, "2"))
+	archive2 := buildArchive(t, validEntries(t, "2"))
 	before2, names2 := c2.liveState()
 	if _, err := c2.doRestore(archive2); err == nil {
 		t.Fatal("stored schema_version 2 with a valid manifest must be rejected")
@@ -704,7 +622,7 @@ func TestRestoreCorruptedSQLite(t *testing.T) {
 	for i := len(data) / 4; i < 3*len(data)/4; i++ {
 		data[i] = 0
 	}
-	archive := buildArchive(t, c.id, []archiveEntry{
+	archive := buildArchive(t, []archiveEntry{
 		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 		{name: snapshotFilename, typ: tar.TypeReg, data: data},
 	})
@@ -724,14 +642,14 @@ func TestRestoreCorruptedSQLite(t *testing.T) {
 func TestRestoreSafetyBackupFailure(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", testClientKey)
-	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
+	archive := buildArchive(t, validEntries(t, db.SchemaVersion))
 	before, _ := c.liveState()
 	blocker := filepath.Join(c.t.TempDir(), "blocker")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h := c.reopen()
-	_, err := Restore(h, c.dbPath, archive, blocker, c.recipient, []age.Identity{c.id}, func() time.Time { return fakeNow })
+	_, err := Restore(h, c.dbPath, archive, blocker, func() time.Time { return fakeNow })
 	if err == nil {
 		t.Fatal("blocked safety backup must fail")
 	}
@@ -745,8 +663,8 @@ func TestRestoreSafetyBackupFailure(t *testing.T) {
 func TestRestoreFailedLeavesCleanState(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", testClientKey)
-	good := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
-	bad := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
+	good := buildArchive(t, validEntries(t, db.SchemaVersion))
+	bad := buildArchive(t, validEntries(t, db.SchemaVersion))
 	corruptFile(t, bad, 3)
 	if _, err := c.doRestore(bad); err == nil {
 		t.Fatal("bad archive must fail")
@@ -770,7 +688,7 @@ func TestRestoreFailedLeavesCleanState(t *testing.T) {
 func TestRestorePendingBlocksSecond(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", testClientKey)
-	archive, err := Create(c.reopen(), c.backupsDir, c.recipient, func() time.Time { return fakeNow })
+	archive, err := Create(c.reopen(), c.backupsDir, func() time.Time { return fakeNow })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -797,7 +715,7 @@ func TestRestorePendingBlocksSecond(t *testing.T) {
 func TestRestoreConcurrent(t *testing.T) {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", testClientKey)
-	archive, err := Create(c.reopen(), c.backupsDir, c.recipient, func() time.Time { return fakeNow })
+	archive, err := Create(c.reopen(), c.backupsDir, func() time.Time { return fakeNow })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -832,7 +750,7 @@ func TestRestoreConcurrent(t *testing.T) {
 		t.Fatalf("no marker after concurrent restore: %v", err)
 	}
 	// exactly one safety backup (the pre-existing archive file is not
-	// one), always decryptable
+	// one), always unpackable
 	entries, err := os.ReadDir(c.backupsDir)
 	if err != nil {
 		t.Fatal(err)
@@ -849,63 +767,29 @@ func TestRestoreConcurrent(t *testing.T) {
 	if safety == "" {
 		t.Fatalf("no safety backup among %v", namesOf(entries))
 	}
-	if got := decryptArchive(t, filepath.Join(c.backupsDir, safety), c.id); len(got) != 2 {
+	if got := unpackTestArchive(t, filepath.Join(c.backupsDir, safety)); len(got) != 2 {
 		t.Fatalf("safety backup entries = %d", len(got))
 	}
 }
 
-// TestRestoreIdentityNotOnDisk: after a successful restore the
-// identity string appears nowhere under the fixture directory.
-func TestRestoreIdentityNotOnDisk(t *testing.T) {
-	c := newRestoreCtx(t)
-	c.seedClient("alice", testClientKey)
-	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
-	if _, err := c.doRestore(archive); err != nil {
-		t.Fatalf("Restore: %v", err)
-	}
-	secret := c.id.String()
-	var found []string
-	err := filepath.Walk(filepath.Dir(c.dbPath), func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return nil
-		}
-		if bytes.Contains(data, []byte(secret)) {
-			found = append(found, p)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(found) != 0 {
-		t.Fatalf("identity leaked onto disk: %v", found)
-	}
-}
-
 // TestRestoreErrorsDoNotLeakSecrets: failing paths must not echo key
-// material, hashes or the identity string.
+// material or hashes.
 func TestRestoreErrorsDoNotLeakSecrets(t *testing.T) {
 	markedPriv := testClientKey
 	c := newRestoreCtx(t)
 	c.seedClient("alice", markedPriv+"-broken")
-	archive2 := buildArchive(t, c.id, validEntries(t, "2")) // schema mismatch
-	corrupt := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
-	corruptFile(t, corrupt, 5)
-	identityStr := c.id.String()
+	archive2 := buildArchive(t, validEntries(t, "2")) // schema mismatch
+	corrupt := filepath.Join(t.TempDir(), "crafted.tar.zst")
+	if err := os.WriteFile(corrupt, []byte("not a tar.zst archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, src := range []string{archive2, corrupt} {
 		_, err := c.doRestore(src)
 		if err == nil {
 			t.Fatalf("%s must fail", src)
 		}
-		for _, secret := range []string{markedPriv, identityStr, "$argon2id$", "x-test-preshared-key"} {
+		for _, secret := range []string{markedPriv, "$argon2id$", "x-test-preshared-key"} {
 			if strings.Contains(err.Error(), secret) {
 				t.Fatalf("error leaks %q: %v", secret, err)
 			}
@@ -931,7 +815,7 @@ func TestRestoreRejectsSpecialTypes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		c := newRestoreCtx(t)
-		archive := buildArchive(t, c.id, []archiveEntry{
+		archive := buildArchive(t, []archiveEntry{
 			{name: manifestFilename, typ: tc.typ, link: tc.link},
 		})
 		before, names := c.liveState()

@@ -1,19 +1,7 @@
 #!/bin/bash
-# LIVE e2e for M10.2-FIX2 (#5): AGE_RECIPIENT deployment contract.
-#
-# The deployment .env is the single source of AGE_RECIPIENT: install.sh
-# creates it (0600, never overwritten) and the operator adds the age
-# recipient there. The compose contract must deliver it into panel and
-# panel-init containers only — never into awg — without printing the
-# value anywhere:
-#
-#   .env AGE_RECIPIENT
-#     → docker compose (env_file, required:false)
-#     → panel backup create works without manual `-e AGE_RECIPIENT=...`
-#     → panel-init restore prepare works without manual `-e ...`
-#     → awg environment has no AGE_RECIPIENT
-#     → `docker compose config` never prints the recipient value
-#
+# LIVE e2e for M10.2-FIX2: deployment .env (AWG_PORT/VPN_SUBNET) is
+# loaded into panel and panel-init only — never into awg. Backups are
+# unencrypted tar.zst (T-143): create/restore need no AGE_RECIPIENT.
 # The harness runs in a temp directory that mirrors the deployment
 # layout: compose.yaml + versions.lock + .env side by side (install.sh
 # copies the first two into ROOT_DIR and creates .env next to them).
@@ -67,88 +55,30 @@ if [ "${M102_PORT:-8787}" != "8787" ]; then
         -e "s|context: \.|context: ${REPO}|" "${M102_APP}/compose.yaml"
 fi
 
-# The age keypair is generated at runtime (module resolves filippo/age
-# from app/panel's go.mod); the private half never lives in the repo.
-# When the host lacks Go and the golang image is unavailable, the keys
-# can be supplied via M102_IDENT/M102_RECIPIENT (generated elsewhere).
-if [ -z "${M102_IDENT:-}" ] || [ -z "${M102_RECIPIENT:-}" ]; then
-    cat > "${M102_ROOT}/genident.go" <<'EOF'
-package main
-
-import (
-	"fmt"
-	"os"
-
-	"filippo.io/age"
-)
-
-func main() {
-	id, err := age.GenerateX25519Identity()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "genident:", err)
-		os.Exit(1)
-	}
-	fmt.Println(id.String())
-	fmt.Println(id.Recipient().String())
-}
-EOF
-    if command -v go >/dev/null 2>&1; then
-        M102_KEYPAIR="$(cd app/panel && go run "${M102_ROOT}/genident.go" 2>/dev/null)"
-    else
-        M102_GENDIR="${M102_ROOT}/gen"
-        mkdir -p "${M102_GENDIR}"
-        cp "${M102_ROOT}/genident.go" "${REPO}/app/panel/go.mod" "${REPO}/app/panel/go.sum" "${M102_GENDIR}/"
-        M102_KEYPAIR="$(docker run --rm -v "${M102_GENDIR}:/work" \
-            -w /work golang:${GO_VERSION} go run /work/genident.go 2>/dev/null)"
-    fi
-    [ -n "${M102_KEYPAIR}" ] || { echo "FAIL: identity generation failed"; exit 1; }
-    M102_IDENT="$(printf '%s\n' "${M102_KEYPAIR}" | sed -n '1p')"
-    M102_RECIPIENT="$(printf '%s\n' "${M102_KEYPAIR}" | sed -n '2p')"
-fi
-
-# Deployment .env — the single source of AGE_RECIPIENT (0600 like
-# install.sh creates it).
-printf 'AWG_PORT=51820\nVPN_SUBNET=10.8.0.0/24\nAGE_RECIPIENT=%s\n' "${M102_RECIPIENT}" \
-    > "${M102_APP}/.env"
+# Deployment .env — AWG_PORT/VPN_SUBNET (0600 like install.sh).
+printf 'AWG_PORT=51820\nVPN_SUBNET=10.8.0.0/24\n' > "${M102_APP}/.env"
 chmod 0600 "${M102_APP}/.env"
 
 COMPOSE=(docker compose -p "${PROJ}" --env-file versions.lock -f "${M102_APP}/compose.yaml")
 
-echo "==> [1] docker compose config never prints the recipient value"
-# Compose v2 kept `env_file` as a reference in `config` output (the
-# value stayed hidden); compose v5 resolves env_file into `environment`
-# and prints the value. Keeping the .env as the single deployment
-# source is the stronger contract here, so on v5 the value-visibility
-# check is skipped and the limitation is recorded in AUDITS/M10.2
-# re-audit (the value appears only in an operator-run `docker compose
-# config` on the server itself; never in service logs or test output).
-M102_CV="$("${COMPOSE[@]}" version --short 2>/dev/null || true)"
-case "${M102_CV}" in
-    v2.*)
-        if "${COMPOSE[@]}" config 2>/dev/null | grep -q "${M102_RECIPIENT}"; then
-            fail "docker compose config printed the AGE_RECIPIENT value"
-        fi
-        echo "OK: compose ${M102_CV} config output has no recipient value"
-        ;;
-    *)
-        echo "SKIP: compose ${M102_CV} resolves env_file into config output (version limitation, recorded)"
-        ;;
-esac
+echo "==> [1] docker compose config parses with the deployment .env"
+"${COMPOSE[@]}" config --quiet || fail "docker compose config with .env"
+echo "OK: compose config"
 
 echo "==> [2] panel-init: server init + client (M3 needs a server row first)"
 "${COMPOSE[@]}" run --rm panel-init /app/panel server init 10.8.0.1/24 51820 \
     --endpoint vpn.example.com:51820 >/dev/null 2>&1 || fail "server init"
 "${COMPOSE[@]}" run --rm panel-init /app/panel client add alice >/dev/null 2>&1 || fail "client add"
 
-echo "==> [3] panel env carries AGE_RECIPIENT from the deployment .env"
+echo "==> [3] panel env carries AWG_PORT from the deployment .env"
 "${COMPOSE[@]}" up -d panel-init panel >/dev/null 2>&1 || fail "panel-init/panel start"
 sleep 2
 PANEL_ID="$(docker ps -q --filter "name=${PROJ}-panel-1")"
 [ -n "${PANEL_ID}" ] || fail "no panel container"
 docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${PANEL_ID}" \
-    | grep -q "^AGE_RECIPIENT=${M102_RECIPIENT}$" \
-    || fail "panel env missing AGE_RECIPIENT from .env"
-echo "OK: panel got AGE_RECIPIENT from the deployment .env"
+    | grep -q "^AWG_PORT=51820$" \
+    || fail "panel env missing AWG_PORT from .env"
+echo "OK: panel got AWG_PORT from the deployment .env"
 
 echo "==> [4] awg environment has no AGE_RECIPIENT"
 # awg's entrypoint blocks forever waiting for a usable /config/awg0.conf
@@ -160,22 +90,20 @@ AWG_ID="$(docker ps -a --filter "name=${PROJ}-awg-" --format '{{.ID}}' | head -1
 [ -n "${AWG_ID}" ] || fail "no created awg container"
 AWG_ENV="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${AWG_ID}")"
 printf '%s\n' "${AWG_ENV}" | grep -q '^AGE_RECIPIENT=' && fail "awg received AGE_RECIPIENT"
-printf '%s\n' "${AWG_ENV}" | grep -q "${M102_RECIPIENT}" && fail "awg env leaked the recipient value"
 echo "OK: awg env is free of AGE_RECIPIENT"
 
-echo "==> [5] panel backup create works WITHOUT manual -e"
+echo "==> [5] panel backup create works without AGE_RECIPIENT"
 "${COMPOSE[@]}" exec -T panel /app/panel backup create >/dev/null 2>&1 || fail "panel backup create"
 ARCHIVE="$(ls -t "${M102_APP}/backups" | grep -E '^backup-' | head -1)"
 [ -n "${ARCHIVE}" ] || fail "no archive in the deployment backups dir"
-echo "OK: archive ${ARCHIVE} created via the .env recipient"
+echo "OK: archive ${ARCHIVE} created"
 
-echo "==> [6] panel-init restore prepare works WITHOUT manual -e"
-"${COMPOSE[@]}" run --rm -e IDENT="${M102_IDENT}" panel-init sh -c \
-    'printf "%s\n" "$IDENT" | /app/panel restore "'"${ARCHIVE}"'" --identity-stdin' \
-    >/dev/null 2>&1 || fail "restore prepare via .env recipient"
+echo "==> [6] panel-init restore prepare works without identity-stdin"
+"${COMPOSE[@]}" run --rm panel-init /app/panel restore "${ARCHIVE}" \
+    >/dev/null 2>&1 || fail "restore prepare"
 [ -d "${M102_APP}/data/.restore-pending" ] || fail "pending marker missing"
-echo "OK: restore pending — the .env recipient is honoured by panel-init"
+echo "OK: restore pending"
 
 echo
-echo "==> e2e OK: .env AGE_RECIPIENT → panel/panel-init only, no -e, config clean"
+echo "==> e2e OK: .env AWG_PORT/VPN_SUBNET → panel/panel-init, backups without age"
 exit 0

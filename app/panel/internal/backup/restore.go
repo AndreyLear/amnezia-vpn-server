@@ -1,13 +1,12 @@
-// M8.4 restore preparation (docs/TECHNICAL_SPEC_v2.0.md §5, §6 CLI):
+// M8.4 restore preparation:
 //
-//	backup.age
-//	  → decrypt (operator identity, never stored on the VPS)
+//	backup.tar.zst
 //	  → strict unpack (exactly manifest.json + amnezia.sqlite)
 //	  → validate manifest
 //	  → SQLite integrity_check
-//	  → schema compatibility (Q6: exact match)
+//	  → schema compatibility
 //	  → safety backup of the current database
-//	  → pending marker → restart required
+//	  → pending marker → apply or restart required
 //
 // Contract invariants:
 //   - the live database is never modified: on any failure (including
@@ -15,14 +14,11 @@
 //   - the pending state is a 0700 directory next to the database
 //     (<dbdir>/.restore-pending/amnezia.sqlite). Its exclusive
 //     creation is the marker and the lock: a second restore fails with
-//     ErrRestorePending (Q14: one restore; the marker is applied by
-//     panel-init/restart);
+//     ErrRestorePending;
 //   - archives must contain exactly manifest.json + amnezia.sqlite as
-//     regular files with bare names (Q15): directories, symlinks,
+//     regular files with bare names: directories, symlinks,
 //     hard links, absolute paths, "..", duplicates and extra files are
-//     rejected (Q11);
-//   - the identity is consumed in memory only and never written to
-//     disk.
+//     rejected.
 package backup
 
 import (
@@ -34,10 +30,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
-	"filippo.io/age"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/klauspost/compress/zstd"
 )
@@ -66,26 +60,12 @@ type RestoreResult struct {
 // Restore prepares restoring the archive at srcPath into the appliance:
 // every validation runs before anything is written, the live database
 // at dbPath is never touched, and the pending marker is the exclusive
-// 0700 directory next to it (Q7a). handle is only used for the safety
-// backup (SQLite Backup API). ids are the operator-supplied age
-// identities; they are used in memory only. recipient is the
-// deployment public key (AGE_RECIPIENT) used for the safety backup.
-// now is injectable for tests.
-func Restore(handle *sql.DB, dbPath, srcPath, backupsDir, recipient string, ids []age.Identity, now func() time.Time) (RestoreResult, error) {
+// 0700 directory next to it. handle is only used for the safety
+// backup (SQLite Backup API). now is injectable for tests.
+func Restore(handle *sql.DB, dbPath, srcPath, backupsDir string, now func() time.Time) (RestoreResult, error) {
 	var res RestoreResult
 	if now == nil {
 		now = time.Now
-	}
-	if len(ids) == 0 {
-		return res, errors.New("backup: no identity provided")
-	}
-	recipient = trimRecipient(recipient)
-	if recipient == "" {
-		return res, errors.New("backup: empty age recipient")
-	}
-	rec, err := age.ParseX25519Recipient(recipient)
-	if err != nil {
-		return res, fmt.Errorf("backup: invalid age recipient: %w", err)
 	}
 	// The source archive must be a regular file: a symlink or other
 	// special entry is never opened.
@@ -113,8 +93,8 @@ func Restore(handle *sql.DB, dbPath, srcPath, backupsDir, recipient string, ids 
 		}
 	}()
 
-	// 1. decrypt + strict unpack into the pending directory.
-	manifestBytes, err := unpackArchive(srcPath, pendingDir, ids)
+	// 1. strict unpack into the pending directory.
+	manifestBytes, err := unpackArchive(srcPath, pendingDir)
 	if err != nil {
 		return res, err
 	}
@@ -140,7 +120,7 @@ func Restore(handle *sql.DB, dbPath, srcPath, backupsDir, recipient string, ids 
 	// 5. safety backup of the current (untouched) database.
 	res.Archive = filepath.Base(srcPath)
 	res.PendingDB = snapPath
-	safety, err := Safety(handle, backupsDir, rec.String(), now)
+	safety, err := Safety(handle, backupsDir, now)
 	if err != nil {
 		return res, err
 	}
@@ -154,28 +134,17 @@ func Restore(handle *sql.DB, dbPath, srcPath, backupsDir, recipient string, ids 
 	return res, nil
 }
 
-// trimRecipient trims whitespace around the deployment recipient.
-func trimRecipient(r string) string {
-	return strings.TrimSpace(r)
-}
-
-// unpackArchive decrypts srcPath with ids and unpacks strictly two
-// entries — manifest.json and amnezia.sqlite — as regular files with
-// bare names into dir, returning the manifest bytes. Anything else
-// (paths, special entries, duplicates, extra files, oversized
-// entries) is rejected.
-func unpackArchive(srcPath, dir string, ids []age.Identity) ([]byte, error) {
+// unpackArchive unpacks srcPath (tar.zst) into dir with exactly two
+// regular files — manifest.json and amnezia.sqlite — and returns the
+// manifest bytes. Anything else is rejected.
+func unpackArchive(srcPath, dir string) ([]byte, error) {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return nil, fmt.Errorf("backup: open archive: %w", err)
 	}
 	defer src.Close()
 
-	rd, err := age.Decrypt(src, ids...)
-	if err != nil {
-		return nil, fmt.Errorf("backup: decrypt: %w", err)
-	}
-	zr, err := zstd.NewReader(rd)
+	zr, err := zstd.NewReader(src)
 	if err != nil {
 		return nil, fmt.Errorf("backup: decompress: %w", err)
 	}

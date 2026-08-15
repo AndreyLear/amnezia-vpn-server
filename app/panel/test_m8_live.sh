@@ -50,43 +50,6 @@ mkdir -p "${M8_DATA}" "${M8_CONFIG}" "${M8_STATUS}" "${M8_BACKUPS}"
 
 M8_ADMIN="m8-admin"
 M8_PASSWORD="m8-password-for-backup-42"
-# The age keypair is generated at runtime (the module resolves
-# filippo/age from app/panel's go.mod — no age CLI required on the
-# host); the private half never lives in the repo or the script.
-cat > "${M8_ROOT}/genident.go" <<'EOF'
-package main
-
-import (
-	"fmt"
-	"os"
-
-	"filippo.io/age"
-)
-
-func main() {
-	id, err := age.GenerateX25519Identity()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "genident:", err)
-		os.Exit(1)
-	}
-	fmt.Println(id.String())
-	fmt.Println(id.Recipient().String())
-}
-EOF
-# age identity generation: go run on hosts with Go; otherwise the
-# versions.lock-pinned golang image (module download needs network).
-if command -v go >/dev/null 2>&1; then
-    M8_KEYPAIR="$(cd app/panel && go run "${M8_ROOT}/genident.go" 2>/dev/null)"
-else
-    M8_GENDIR="${M8_ROOT}/gen"
-    mkdir -p "${M8_GENDIR}"
-    cp "${M8_ROOT}/genident.go" "${REPO}/app/panel/go.mod" "${REPO}/app/panel/go.sum" "${M8_GENDIR}/"
-    M8_KEYPAIR="$(docker run --rm -v "${M8_GENDIR}:/work" \
-        -w /work golang:${GO_VERSION} go run /work/genident.go 2>/dev/null)"
-fi
-[ -n "${M8_KEYPAIR}" ] || { echo "FAIL: identity generation failed"; exit 1; }
-M8_IDENT="$(printf '%s\n' "${M8_KEYPAIR}" | sed -n '1p')"
-M8_RECIPIENT="$(printf '%s\n' "${M8_KEYPAIR}" | sed -n '2p')"
 
 # stat_mode prints the octal mode of a path (GNU on Linux CI, BSD on
 # macOS hosts).
@@ -122,17 +85,7 @@ sed -i.bak \
     -e "s|127.0.0.1:8787:8787|127.0.0.1:${M8_PORT:-8787}:8787|" \
     -e "s|context: \.|context: ${REPO}|" "${COMPOSE_FILE}"
 
-# The panel gets the runtime-generated recipient via the override
-# environment (the .env-file mechanism itself is covered by
-# test_m102_env_live.sh); volume lists are NOT overridden.
-cat > "${M8_ROOT}/override.yaml" <<EOF
-services:
-  panel:
-    environment:
-      - AGE_RECIPIENT=${M8_RECIPIENT}
-EOF
-
-COMPOSE=(docker compose -p "${PROJ}" --env-file versions.lock -f "${COMPOSE_FILE}" -f "${M8_ROOT}/override.yaml")
+COMPOSE=(docker compose -p "${PROJ}" --env-file versions.lock -f "${COMPOSE_FILE}")
 
 fail() {
     echo "FAIL: $1"
@@ -238,7 +191,7 @@ SNAP="$("${COMPOSE[@]}" exec -T panel /app/panel backup list | head -1)"
 # M10.2-FIX regression: the archive created through the panel is visible
 # to panel-init (the shared store), so the documented DR restore path
 # (`docker compose run --rm panel-init ... restore`) can reach it.
-PI_SNAP="$("${COMPOSE[@]}" run --rm -e AGE_RECIPIENT="${M8_RECIPIENT}" panel-init /app/panel backup list | head -1)"
+PI_SNAP="$("${COMPOSE[@]}" run --rm panel-init /app/panel backup list | head -1)"
 [ -n "${PI_SNAP}" ] || fail "panel-init cannot see the panel-created backup"
 [ "${PI_SNAP}" = "${SNAP}" ] || fail "panel and panel-init disagree on the backup store (${SNAP} vs ${PI_SNAP})"
 echo "OK: panel-created archive ${SNAP} visible to panel-init (shared store)"
@@ -246,10 +199,8 @@ echo "OK: panel-created archive ${SNAP} visible to panel-init (shared store)"
 "${COMPOSE[@]}" exec -T panel /app/panel client add bob >/dev/null || fail "client add bob"
 
 # Restore prepares the pending marker via the panel-init CLI path — the
-# flow install.sh documents for disaster recovery; the identity goes via
-# stdin only, AGE_RECIPIENT matches the archive creation.
-printf '%s\n' "${M8_IDENT}" | "${COMPOSE[@]}" run --rm -e AGE_RECIPIENT="${M8_RECIPIENT}" \
-    panel-init /app/panel restore "${SNAP}" --identity-stdin \
+# flow install.sh documents for disaster recovery.
+"${COMPOSE[@]}" run --rm panel-init /app/panel restore "${SNAP}" \
     >/dev/null || fail "restore prepare via panel-init"
 [ -d "${M8_DATA}/.restore-pending" ] || fail "pending marker missing on the host bind dir"
 ls -A "${M8_BACKUPS}" | grep -q '^safety-backup-' || fail "no safety backup after restore"
@@ -305,10 +256,13 @@ UPLOC="$(curl -s -b "${M8_ROOT}/cookies.txt" -c "${M8_ROOT}/cookies.txt" \
     -e "http://127.0.0.1:${M8_PORT}/backups" \
     -F "_csrf=${M8_CSRF}" \
     -F "backup=@${M8_BACKUPS}/${SNAP2};filename=${SNAP2}" \
-    -F "identity=${M8_IDENT}" \
     -D- -o /dev/null "http://127.0.0.1:${M8_PORT}/backups/restore" \
     | grep -i '^location' | tr -d '\r' | awk '{print $2}')"
-printf '%s\n' "${UPLOC}" | grep -q "Restore+applied." || fail "upload did not apply in-process: ${UPLOC}"
+# Success is the applied flash, not any msg= (a failure flash also
+# carries msg=). Session is cleared on apply, so check Location.
+printf '%s\n' "${UPLOC}" | grep -q 'Восстановление применено' \
+    || printf '%s\n' "${UPLOC}" | grep -qi '%D0%92%D0%BE%D1%81%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%BB%D0%B5%D0%BD%D0%B8%D0%B5' \
+    || fail "upload did not apply in-process: ${UPLOC}"
 [ ! -e "${M8_DATA}/.restore-pending" ] || fail "pending marker survived the in-process apply"
 CLIENTS2="$("${COMPOSE[@]}" exec -T panel /app/panel client list)"
 printf '%s\n' "${CLIENTS2}" | grep -q charlie || fail "in-process restore lost charlie"

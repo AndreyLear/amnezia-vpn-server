@@ -20,9 +20,9 @@
       <div class="menu-panel">
         <form action="/backups/download" method="post">
           <input type="hidden" name="_csrf" value="{{.CSRF}}">
-          <button type="submit" class="menu-item">Скачать бэкап</button>
+          <button type="submit" class="menu-item">Скачать</button>
         </form>
-        <a class="menu-item" href="#upload">Загрузить бэкап</a>
+        <a class="menu-item" href="/backups">Загрузить</a>
       </div>
     </details>
     <form action="/logout" method="post" class="inline-form">
@@ -33,69 +33,25 @@
 </header>
 
 <main class="page">
-  <h1 class="page-title">Бэкапы</h1>
-  <p class="page-sub">Зашифрованные архивы базы данных (age), восстанавливаются через штатный процесс.</p>
+  <h1 class="page-title">Загрузить бэкап</h1>
+  <p class="page-sub">Выберите архив (.tar.zst). База применится сразу, без ключей и паролей.</p>
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
 
   {{if .Pending}}
-  <p class="pending">Восстановление подготовлено и ожидает перезапуска. Панель не перезапускает себя сама: перезапустите её, чтобы применить; иначе восстановление отменится при следующем запуске. Создание, удаление и новые восстановления приостановлены до этого.</p>
+  <p class="pending">Восстановление подготовлено и ожидает перезапуска. Новые загрузки приостановлены.</p>
   {{end}}
 
   <section class="form-card" id="upload">
-    <h2 class="section-title">Действия</h2>
-    <div class="row-actions">
-      <form action="/backups/create" method="post">
-        <input type="hidden" name="_csrf" value="{{.CSRF}}">
-        <button type="submit" class="btn btn-primary">Создать бэкап</button>
-      </form>
-      <form action="/backups/download" method="post">
-        <input type="hidden" name="_csrf" value="{{.CSRF}}">
-        <button type="submit" class="btn">Скачать свежий бэкап</button>
-      </form>
-    </div>
-  </section>
-
-  <section class="form-card">
-    <h2 class="section-title">Загрузить бэкап</h2>
-    <p class="sub">Восстановление из архива (.tar.zst.age): архив проверяется, распаковывается и применяется сразу — все клиенты из архива становятся активными без перезапуска.</p>
     <form action="/backups/restore" method="post" enctype="multipart/form-data">
       <input type="hidden" name="_csrf" value="{{.CSRF}}">
       <p>
-        <label class="label">Архив бэкапа
-          <input class="input" type="file" name="backup" accept=".age" required>
-        </label>
-      </p>
-      <p>
-        <label class="label">Ключ age (секретный)
-          <textarea class="input textarea" name="identity" rows="4" autocomplete="off"
-                    spellcheck="false" placeholder="AGE-SECRET-KEY-1..."></textarea>
+        <label class="label">Архив
+          <input class="input" type="file" name="backup" accept=".tar.zst,.zst" required>
         </label>
       </p>
       <button type="submit" class="btn btn-destructive">Загрузить и применить</button>
     </form>
-    <p class="sub">Нужен полный ручной процесс? <a href="/backups/restore">Страница восстановления</a></p>
-  </section>
-
-  <section class="table-wrap">
-    <h2 class="section-title table-title">Архивы</h2>
-    {{if not .Backups}}<p class="empty table-empty"><strong>Бэкапов пока нет.</strong><span>Создайте зашифрованный архив или загрузите его из резервной копии.</span></p>{{end}}
-    <table>
-      {{range .Backups}}
-      <tr>
-        <td><code>{{.Name}}</code></td>
-        <td>{{.DateText}}</td>
-        <td>{{.SizeText}}</td>
-        <td><a class="btn btn-ghost" href="/backups/{{.Name}}/download">скачать</a></td>
-        <td>
-          <form action="/backups/{{.Name}}/delete" method="post">
-            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-            <button type="submit" class="btn btn-destructive">Удалить</button>
-          </form>
-        </td>
-      </tr>
-      {{end}}
-    </table>
   </section>
 </main>
 </body>

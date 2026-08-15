@@ -31,9 +31,10 @@ import (
 // matrix otherwise posts url-encoded forms, which that route cannot
 // parse by design — M8.6).
 func protectedPosts(f *fixture) []struct {
-	name string
-	path func() string
-	post func(f *fixture, path, token string) *httptest.ResponseRecorder
+	name     string
+	path     func() string
+	post     func(f *fixture, path, token string) *httptest.ResponseRecorder
+	wantCode int // 0 means 303 PRG
 } {
 	mk := func(prefix string) func() string {
 		return func() string {
@@ -42,33 +43,29 @@ func protectedPosts(f *fixture) []struct {
 		}
 	}
 	entries := []struct {
-		name string
-		path func() string
-		post func(f *fixture, path, token string) *httptest.ResponseRecorder
+		name     string
+		path     func() string
+		post     func(f *fixture, path, token string) *httptest.ResponseRecorder
+		wantCode int
 	}{
-		{"new", func() string { return "/clients/new" }, nil},
-		{"enable", mk("enable"), nil},
-		{"disable", mk("disable"), nil},
-		{"delete", mk("delete"), nil},
-		{"rename", mk("rename"), nil},
-		{"expiry", mk("expiry"), nil},
-		{"backup create", func() string { return "/backups/create" }, nil},
-		{"backup delete", func() string {
-			dir, _ := setBackupsPath(f.t)
-			name := makeBackup(f.t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
-			return "/backups/" + name + "/delete"
-		}, nil},
-		{"backup restore", func() string { return "/backups/restore" }, restoreCSRFPost},
+		{"new", func() string { return "/clients/new" }, nil, 0},
+		{"enable", mk("enable"), nil, 0},
+		{"disable", mk("disable"), nil, 0},
+		{"delete", mk("delete"), nil, 0},
+		{"rename", mk("rename"), nil, 0},
+		{"expiry", mk("expiry"), nil, 0},
+		{"backup download", func() string { return "/backups/download" }, nil, http.StatusOK},
+		{"backup restore", func() string { return "/backups/restore" }, restoreCSRFPost, 0},
 		// logout invalidates the session; it must stay the last entry
 		// so later subtests reuse a live fixture session.
-		{"logout", func() string { return "/logout" }, nil},
+		{"logout", func() string { return "/logout" }, nil, 0},
 	}
 	return entries
 }
 
 // restoreCSRFPost posts a multipart body carrying only the given CSRF
 // token to path (an empty body when token == ""): the restore handler
-// answers a fixed 403 for bad tokens and PRG (missing identity flash)
+// answers a fixed 403 for bad tokens and PRG (missing file flash)
 // for the valid one — never a 200, never a mutation.
 func restoreCSRFPost(f *fixture, path, token string) *httptest.ResponseRecorder {
 	f.t.Helper()
@@ -118,11 +115,17 @@ func TestCSRFValidTokenNormalBehaviour(t *testing.T) {
 		}
 		t.Run(rt.name, func(t *testing.T) {
 			rec := post(f, path, f.csrf)
-			if rec.Code != http.StatusSeeOther {
-				t.Fatalf("valid token %s: code = %d, want 303 (PRG)", path, rec.Code)
+			want := http.StatusSeeOther
+			if rt.wantCode != 0 {
+				want = rt.wantCode
 			}
-			if loc := rec.Header().Get("Location"); loc == "" {
-				t.Fatal("valid POST must answer a PRG Location")
+			if rec.Code != want {
+				t.Fatalf("valid token %s: code = %d, want %d", path, rec.Code, want)
+			}
+			if want == http.StatusSeeOther {
+				if loc := rec.Header().Get("Location"); loc == "" {
+					t.Fatal("valid POST must answer a PRG Location")
+				}
 			}
 		})
 	}

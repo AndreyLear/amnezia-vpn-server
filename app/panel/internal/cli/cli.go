@@ -50,9 +50,9 @@ commands:
   auth change-password <username> --old-password-stdin --new-password-stdin
   auth 2fa status <username>
   auth 2fa disable <username>
-  backup create                  create an encrypted database backup
+  backup create                  create a database backup (tar.zst)
   backup list                    list existing backups
-  restore <backup> --identity-stdin   prepare a restore (restart required)
+  restore <backup>               prepare a restore (restart required)
 `
 
 // serveNotImplemented kept the M2/M6 contract; M6.1 replaces it with a
@@ -275,8 +275,8 @@ func (a *app) cmdInit(args []string) int {
 			if errors.Is(lstatErr, os.ErrNotExist) {
 				return a.fatal("init", fmt.Errorf(
 					".server-initialized exists but the database is missing — "+
-						"refusing to create a fresh one. Restore it: `panel restore <archive> "+
-						"--identity-stdin` (backups/), or copy back a boot snapshot "+
+						"refusing to create a fresh one. Restore it: `panel restore <archive>` "+
+						"(backups/), or copy back a boot snapshot "+
 						"amnezia.sqlite.boot-* from the data directory"))
 			}
 			return a.fatal("init", lstatErr)
@@ -308,7 +308,7 @@ func (a *app) cmdInit(args []string) int {
 				return a.fatal("init", fmt.Errorf(
 					".server-initialized exists but no server row was found — "+
 						"the database was lost or reset, refusing to create a fresh one. "+
-						"Restore it: `panel restore <archive> --identity-stdin` (backups/), "+
+						"Restore it: `panel restore <archive>` (backups/), "+
 						"or copy back a boot snapshot amnezia.sqlite.boot-* from the data directory"))
 			}
 			return a.fatal("init", srvErr)

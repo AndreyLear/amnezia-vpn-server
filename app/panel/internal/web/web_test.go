@@ -585,7 +585,7 @@ func TestStaticCSSAndTemplatePurity(t *testing.T) {
 		t.Fatal("app.js body is empty")
 	}
 
-	for _, path := range []string{"/login", "/", "/backups", "/backups/restore"} {
+	for _, path := range []string{"/login", "/", "/backups"} {
 		rec := httptest.NewRecorder()
 		var req *http.Request
 		if path == "/login" {

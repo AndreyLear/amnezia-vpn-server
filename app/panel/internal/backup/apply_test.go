@@ -11,7 +11,6 @@ import (
 	"sync"
 	"testing"
 
-	"filippo.io/age"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
 
@@ -47,9 +46,9 @@ func sqliteFileWithClient(t *testing.T, name, key string) []byte {
 
 // archiveWithAlice is the crafted restore source: manifest + a
 // migrated database whose only client is alice.
-func archiveWithAlice(t *testing.T, id *age.X25519Identity) string {
+func archiveWithAlice(t *testing.T) string {
 	t.Helper()
-	return buildArchive(t, id, []archiveEntry{
+	return buildArchive(t, []archiveEntry{
 		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileWithClient(t, "alice", "x-archive-client-private-key-alice")},
 	})
@@ -63,7 +62,7 @@ func applyCtx(t *testing.T) *restoreCtx {
 	c := newRestoreCtx(t)
 	c.seedClient("alice", "x-test-client-private-key-alice")
 	c.seedClient("bob", "x-test-client-private-key-bob")
-	res, err := c.doRestore(archiveWithAlice(t, c.id))
+	res, err := c.doRestore(archiveWithAlice(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +271,7 @@ func TestApplyPendingCrashBeforeRetire(t *testing.T) {
 // start): the image simply becomes the live database.
 func TestApplyPendingNoLiveDatabase(t *testing.T) {
 	c := newRestoreCtx(t)
-	archive := buildArchive(t, c.id, validEntries(t, db.SchemaVersion))
+	archive := buildArchive(t, validEntries(t, db.SchemaVersion))
 	if _, err := c.doRestore(archive); err != nil {
 		t.Fatal(err)
 	}
@@ -430,9 +429,9 @@ func TestApplyPendingConcurrent(t *testing.T) {
 	}
 }
 
-func archiveWithClient(t *testing.T, id *age.X25519Identity, name, key string) string {
+func archiveWithClient(t *testing.T, name, key string) string {
 	t.Helper()
-	return buildArchive(t, id, []archiveEntry{
+	return buildArchive(t, []archiveEntry{
 		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
 		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileWithClient(t, name, key)},
 	})
@@ -467,7 +466,7 @@ func TestApplyPendingSequentialRefreshesPreRestore(t *testing.T) {
 		t.Fatal("live database was not mutated between applies")
 	}
 
-	if _, err := c.doRestore(archiveWithClient(t, c.id, "charlie", "x-archive-client-private-key-charlie")); err != nil {
+	if _, err := c.doRestore(archiveWithClient(t, "charlie", "x-archive-client-private-key-charlie")); err != nil {
 		t.Fatal(err)
 	}
 	applied, err = ApplyPending(c.dbPath)

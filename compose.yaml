@@ -10,7 +10,7 @@ services:
       # M10.2-FIX: общее с panel хранилище резервных копий (rw) — CLI
       # backup create/restore видит архивы панели и наоборот (DR-флоу)
       - ./backups:/data/backups
-    # M10.2-FIX2: deployment .env (AWG_PORT/VPN_SUBNET/AGE_RECIPIENT)
+    # M10.2-FIX2: deployment .env (AWG_PORT/VPN_SUBNET)
     # прокидывается в panel и panel-init; awg его не получает.
     env_file:
       - path: .env
@@ -46,8 +46,8 @@ services:
       # M8.7/M10.2: хранилище резервных копий — panel и panel-init (rw);
       # awg backups не получает (ARCHITECTURE.md mount contract)
       - ./backups:/data/backups
-    # M10.2-FIX2: deployment .env — единственный источник
-    # AGE_RECIPIENT для web backup create/restore (см. panel-init).
+    # M10.2-FIX2: deployment .env — AWG_PORT/VPN_SUBNET for panel
+    # and panel-init (awg never loads it).
     env_file:
       - path: .env
         required: false

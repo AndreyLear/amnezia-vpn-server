@@ -69,7 +69,7 @@ func TestRestorePageProbeFailure(t *testing.T) {
 	if err := os.WriteFile(pending, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rec := f.get("/backups/restore")
+	rec := f.get("/backups")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("code = %d, want 500", rec.Code)
 	}

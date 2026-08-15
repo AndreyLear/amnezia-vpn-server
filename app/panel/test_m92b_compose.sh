@@ -81,11 +81,11 @@ test_mount_contract() {
     check_in '^panel:.*- ./status:/status:ro' "panel: status mounted read-only"
     check_in '^panel:.*- ./backups:/data/backups' "panel: backups mounted read-write"
     check_in '^panel-init:.*- ./backups:/data/backups' "panel-init: backups mounted read-write (M10.2-FIX shared store)"
-    check_in '^panel:.*env_file:' "panel: deployment .env loaded (M10.2-FIX2 AGE_RECIPIENT)"
+    check_in '^panel:.*env_file:' "panel: deployment .env loaded"
     check_in '^panel:.*path: \.env' "panel: env_file is the deployment .env"
     check_in '^panel-init:.*env_file:' "panel-init: deployment .env loaded (M10.2-FIX2)"
     check_in '^panel-init:.*path: \.env' "panel-init: env_file is the deployment .env"
-    check_out '^awg:.*env_file:' "awg: no deployment .env (AGE_RECIPIENT never reaches awg)"
+    check_out '^awg:.*env_file:' "awg: no deployment .env"
     check_out 'docker\.sock' "no service mounts the docker socket"
 }
 

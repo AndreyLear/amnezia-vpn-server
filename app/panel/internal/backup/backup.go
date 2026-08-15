@@ -1,15 +1,16 @@
-// M8.2 backup snapshot pipeline (docs/TECHNICAL_SPEC_v2.0.md §5):
+// M8.2 backup snapshot pipeline (T-143 home-use):
 //
-//	SQLite Backup API → amnezia.sqlite → manifest.json → tar.zst → age
+//	SQLite Backup API → amnezia.sqlite → manifest.json → tar.zst
 //	→ atomic rename into backups/
 //
-// Invariants (M8 contract):
+// Invariants:
 //   - the snapshot is taken through the SQLite Backup API — direct file
-//     copying of the live database is forbidden by the spec;
+//     copying of the live database is forbidden;
 //   - the archive contains exactly manifest.json + amnezia.sqlite;
-//   - the archive is always encrypted with age; the plaintext snapshot
-//     and manifest live only inside a 0700 staging directory and are
-//     removed on every path, including errors;
+//   - there is no age layer: the operator downloads/uploads tar.zst
+//     over the already-authenticated panel session;
+//   - the snapshot and manifest live only inside a 0700 staging
+//     directory and are removed on every path, including errors;
 //   - the final file is installed with an atomic rename + directory
 //     fsync, and unique staging names make concurrent backups safe;
 //   - the backups directory is 0700, the backup file 0600;
@@ -25,22 +26,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
-	"filippo.io/age"
 	"github.com/klauspost/compress/zstd"
 	"modernc.org/sqlite"
-)
-
-// recipient in the M8 contract (Q2): the age recipient (public key)
-// comes from the deployment configuration; the panel reads it from the
-// AGE_RECIPIENT environment variable / .env (compose). The matching
-// identity (private key) is never stored on the VPS and is supplied
-// manually at restore time (M8.4). This package only ever handles the
-// recipient.
-const (
-	envRecipient = "AGE_RECIPIENT"
 )
 
 // backuper is the exported method set of modernc's unexported conn type
@@ -99,7 +88,7 @@ func snapshot(handle *sql.DB, dstPath string) error {
 }
 
 // verifySnapshot runs PRAGMA integrity_check on the freshly created
-// snapshot so a bad image is rejected before it is encrypted.
+// snapshot so a bad image is rejected before it is packed.
 func verifySnapshot(snapPath string) error {
 	snap, err := sql.Open("sqlite", snapPath)
 	if err != nil {
@@ -117,16 +106,15 @@ func verifySnapshot(snapPath string) error {
 }
 
 // Create builds a full backup of the database and installs it into
-// backupsDir as backup-YYYY-MM-DD.tar.zst.age (spec §5). recipient is
-// the age public key from the deployment configuration (AGE_RECIPIENT);
-// now is injectable for tests. The returned path is the final archive.
+// backupsDir as backup-YYYY-MM-DD.tar.zst. now is injectable for tests.
+// The returned path is the final archive.
 //
 // The same-day name is replaced atomically (rename); concurrent Create
 // calls can never corrupt each other because every call stages its
 // files under a unique 0700 directory. Overwrite policy (Q8) is a
 // caller-level concern.
-func Create(handle *sql.DB, backupsDir, recipient string, now func() time.Time) (string, error) {
-	return create(handle, backupsDir, recipient, now, func(ts time.Time) string {
+func Create(handle *sql.DB, backupsDir string, now func() time.Time) (string, error) {
+	return create(handle, backupsDir, now, func(ts time.Time) string {
 		return "backup-" + ts.Format(filenameTimeLayout) + archiveSuffix
 	})
 }
@@ -135,8 +123,8 @@ func Create(handle *sql.DB, backupsDir, recipient string, now func() time.Time) 
 // restore (spec §5). Unlike Create it never overwrites: the name
 // carries the time of day, so every safety backup is unique and no
 // archive is ever lost.
-func Safety(handle *sql.DB, backupsDir, recipient string, now func() time.Time) (string, error) {
-	return create(handle, backupsDir, recipient, now, func(ts time.Time) string {
+func Safety(handle *sql.DB, backupsDir string, now func() time.Time) (string, error) {
+	return create(handle, backupsDir, now, func(ts time.Time) string {
 		return "safety-backup-" + ts.Format(filenameTimeLayout) + "-" + ts.Format(filenameTimeOfDayLayout) + archiveSuffix
 	})
 }
@@ -146,17 +134,9 @@ func Safety(handle *sql.DB, backupsDir, recipient string, now func() time.Time) 
 // manifest). create() never echoes live database state through the
 // returned path or errors (except the chosen file name in case of
 // failure — carrying no secrets by construction).
-func create(handle *sql.DB, backupsDir, recipient string, now func() time.Time, nameOf func(time.Time) string) (string, error) {
+func create(handle *sql.DB, backupsDir string, now func() time.Time, nameOf func(time.Time) string) (string, error) {
 	if now == nil {
 		now = time.Now
-	}
-	recipient = strings.TrimSpace(recipient)
-	if recipient == "" {
-		return "", errors.New("backup: empty age recipient")
-	}
-	rec, err := age.ParseX25519Recipient(recipient)
-	if err != nil {
-		return "", fmt.Errorf("backup: invalid age recipient: %w", err)
 	}
 
 	if err := os.MkdirAll(backupsDir, 0o700); err != nil {
@@ -192,7 +172,7 @@ func create(handle *sql.DB, backupsDir, recipient string, now func() time.Time, 
 	}
 
 	archivePath := filepath.Join(staging, name)
-	if err := encryptArchive(archivePath, manifestJSON, snapPath, rec); err != nil {
+	if err := writeArchive(archivePath, manifestJSON, snapPath); err != nil {
 		return "", err
 	}
 
@@ -205,10 +185,9 @@ func create(handle *sql.DB, backupsDir, recipient string, now func() time.Time, 
 	return target, nil
 }
 
-// encryptArchive streams tar(manifest, snapshot) → zstd → age into the
-// final encrypted file; the plaintext archive is never materialized on
-// disk (only the two plaintext inputs exist inside staging).
-func encryptArchive(dstPath string, manifestJSON []byte, snapPath string, rec *age.X25519Recipient) error {
+// writeArchive streams tar(manifest, snapshot) → zstd into dstPath.
+// The uncompressed tar is never materialized on disk.
+func writeArchive(dstPath string, manifestJSON []byte, snapPath string) error {
 	dst, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("backup: create archive: %w", err)
@@ -221,11 +200,7 @@ func encryptArchive(dstPath string, manifestJSON []byte, snapPath string, rec *a
 		}
 	}()
 
-	enc, err := age.Encrypt(dst, rec)
-	if err != nil {
-		return fmt.Errorf("backup: start age: %w", err)
-	}
-	zw, err := zstd.NewWriter(enc, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	zw, err := zstd.NewWriter(dst, zstd.WithEncoderLevel(zstd.SpeedDefault))
 	if err != nil {
 		return fmt.Errorf("backup: start zstd: %w", err)
 	}
@@ -242,9 +217,6 @@ func encryptArchive(dstPath string, manifestJSON []byte, snapPath string, rec *a
 	}
 	if err := zw.Close(); err != nil {
 		return fmt.Errorf("backup: close zstd: %w", err)
-	}
-	if err := enc.Close(); err != nil {
-		return fmt.Errorf("backup: close age: %w", err)
 	}
 	if err := dst.Sync(); err != nil {
 		return fmt.Errorf("backup: sync archive: %w", err)
@@ -307,18 +279,4 @@ func syncDir(dir string) error {
 	}
 	defer d.Close()
 	return d.Sync()
-}
-
-// RecipientFromEnv returns the age recipient from the deployment
-// configuration (AGE_RECIPIENT). The M8 contract (Q2): the public key
-// may live on the VPS; the identity never does.
-func RecipientFromEnv() (string, error) {
-	r := strings.TrimSpace(os.Getenv(envRecipient))
-	if r == "" {
-		return "", fmt.Errorf("backup: %s is not set: export the age recipient (public key) in the deployment environment or compose .env (AGE_RECIPIENT=age1...) before `panel backup create`; the matching private identity is supplied at restore time", envRecipient)
-	}
-	if _, err := age.ParseX25519Recipient(r); err != nil {
-		return "", fmt.Errorf("backup: %s is not a valid age recipient", envRecipient)
-	}
-	return r, nil
 }

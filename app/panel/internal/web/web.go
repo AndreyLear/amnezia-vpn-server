@@ -225,18 +225,15 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /account/totp/disable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpDisable))))
 	s.mux.Handle("POST /account/totp/mode", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpMode))))
 	s.mux.Handle("GET /backups", s.auth.RequireAuth(http.HandlerFunc(s.backupsPage)))
-	s.mux.Handle("POST /backups/create", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupCreate))))
 	// T-125: one-click download (fresh archive, not stored).
 	s.mux.Handle("POST /backups/download", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupDownloadNow))))
-	s.mux.Handle("GET /backups/{name}/download", s.auth.RequireAuth(http.HandlerFunc(s.backupDownload)))
-	s.mux.Handle("POST /backups/{name}/delete", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupDelete))))
-	// The restore pair is the one multipart route of the panel: the
-	// POST carries a file upload, so it is NOT mounted through
-	// RequireCSRF (r.ParseForm never parses multipart bodies and would
-	// 403 every legitimate upload). restoreSubmit performs the same
-	// check with the same primitives (auth.CSRFFieldName +
-	// auth.CSRFValid) after parsing the parts itself.
-	s.mux.Handle("GET /backups/restore", s.auth.RequireAuth(http.HandlerFunc(s.restorePage)))
+	// The restore POST is the one multipart route of the panel: it
+	// carries a file upload, so it is NOT mounted through RequireCSRF
+	// (r.ParseForm never parses multipart bodies and would 403 every
+	// legitimate upload). restoreSubmit performs the same check with
+	// the same primitives (auth.CSRFFieldName + auth.CSRFValid) after
+	// parsing the parts itself. GET /backups is the upload page;
+	// there is no separate GET /backups/restore.
 	s.mux.Handle("POST /backups/restore", s.auth.RequireAuth(http.HandlerFunc(s.restoreSubmit)))
 	s.mux.Handle("GET /clients/{id}/config", s.auth.RequireAuth(http.HandlerFunc(s.clientConfigDownload)))
 	s.mux.Handle("GET /clients/{id}/qr", s.auth.RequireAuth(http.HandlerFunc(s.clientQR)))
