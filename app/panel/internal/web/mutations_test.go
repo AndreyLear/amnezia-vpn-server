@@ -107,10 +107,9 @@ func TestMutationAddClient(t *testing.T) {
 	f.configMatches()
 }
 
-func TestMutationAddTrimsNameAndStoresExpiry(t *testing.T) {
+func TestMutationAddTrimsNameWithoutExpiry(t *testing.T) {
 	f := newFixture(t)
-	expiry := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
-	rec := f.post("/clients/new", url.Values{"name": {"  dave  "}, "expires_at": {expiry}})
+	rec := f.post("/clients/new", url.Values{"name": {"  dave  "}})
 	if got := f.flashOf(rec); got != flashAdded {
 		t.Fatalf("flash = %q", got)
 	}
@@ -124,13 +123,27 @@ func TestMutationAddTrimsNameAndStoresExpiry(t *testing.T) {
 	if clients[0].Name != "dave" {
 		t.Errorf("name = %q, want trimmed dave", clients[0].Name)
 	}
-	// the stored expiry is the canonical UTC form of the input
-	wantNormalized, err := time.Parse(time.RFC3339, expiry)
-	if err != nil {
-		t.Fatalf("parse fixture expiry: %v", err)
+	if clients[0].ExpiresAt != "" {
+		t.Errorf("ExpiresAt = %q, want empty (web add does not set expiry)", clients[0].ExpiresAt)
 	}
-	if clients[0].ExpiresAt != wantNormalized.UTC().Format(time.RFC3339) {
-		t.Errorf("ExpiresAt = %q, want canonical UTC %q", clients[0].ExpiresAt, wantNormalized.UTC().Format(time.RFC3339))
+}
+
+func TestMutationAddIgnoresExpiresAt(t *testing.T) {
+	f := newFixture(t)
+	expiry := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	rec := f.post("/clients/new", url.Values{"name": {"dave"}, "expires_at": {expiry}})
+	if got := f.flashOf(rec); got != flashAdded {
+		t.Fatalf("flash = %q, want %q", got, flashAdded)
+	}
+	clients, err := db.ClientsAll(f.h)
+	if err != nil {
+		t.Fatalf("ClientsAll: %v", err)
+	}
+	if len(clients) != 1 {
+		t.Fatalf("clients = %d, want 1", len(clients))
+	}
+	if clients[0].ExpiresAt != "" {
+		t.Errorf("ExpiresAt = %q, want empty when expires_at is posted on /clients/new", clients[0].ExpiresAt)
 	}
 }
 
@@ -144,7 +157,7 @@ func TestMutationAddFailures(t *testing.T) {
 		{"empty name", url.Values{"name": {""}}, flashInvalidName},
 		{"whitespace name", url.Values{"name": {"   "}}, flashInvalidName},
 		{"long name", url.Values{"name": {strings.Repeat("x", 65)}}, flashInvalidName},
-		{"bad expiry", url.Values{"name": {"eve"}, "expires_at": {"tomorrow"}}, flashInvalidExpiry},
+		{"garbage expires_at ignored", url.Values{"name": {"eve"}, "expires_at": {"tomorrow"}}, flashAdded},
 	}
 	for _, tc := range cases {
 		rec := f.post("/clients/new", tc.fields)
@@ -156,8 +169,8 @@ func TestMutationAddFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClientsAll: %v", err)
 	}
-	if len(clients) != 0 {
-		t.Fatalf("failed adds must not insert: %d clients", len(clients))
+	if len(clients) != 1 || clients[0].Name != "eve" {
+		t.Fatalf("only the ignored-expires_at add must insert: %+v", clients)
 	}
 }
 
@@ -303,21 +316,6 @@ func TestMutationExpiryDatetimeLocal(t *testing.T) {
 	}
 	if want := "2026-09-01T18:30:00Z"; row.ExpiresAt != want {
 		t.Fatalf("ExpiresAt = %q, want canonical UTC %q", row.ExpiresAt, want)
-	}
-
-	// the add form accepts the same shape
-	rec = f.post("/clients/new", url.Values{"name": {"lisa"}, "expires_at": {"2026-10-02T09:15"}})
-	if got := f.flashOf(rec); got != flashAdded {
-		t.Fatalf("add flash = %q", got)
-	}
-	clients, err := db.ClientsAll(f.h)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, cl := range clients {
-		if cl.Name == "lisa" && cl.ExpiresAt != "2026-10-02T09:15:00Z" {
-			t.Errorf("lisa ExpiresAt = %q, want 2026-10-02T09:15:00Z", cl.ExpiresAt)
-		}
 	}
 }
 

@@ -171,7 +171,6 @@ func TestMutationJSONErrors(t *testing.T) {
 		wantFlash string
 	}{
 		{"bad name", "/clients/new", url.Values{"name": {""}}, flashInvalidName},
-		{"bad expiry", "/clients/new", url.Values{"name": {"eve"}, "expires_at": {"tomorrow"}}, flashInvalidExpiry},
 		{"bad id", "/clients/abc/delete", nil, flashInvalidID},
 		{"unknown id", "/clients/999/delete", nil, flashNotFound},
 	}
