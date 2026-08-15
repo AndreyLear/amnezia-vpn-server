@@ -14,7 +14,7 @@
 // a login without one creates a fresh session. In both cases the
 // store is reduced to exactly one active session per user.
 //
-// CSRF: POST /login is the single CSRF-exempt route (M7.5 contract,
+// CSRF: POST /login and POST /api/login are CSRF-exempt (M7.5 contract,
 // pinned in M7.6): the login form carries no token, login itself
 // cannot be CSRF-exploited to log the victim into an attacker's
 // account beyond a credential re-entry, and SameSite=Lax drops the
@@ -110,17 +110,42 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	password := r.PostForm.Get("password")
 	code := r.PostForm.Get("code")
 
+	outcome, err := s.evaluateLogin(r, username, password, code)
+	if err != nil {
+		internalFailure(w, s, "login: read user", err)
+		return
+	}
+	if outcome.message != "" {
+		s.renderLogin(w, loginData{Error: outcome.message, Username: username, NeedCode: outcome.needCode})
+		return
+	}
+	if outcome.needCode {
+		s.renderLogin(w, loginData{Username: username, NeedCode: true})
+		return
+	}
+	if err := s.issueLoginSession(w, r, username); err != nil {
+		internalFailure(w, s, "login: create session", err)
+		return
+	}
+	redirect303(w, r, "/")
+}
+
+type loginOutcome struct {
+	needCode bool
+	message  string
+}
+
+// evaluateLogin runs the dummy-hash password check and optional TOTP.
+// A non-empty message is a client-visible failure; needCode with an
+// empty message means the password was accepted and a code is required.
+func (s *Server) evaluateLogin(r *http.Request, username, password, code string) (loginOutcome, error) {
 	user, err := db.AuthUserByUsername(s.db(), username)
 	switch {
 	case err == nil:
-		// Stored hash verified below.
 	case errors.Is(err, db.ErrAuthUserNotFound):
-		// Unknown user: verify against the dummy hash so the timing
-		// does not differ from a wrong password.
 		user = nil
 	default:
-		internalFailure(w, s, "login: read user", err)
-		return
+		return loginOutcome{}, err
 	}
 	hash := dummyPasswordHash
 	if user != nil {
@@ -128,26 +153,23 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	if !auth.VerifyPassword(password, hash) {
 		s.loginLimit.fail(clientIP(r), time.Now())
-		s.renderLogin(w, loginData{Error: loginErrorText, Username: username})
-		return
+		return loginOutcome{message: loginErrorText}, nil
 	}
 	if totpLoginRequired(user) {
 		if code == "" {
-			s.renderLogin(w, loginData{Username: username, NeedCode: true})
-			return
+			return loginOutcome{needCode: true}, nil
 		}
 		if !auth.VerifyTOTP(user.TOTPSecret, code, time.Now()) {
 			s.loginLimit.fail(clientIP(r), time.Now())
-			s.renderLogin(w, loginData{Error: "Неверный код.", Username: username, NeedCode: true})
-			return
+			return loginOutcome{needCode: true, message: "Неверный код."}, nil
 		}
 	}
+	return loginOutcome{}, nil
+}
 
-	// Issue the session. A presented live session is rotated (old SID
-	// is invalidated atomically); a missing/unknown/expired one falls
-	// back to Create. Failed rotations (concurrent expiry between the
-	// shape check and the store) behave like a session-less login.
+func (s *Server) issueLoginSession(w http.ResponseWriter, r *http.Request, username string) error {
 	var sess auth.Session
+	var err error
 	if sid, ok := auth.ReadSessionID(r); ok {
 		sess, err = s.cfg.Sessions.Rotate(sid, username)
 		if errors.Is(err, auth.ErrSessionNotFound) {
@@ -158,15 +180,12 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		sess, err = s.cfg.Sessions.Create(username)
 	}
 	if err != nil {
-		internalFailure(w, s, "login: create session", err)
-		return
+		return err
 	}
-	// One active login per user: every other session of this user (for
-	// example from another browser) is dropped.
 	s.cfg.Sessions.DeleteByUsername(username, sess.ID)
 	auth.WriteSessionCookie(w, sess.ID, sess.ExpiresAt)
 	s.loginLimit.clear(clientIP(r))
-	redirect303(w, r, "/")
+	return nil
 }
 
 // logout handles POST /logout (protected by RequireAuth, so a live

@@ -431,14 +431,50 @@ func TestRequireCSRFTokenNotInQueryOrCookie(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("token in cookie: code = %d, want 403", rec.Code)
 	}
-	// Token in a custom header, absent from the body.
+	// Token in a header named like the form field, absent from the body.
 	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))
 	req.Header.Set(CSRFFieldName, sess.CSRFToken)
 	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sess.ID})
 	rec = httptest.NewRecorder()
 	csrfHandler(store).ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
-		t.Errorf("token in header: code = %d, want 403", rec.Code)
+		t.Errorf("token in %s header: code = %d, want 403", CSRFFieldName, rec.Code)
+	}
+}
+
+func TestRequireCSRFHeaderOK(t *testing.T) {
+	store := NewSessionStore(SessionTTL)
+	_, sess := createForCSRF(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set(CSRFHeaderName, sess.CSRFToken)
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sess.ID})
+	rec := httptest.NewRecorder()
+	csrfHandler(store).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
+		t.Fatalf("X-CSRF-Token: code = %d body = %q, want 200 ok", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRequireAPIUnauthorizedJSON(t *testing.T) {
+	store := NewSessionStore(SessionTTL)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	})
+	h := NewAuth(store).RequireAPI(next)
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Fatalf("RequireAPI must not redirect: %q", loc)
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(rec.Body.String(), `"ok":false`) {
+		t.Fatalf("body = %q", rec.Body.String())
 	}
 }
 

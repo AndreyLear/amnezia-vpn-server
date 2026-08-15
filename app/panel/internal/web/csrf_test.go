@@ -261,16 +261,18 @@ func TestCSRFTokenInCookieForbidden(t *testing.T) {
 	}
 }
 
-// TestCSRFTokenInHeaderForbidden: a token in a custom header is
-// rejected (the panel is a non-JS HTML UI; no header channel exists).
+// TestCSRFTokenInHeaderForbidden used to reject X-CSRF-Token. The SPA
+// needs the header channel; HTML forms still send _csrf. A correct
+// header plus valid fields must reach the handler (303 PRG).
 func TestCSRFTokenInHeaderForbidden(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest(http.MethodPost, "/clients/new", strings.NewReader(""))
-	req.Header.Set("X-CSRF-Token", f.csrf)
+	req := httptest.NewRequest(http.MethodPost, "/clients/new", strings.NewReader("name=header-ok"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set(auth.CSRFHeaderName, f.csrf)
 	rec := httptest.NewRecorder()
 	f.serve(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("token in header: code = %d, want 403", rec.Code)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("token in header: code = %d, want 303", rec.Code)
 	}
 }
 

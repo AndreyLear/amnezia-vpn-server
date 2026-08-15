@@ -10,13 +10,13 @@
 // (the PRG mutations) gets a generic 401 text/plain response. Neither
 // path ever echoes the session id or the identity.
 //
-// CSRF contract (M7.6): RequireCSRF runs inside RequireAuth (auth →
-// csrf → handler). Safe methods (GET/HEAD/OPTIONS) pass through;
-// every other method must carry the session's CSRF token in the
-// _csrf form field. The token is never accepted from the query
-// string, a cookie, the URL or a custom header. Failures answer a
+// CSRF contract (M7.6 + SPA): RequireCSRF runs inside RequireAuth or
+// RequireAPI (auth → csrf → handler). Safe methods (GET/HEAD/OPTIONS)
+// pass through; every other method must carry the session's CSRF token
+// in the X-CSRF-Token header or the _csrf form field. The token is
+// never accepted from the query string or a cookie. Failures answer a
 // generic 403 with no details, do not touch the session store, and
-// never PRG. POST /login is intentionally exempt (M7.5 contract);
+// never PRG. POST /login and POST /api/login are CSRF-exempt (M7.5);
 // SameSite=Lax stays as the defense-in-depth layer.
 package auth
 
@@ -27,6 +27,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -37,9 +38,12 @@ const SessionCookieName = "amnezia_session"
 
 // CSRFFieldName is the POST form field carrying the CSRF token (M7.6).
 // The token is rendered by the web layer into every protected form as
-// a hidden input; only the form body is accepted, never query/cookie/
-// header.
+// a hidden input. JSON clients send CSRFHeaderName instead.
 const CSRFFieldName = "_csrf"
+
+// CSRFHeaderName is the request header carrying the CSRF token for the
+// SPA. Cookie and query string remain forbidden.
+const CSRFHeaderName = "X-CSRF-Token"
 
 // Cookie attribute constants (M7.4 contract):
 //   - HttpOnly: the SID must never be readable by page scripts;
@@ -172,6 +176,37 @@ func (a *Auth) RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
+// RequireAPI is the JSON counterpart of RequireAuth: missing or dead
+// sessions answer 401 JSON and never 303 to /login.
+func (a *Auth) RequireAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ConsumeInvalidateSessions(a.dbPath, a.store)
+		sid, ok := ReadSessionID(r)
+		if !ok {
+			writeAPIUnauthorized(w)
+			return
+		}
+		sess, ok := a.store.Get(sid)
+		if !ok {
+			writeAPIUnauthorized(w)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionCtxKey{}, sess)))
+	})
+}
+
+func writeAPIUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"ok":false,"message":"Unauthorized."}` + "\n"))
+}
+
+func writeAPIForbidden(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`{"ok":false,"message":"Forbidden."}` + "\n"))
+}
+
 // challenge answers an unauthenticated request. The response never
 // contains the cookie value, the session id or the identity: the 303
 // target is the static /login path, the 401 body is a fixed string.
@@ -187,22 +222,21 @@ func (a *Auth) challenge(w http.ResponseWriter, r *http.Request) {
 }
 
 // RequireCSRF protects a handler against cross-site request forgery
-// (M7.6). It must be mounted inside RequireAuth: the authenticated
-// session travels via the request context.
+// (M7.6). It must be mounted inside RequireAuth or RequireAPI: the
+// authenticated session travels via the request context.
 //
 // Rules:
 //   - GET/HEAD/OPTIONS pass through untouched (safe methods);
 //   - any other method must present the session's CSRF token in the
-//     CSRFFieldName form field — the token is read only from the form
-//     body, never from the query string, a cookie, the URL or a
-//     custom header;
+//     X-CSRF-Token header or the CSRFFieldName form field — never from
+//     the query string or a cookie;
+//   - JSON bodies skip ParseForm so the handler can decode them;
 //   - comparison is constant-time (CSRFValid);
-//   - a missing or wrong token answers a generic 403 text/plain
-//     response with no details, never a redirect (no PRG on CSRF
-//     failure), and never touches the session store;
-//   - the body is parsed here so protected handlers receive an
-//     already-parsed form; oversized bodies map to the same 413 as
-//     the handlers' own requestBodyError.
+//   - a missing or wrong token answers a generic 403 (JSON under /api/,
+//     otherwise text/plain), never a redirect, and never touches the
+//     session store;
+//   - oversized bodies map to the same 413 as the handlers' own
+//     requestBodyError.
 func (a *Auth) RequireCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -210,25 +244,38 @@ func (a *Auth) RequireCSRF(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if err := r.ParseForm(); err != nil {
-			var mbe *http.MaxBytesError
-			if ok := errors.As(err, &mbe); ok {
+		ct := strings.ToLower(r.Header.Get("Content-Type"))
+		if !strings.Contains(ct, "application/json") {
+			if err := r.ParseForm(); err != nil {
+				var mbe *http.MaxBytesError
+				if ok := errors.As(err, &mbe); ok {
+					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+					http.Error(w, "Request body too large.", http.StatusRequestEntityTooLarge)
+					return
+				}
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-				http.Error(w, "Request body too large.", http.StatusRequestEntityTooLarge)
+				http.Error(w, "Bad request.", http.StatusBadRequest)
 				return
 			}
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			http.Error(w, "Bad request.", http.StatusBadRequest)
-			return
 		}
 		sess, ok := CurrentUser(r.Context())
 		if !ok {
-			// Mounted outside RequireAuth: a programmer error, but the
-			// response must stay generic and secret-free.
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				writeAPIUnauthorized(w)
+				return
+			}
 			a.challenge(w, r)
 			return
 		}
-		if !CSRFValid(sess.CSRFToken, r.PostForm.Get(CSRFFieldName)) {
+		token := r.Header.Get(CSRFHeaderName)
+		if token == "" {
+			token = r.PostForm.Get(CSRFFieldName)
+		}
+		if !CSRFValid(sess.CSRFToken, token) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				writeAPIForbidden(w)
+				return
+			}
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusForbidden)
 			io.WriteString(w, "Forbidden.\n")
