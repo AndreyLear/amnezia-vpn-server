@@ -110,9 +110,15 @@ func TestLoginPageRendersForm(t *testing.T) {
 		`action="/login"`, `method="post"`,
 		`name="username"`, `autocomplete="username"`,
 		`name="password"`, `type="password"`, `autocomplete="current-password"`,
+		`set-password`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("login form misses %q", want)
+		}
+	}
+	for _, leak := range []string{"/forgot", "mailto:"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("login page must not offer web recovery %q", leak)
 		}
 	}
 }

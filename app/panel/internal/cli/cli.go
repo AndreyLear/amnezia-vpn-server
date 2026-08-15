@@ -48,6 +48,7 @@ commands:
   client config <id>
   auth add-user <username> (--password-stdin | --password-env <ENV>)
   auth change-password <username> --old-password-stdin --new-password-stdin
+  auth set-password <username> --password-stdin
   auth 2fa status <username>
   auth 2fa disable <username>
   backup create                  create a database backup (tar.zst)

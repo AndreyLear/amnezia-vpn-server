@@ -104,6 +104,42 @@ func TestAuthChangePasswordCLIFailureIsSafe(t *testing.T) {
 	}
 }
 
+func TestAuthSetPasswordCLI(t *testing.T) {
+	newCtx(t)
+	if code, _, errb := runInput(strings.NewReader("old-password\n"), "auth", "add-user", "alice", "--password-stdin"); code != 0 {
+		t.Fatalf("add user: %d %s", code, errb)
+	}
+	code, out, errb := runInput(strings.NewReader("brand-new\n"), "auth", "set-password", "alice", "--password-stdin")
+	if code != 0 || !strings.Contains(out, "password changed") {
+		t.Fatalf("set password: code=%d out=%q err=%q", code, out, errb)
+	}
+	u := authUser(t, "alice")
+	if !auth.VerifyPassword("brand-new", u.PasswordHash) || auth.VerifyPassword("old-password", u.PasswordHash) {
+		t.Fatal("CLI did not replace password without old password")
+	}
+	assertNoSecrets(t, out, errb, "brand-new")
+	assertNoSecrets(t, out, errb, "old-password")
+	raw, err := os.ReadFile(auth.InvalidateSessionsPath(db.DefaultPath()))
+	if err != nil {
+		t.Fatalf("invalidate sentinel: %v", err)
+	}
+	if string(raw) != "alice\n" {
+		t.Fatalf("sentinel = %q", raw)
+	}
+}
+
+func TestAuthSetPasswordCLIUnknownUser(t *testing.T) {
+	newCtx(t)
+	code, out, errb := runInput(strings.NewReader("brand-new\n"), "auth", "set-password", "nobody", "--password-stdin")
+	if code == 0 {
+		t.Fatalf("unknown user: code=%d out=%q err=%q", code, out, errb)
+	}
+	assertNoSecrets(t, out, errb, "brand-new")
+	if _, err := os.Stat(auth.InvalidateSessionsPath(db.DefaultPath())); !os.IsNotExist(err) {
+		t.Fatalf("failed set-password must not write sentinel, stat err = %v", err)
+	}
+}
+
 func TestAuth2FAStatusAndDisableCLI(t *testing.T) {
 	newCtx(t)
 	if code, _, _ := runInput(strings.NewReader("password\n"), "auth", "add-user", "alice", "--password-stdin"); code != 0 {

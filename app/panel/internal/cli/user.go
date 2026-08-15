@@ -42,6 +42,8 @@ func (a *app) cmdAuth(args []string) int {
 		return a.cmdAuthAddUser(args[1:])
 	case "change-password":
 		return a.cmdAuthChangePassword(args[1:])
+	case "set-password":
+		return a.cmdAuthSetPassword(args[1:])
 	case "2fa":
 		if len(args) < 2 {
 			a.usage()
@@ -118,6 +120,51 @@ func (a *app) cmdAuthChangePassword(args []string) int {
 		return a.fatal("auth change-password", err)
 	}
 	return a.ok("auth change-password", "password changed")
+}
+
+// cmdAuthSetPassword resets a user's password from stdin without the
+// current password. SSH (or equivalent host access) is the trust
+// boundary; there is no web forgot-password form.
+func (a *app) cmdAuthSetPassword(args []string) int {
+	p, err := parseArgs(args, map[string]bool{"password-stdin": false})
+	if err != nil {
+		return a.usageError("auth set-password", err.Error())
+	}
+	if len(p.positional) != 1 || len(p.flags) != 1 {
+		return a.usageError("auth set-password", "want <username> --password-stdin")
+	}
+	username, err := validateNamed(p.positional[0], "username")
+	if err != nil {
+		return a.usageError("auth set-password", err.Error())
+	}
+	reader := bufio.NewReader(a.stdin)
+	newp, err := readCLISecret(reader)
+	if err != nil {
+		return a.fatal("auth set-password", err)
+	}
+	handle, err := a.openDB()
+	if err != nil {
+		return a.fatal("auth set-password", err)
+	}
+	defer handle.Close()
+	row, err := db.AuthUserByUsername(handle, username)
+	if err != nil {
+		return a.fatal("auth set-password", err)
+	}
+	hash, err := auth.HashPassword(newp)
+	if err != nil {
+		if errors.Is(err, auth.ErrPasswordTooShort) || errors.Is(err, auth.ErrPasswordTooLong) {
+			return a.usageError("auth set-password", err.Error())
+		}
+		return a.fatal("auth set-password", err)
+	}
+	if err := db.UpdateAuthPassword(handle, username, row.PasswordHash, hash); err != nil {
+		return a.fatal("auth set-password", err)
+	}
+	if err := auth.RequestInvalidateSessions(db.DefaultPath(), username); err != nil {
+		return a.fatal("auth set-password", err)
+	}
+	return a.ok("auth set-password", "password changed")
 }
 
 func (a *app) cmdAuth2FAStatus(args []string) int {

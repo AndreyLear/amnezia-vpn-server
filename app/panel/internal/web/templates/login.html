@@ -26,7 +26,7 @@
       {{if .NeedCode}}<label class="label">Код из приложения <input class="input" name="code" inputmode="numeric" pattern="[0-9]{6}" required></label>{{end}}
       <button type="submit" class="btn btn-primary">Войти</button>
     </form>
-    <p class="login-footnote">Сессия защищена и действует ограниченное время.</p>
+    <p class="login-footnote">Сессия защищена и действует ограниченное время. Пароль сбрасывается на сервере командой panel auth set-password, не через эту страницу.</p>
   </section>
 </main>
 </body>
