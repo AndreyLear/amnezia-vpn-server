@@ -26,6 +26,10 @@ const (
 	genJmaxSpread   = 50 // Jmax = Jmin + [0, 50]
 	genSMin         = 1
 	genSMax         = 128
+	genS3Min        = 15
+	genS3Max        = 64
+	genS4Min        = 8
+	genS4Max        = 32
 	genChainTagsMin = 1
 	genChainTagsMax = 3
 	genTagSizeMin   = 1
@@ -36,10 +40,11 @@ const (
 	genHMax         = 9999999
 )
 
-// GenerateParams builds a full random AWG obfuscation parameter set
-// (Jc/Jmin/Jmax/S1/S2/H1-H4/I1-I5) from crypto/rand. The result always
-// passes validateParams. S3/S4 stay unset (the AmneziaVPN app does not
-// generate them either).
+// GenerateParams builds a full random AWG 2.0 obfuscation set
+// (Jc/Jmin/Jmax/S1-S4/H1-H4/I1-I5) from crypto/rand. S3 and S4 are
+// required: the AmneziaVPN app treats a .conf with I1–I5 but no S3/S4
+// as protocol 1.5, which does not handshake with a 2.x runtime.
+// H1–H4 stay 7-digit scalars (pinned amneziawg-tools reject N-M ranges).
 func GenerateParams() (*Params, error) {
 	jc, err := randRange(genJcMin, genJcMax)
 	if err != nil {
@@ -61,13 +66,30 @@ func GenerateParams() (*Params, error) {
 	if err != nil {
 		return nil, err
 	}
+	s3, err := randRange(genS3Min, genS3Max)
+	if err != nil {
+		return nil, err
+	}
+	s4, err := randRange(genS4Min, genS4Max)
+	if err != nil {
+		return nil, err
+	}
 	headers := make([]string, 4)
+	seen := make(map[string]struct{}, 4)
 	for i := range headers {
-		h, err := randRange(genHMin, genHMax)
-		if err != nil {
-			return nil, err
+		for {
+			h, err := randRange(genHMin, genHMax)
+			if err != nil {
+				return nil, err
+			}
+			hs := strconv.FormatUint(h, 10)
+			if _, dup := seen[hs]; dup {
+				continue
+			}
+			seen[hs] = struct{}{}
+			headers[i] = hs
+			break
 		}
-		headers[i] = strconv.FormatUint(h, 10)
 	}
 	chains := make([]string, 5)
 	for i := range chains {
@@ -83,6 +105,8 @@ func GenerateParams() (*Params, error) {
 		Jmax: u16ptr(jmin + spread),
 		S1:   u16ptr(s1),
 		S2:   u16ptr(s2),
+		S3:   u16ptr(s3),
+		S4:   u16ptr(s4),
 		H1:   headers[0],
 		H2:   headers[1],
 		H3:   headers[2],

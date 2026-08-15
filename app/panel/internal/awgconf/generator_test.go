@@ -29,8 +29,11 @@ func TestGenerateParamsRangesAndValidity(t *testing.T) {
 		if p.S2 == nil || *p.S2 < genSMin || *p.S2 > genSMax {
 			t.Fatalf("s2 = %v, want %d..%d", p.S2, genSMin, genSMax)
 		}
-		if p.S3 != nil || p.S4 != nil {
-			t.Fatalf("s3/s4 must stay unset, got %v/%v", p.S3, p.S4)
+		if p.S3 == nil || *p.S3 < genS3Min || *p.S3 > genS3Max {
+			t.Fatalf("s3 = %v, want %d..%d", p.S3, genS3Min, genS3Max)
+		}
+		if p.S4 == nil || *p.S4 < genS4Min || *p.S4 > genS4Max {
+			t.Fatalf("s4 = %v, want %d..%d", p.S4, genS4Min, genS4Max)
 		}
 		for name, h := range map[string]string{"h1": p.H1, "h2": p.H2, "h3": p.H3, "h4": p.H4} {
 			if h == "" {
@@ -42,6 +45,9 @@ func TestGenerateParamsRangesAndValidity(t *testing.T) {
 			if len(h) != 7 {
 				t.Fatalf("%s = %q: want 7-digit header", name, h)
 			}
+		}
+		if p.H1 == p.H2 || p.H1 == p.H3 || p.H1 == p.H4 || p.H2 == p.H3 || p.H2 == p.H4 || p.H3 == p.H4 {
+			t.Fatalf("headers must be unique: %s %s %s %s", p.H1, p.H2, p.H3, p.H4)
 		}
 		for name, chain := range map[string]string{
 			"i1": p.I1, "i2": p.I2, "i3": p.I3, "i4": p.I4, "i5": p.I5,
@@ -153,7 +159,7 @@ func TestGenerateParamsRoundTrip(t *testing.T) {
 			t.Fatalf("ParseParams(MarshalParams(p)) error: %v", err)
 		}
 		if *got.Jc != *p.Jc || *got.Jmin != *p.Jmin || *got.Jmax != *p.Jmax ||
-			*got.S1 != *p.S1 || *got.S2 != *p.S2 {
+			*got.S1 != *p.S1 || *got.S2 != *p.S2 || *got.S3 != *p.S3 || *got.S4 != *p.S4 {
 			t.Fatalf("numeric round trip mismatch: %+v vs %+v", got, p)
 		}
 		if got.H1 != p.H1 || got.H2 != p.H2 || got.H3 != p.H3 || got.H4 != p.H4 {
@@ -162,8 +168,8 @@ func TestGenerateParamsRoundTrip(t *testing.T) {
 		if got.I1 != p.I1 || got.I2 != p.I2 || got.I3 != p.I3 || got.I4 != p.I4 || got.I5 != p.I5 {
 			t.Fatalf("obf chain round trip mismatch: %+v vs %+v", got, p)
 		}
-		if got.S3 != nil || got.S4 != nil {
-			t.Fatalf("s3/s4 round trip must stay unset: %+v", got)
+		if got.S3 == nil || got.S4 == nil {
+			t.Fatalf("s3/s4 round trip dropped: %+v", got)
 		}
 	}
 }

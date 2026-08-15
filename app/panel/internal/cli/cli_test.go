@@ -887,6 +887,7 @@ func TestClientConfigGolden(t *testing.T) {
 	line("PresharedKey", client.PresharedKey)
 	line("AllowedIPs", "0.0.0.0/0")
 	line("Endpoint", testEndpoint)
+	line("PersistentKeepalive", "25")
 	if out != want.String() {
 		t.Fatalf("golden mismatch:\n-- got --\n%s\n-- want --\n%s", out, want.String())
 	}

@@ -95,8 +95,8 @@ func validateEndpoint(endpoint string) error {
 // [Interface] section (PrivateKey, Address, DNS when set, the server's
 // AWG J/S/H/I parameter lines in the fixed renderParams order), one
 // blank line, then the [Peer] section (server PublicKey, PresharedKey
-// when set, AllowedIPs = 0.0.0.0/0, Endpoint). No comments, final
-// newline, CanonicalKeyCasing.
+// when set, AllowedIPs = 0.0.0.0/0, Endpoint, PersistentKeepalive = 25).
+// No comments, final newline, CanonicalKeyCasing.
 func RenderClient(c ClientConfig) string {
 	var b strings.Builder
 	line := func(key, val string) {
@@ -122,6 +122,7 @@ func RenderClient(c ClientConfig) string {
 	}
 	line("AllowedIPs", clientAllowedIPs)
 	line("Endpoint", c.Endpoint)
+	line("PersistentKeepalive", "25")
 	return b.String()
 }
 

@@ -40,7 +40,8 @@ func TestGenerateClientMinimal(t *testing.T) {
 		"[Peer]\n" +
 		"PublicKey = " + testKey(2) + "\n" +
 		"AllowedIPs = 0.0.0.0/0\n" +
-		"Endpoint = " + testEndpoint + "\n"
+		"Endpoint = " + testEndpoint + "\n" +
+		"PersistentKeepalive = 25\n"
 	if got := string(cfg); got != want {
 		t.Fatalf("minimal config =\n%q\nwant\n%q", got, want)
 	}
@@ -71,6 +72,7 @@ func TestGenerateClientFull(t *testing.T) {
 		"PresharedKey = " + testKey(4),
 		"AllowedIPs = 0.0.0.0/0",
 		"Endpoint = " + testEndpoint,
+		"PersistentKeepalive = 25",
 	}
 	for _, line := range want {
 		if !strings.Contains(got, line+"\n") {
@@ -103,7 +105,8 @@ func TestGenerateClientFull(t *testing.T) {
 		"PublicKey = "+testKey(2)+"\n"+
 		"PresharedKey = "+testKey(4)+"\n"+
 		"AllowedIPs = 0.0.0.0/0\n"+
-		"Endpoint = "+testEndpoint+"\n" {
+		"Endpoint = "+testEndpoint+"\n"+
+		"PersistentKeepalive = 25\n" {
 		t.Fatalf("full config order mismatch:\n%s", got)
 	}
 	// exact structural invariants
@@ -328,7 +331,8 @@ func TestRenderClientDirect(t *testing.T) {
 		"[Peer]\n" +
 		"PublicKey = " + testKey(2) + "\n" +
 		"AllowedIPs = 0.0.0.0/0\n" +
-		"Endpoint = " + testEndpoint + "\n"
+		"Endpoint = " + testEndpoint + "\n" +
+		"PersistentKeepalive = 25\n"
 	if got := RenderClient(cfg); got != want {
 		t.Fatalf("RenderClient() =\n%q\nwant\n%q", got, want)
 	}
