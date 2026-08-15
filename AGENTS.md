@@ -111,7 +111,13 @@ anything contradictory in the managed blocks above.
   lists (no TODO files, no tasks.md). The historical `AUDITS/TASKS.md` is
   a frozen archive — do not update it, do not read it for work.
 - **Do not change production code without a task (bead).**
-- **One task = one commit.** Run the relevant tests before and after.
+- **One task = one commit on a feature branch, not on main.** Workers
+  implement in an isolated branch/worktree (superpowers: using-git-worktrees).
+  After the orchestrator verifies tests and the owner accepts, merge into
+  main (superpowers: finishing-a-development-branch). Do not land unverified
+  work on main.
+- **Commits and CHANGELOG.md** are written by a small/fast model dispatched
+  by the orchestrator, not by the implementing worker unless asked.
 - **After completing work, report to the orchestrator:** diff, test
   output, evidence. Do NOT close your own bead.
 - **Only the orchestrator closes beads**, after verifying the acceptance
