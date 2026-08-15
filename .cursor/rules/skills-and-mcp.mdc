@@ -1,0 +1,26 @@
+---
+description: Required skills and MCP for this repo — ignore unrelated plugins
+alwaysApply: true
+---
+
+# Skills and MCP
+
+Full list: `AGENTS.md` section **Required skills and MCP**.
+
+**Must use:** project `beads`; superpowers `using-git-worktrees`,
+`finishing-a-development-branch`, `verification-before-completion`,
+`requesting-code-review` / `receiving-code-review`, `systematic-debugging`,
+`test-driven-development`. Orchestrator also: `subagent-driven-development`,
+`dispatching-parallel-agents`, `writing-plans`.
+
+**When the task matches:** `tailwindcss` (panel CSS; `input.css` is frozen
+until the UI bead), `cli-for-agents` (`install.sh` / `bootstrap.sh` /
+`panel` CLI), Cursor `review-security` / `review-bugbot` before merge.
+
+**MCP required for live panel checks:** Playwright plugin and/or
+`cursor-ide-browser`. SSH to the VPS is the shell, not an MCP.
+
+**Do not treat as required:** Figma MCPs (UI redesign deferred), GitHub MCP
+(no git remote), Orca (`orca-cli` / orchestration) until Orca.app is
+installed — use Cursor Task. Do not install random skills.sh Go/Docker
+packs; this repo has its own compose, installers, and tests.

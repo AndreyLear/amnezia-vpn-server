@@ -98,6 +98,26 @@ in Russian with the task ID. Does not add CHANGELOG to git.
 - Never commit `app/panel/internal/web/static/input.css` or secrets.
 - No git push / VPS deploy unless the owner explicitly asks.
 
+## Required skills and MCP
+
+Canonical list: `AGENTS.md` (same heading). Always-on: `.cursor/rules/skills-and-mcp.mdc`.
+
+**Skills (required):** `beads`; Superpowers `using-git-worktrees`,
+`finishing-a-development-branch`, `verification-before-completion`,
+`requesting-code-review` / `receiving-code-review`, `systematic-debugging`,
+`test-driven-development`. Orchestrator: `subagent-driven-development`,
+`dispatching-parallel-agents`, `writing-plans`.
+
+**When it matches:** `tailwindcss` (panel CSS; `input.css` frozen until UI
+bead), `cli-for-agents` (install/bootstrap/panel CLI), `review-security` /
+`review-bugbot` before merge.
+
+**MCP:** Playwright plugin and/or `cursor-ide-browser` for the panel;
+`cursor-app-control` after worktrees. VPS is SSH, not MCP.
+
+**Not required:** Figma, GitHub (no origin), Orca until installed, random
+skills.sh Go/Docker/VPS packs.
+
 ## Build & Test
 
 _Add your build and test commands here_
