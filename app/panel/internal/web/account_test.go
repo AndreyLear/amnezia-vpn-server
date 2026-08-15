@@ -103,6 +103,50 @@ func TestAccountPasswordChangeFailureAndSessionInvalidation(t *testing.T) {
 	}
 }
 
+func TestAccountChangePassword(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, f.username, testPassword)
+	post := func(values url.Values) *httptest.ResponseRecorder {
+		values.Set(auth.CSRFFieldName, f.csrf)
+		req := httptest.NewRequest(http.MethodPost, "/account/password", strings.NewReader(values.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
+		rec := httptest.NewRecorder()
+		f.server.ServeHTTP(rec, req)
+		return rec
+	}
+
+	same := post(url.Values{"old_password": {testPassword}, "new_password": {testPassword}, "confirm_password": {testPassword}})
+	if same.Code == http.StatusSeeOther {
+		t.Fatalf("same password must not succeed: %d Location %q", same.Code, same.Header().Get("Location"))
+	}
+	if !strings.Contains(same.Body.String(), accountPasswordUnchanged) {
+		t.Fatalf("same password body = %q, want %q", same.Body.String(), accountPasswordUnchanged)
+	}
+	if strings.Contains(same.Body.String(), accountError) {
+		t.Fatal("same password must not use the generic account error")
+	}
+	row, _ := db.AuthUserByUsername(f.h, f.username)
+	if !auth.VerifyPassword(testPassword, row.PasswordHash) {
+		t.Fatal("same-password change must leave hash verifiable with the current password")
+	}
+	if _, ok := f.sessions.Get(f.sid); !ok {
+		t.Fatal("old session must still be valid after same-password rejection")
+	}
+
+	mismatch := post(url.Values{"old_password": {testPassword}, "new_password": {"new-password"}, "confirm_password": {"other-password"}})
+	if mismatch.Code != http.StatusBadRequest || mismatch.Body.String() != accountError+"\n" {
+		t.Fatalf("confirm mismatch = %d %q", mismatch.Code, mismatch.Body.String())
+	}
+	if strings.Contains(mismatch.Body.String(), accountPasswordUnchanged) {
+		t.Fatal("confirm mismatch must not reveal the same-password message")
+	}
+	wrongOld := post(url.Values{"old_password": {"wrong"}, "new_password": {testPassword}, "confirm_password": {testPassword}})
+	if wrongOld.Code != http.StatusBadRequest || wrongOld.Body.String() != accountError+"\n" {
+		t.Fatalf("wrong old password = %d %q", wrongOld.Code, wrongOld.Body.String())
+	}
+}
+
 func TestAccountDisableFailureIsGenericAndKeepsTOTP(t *testing.T) {
 	f := newFixture(t)
 	addUser(t, f, f.username, testPassword)

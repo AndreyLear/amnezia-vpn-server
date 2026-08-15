@@ -11,6 +11,7 @@ import (
 )
 
 const accountError = "Операция не выполнена."
+const accountPasswordUnchanged = "Новый пароль должен отличаться от старого."
 
 type accountData struct {
 	CSRF, Username, Mode, Secret, OTPAuth, QR, Error, Flash string
@@ -63,6 +64,10 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	u, err := db.AuthUserByUsername(s.db(), sess.Username)
 	if err != nil || !auth.VerifyPassword(old, u.PasswordHash) || newp != confirm {
 		s.redirectAccountError(w)
+		return
+	}
+	if old == newp {
+		http.Error(w, accountPasswordUnchanged, http.StatusBadRequest)
 		return
 	}
 	if totpLoginRequired(u) && !auth.VerifyTOTP(u.TOTPSecret, r.PostForm.Get("code"), time.Now()) {
