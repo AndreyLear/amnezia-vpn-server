@@ -108,12 +108,17 @@ Canonical list: `AGENTS.md` (same heading). Always-on: `.cursor/rules/skills-and
 `test-driven-development`. Orchestrator: `subagent-driven-development`,
 `dispatching-parallel-agents`, `writing-plans`.
 
-**When it matches:** `tailwindcss` (panel CSS; `input.css` frozen until UI
-bead), `cli-for-agents` (install/bootstrap/panel CLI), `review-security` /
-`review-bugbot` before merge.
+**When it matches:** project `.agents/skills/tailwindcss` (panel CSS;
+`input.css` frozen until UI bead), project `.agents/skills/cli-for-agents`
+(install/bootstrap/panel CLI), `review-security` / `review-bugbot` before
+merge.
 
-**MCP:** Playwright plugin and/or `cursor-ide-browser` for the panel;
-`cursor-app-control` after worktrees. VPS is SSH, not MCP.
+**Plugins:** `.cursor/settings.json` enables `superpowers`, `playwright`,
+and `cli-for-agent` (not Figma/GitHub).
+
+**MCP:** project `.cursor/mcp.json` launches Playwright only
+(`npx -y @playwright/mcp@latest`); also `cursor-ide-browser` for the
+panel and `cursor-app-control` after worktrees. VPS is SSH, not MCP.
 
 **Not required:** Figma, GitHub (no origin), Orca until installed, random
 skills.sh Go/Docker/VPS packs.

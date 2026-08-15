@@ -13,11 +13,16 @@ Full list: `AGENTS.md` section **Required skills and MCP**.
 `test-driven-development`. Orchestrator also: `subagent-driven-development`,
 `dispatching-parallel-agents`, `writing-plans`.
 
-**When the task matches:** `tailwindcss` (panel CSS; `input.css` is frozen
-until the UI bead), `cli-for-agents` (`install.sh` / `bootstrap.sh` /
+**When the task matches:** project `.agents/skills/tailwindcss` (panel
+CSS; `input.css` frozen until the UI bead), project
+`.agents/skills/cli-for-agents` (`install.sh` / `bootstrap.sh` /
 `panel` CLI), Cursor `review-security` / `review-bugbot` before merge.
 
-**MCP required for live panel checks:** Playwright plugin and/or
+**Plugins:** `.cursor/settings.json` — `superpowers`, `playwright`,
+`cli-for-agent` (not Figma/GitHub).
+
+**MCP required for live panel checks:** project `.cursor/mcp.json`
+(Playwright only: `npx -y @playwright/mcp@latest`) and/or
 `cursor-ide-browser`. SSH to the VPS is the shell, not an MCP.
 
 **Do not treat as required:** Figma MCPs (UI redesign deferred), GitHub MCP

@@ -58,3 +58,6 @@ CHANGELOG.md
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Git worktrees (local checkouts; never commit contents)
+.worktrees/

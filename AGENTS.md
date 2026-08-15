@@ -170,7 +170,7 @@ matching skill before acting.
 
 | Skill | Where | Who |
 |---|---|---|
-| `beads` | `.agents/skills/beads/` | all |
+| `beads` | `.agents/skills/beads/` (project) | all |
 | `using-git-worktrees` | Superpowers | worker |
 | `finishing-a-development-branch` | Superpowers | orchestrator after accept |
 | `verification-before-completion` | Superpowers | worker + orchestrator |
@@ -191,18 +191,20 @@ matching skill before acting.
 
 ### Skills — when the task matches
 
-| Skill | When |
-|---|---|
-| `tailwindcss` | Panel HTML/CSS. Do not edit `input.css` until the UI redesign bead is active. |
-| `cli-for-agents` | `install.sh`, `bootstrap.sh`, `panel` CLI flags/help. |
-| `review-security` | Auth, TOTP, backups, nftables, exposed ports. |
-| `review-bugbot` | Before merge, if the owner asks for a Bugbot-style pass. |
+| Skill | When | Where |
+|---|---|---|
+| `tailwindcss` | Panel HTML/CSS. Do not edit `input.css` until the UI redesign bead is active. | `.agents/skills/tailwindcss/` (project) |
+| `cli-for-agents` | `install.sh`, `bootstrap.sh`, `panel` CLI flags/help. | `.agents/skills/cli-for-agents/` (project) |
+| `review-security` | Auth, TOTP, backups, nftables, exposed ports. | Cursor plugin |
+| `review-bugbot` | Before merge, if the owner asks for a Bugbot-style pass. | Cursor plugin |
+
+Project Cursor plugins (`.cursor/settings.json`): `superpowers`, `playwright`, `cli-for-agent`. Do not enable Figma or GitHub.
 
 ### MCP — use
 
 | Server | Why |
 |---|---|
-| `plugin-playwright-playwright` | Headless checks of the panel (login, backups, clients). |
+| Playwright (`playwright`) | Project `.cursor/mcp.json` (`npx -y @playwright/mcp@latest`). Headless checks of the panel (login, backups, clients). |
 | `cursor-ide-browser` | Visual check of `https://panel.super-space.com.de` after deploy. |
 | `cursor-app-control` | Switch workspace root after creating a worktree. |
 
