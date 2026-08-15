@@ -5,7 +5,6 @@
     <div class="flex flex-wrap items-center gap-1.5">
       <span class="badge {{if .Card.Online}}badge-on{{else}}badge-off{{end}}">{{if .Card.Online}}онлайн{{else}}офлайн{{end}}</span>
       <span class="badge {{if .Card.Enabled}}badge-on{{else}}badge-off{{end}}">{{if .Card.Enabled}}включён{{else}}отключён{{end}}</span>
-      {{if .Card.Expired}}<span class="badge badge-expired">срок истёк</span>{{end}}
     </div>
   </div>
   <div class="meta">
@@ -36,13 +35,6 @@
             <input class="input" type="text" name="name" maxlength="64" value="{{.Card.Name}}">
           </label>
           <button type="submit" class="btn">Переименовать</button>
-        </form>
-        <form action="/clients/{{.Card.ID}}/expiry" method="post" data-mutate="expiry" data-client-id="{{.Card.ID}}">
-          <input type="hidden" name="_csrf" value="{{.CSRF}}">
-          <label class="menu-label">Срок действия (пусто — без срока)
-            <input class="input" type="datetime-local" name="expires_at">
-          </label>
-          <button type="submit" class="btn">Сохранить</button>
         </form>
         <button type="button" class="menu-item menu-danger" data-dialog-open="del-{{.Card.ID}}">Удалить</button>
       </div>

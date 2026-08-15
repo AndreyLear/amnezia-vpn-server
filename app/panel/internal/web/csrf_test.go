@@ -353,11 +353,13 @@ func TestCSRFDashboardHiddenFields(t *testing.T) {
 		`action="/clients/new"`,
 		`action="/clients/` + fmt.Sprint(c.ID) + `/delete"`,
 		`action="/clients/` + fmt.Sprint(c.ID) + `/rename"`,
-		`action="/clients/` + fmt.Sprint(c.ID) + `/expiry"`,
 	} {
 		if !strings.Contains(body, action) {
 			t.Errorf("dashboard misses form %s", action)
 		}
+	}
+	if strings.Contains(body, `action="/clients/`+fmt.Sprint(c.ID)+`/expiry"`) {
+		t.Errorf("dashboard must not link the expiry form")
 	}
 	// T-120 round 2 §7: the enable/disable pair collapsed into a single
 	// toggle form — an enabled client renders the disable action.

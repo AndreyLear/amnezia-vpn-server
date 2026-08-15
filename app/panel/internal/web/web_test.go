@@ -293,7 +293,7 @@ func TestDashboardOrderAndPeerHidden(t *testing.T) {
 	}
 }
 
-func TestDashboardExpiredShownAndDBIntact(t *testing.T) {
+func TestDashboardHasNoExpiryUI(t *testing.T) {
 	f := newFixture(t)
 	c, _, _ := f.addClient("old")
 	past := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
@@ -306,8 +306,15 @@ func TestDashboardExpiredShownAndDBIntact(t *testing.T) {
 	}
 	f.setStatus(upStatusWith())
 	body := f.get("/").Body.String()
-	if !strings.Contains(body, "срок истёк") {
-		t.Errorf("expired client must be marked: %s", body)
+	for _, needle := range []string{
+		`name="expires_at"`,
+		`/expiry"`,
+		"срок истёк",
+		"Срок действия",
+	} {
+		if strings.Contains(body, needle) {
+			t.Errorf("dashboard must not show expiry UI %q", needle)
+		}
 	}
 	after, err := db.ClientsAll(f.h)
 	if err != nil {
@@ -315,6 +322,9 @@ func TestDashboardExpiredShownAndDBIntact(t *testing.T) {
 	}
 	if len(before) != 1 || len(after) != 1 || after[0].ID != c.ID {
 		t.Fatalf("DB mutated by dashboard: before=%v after=%v", before, after)
+	}
+	if after[0].ExpiresAt != past {
+		t.Errorf("stored expires_at changed: %q", after[0].ExpiresAt)
 	}
 }
 

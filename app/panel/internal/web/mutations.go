@@ -297,9 +297,10 @@ func (s *Server) countPayload() (mutationPayload, error) {
 	return mutationPayload{Count: &n}, nil
 }
 
-// clientNew handles POST /clients/new: validates name and optional
-// expiry, generates the keypair, inserts via db.CreateClient (address
-// allocation is transactional) and regenerates the config.
+// clientNew handles POST /clients/new: validates name, generates the
+// keypair, inserts via db.CreateClient (address allocation is
+// transactional) and regenerates the config. expires_at is ignored
+// (T-145): the web form does not set a deadline.
 func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		requestBodyError(err, w)
@@ -309,14 +310,6 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.flash(w, r, flashInvalidName)
 		return
-	}
-	expiresAt := ""
-	if raw := r.FormValue("expires_at"); raw != "" {
-		expiresAt, err = normalizeExpiry(raw)
-		if err != nil {
-			s.flash(w, r, flashInvalidExpiry)
-			return
-		}
 	}
 	privateKey, publicKey, err := keys.GenerateKeyPair()
 	if err != nil {
@@ -355,9 +348,6 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		createdID = record.ID
-		if expiresAt != "" {
-			return db.SetClientExpiry(s.db(), record.ID, expiresAt)
-		}
 		return nil
 	})
 }
