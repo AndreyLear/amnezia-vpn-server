@@ -128,3 +128,51 @@
     @apply font-sans;
     }
 }
+
+.ambient-bg {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      ellipse 80% 50% at 50% -20%,
+      color-mix(in oklch, var(--primary) 16%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 55% 40% at 100% 110%,
+      color-mix(in oklch, var(--accent) 22%, transparent),
+      transparent 65%
+    ),
+    var(--background);
+}
+
+.ambient-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    color-mix(in oklch, var(--foreground) 14%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 18px 18px;
+  opacity: 0.35;
+  animation: ambient-drift 48s linear infinite;
+}
+
+@keyframes ambient-drift {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 18px 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-bg::before {
+    animation: none;
+  }
+}

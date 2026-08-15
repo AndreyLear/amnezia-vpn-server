@@ -1,10 +1,17 @@
+import HomePage from "@/pages/HomePage";
 import LoginPage from "@/pages/LoginPage";
+import { Toaster } from "@/components/ui/sonner";
 
 function App() {
-  if (window.location.pathname === "/login") {
-    return <LoginPage />;
-  }
-  return <div>panel</div>;
+  const page =
+    window.location.pathname === "/login" ? <LoginPage /> : <HomePage />;
+
+  return (
+    <>
+      {page}
+      <Toaster />
+    </>
+  );
 }
 
 export default App;
