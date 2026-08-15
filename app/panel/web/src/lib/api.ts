@@ -22,7 +22,7 @@ function mutationNeedsCsrf(path: string, init: RequestInit): boolean {
   return path !== "/api/login";
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function apiRequest(path: string, init: RequestInit = {}): Promise<Response> {
   if (mutationNeedsCsrf(path, init)) {
     await waitForCsrf();
   }
@@ -32,15 +32,20 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
   const res = await fetch(path, { ...init, headers, credentials: "same-origin" });
+  if (res.status === 401 && path !== "/api/login") {
+    window.location.assign("/login");
+    throw new Error("Unauthorized.");
+  }
+  return res;
+}
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await apiRequest(path, init);
   let data: T | undefined;
   try {
     data = (await res.json()) as T;
   } catch {
     data = undefined;
-  }
-  if (res.status === 401 && path !== "/api/login") {
-    window.location.assign("/login");
-    throw new Error("Unauthorized.");
   }
   return data as T;
 }

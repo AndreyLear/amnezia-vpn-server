@@ -41,7 +41,8 @@ import (
 const (
 	// restoreUploadPath is the restore route (also used to exempt the
 	// route from the M6 body limit; the handler sets its own).
-	restoreUploadPath = "/backups/restore"
+	restoreUploadPath    = "/backups/restore"
+	apiRestoreUploadPath = "/api/backups/restore"
 	// MaxRestoreBodyBytes caps the whole multipart upload. A backup of
 	// a heavily populated panel reaches a few megabytes; 64 MiB leaves
 	// a generous headroom while bounding the request (M8_AUDIT.md
@@ -68,13 +69,43 @@ const (
 // the database. A probe failure is an internal error: the caller must
 // not proceed, so the generic 500 page is rendered.
 func (s *Server) pendingExists(w http.ResponseWriter) (bool, bool) {
+	return s.pendingExistsReply(w, false)
+}
+
+func (s *Server) pendingExistsReply(w http.ResponseWriter, jsonAPI bool) (bool, bool) {
 	_, ok, err := backup.PendingPath(s.cfg.DBPath)
 	if err != nil {
 		s.cfg.Logger.Printf("restore pending probe: %v", err)
-		s.errorPage(w, http.StatusInternalServerError)
+		if jsonAPI {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "Внутренняя ошибка сервера."})
+		} else {
+			s.errorPage(w, http.StatusInternalServerError)
+		}
 		return false, false
 	}
 	return ok, true
+}
+
+func restoreBodyExempt(path string) bool {
+	return path == restoreUploadPath || path == apiRestoreUploadPath
+}
+
+func restoreForbidden(w http.ResponseWriter, jsonAPI bool) {
+	if jsonAPI {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "message": "Forbidden."})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	io.WriteString(w, "Forbidden.\n")
+}
+
+func (s *Server) restoreAnswer(w http.ResponseWriter, r *http.Request, jsonAPI bool, code int, ok bool, msg string) {
+	if jsonAPI {
+		writeJSON(w, code, map[string]any{"ok": ok, "message": msg})
+		return
+	}
+	s.flashBackups(w, r, msg)
 }
 
 // restoreSubmit handles POST /backups/restore. Flow:
@@ -84,6 +115,10 @@ func (s *Server) pendingExists(w http.ResponseWriter) (bool, bool) {
 //
 // The temp upload is removed unconditionally.
 func (s *Server) restoreSubmit(w http.ResponseWriter, r *http.Request) {
+	s.handleRestore(w, r, false)
+}
+
+func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI bool) {
 	sess, _ := auth.CurrentUser(r.Context())
 
 	// Own body limit: MaxBytesReader aborts the read (413) before the
@@ -138,30 +173,31 @@ func (s *Server) restoreSubmit(w http.ResponseWriter, r *http.Request) {
 		part.Close()
 	}
 
-	// CSRF: the same fixed 403 as RequireCSRF, token accepted only as
-	// a form part.
-	if !auth.CSRFValid(sess.CSRFToken, csrfToken) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusForbidden)
-		io.WriteString(w, "Forbidden.\n")
+	headerToken := r.Header.Get(auth.CSRFHeaderName)
+	if !auth.CSRFValid(sess.CSRFToken, csrfToken) && !auth.CSRFValid(sess.CSRFToken, headerToken) {
+		restoreForbidden(w, jsonAPI)
 		return
 	}
 
 	if !uploaded {
-		s.flashBackups(w, r, flashRestoreMissingFile)
+		s.restoreAnswer(w, r, jsonAPI, http.StatusBadRequest, false, flashRestoreMissingFile)
 		return
 	}
 	if !validUploadName(fileName) {
-		s.flashBackups(w, r, flashRestoreInvalidFileName)
+		s.restoreAnswer(w, r, jsonAPI, http.StatusBadRequest, false, flashRestoreInvalidFileName)
 		return
 	}
 
-	pending, ok := s.pendingExists(w)
+	pending, ok := s.pendingExistsReply(w, jsonAPI)
 	if !ok {
 		return
 	}
 	if pending {
-		s.flashBackups(w, r, flashRestoreBlockedByPending)
+		code := http.StatusSeeOther
+		if jsonAPI {
+			code = http.StatusConflict
+		}
+		s.restoreAnswer(w, r, jsonAPI, code, false, flashRestoreBlockedByPending)
 		return
 	}
 
@@ -174,21 +210,25 @@ func (s *Server) restoreSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mutex.Unlock()
 	if errors.Is(err, backup.ErrRestorePending) {
-		s.flashBackups(w, r, flashRestorePending)
+		code := http.StatusSeeOther
+		if jsonAPI {
+			code = http.StatusConflict
+		}
+		s.restoreAnswer(w, r, jsonAPI, code, false, flashRestorePending)
 		return
 	}
 	if err != nil {
 		s.cfg.Logger.Printf("restore: %v", err)
-		s.flashBackups(w, r, flashRestoreFailed)
+		s.restoreAnswer(w, r, jsonAPI, http.StatusBadRequest, false, flashRestoreFailed)
 		return
 	}
 	if applyErr != nil {
 		s.cfg.Logger.Printf("restore apply: %v", applyErr)
-		s.flashBackups(w, r, flashRestoreApplyFailed)
+		s.restoreAnswer(w, r, jsonAPI, http.StatusBadRequest, false, flashRestoreApplyFailed)
 		return
 	}
 	auth.ClearSessionCookie(w)
-	s.flashBackups(w, r, fmt.Sprintf(flashRestoreApplied, appliedN))
+	s.restoreAnswer(w, r, jsonAPI, http.StatusOK, true, fmt.Sprintf(flashRestoreApplied, appliedN))
 }
 
 // testFault, when set by tests, injects the named failure into the

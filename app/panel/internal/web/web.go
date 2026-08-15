@@ -247,6 +247,12 @@ func New(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/login", s.apiLogin)
 	s.mux.Handle("GET /api/me", s.auth.RequireAPI(http.HandlerFunc(s.apiMe)))
 	s.mux.Handle("POST /api/logout", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiLogout))))
+	s.mux.Handle("POST /api/account/password", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiChangePassword))))
+	s.mux.Handle("POST /api/account/totp/enroll", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiTOTPEnroll))))
+	s.mux.Handle("POST /api/account/totp/confirm", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiTOTPConfirm))))
+	s.mux.Handle("POST /api/account/totp/disable", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiTOTPDisable))))
+	s.mux.Handle("POST /api/backups/download", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiBackupDownload))))
+	s.mux.Handle("POST /api/backups/restore", s.auth.RequireAPI(http.HandlerFunc(s.apiBackupRestore)))
 	s.mux.Handle("GET /api/clients", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsList)))
 	s.mux.Handle("POST /api/clients", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsCreate))))
 	s.mux.Handle("GET /api/clients/{id}", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsGet)))
@@ -390,7 +396,7 @@ func (s *Server) bodyLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch:
-			if r.Body != nil && r.URL.Path != restoreUploadPath {
+			if r.Body != nil && !restoreBodyExempt(r.URL.Path) {
 				r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 			}
 		}

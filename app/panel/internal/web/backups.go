@@ -96,38 +96,50 @@ func (s *Server) renderBackups(w http.ResponseWriter, data backupsData) {
 // directory, streamed as an attachment and removed — nothing is stored
 // in backups/. CSRF-protected; paused while a restore is pending.
 func (s *Server) backupDownloadNow(w http.ResponseWriter, r *http.Request) {
-	if pending, ok := s.pendingExists(w); !ok {
+	s.handleBackupDownload(w, r, false)
+}
+
+func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request, jsonAPI bool) {
+	if pending, ok := s.pendingExistsReply(w, jsonAPI); !ok {
 		return
 	} else if pending {
+		if jsonAPI {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "message": flashRestoreBlockedByPending})
+			return
+		}
 		s.flashBackups(w, r, flashRestoreBlockedByPending)
 		return
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	fail := func(what string, err error) {
+		s.cfg.Logger.Printf("%s: %v", what, err)
+		if jsonAPI {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": flashBackupDownloadFailed})
+			return
+		}
+		s.flashBackups(w, r, flashBackupDownloadFailed)
+	}
 	tmp, err := os.MkdirTemp("", "panel-download-*")
 	if err != nil {
-		s.cfg.Logger.Printf("backup download: temp dir: %v", err)
-		s.flashBackups(w, r, flashBackupDownloadFailed)
+		fail("backup download: temp dir", err)
 		return
 	}
 	defer os.RemoveAll(tmp)
 	archive, err := backup.Create(s.db(), tmp, time.Now)
 	if err != nil {
-		s.cfg.Logger.Printf("backup download: create: %v", err)
-		s.flashBackups(w, r, flashBackupDownloadFailed)
+		fail("backup download: create", err)
 		return
 	}
 	f, err := os.Open(archive)
 	if err != nil {
-		s.cfg.Logger.Printf("backup download: open: %v", err)
-		s.flashBackups(w, r, flashBackupDownloadFailed)
+		fail("backup download: open", err)
 		return
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil || !fi.Mode().IsRegular() {
-		s.cfg.Logger.Printf("backup download: stat: %v", err)
-		s.flashBackups(w, r, flashBackupDownloadFailed)
+		fail("backup download: stat", err)
 		return
 	}
 	// backup.Create returns a bare archive name (backup-YYYY-MM-DD.tar.zst).

@@ -174,15 +174,22 @@ func (s *Server) totpMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rotateAccount(w http.ResponseWriter, r *http.Request, msg string) {
-	sess, _ := auth.CurrentUser(r.Context())
-	next, err := s.cfg.Sessions.Rotate(sess.ID, sess.Username)
-	if err != nil {
+	if err := s.rotateCurrentSession(w, r); err != nil {
 		s.errorPage(w, 500)
 		return
 	}
+	redirect303(w, r, "/account?msg="+url.QueryEscape(msg))
+}
+
+func (s *Server) rotateCurrentSession(w http.ResponseWriter, r *http.Request) error {
+	sess, _ := auth.CurrentUser(r.Context())
+	next, err := s.cfg.Sessions.Rotate(sess.ID, sess.Username)
+	if err != nil {
+		return err
+	}
 	s.cfg.Sessions.DeleteByUsername(sess.Username, next.ID)
 	auth.WriteSessionCookie(w, next.ID, next.ExpiresAt)
-	redirect303(w, r, "/account?msg="+url.QueryEscape(msg))
+	return nil
 }
 func (s *Server) redirectAccountError(w http.ResponseWriter) {
 	http.Error(w, accountError, http.StatusBadRequest)

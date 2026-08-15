@@ -17,6 +17,7 @@ import {
 
 export default function HomePage() {
   const [clients, setClients] = useState<Client[]>([]);
+  const [totpEnabled, setTotpEnabled] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [infoId, setInfoId] = useState<number | null>(null);
   const [qrId, setQrId] = useState<number | null>(null);
@@ -33,7 +34,10 @@ export default function HomePage() {
     async function boot() {
       const me = await api<MeResponse>("/api/me");
       setCsrf(me.csrf);
-      if (!stopped) await load();
+      if (!stopped) {
+        setTotpEnabled(me.totp.enabled);
+        await load();
+      }
     }
 
     void boot();
@@ -101,7 +105,7 @@ export default function HomePage() {
   }
 
   return (
-    <AppShell>
+    <AppShell totpEnabled={totpEnabled} onTotpChange={setTotpEnabled}>
       <div className="grid grid-cols-1 gap-4 pb-8 min-[752px]:grid-cols-2">
         <AddClientCard onClick={() => setAddOpen(true)} />
         {clients.map((client) => (
