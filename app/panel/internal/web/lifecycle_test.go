@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
@@ -126,11 +125,6 @@ func TestAuthFullLifecycle(t *testing.T) {
 		{fmt.Sprintf("/clients/%d/rename", carolID), url.Values{"name": {"carol-renamed"}}, func(t *testing.T, row *db.ClientRecord) {
 			if row.Name != "carol-renamed" {
 				t.Fatalf("rename: name = %q, want carol-renamed", row.Name)
-			}
-		}},
-		{fmt.Sprintf("/clients/%d/expiry", carolID), url.Values{"expires_at": {time.Now().Add(72 * time.Hour).UTC().Format(time.RFC3339)}}, func(t *testing.T, row *db.ClientRecord) {
-			if row.ExpiresAt == "" {
-				t.Fatal("expiry: expires_at must be set")
 			}
 		}},
 		{fmt.Sprintf("/clients/%d/enable", carolID), nil, func(t *testing.T, row *db.ClientRecord) {

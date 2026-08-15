@@ -310,7 +310,7 @@
         const dlg = form.closest("dialog");
         if (dlg) closeDialog(dlg);
       } else {
-        // toggle/rename/expiry: replace the card with the fresh fragment.
+        // toggle/rename: replace the card with the fresh fragment.
         if (data.html && clientId) {
           const card = doc.getElementById("client-" + clientId);
           if (card) card.outerHTML = data.html;

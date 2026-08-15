@@ -216,7 +216,6 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /clients/{id}/disable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientSetEnabled(false)))))
 	s.mux.Handle("POST /clients/{id}/delete", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientDelete))))
 	s.mux.Handle("POST /clients/{id}/rename", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientRename))))
-	s.mux.Handle("POST /clients/{id}/expiry", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientExpiry))))
 	s.mux.Handle("POST /logout", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.logout))))
 	s.mux.Handle("GET /account", s.auth.RequireAuth(http.HandlerFunc(s.accountPage)))
 	s.mux.Handle("POST /account/password", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.changePassword))))

@@ -265,57 +265,36 @@ func TestMutationRename(t *testing.T) {
 	}
 }
 
-func TestMutationExpiry(t *testing.T) {
+// TestMutationExpiryRouteGone (T-153): expiry is CLI-only. An
+// authenticated POST with a live CSRF token must hit the generic 404
+// page and must not mutate expires_at or flash a success message.
+func TestMutationExpiryRouteGone(t *testing.T) {
 	f := newFixture(t)
 	c, _, _ := f.addClient("judy")
 	future := time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339)
-	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {future}})); got != flashExpirySet {
-		t.Fatalf("expiry flash = %q", got)
+	rec := f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {future}})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code = %d, want 404", rec.Code)
 	}
-	row, err := db.ClientByID(f.h, c.ID)
-	if err != nil || row.ExpiresAt == "" {
-		t.Fatalf("expiry not set: %+v err=%v", row, err)
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Errorf("must not PRG: Location %q", loc)
 	}
-	f.configMatches()
-	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {"none"}})); got != flashExpirySet {
-		t.Fatalf("clear flash = %q", got)
+	body := rec.Body.String()
+	if !strings.Contains(body, "Страница не найдена.") {
+		t.Errorf("want generic 404 page, got %q", body)
 	}
-	row, _ = db.ClientByID(f.h, c.ID)
-	if row.ExpiresAt != "" {
-		t.Errorf("expiry not cleared: %q", row.ExpiresAt)
+	if strings.Contains(body, "Срок действия обновлён.") {
+		t.Error("must not flash expiry success")
 	}
-	// T-120 round 2 §8: an empty value also means "no deadline".
-	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {future}})); got != flashExpirySet {
-		t.Fatalf("re-set flash = %q", got)
-	}
-	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {""}})); got != flashExpirySet {
-		t.Fatalf("empty expiry flash = %q, want %q", got, flashExpirySet)
-	}
-	row, _ = db.ClientByID(f.h, c.ID)
-	if row.ExpiresAt != "" {
-		t.Errorf("empty expiry must clear: %q", row.ExpiresAt)
-	}
-	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {"not-a-date"}})); got != flashInvalidExpiry {
-		t.Fatalf("bad expiry flash = %q, want %q", got, flashInvalidExpiry)
-	}
-}
-
-// TestMutationExpiryDatetimeLocal (T-120 round 2 §8): the browser's
-// datetime-local shape (YYYY-MM-DDTHH:MM) is accepted and stored as
-// the canonical UTC RFC3339 timestamp.
-func TestMutationExpiryDatetimeLocal(t *testing.T) {
-	f := newFixture(t)
-	c, _, _ := f.addClient("kate")
-	rec := f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {"2026-09-01T18:30"}})
-	if got := f.flashOf(rec); got != flashExpirySet {
-		t.Fatalf("flash = %q, want %q", got, flashExpirySet)
+	if strings.Contains(body, fmt.Sprintf("/clients/%d/expiry", c.ID)) {
+		t.Error("404 body must not echo the path")
 	}
 	row, err := db.ClientByID(f.h, c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "2026-09-01T18:30:00Z"; row.ExpiresAt != want {
-		t.Fatalf("ExpiresAt = %q, want canonical UTC %q", row.ExpiresAt, want)
+	if row.ExpiresAt != "" {
+		t.Errorf("expires_at mutated: %q", row.ExpiresAt)
 	}
 }
 
@@ -375,7 +354,7 @@ func TestMutationOversizedBody413(t *testing.T) {
 func TestMutationFlashNoSecretsAndEscaped(t *testing.T) {
 	f := newFixture(t)
 	_, priv, psk := f.addClient("mallory")
-	if got := f.flashOf(f.post("/clients/999/expiry", url.Values{"expires_at": {"x"}})); got != flashInvalidExpiry {
+	if got := f.flashOf(f.post("/clients/999/delete", nil)); got != flashNotFound {
 		t.Fatalf("flash = %q", got)
 	}
 	body := f.get("/?msg=" + url.QueryEscape("<script>alert(1)</script>")).Body.String()

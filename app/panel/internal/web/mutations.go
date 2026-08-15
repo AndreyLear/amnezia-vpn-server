@@ -1,5 +1,5 @@
 // M6.3 client mutations (M6_AUDIT.md §2.1.4, §2.2 URL table): add /
-// enable / disable / delete / rename / set-expiry backed by the
+// enable / disable / delete / rename backed by the
 // existing db functions, each followed by an atomic regeneration of
 // config/awg0.conf (awgconf.Generate). Every mutation runs inside the
 // server mutex (§4.10): the SQLite write is serialized by the database
@@ -37,19 +37,17 @@ import (
 // Flash messages are fixed strings; they never contain request input,
 // ids or secrets. The whole panel is Russian (T-120 round 2).
 const (
-	flashInvalidID     = "Некорректный ID клиента."
-	flashNotFound      = "Клиент не найден."
-	flashInvalidName   = "Недопустимое имя клиента."
-	flashNameTaken     = "Клиент с таким именем уже существует."
-	flashInvalidExpiry = "Недопустимый срок. Формат: ГГГГ-ММ-ДДTЧЧ:ММ."
-	flashNoServer      = "Сервер не инициализирован."
-	flashNoAddress     = "Нет свободных адресов в пуле."
-	flashAdded         = "Клиент добавлен."
-	flashDeleted       = "Клиент удалён."
-	flashEnabled       = "Клиент включён."
-	flashDisabled      = "Клиент отключён."
-	flashRenamed       = "Клиент переименован."
-	flashExpirySet     = "Срок действия обновлён."
+	flashInvalidID   = "Некорректный ID клиента."
+	flashNotFound    = "Клиент не найден."
+	flashInvalidName = "Недопустимое имя клиента."
+	flashNameTaken   = "Клиент с таким именем уже существует."
+	flashNoServer    = "Сервер не инициализирован."
+	flashNoAddress   = "Нет свободных адресов в пуле."
+	flashAdded       = "Клиент добавлен."
+	flashDeleted     = "Клиент удалён."
+	flashEnabled     = "Клиент включён."
+	flashDisabled    = "Клиент отключён."
+	flashRenamed     = "Клиент переименован."
 )
 
 // clientNameMaxRunes mirrors cli.clientNameMaxRunes: the web layer uses
@@ -70,19 +68,6 @@ func validateName(raw string) (string, error) {
 		return "", errors.New("name too long")
 	}
 	return name, nil
-}
-
-// normalizeExpiry mirrors cli.normalizeRFC3339: canonical UTC form.
-// The UI submits either a full RFC3339 timestamp (cli parity) or the
-// browser's datetime-local shape "2006-01-02T15:04" (wall time,
-// interpreted as UTC server-side, T-120 round 2 §8).
-func normalizeExpiry(raw string) (string, error) {
-	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04"} {
-		if t, err := time.Parse(layout, raw); err == nil {
-			return t.UTC().Format(time.RFC3339), nil
-		}
-	}
-	return "", errors.New("invalid expiry")
 }
 
 // parseClientID mirrors cli.parseClientID: positive integer only.
@@ -119,8 +104,8 @@ type mutationResponse struct {
 }
 
 // mutationPayload is the optional per-mutation extra data attached to a
-// success answer: the fresh card fragment (add/enable/disable/rename/
-// expiry) and/or the new client count (add/delete).
+// success answer: the fresh card fragment (add/enable/disable/rename)
+// and/or the new client count (add/delete).
 type mutationPayload struct {
 	HTML  string
 	Count *int
@@ -407,33 +392,5 @@ func (s *Server) clientRename(w http.ResponseWriter, r *http.Request) {
 		return s.cardPayload(r, id)
 	}, func(id int64) error {
 		return db.UpdateClientName(s.db(), id, name)
-	})
-}
-
-// clientExpiry handles POST /clients/{id}/expiry: an RFC3339 or
-// datetime-local value (YYYY-MM-DDTHH:MM) is stored in canonical UTC
-// form; "none" or an empty value clears the expiry (T-120 round 2 §8:
-// empty input = no deadline).
-func (s *Server) clientExpiry(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		requestBodyError(err, w)
-		return
-	}
-	value := r.FormValue("expires_at")
-	expiresAt := ""
-	switch {
-	case value == "none" || value == "":
-	default:
-		var err error
-		expiresAt, err = normalizeExpiry(value)
-		if err != nil {
-			s.flash(w, r, flashInvalidExpiry)
-			return
-		}
-	}
-	s.withID(w, r, flashExpirySet, func(id int64) (mutationPayload, error) {
-		return s.cardPayload(r, id)
-	}, func(id int64) error {
-		return db.SetClientExpiry(s.db(), id, expiresAt)
 	})
 }
