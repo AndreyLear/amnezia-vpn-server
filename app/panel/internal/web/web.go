@@ -247,6 +247,11 @@ func New(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/login", s.apiLogin)
 	s.mux.Handle("GET /api/me", s.auth.RequireAPI(http.HandlerFunc(s.apiMe)))
 	s.mux.Handle("POST /api/logout", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiLogout))))
+	s.mux.Handle("GET /api/clients", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsList)))
+	s.mux.Handle("POST /api/clients", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsCreate))))
+	s.mux.Handle("GET /api/clients/{id}", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsGet)))
+	s.mux.Handle("PATCH /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsPatch))))
+	s.mux.Handle("DELETE /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsDelete))))
 	// Public static assets (T-120 design system): the compiled Tailwind
 	// stylesheet (committed artifact, see internal/web/static/input.css)
 	// and the progressive-enhancement JS served from the embedded FS;

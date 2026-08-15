@@ -41,10 +41,11 @@ func mapNameConstraint(err error) error {
 
 // SchemaVersion matches manifest.schema_version in §5. Bumped to 4 when
 // client names became unique (M10.1): v4 adds the dedup migration plus
-// the unique name index. Archives written by older releases are still
-// accepted by restore and migrated here at apply time (T-110 backward
+// the unique name index. Bumped to 6 when clients.description was
+// added. Archives written by older releases are still accepted by
+// restore and migrated here at apply time (T-110 backward
 // compatibility).
-const SchemaVersion = "5"
+const SchemaVersion = "6"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS server (
@@ -145,6 +146,9 @@ func Migrate(handle *sql.DB) error {
 	if err := migrateTOTPMode(handle); err != nil {
 		return err
 	}
+	if err := migrateClientDescription(handle); err != nil {
+		return err
+	}
 	if _, err := handle.Exec(
 		`INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)
 		 ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
@@ -180,6 +184,36 @@ func migrateTOTPMode(handle *sql.DB) error {
 	if !found {
 		if _, err := handle.Exec(`ALTER TABLE auth ADD COLUMN totp_mode TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("db: add auth totp mode: %w", err)
+		}
+	}
+	return nil
+}
+
+func migrateClientDescription(handle *sql.DB) error {
+	rows, err := handle.Query(`PRAGMA table_info(clients)`)
+	if err != nil {
+		return fmt.Errorf("db: inspect clients schema: %w", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("db: inspect clients schema: %w", err)
+		}
+		if name == "description" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("db: inspect clients schema: %w", err)
+	}
+	if !found {
+		if _, err := handle.Exec(`ALTER TABLE clients ADD COLUMN description TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("db: add clients description: %w", err)
 		}
 	}
 	return nil
@@ -532,6 +566,7 @@ type ClientRecord struct {
 	CreatedAt    string
 	UpdatedAt    string
 	ExpiresAt    string // empty when clients.expires_at is NULL
+	Description  string
 }
 
 // Expired reports whether the record is past expires_at (see ClientRow.
@@ -560,6 +595,7 @@ type NewClient struct {
 	PrivateKey   string
 	PublicKey    string
 	PresharedKey string // optional
+	Description  string // optional; empty string allowed; never written to awg0.conf
 }
 
 // CreateClient allocates the first free /32 host address in the server
@@ -618,9 +654,9 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 
 	now := stamp()
 	res, err := tx.Exec(
-		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, NULLIF(?, ''), ?, 1, ?, ?)`,
-		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now,
+		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, description)
+		 VALUES (?, ?, ?, NULLIF(?, ''), ?, 1, ?, ?, ?)`,
+		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now, nc.Description,
 	)
 	if err != nil {
 		if mapped := mapNameConstraint(err); errors.Is(mapped, ErrClientNameExists) {
@@ -645,6 +681,7 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 		Enabled:      true,
 		CreatedAt:    now,
 		UpdatedAt:    now,
+		Description:  nc.Description,
 	}, nil
 }
 
@@ -695,7 +732,7 @@ func allocClientAddress(serverCIDR string, used []string) (string, error) {
 // ErrClientNotFound.
 func ClientByID(handle *sql.DB, id int64) (*ClientRecord, error) {
 	row := handle.QueryRow(
-		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description
 		   FROM clients WHERE id = ?`, id,
 	)
 	c, err := scanClient(row)
@@ -711,7 +748,7 @@ func ClientByID(handle *sql.DB, id int64) (*ClientRecord, error) {
 // ClientsAll loads all client records, ordered by id.
 func ClientsAll(handle *sql.DB) ([]ClientRecord, error) {
 	rows, err := handle.Query(
-		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description
 		   FROM clients ORDER BY id`,
 	)
 	if err != nil {
@@ -745,7 +782,7 @@ func scanClient(row rowScanner) (*ClientRecord, error) {
 		expiresAt sql.NullString
 	)
 	if err := row.Scan(&c.ID, &c.Name, &c.PrivateKey, &c.PublicKey, &psk,
-		&c.Address, &enabled, &c.CreatedAt, &c.UpdatedAt, &expiresAt); err != nil {
+		&c.Address, &enabled, &c.CreatedAt, &c.UpdatedAt, &expiresAt, &c.Description); err != nil {
 		return nil, err
 	}
 	c.PresharedKey = psk.String
@@ -783,6 +820,15 @@ func UpdateClientName(handle *sql.DB, id int64, name string) error {
 		return err
 	}
 	return nil
+}
+
+// UpdateClientDescription sets the free-text description (empty allowed).
+// ErrClientNotFound when the id is unknown. The value is never written
+// to awg0.conf.
+func UpdateClientDescription(handle *sql.DB, id int64, description string) error {
+	return mutateClient(handle, id,
+		`UPDATE clients SET description = ?, updated_at = ? WHERE id = ?`,
+		description, stamp(), id)
 }
 
 // SetClientEnabled sets the enabled flag. ErrClientNotFound when the id
