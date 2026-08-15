@@ -57,6 +57,46 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 
+## Execution Rules (owner, 2026-08-14)
+
+Mirror of `AGENTS.md`. These override the managed Beads blocks above
+(including any instruction to `bd close` or commit on `main`).
+
+Cursor always-on copies: `.cursor/rules/orchestrator.mdc` and
+`.cursor/rules/workers.mdc`.
+
+### Roles
+
+**Owner** — product decisions, acceptance, deploy («заливай»), git push.
+
+**Orchestrator** — plans, creates/claims beads, dispatches workers, verifies
+tests and acceptance, closes beads, asks a weak model to commit and update
+CHANGELOG, then merges the feature branch into `main`. Does **not**
+implement production code, does **not** commit, does **not** write
+CHANGELOG itself.
+
+**Implementing worker** — one claimed bead, isolated worktree/branch
+(superpowers: using-git-worktrees). Reports diff + test evidence. Does
+**not** commit (unless asked), does **not** merge, does **not** `bd close`,
+does **not** push or deploy.
+
+**Weak model (`composer-2.5-fast`)** — after owner accept: one commit on
+the feature branch (why, not what); gitignored CHANGELOG `[Unreleased]`
+in Russian with the task ID. Does not add CHANGELOG to git.
+
+### Shared rules
+
+- **Tasks live ONLY in beads.** Never create or maintain markdown task
+  lists. `AUDITS/TASKS.md` is a frozen archive.
+- **Do not change production code without a task (bead).**
+- **One task = one commit on a feature branch, not on main.** Merge only
+  after verification (superpowers: finishing-a-development-branch).
+- Workers report to the orchestrator; they do **not** close their own bead.
+- Only the orchestrator closes beads after acceptance criteria pass.
+- New defect → new bead; do not fix without a task. Rework notes are binding.
+- CHANGELOG.md is gitignored: [Unreleased], Russian, Keep a Changelog, task ID.
+- Never commit `app/panel/internal/web/static/input.css` or secrets.
+- No git push / VPS deploy unless the owner explicitly asks.
 
 ## Build & Test
 
