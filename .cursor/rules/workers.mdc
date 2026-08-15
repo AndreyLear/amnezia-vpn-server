@@ -13,8 +13,9 @@ alwaysApply: true
 - Do **not** commit unless the orchestrator asked you to (normally a weak
   model commits). Do **not** `bd close`. Do **not** merge to `main`.
 - Do **not** push, deploy, or rewrite git history.
-- Hand off: diff, test commands + output, files touched, leftover risks.
-  If returned «на доработку», the review notes are binding.
+- Hand off to the **orchestrator** (not the owner): diff, test commands +
+  output, files touched, leftover risks. The orchestrator accepts or
+  returns «на доработку»; review notes are binding.
 - New defect: stop and report; do not expand scope without a bead.
 - Do not commit `app/panel/internal/web/static/input.css` or secrets.
 

@@ -67,21 +67,22 @@ Cursor always-on copies: `.cursor/rules/orchestrator.mdc` and
 
 ### Roles
 
-**Owner** — product decisions, acceptance, deploy («заливай»), git push.
+**Owner** — product decisions, deploy («заливай»), git push. Does **not**
+accept each bead.
 
-**Orchestrator** — plans, creates/claims beads, dispatches workers, verifies
-tests and acceptance, closes beads, asks a weak model to commit and update
-CHANGELOG, then merges the feature branch into `main`. Does **not**
-implement production code, does **not** commit, does **not** write
-CHANGELOG itself.
+**Orchestrator** — plans, creates/claims beads, dispatches workers, **verifies
+and accepts** (diff + tests + acceptance criteria), closes beads, asks a
+weak model to commit and update CHANGELOG, then merges into `main`. Does
+**not** wait for owner «принимаю». Does **not** implement production code,
+does **not** commit, does **not** write CHANGELOG itself.
 
 **Implementing worker** — one claimed bead, isolated worktree/branch
 (superpowers: using-git-worktrees). Reports diff + test evidence. Does
 **not** commit (unless asked), does **not** merge, does **not** `bd close`,
 does **not** push or deploy.
 
-**Weak model (`composer-2.5-fast`)** — after owner accept: one commit on
-the feature branch (why, not what); gitignored CHANGELOG `[Unreleased]`
+**Weak model (`composer-2.5-fast`)** — after orchestrator accept: one commit
+on the feature branch (why, not what); gitignored CHANGELOG `[Unreleased]`
 in Russian with the task ID. Does not add CHANGELOG to git.
 
 ### Shared rules

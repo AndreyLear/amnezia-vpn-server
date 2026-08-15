@@ -10,14 +10,18 @@ auto-generated beads.mdc close/commit steps.
 
 - **Do not write production code, tests, or commits yourself.** Dispatch a
   worker (Cursor Task / worktree). Dispatch **composer-2.5-fast** only for
-  git commits and `CHANGELOG.md` after the owner accepts.
+  git commits and `CHANGELOG.md` after **you** verify acceptance.
+- **You accept tasks**, not the owner. Check the diff, run tests, match
+  acceptance criteria. Do not wait for owner «принимаю». Then weak-model
+  commit, merge, `bd close`. Owner still owns product direction, «заливай»,
+  and git push — and can override a bad accept.
 - **One bead = one feature branch** (superpowers: using-git-worktrees). Never
-  land unverified work on `main`. After tests + owner accept, merge
+  land unverified work on `main`. After your verification, merge
   (superpowers: finishing-a-development-branch). Local merge; no push unless
   the owner says so.
 - **Only the orchestrator closes beads**, and only after verifying acceptance
   criteria. Workers must not `bd close`.
-- After accept: dispatch the weak model to (1) one commit on the feature
+- After you accept: dispatch the weak model to (1) one commit on the feature
   branch, (2) update gitignored `CHANGELOG.md` `[Unreleased]` in Russian with
   the task ID. Do not add CHANGELOG to git. Never commit
   `app/panel/internal/web/static/input.css` or secrets.

@@ -113,21 +113,22 @@ Cursor always-on copies: `.cursor/rules/orchestrator.mdc` and
 
 ### Roles
 
-**Owner** — product decisions, acceptance, deploy («заливай»), git push.
+**Owner** — product decisions, deploy («заливай»), git push. Does **not**
+accept each bead.
 
-**Orchestrator** — plans, creates/claims beads, dispatches workers, verifies
-tests and acceptance, closes beads, asks a weak model to commit and update
-CHANGELOG, then merges the feature branch into `main`. Does **not**
-implement production code, does **not** commit, does **not** write
-CHANGELOG itself.
+**Orchestrator** — plans, creates/claims beads, dispatches workers, **verifies
+and accepts** (diff + tests + acceptance criteria), closes beads, asks a
+weak model to commit and update CHANGELOG, then merges into `main`. Does
+**not** wait for owner «принимаю». Does **not** implement production code,
+does **not** commit, does **not** write CHANGELOG itself.
 
 **Implementing worker** — one claimed bead, isolated worktree/branch
 (superpowers: using-git-worktrees). Reports diff + test evidence. Does
 **not** commit (unless asked), does **not** merge, does **not** `bd close`,
 does **not** push or deploy.
 
-**Weak model (`composer-2.5-fast`)** — after owner accept: one commit on
-the feature branch (why, not what); gitignored CHANGELOG `[Unreleased]`
+**Weak model (`composer-2.5-fast`)** — after orchestrator accept: one commit
+on the feature branch (why, not what); gitignored CHANGELOG `[Unreleased]`
 in Russian with the task ID. Does not add CHANGELOG to git.
 
 ### Shared rules
@@ -137,9 +138,9 @@ in Russian with the task ID. Does not add CHANGELOG to git.
   a frozen archive — do not update it, do not read it for work.
 - **Do not change production code without a task (bead).**
 - **One task = one commit on a feature branch, not on main.** After the
-  orchestrator verifies tests and the owner accepts, merge into main
+  orchestrator verifies tests and acceptance criteria, merge into main
   (superpowers: finishing-a-development-branch). Do not land unverified
-  work on main.
+  work on main. Do not wait for the owner to accept each task.
 - **Commits and CHANGELOG.md** are written by a small/fast model dispatched
   by the orchestrator, not by the implementing worker unless asked.
 - **After completing work, report to the orchestrator:** diff, test
