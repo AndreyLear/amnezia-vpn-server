@@ -50,14 +50,22 @@ var dummyPasswordHash = func() string {
 	return h
 }()
 
-// loginData is the GET /login payload: only a fixed failure message is
-// ever rendered. No session id, password, hash or key can reach the
+// loginData is the login form payload. Error is a flash string (empty
+// when the form is prompting for the next factor). Username is echoed
+// back into the field. NeedCode shows the TOTP field after a correct
+// password. No session id, password, hash or key can reach the
 // template through this type.
 type loginData struct {
-	Error        string
-	Username     string
-	NeedCode     bool
-	Passwordless bool
+	Error    string
+	Username string
+	NeedCode bool
+}
+
+// totpLoginRequired is true when the user must supply a TOTP code after
+// a correct password. Legacy totp_mode=passwordless is treated as 2fa
+// (secret is kept; password is still required).
+func totpLoginRequired(u *db.AuthUser) bool {
+	return u != nil && u.TOTPSecret != "" && u.TOTPMode != ""
 }
 
 // loginPage renders the login form (GET /login, public). An already
@@ -111,21 +119,20 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, s, "login: read user", err)
 		return
 	}
-	if user != nil && user.TOTPMode == "passwordless" {
+	hash := dummyPasswordHash
+	if user != nil {
+		hash = user.PasswordHash
+	}
+	if !auth.VerifyPassword(password, hash) {
+		s.renderLogin(w, loginData{Error: loginErrorText, Username: username})
+		return
+	}
+	if totpLoginRequired(user) {
+		if code == "" {
+			s.renderLogin(w, loginData{Username: username, NeedCode: true})
+			return
+		}
 		if !auth.VerifyTOTP(user.TOTPSecret, code, time.Now()) {
-			s.renderLogin(w, loginData{Error: loginErrorText, Username: username, Passwordless: true})
-			return
-		}
-	} else {
-		hash := dummyPasswordHash
-		if user != nil {
-			hash = user.PasswordHash
-		}
-		if !auth.VerifyPassword(password, hash) {
-			s.renderLogin(w, loginData{Error: loginErrorText, Username: username})
-			return
-		}
-		if user != nil && user.TOTPMode == "2fa" && !auth.VerifyTOTP(user.TOTPSecret, code, time.Now()) {
 			s.renderLogin(w, loginData{Error: "Неверный код.", Username: username, NeedCode: true})
 			return
 		}

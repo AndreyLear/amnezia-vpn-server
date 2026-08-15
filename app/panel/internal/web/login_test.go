@@ -64,6 +64,18 @@ func configureTOTPUser(t *testing.T, f *fixture, username, mode string) string {
 	return secret
 }
 
+// seedLegacyPasswordless writes totp_mode=passwordless without going
+// through SetTotpMode (which maps that value to 2fa). Used to cover
+// pre-T-150 rows that must still log in as password-then-code.
+func seedLegacyPasswordless(t *testing.T, f *fixture, username string) string {
+	t.Helper()
+	secret := configureTOTPUser(t, f, username, "2fa")
+	if _, err := f.h.Exec(`UPDATE auth SET totp_mode = 'passwordless' WHERE username = ?`, username); err != nil {
+		t.Fatal(err)
+	}
+	return secret
+}
+
 // lastCookie returns the most recent Set-Cookie for the session cookie.
 func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 	t.Helper()
@@ -146,6 +158,9 @@ func TestLoginPasswordPlusCodeMatrix(t *testing.T) {
 	if wrong.Code != http.StatusOK || !strings.Contains(wrong.Body.String(), "Неверный код.") {
 		t.Fatalf("wrong code response = %d %q", wrong.Code, wrong.Body.String())
 	}
+	if !strings.Contains(wrong.Body.String(), `name="code"`) {
+		t.Fatal("wrong nonempty code must keep the code field")
+	}
 	code, err := auth.TOTPCode(secret, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -157,23 +172,118 @@ func TestLoginPasswordPlusCodeMatrix(t *testing.T) {
 	}
 }
 
-func TestLoginPasswordlessMatrix(t *testing.T) {
+func TestLogin2FAEmptyCodePromptsWithoutError(t *testing.T) {
 	f := newFixture(t)
 	addUser(t, f, "alice", testPassword)
-	secret := configureTOTPUser(t, f, "alice", "passwordless")
+	configureTOTPUser(t, f, "alice", "2fa")
+
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, loginForm(t, "alice", testPassword))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty-code 2fa: code = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "Неверный код.") || strings.Contains(body, loginErrorText) {
+		t.Fatalf("empty-code 2fa must not flash an error, got %q", body)
+	}
+	if !strings.Contains(body, `name="code"`) {
+		t.Fatal("empty-code 2fa must show the code field")
+	}
+	if !strings.Contains(body, `value="alice"`) {
+		t.Fatal("empty-code 2fa must keep the username filled")
+	}
+	if sessionCookie(t, rec) != nil || activeSessionCount(f, "alice") != 0 {
+		t.Fatal("empty-code 2fa must not create a session")
+	}
+}
+
+func TestLogin2FAWrongPasswordHidesCodeField(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+	configureTOTPUser(t, f, "alice", "2fa")
+
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, loginForm(t, "alice", "wrong-password"))
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, loginErrorText) {
+		t.Fatalf("wrong password 2fa: code = %d body = %q", rec.Code, body)
+	}
+	if strings.Contains(body, `name="code"`) {
+		t.Fatal("wrong password must not reveal the 2FA code field")
+	}
+	if strings.Contains(body, "Неверный код.") {
+		t.Fatal("wrong password must not say the code is wrong")
+	}
+}
+
+func TestLoginLegacyPasswordlessBehavesAs2FA(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+	secret := seedLegacyPasswordless(t, f, "alice")
+
+	codeOnly := httptest.NewRecorder()
+	f.server.ServeHTTP(codeOnly, loginFields(t, url.Values{"username": {"alice"}, "code": {"000000"}}))
+	if codeOnly.Code != http.StatusOK || !strings.Contains(codeOnly.Body.String(), loginErrorText) {
+		t.Fatalf("legacy passwordless without password = %d %q", codeOnly.Code, codeOnly.Body.String())
+	}
+	if strings.Contains(codeOnly.Body.String(), `name="code"`) {
+		t.Fatal("legacy passwordless without a valid password must not show the code field")
+	}
+
+	prompt := httptest.NewRecorder()
+	f.server.ServeHTTP(prompt, loginForm(t, "alice", testPassword))
+	body := prompt.Body.String()
+	if prompt.Code != http.StatusOK {
+		t.Fatalf("legacy passwordless empty code: code = %d, want 200", prompt.Code)
+	}
+	if strings.Contains(body, "Неверный код.") || strings.Contains(body, loginErrorText) {
+		t.Fatalf("legacy passwordless empty code must not flash an error, got %q", body)
+	}
+	if !strings.Contains(body, `name="code"`) {
+		t.Fatal("legacy passwordless empty code must show the code field")
+	}
+	if !strings.Contains(body, `name="password"`) {
+		t.Fatal("legacy passwordless step 2 must keep the password field")
+	}
+	if sessionCookie(t, prompt) != nil {
+		t.Fatal("legacy passwordless empty code must not issue a session")
+	}
+
+	wrong := httptest.NewRecorder()
+	f.server.ServeHTTP(wrong, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {"000000"}}))
+	if wrong.Code != http.StatusOK || !strings.Contains(wrong.Body.String(), "Неверный код.") {
+		t.Fatalf("legacy passwordless wrong code = %d %q", wrong.Code, wrong.Body.String())
+	}
+
 	code, err := auth.TOTPCode(secret, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	fail := httptest.NewRecorder()
-	f.server.ServeHTTP(fail, loginFields(t, url.Values{"username": {"alice"}, "code": {"000000"}}))
-	if fail.Code != http.StatusOK || !strings.Contains(fail.Body.String(), loginErrorText) {
-		t.Fatalf("passwordless failure = %d %q", fail.Code, fail.Body.String())
-	}
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"alice"}, "code": {code}}))
+	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {code}}))
 	if rec.Code != http.StatusSeeOther || sessionCookie(t, rec) == nil {
-		t.Fatalf("passwordless login = %d, cookie=%v", rec.Code, sessionCookie(t, rec))
+		t.Fatalf("legacy passwordless login = %d, cookie=%v", rec.Code, sessionCookie(t, rec))
+	}
+	u, err := db.AuthUserByUsername(f.h, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TOTPMode != "passwordless" || u.TOTPSecret != secret {
+		t.Fatalf("login must not rewrite a legacy passwordless row: %+v", u)
+	}
+}
+
+func TestLoginPasswordlessUnknownUserGeneric(t *testing.T) {
+	f := newFixture(t)
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"nobody"}}))
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, loginErrorText) {
+		t.Fatalf("unknown username-only: code = %d body = %q", rec.Code, body)
+	}
+	if strings.Contains(body, `name="code"`) {
+		t.Fatal("unknown user must not reveal a code field")
 	}
 }
 
@@ -254,10 +364,6 @@ func TestLoginGenericFailure(t *testing.T) {
 	f := newFixture(t)
 	alice := addUser(t, f, "alice", testPassword)
 
-	// The baseline of the generic failure: a wrong password for an
-	// existing user. Every other failure mode must byte-match it.
-	wantBody := failedLogin(t, f, "alice", "wrong-password")
-
 	cases := []struct {
 		name     string
 		username string
@@ -272,14 +378,11 @@ func TestLoginGenericFailure(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := failedLogin(t, f, tc.username, tc.password)
-			if got != wantBody {
-				t.Errorf("failure body differs from the baseline:\n%q\nwant:\n%q", got, wantBody)
-			}
 			if !strings.Contains(got, loginErrorText) {
 				t.Errorf("failure body misses the generic message: %q", got)
 			}
-			if strings.Contains(got, tc.username) && tc.username != "" {
-				t.Errorf("failure body echoes the username %q", tc.username)
+			if strings.Contains(got, `name="code"`) {
+				t.Error("generic failure must not show a code field")
 			}
 			if strings.Contains(got, tc.password) && tc.password != "" {
 				t.Errorf("failure body echoes the password")

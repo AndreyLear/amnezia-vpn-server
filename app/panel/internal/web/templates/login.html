@@ -21,9 +21,9 @@
     {{if .Error}}<p class="flash flash-error" role="alert">{{.Error}}</p>{{end}}
 
     <form action="/login" method="post">
-      <label class="label">Имя пользователя <input class="input" type="text" name="username" autocomplete="username" required></label>
-      {{if not .Passwordless}}<label class="label">Пароль <input class="input" type="password" name="password" autocomplete="current-password" {{if not .NeedCode}}required{{end}}></label>{{end}}
-      {{if or .NeedCode .Passwordless}}<label class="label">Код из приложения <input class="input" name="code" inputmode="numeric" pattern="[0-9]{6}" required></label>{{end}}
+      <label class="label">Имя пользователя <input class="input" type="text" name="username" autocomplete="username" value="{{.Username}}" required></label>
+      <label class="label">Пароль <input class="input" type="password" name="password" autocomplete="current-password" required></label>
+      {{if .NeedCode}}<label class="label">Код из приложения <input class="input" name="code" inputmode="numeric" pattern="[0-9]{6}" required></label>{{end}}
       <button type="submit" class="btn btn-primary">Войти</button>
     </form>
     <p class="login-footnote">Сессия защищена и действует ограниченное время.</p>

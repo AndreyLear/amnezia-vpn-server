@@ -193,10 +193,19 @@ func TestAccountTOTPModeTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	postMode("2fa", code)
+	u, _ = db.AuthUserByUsername(f.h, f.username)
+	if u.TOTPMode != "2fa" {
+		t.Fatalf("mode after re-enable 2fa = %q", u.TOTPMode)
+	}
+	code, err = auth.TOTPCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
 	postMode("passwordless", code)
 	u, _ = db.AuthUserByUsername(f.h, f.username)
-	if u.TOTPMode != "passwordless" {
-		t.Fatalf("mode after passwordless = %q", u.TOTPMode)
+	if u.TOTPMode != "2fa" {
+		t.Fatalf("POST passwordless must store 2fa, got %q", u.TOTPMode)
 	}
 	code, err = auth.TOTPCode(secret, time.Now())
 	if err != nil {
@@ -320,8 +329,11 @@ func TestAccountTOTPConfirmEnforcesLoginTOTP(t *testing.T) {
 	}
 	login := httptest.NewRecorder()
 	f.server.ServeHTTP(login, loginForm(t, f.username, testPassword))
-	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), "Неверный код.") {
+	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `name="code"`) {
 		t.Fatalf("password-only login after confirm = %d %q", login.Code, login.Body.String())
+	}
+	if strings.Contains(login.Body.String(), "Неверный код.") {
+		t.Fatal("password-only 2FA login must prompt for a code without a false error")
 	}
 	if sessionCookie(t, login) != nil {
 		t.Fatal("password-only login must not issue a session after 2FA confirm")
@@ -337,16 +349,20 @@ func TestAccountTOTPConfirmEnforcesLoginTOTP(t *testing.T) {
 	}
 }
 
-func TestAccountPasswordChangePasswordlessRequiresCode(t *testing.T) {
+func TestAccountPasswordChangeLegacyPasswordlessRequiresCode(t *testing.T) {
 	f := newFixture(t)
 	addUser(t, f, f.username, testPassword)
-	secret := configureTOTPUser(t, f, f.username, "passwordless")
+	secret := seedLegacyPasswordless(t, f, f.username)
 	page := httptest.NewRecorder()
 	preq := httptest.NewRequest(http.MethodGet, "/account", nil)
 	preq.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
 	f.server.ServeHTTP(page, preq)
-	if !strings.Contains(page.Body.String(), `action="/account/password"`) || !strings.Contains(page.Body.String(), `name="code"`) {
-		t.Fatal("password-change form must include a TOTP code field in passwordless mode")
+	body := page.Body.String()
+	if !strings.Contains(body, `action="/account/password"`) || !strings.Contains(body, `name="code"`) {
+		t.Fatal("password-change form must include a TOTP code field for legacy passwordless")
+	}
+	if strings.Contains(body, "Только код") || strings.Contains(body, `value="passwordless"`) {
+		t.Fatal("account UI must not offer passwordless as a selectable mode")
 	}
 	post := func(values url.Values) *httptest.ResponseRecorder {
 		values.Set(auth.CSRFFieldName, f.csrf)
@@ -359,7 +375,7 @@ func TestAccountPasswordChangePasswordlessRequiresCode(t *testing.T) {
 	}
 	missing := post(url.Values{"old_password": {testPassword}, "new_password": {"new-password"}, "confirm_password": {"new-password"}})
 	if missing.Code != http.StatusBadRequest {
-		t.Fatalf("passwordless change without code = %d", missing.Code)
+		t.Fatalf("legacy passwordless change without code = %d", missing.Code)
 	}
 	code, err := auth.TOTPCode(secret, time.Now())
 	if err != nil {
@@ -367,11 +383,14 @@ func TestAccountPasswordChangePasswordlessRequiresCode(t *testing.T) {
 	}
 	ok := post(url.Values{"old_password": {testPassword}, "new_password": {"new-password"}, "confirm_password": {"new-password"}, "code": {code}})
 	if ok.Code != http.StatusSeeOther {
-		t.Fatalf("passwordless change with code = %d", ok.Code)
+		t.Fatalf("legacy passwordless change with code = %d", ok.Code)
 	}
 	row, _ := db.AuthUserByUsername(f.h, f.username)
 	if !auth.VerifyPassword("new-password", row.PasswordHash) {
-		t.Fatal("passwordless change with code did not store new password")
+		t.Fatal("legacy passwordless change with code did not store new password")
+	}
+	if row.TOTPMode != "passwordless" || row.TOTPSecret != secret {
+		t.Fatalf("password change must keep the legacy secret: %+v", row)
 	}
 }
 

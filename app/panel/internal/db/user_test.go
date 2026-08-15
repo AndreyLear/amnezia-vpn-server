@@ -185,3 +185,26 @@ func TestAuthSchemaVersionUnchanged(t *testing.T) {
 		t.Fatalf("schema_version changed after CreateAuthUser: %q", v)
 	}
 }
+
+func TestSetTotpModeMapsPasswordlessTo2FA(t *testing.T) {
+	handle, _ := openTest(t, "auth.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := CreateAuthUser(handle, "alice", "hash"); err != nil {
+		t.Fatalf("CreateAuthUser: %v", err)
+	}
+	if err := SetTotpMode(handle, "alice", "passwordless"); err != nil {
+		t.Fatalf("SetTotpMode(passwordless): %v", err)
+	}
+	u, err := AuthUserByUsername(handle, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TOTPMode != "2fa" {
+		t.Fatalf("stored mode = %q, want 2fa", u.TOTPMode)
+	}
+	if err := SetTotpMode(handle, "alice", "bogus"); err == nil {
+		t.Fatal("SetTotpMode(bogus) must fail")
+	}
+}

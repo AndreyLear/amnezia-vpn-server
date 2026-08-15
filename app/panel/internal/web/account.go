@@ -65,7 +65,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		s.redirectAccountError(w)
 		return
 	}
-	if u.TOTPMode != "" && !auth.VerifyTOTP(u.TOTPSecret, r.PostForm.Get("code"), time.Now()) {
+	if totpLoginRequired(u) && !auth.VerifyTOTP(u.TOTPSecret, r.PostForm.Get("code"), time.Now()) {
 		s.redirectAccountError(w)
 		return
 	}
@@ -153,7 +153,10 @@ func (s *Server) totpMode(w http.ResponseWriter, r *http.Request) {
 	sess, _ := auth.CurrentUser(r.Context())
 	u, err := db.AuthUserByUsername(s.db(), sess.Username)
 	mode := r.PostForm.Get("mode")
-	needTOTP := u.TOTPSecret != "" && (u.TOTPMode != "" || mode == "2fa" || mode == "passwordless")
+	if mode == "passwordless" {
+		mode = "2fa"
+	}
+	needTOTP := u.TOTPSecret != "" && (u.TOTPMode != "" || mode == "2fa")
 	if err != nil || u.TOTPSecret == "" || !auth.VerifyPassword(r.PostForm.Get("password"), u.PasswordHash) || (needTOTP && !auth.VerifyTOTP(u.TOTPSecret, r.PostForm.Get("code"), time.Now())) {
 		s.redirectAccountError(w)
 		return

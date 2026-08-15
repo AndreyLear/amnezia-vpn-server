@@ -74,7 +74,10 @@ func ClearTotpSecret(handle *sql.DB, username string) error {
 }
 
 func SetTotpMode(handle *sql.DB, username, mode string) error {
-	if mode != "" && mode != "2fa" && mode != "passwordless" {
+	if mode == "passwordless" {
+		mode = "2fa"
+	}
+	if mode != "" && mode != "2fa" {
 		return errors.New("db: invalid totp mode")
 	}
 	res, err := handle.Exec(`UPDATE auth SET totp_mode = ? WHERE username = ?`, mode, username)
