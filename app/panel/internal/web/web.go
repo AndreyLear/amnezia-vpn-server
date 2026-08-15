@@ -402,8 +402,9 @@ type dashboardData struct {
 // clientCardData is one dashboard card plus the CSRF token its inline
 // forms embed (also used by the fetch-channel card fragments).
 type clientCardData struct {
-	Card ClientCard
-	CSRF string
+	Card    ClientCard
+	CSRF    string
+	Ordinal int
 }
 
 // Interface-state predicates keep magic numbers out of the templates.
@@ -436,7 +437,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	for i, c := range rec.Cards {
 		rxTotal += c.RxBytes
 		txTotal += c.TxBytes
-		views[i] = clientCardData{Card: c, CSRF: sess.CSRFToken}
+		views[i] = clientCardData{Card: c, CSRF: sess.CSRFToken, Ordinal: i + 1}
 	}
 	s.renderPage(w, http.StatusOK, dashboardData{
 		Reconciliation: rec,

@@ -1,7 +1,7 @@
 {{define "clientcard"}}
 <article class="card" id="client-{{.Card.ID}}">
   <div class="card-head">
-    <h3 class="flex flex-wrap items-center gap-2 text-[15.5px] font-semibold">{{.Card.Name}} <span class="font-mono text-[13px] font-medium text-ink-faint">#{{.Card.ID}}</span></h3>
+    <h3 class="flex flex-wrap items-center gap-2 text-[15.5px] font-semibold">{{.Card.Name}} <span class="font-mono text-[13px] font-medium text-ink-faint">#{{.Ordinal}}</span></h3>
     <div class="flex flex-wrap items-center gap-1.5">
       <span class="badge {{if .Card.Online}}badge-on{{else}}badge-off{{end}}">{{if .Card.Online}}онлайн{{else}}офлайн{{end}}</span>
       <span class="badge {{if .Card.Enabled}}badge-on{{else}}badge-off{{end}}">{{if .Card.Enabled}}включён{{else}}отключён{{end}}</span>

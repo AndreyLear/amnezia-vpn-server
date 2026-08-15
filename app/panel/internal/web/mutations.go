@@ -252,17 +252,24 @@ func csrfFromContext(r *http.Request) string {
 // cardFragment renders one client card (the same "clientcard" template
 // the dashboard uses) for the fetch-channel HTML updates.
 func (s *Server) cardFragment(csrf string, id int64) (string, error) {
-	rec, err := db.ClientByID(s.db(), id)
+	clients, err := db.ClientsAll(s.db())
 	if err != nil {
 		return "", err
 	}
 	st, readErr := status.ReadStatus(s.cfg.StatusPath)
-	cards := Reconcile([]db.ClientRecord{*rec}, st, readErr, time.Now()).Cards
-	if len(cards) != 1 {
-		return "", errors.New("reconcile produced no card")
+	cards := Reconcile(clients, st, readErr, time.Now()).Cards
+	idx := -1
+	for i, c := range cards {
+		if c.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return "", db.ErrClientNotFound
 	}
 	var buf bytes.Buffer
-	if err := s.tpl.ExecuteTemplate(&buf, "clientcard", clientCardData{Card: cards[0], CSRF: csrf}); err != nil {
+	if err := s.tpl.ExecuteTemplate(&buf, "clientcard", clientCardData{Card: cards[idx], CSRF: csrf, Ordinal: idx + 1}); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

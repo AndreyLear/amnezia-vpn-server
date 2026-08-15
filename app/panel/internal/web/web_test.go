@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -290,6 +291,73 @@ func TestDashboardOrderAndPeerHidden(t *testing.T) {
 	body := f.get("/").Body.String()
 	if strings.Index(body, "aaa") > strings.Index(body, "ccc") {
 		t.Errorf("cards not in ClientsAll order")
+	}
+}
+
+// visibleOrdinalRE matches the number shown next to the client name
+// (not SQLite ids used in routes or article ids).
+var visibleOrdinalRE = regexp.MustCompile(`font-mono text-\[13px\] font-medium text-ink-faint">#(\d+)</span>`)
+
+func visibleOrdinals(body string) []string {
+	matches := visibleOrdinalRE.FindAllStringSubmatch(body, -1)
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+func TestDashboardVisibleOrdinalsAreContiguous(t *testing.T) {
+	f := newFixture(t)
+	first, _, _ := f.addClient("alice")
+	second, _, _ := f.addClient("bob")
+	if first.ID != 1 || second.ID != 2 {
+		t.Fatalf("fixture ids = %d, %d; want AUTOINCREMENT 1, 2", first.ID, second.ID)
+	}
+	f.setStatus(upStatusWith())
+	body := f.get("/").Body.String()
+	got := visibleOrdinals(body)
+	if len(got) != 2 || got[0] != "1" || got[1] != "2" {
+		t.Fatalf("two-client ordinals = %v, want [1 2]", got)
+	}
+	if !strings.Contains(body, `id="client-1"`) || !strings.Contains(body, `id="client-2"`) {
+		t.Errorf("card article ids must keep SQLite PK: %s", body)
+	}
+}
+
+func TestDashboardOrdinalsCompactAfterDelete(t *testing.T) {
+	f := newFixture(t)
+	first, _, _ := f.addClient("alice")
+	second, _, _ := f.addClient("bob")
+	if first.ID != 1 || second.ID != 2 {
+		t.Fatalf("fixture ids = %d, %d; want AUTOINCREMENT 1, 2", first.ID, second.ID)
+	}
+	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/delete", first.ID), nil)); got != flashDeleted {
+		t.Fatalf("delete flash = %q, want %q", got, flashDeleted)
+	}
+	clients, err := db.ClientsAll(f.h)
+	if err != nil {
+		t.Fatalf("ClientsAll: %v", err)
+	}
+	if len(clients) != 1 || clients[0].ID != second.ID {
+		t.Fatalf("remaining client = %+v, want PK %d unchanged", clients, second.ID)
+	}
+	f.setStatus(upStatusWith())
+	body := f.get("/").Body.String()
+	got := visibleOrdinals(body)
+	if len(got) != 1 || got[0] != "1" {
+		t.Fatalf("remaining visible ordinals = %v, want [1]", got)
+	}
+	for _, m := range visibleOrdinalRE.FindAllString(body, -1) {
+		if strings.Contains(m, "#2") {
+			t.Errorf("visible ordinal still shows leftover id: %s", m)
+		}
+	}
+	if !strings.Contains(body, `id="client-2"`) {
+		t.Errorf("remaining card must keep PK in id=client-%d", second.ID)
+	}
+	if strings.Contains(body, `id="client-1"`) {
+		t.Errorf("deleted client card still present")
 	}
 }
 
