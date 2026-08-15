@@ -99,6 +99,9 @@ func (s *Server) renderLogin(w http.ResponseWriter, data loginData) {
 // amnezia_session cookie with the new id and answers 303 /. The new SID
 // never travels in a URL or query string.
 func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
+	if s.rejectLimitedLogin(w, r) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		requestBodyError(err, w)
 		return
@@ -124,6 +127,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		hash = user.PasswordHash
 	}
 	if !auth.VerifyPassword(password, hash) {
+		s.loginLimit.fail(clientIP(r), time.Now())
 		s.renderLogin(w, loginData{Error: loginErrorText, Username: username})
 		return
 	}
@@ -133,6 +137,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !auth.VerifyTOTP(user.TOTPSecret, code, time.Now()) {
+			s.loginLimit.fail(clientIP(r), time.Now())
 			s.renderLogin(w, loginData{Error: "Неверный код.", Username: username, NeedCode: true})
 			return
 		}
@@ -160,6 +165,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	// example from another browser) is dropped.
 	s.cfg.Sessions.DeleteByUsername(username, sess.ID)
 	auth.WriteSessionCookie(w, sess.ID, sess.ExpiresAt)
+	s.loginLimit.clear(clientIP(r))
 	redirect303(w, r, "/")
 }
 

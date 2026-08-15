@@ -218,6 +218,12 @@
         return;
       }
     }
+    if (resp.status === 429) {
+      const text = (await resp.text()).trim();
+      if (login2fa && login2fa.open) closeDialog(login2fa);
+      loginShowFlash(text || "Слишком много попыток входа. Подождите и попробуйте снова.");
+      return;
+    }
     if (resp.status !== 200) {
       loginShowFlash("Ошибка сервера (" + resp.status + ")");
       return;

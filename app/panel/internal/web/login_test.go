@@ -6,10 +6,12 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,11 +39,19 @@ func addUser(t *testing.T, f *fixture, username, password string) *db.AuthUser {
 }
 
 // loginForm returns a POST /login request carrying the given fields.
+var loginTestIP uint32
+
+func assignLoginRemoteAddr(req *http.Request) {
+	n := atomic.AddUint32(&loginTestIP, 1)
+	req.RemoteAddr = fmt.Sprintf("10.%d.%d.%d:12345", (n>>16)&0xff, (n>>8)&0xff, n&0xff)
+}
+
 func loginForm(t *testing.T, username, password string) *http.Request {
 	t.Helper()
 	form := url.Values{"username": {username}, "password": {password}}
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	assignLoginRemoteAddr(req)
 	return req
 }
 
@@ -49,6 +59,7 @@ func loginFields(t *testing.T, fields url.Values) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(fields.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	assignLoginRemoteAddr(req)
 	return req
 }
 
