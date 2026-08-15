@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -104,6 +105,9 @@ var templateFS embed.FS
 
 //go:embed static/tailwind.css static/app.js
 var staticFS embed.FS
+
+//go:embed dist
+var distFS embed.FS
 
 // Server is one panel HTTP server. It is safe to call Handler after
 // construction; Handler wraps the mux (plus middlewares) and allows
@@ -248,6 +252,12 @@ func New(cfg Config) (*Server, error) {
 	// them before any session exists.
 	s.mux.HandleFunc("GET /static/tailwind.css", s.staticCSS)
 	s.mux.HandleFunc("GET /static/app.js", s.staticJS)
+	distRoot, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		return nil, fmt.Errorf("web: dist embed: %w", err)
+	}
+	// Vite emits dist/assets/<hash>.*; do not serve dist/index.html for GET /.
+	s.mux.Handle("GET /assets/", http.FileServer(http.FS(distRoot)))
 	s.mux.HandleFunc("/", s.notFound)
 	return s, nil
 }
