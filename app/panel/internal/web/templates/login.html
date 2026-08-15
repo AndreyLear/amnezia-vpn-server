@@ -20,12 +20,26 @@
 
     {{if .Error}}<p class="flash flash-error" role="alert">{{.Error}}</p>{{end}}
 
-    <form action="/login" method="post">
+    <form id="login-form" action="/login" method="post">
       <label class="label">Имя пользователя <input class="input" type="text" name="username" autocomplete="username" value="{{.Username}}" required></label>
       <label class="label">Пароль <input class="input" type="password" name="password" autocomplete="current-password" required></label>
       {{if .NeedCode}}<label class="label">Код из приложения <input class="input" name="code" inputmode="numeric" pattern="[0-9]{6}" required></label>{{end}}
       <button type="submit" class="btn btn-primary">Войти</button>
     </form>
+    <dialog class="modal" id="login-2fa">
+      <form id="login-2fa-form">
+        <h2>Код из приложения</h2>
+        <p class="muted">Введите 6-значный код из приложения-аутентификатора.</p>
+        <label class="label">Код
+          <input class="input" id="login-2fa-code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+        </label>
+        <p id="login-2fa-error" class="flash flash-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="btn" data-dialog-close>Отмена</button>
+          <button type="submit" class="btn btn-primary" id="login-2fa-confirm">Подтвердить</button>
+        </div>
+      </form>
+    </dialog>
     <p class="login-footnote">Сессия защищена и действует ограниченное время. Пароль сбрасывается на сервере командой panel auth set-password, не через эту страницу.</p>
   </section>
 </main>

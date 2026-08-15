@@ -111,6 +111,7 @@ func TestLoginPageRendersForm(t *testing.T) {
 		`name="username"`, `autocomplete="username"`,
 		`name="password"`, `type="password"`, `autocomplete="current-password"`,
 		`set-password`,
+		`id="login-2fa"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("login form misses %q", want)

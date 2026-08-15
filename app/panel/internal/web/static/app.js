@@ -126,6 +126,147 @@
     }
   }
 
+  /* ---- login 2FA modal (keep password in the live form) ------------ */
+
+  const loginForm = doc.getElementById("login-form");
+  const login2fa = doc.getElementById("login-2fa");
+  const login2faCode = doc.getElementById("login-2fa-code");
+  const login2faError = doc.getElementById("login-2fa-error");
+  const login2faConfirm = doc.getElementById("login-2fa-confirm");
+  const loginWrongPassword = "Неверное имя пользователя или пароль.";
+  const loginWrongCode = "Неверный код.";
+  const loginNeedCodeLabel = "Код из приложения";
+
+  function loginNeedCodeHTML(html) {
+    return html.indexOf('name="code"') !== -1 && html.indexOf(loginNeedCodeLabel) !== -1;
+  }
+
+  function loginShowFlash(message) {
+    if (!loginForm) return;
+    let flash = doc.querySelector(".login-card > .flash.flash-error");
+    if (!flash) {
+      flash = doc.createElement("p");
+      flash.className = "flash flash-error";
+      flash.setAttribute("role", "alert");
+      loginForm.parentNode.insertBefore(flash, loginForm);
+    }
+    flash.hidden = false;
+    flash.textContent = message;
+  }
+
+  function loginSetHiddenCode(form, code) {
+    let field = form.querySelector('input[type="hidden"][name="code"]');
+    if (!field) {
+      field = doc.createElement("input");
+      field.type = "hidden";
+      field.name = "code";
+      form.appendChild(field);
+    }
+    field.value = code;
+  }
+
+  function loginStripHiddenCode(form) {
+    const hidden = form.querySelector('input[type="hidden"][name="code"]');
+    if (hidden) hidden.remove();
+  }
+
+  function loginClear2FA() {
+    if (login2faCode) login2faCode.value = "";
+    if (login2faError) {
+      login2faError.hidden = true;
+      login2faError.textContent = "";
+    }
+    if (loginForm) loginStripHiddenCode(loginForm);
+  }
+
+  function loginOpen2FA(errorText) {
+    if (login2faError) {
+      if (errorText) {
+        login2faError.hidden = false;
+        login2faError.textContent = errorText;
+      } else {
+        login2faError.hidden = true;
+        login2faError.textContent = "";
+      }
+    }
+    if (login2fa && login2fa.open) {
+      if (login2faCode) login2faCode.focus();
+      return;
+    }
+    openDialog("login-2fa");
+    if (login2faCode) login2faCode.focus();
+  }
+
+  async function loginPost(form) {
+    const body = new URLSearchParams(new FormData(form));
+    const resp = await window.fetch("/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+      redirect: "follow",
+    });
+    if (resp.redirected) {
+      try {
+        const dest = new URL(resp.url, window.location.origin);
+        if (dest.pathname === "/") {
+          window.location.assign(resp.url);
+          return;
+        }
+      } catch (err) {
+        window.location.assign("/");
+        return;
+      }
+    }
+    if (resp.status !== 200) {
+      loginShowFlash("Ошибка сервера (" + resp.status + ")");
+      return;
+    }
+    const html = await resp.text();
+    const needCode = loginNeedCodeHTML(html);
+    if (needCode) {
+      const wrongCode = html.indexOf(loginWrongCode) !== -1;
+      loginOpen2FA(wrongCode ? loginWrongCode : "");
+      return;
+    }
+    if (html.indexOf(loginWrongPassword) !== -1) {
+      loginShowFlash(loginWrongPassword);
+      if (login2fa && login2fa.open) closeDialog(login2fa);
+      return;
+    }
+    loginShowFlash("Некорректный ответ сервера");
+  }
+
+  if (loginForm) {
+    if (login2fa) {
+      login2fa.addEventListener("close", loginClear2FA);
+    }
+    loginForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const confirming = login2fa && login2fa.open;
+      if (confirming && login2faCode) {
+        loginSetHiddenCode(loginForm, login2faCode.value);
+      } else {
+        loginStripHiddenCode(loginForm);
+      }
+      try {
+        await loginPost(loginForm);
+      } catch (err) {
+        loginShowFlash("Сетевая ошибка");
+      }
+    });
+    const login2faForm = doc.getElementById("login-2fa-form");
+    function loginConfirm2FA(e) {
+      e.preventDefault();
+      if (!login2faCode) return;
+      loginSetHiddenCode(loginForm, login2faCode.value);
+      if (typeof loginForm.requestSubmit === "function") loginForm.requestSubmit();
+      else loginForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    }
+    if (login2faForm) login2faForm.addEventListener("submit", loginConfirm2FA);
+    else if (login2faConfirm) login2faConfirm.addEventListener("click", loginConfirm2FA);
+  }
+
   doc.addEventListener("submit", async (e) => {
     const form = e.target.closest("form[data-mutate]");
     if (!form) return;
