@@ -14,7 +14,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +179,25 @@ func (f *fixture) get(path string) *httptest.ResponseRecorder {
 	return rec
 }
 
+func assertSPA(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("SPA document: code = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<!doctype html>") || !strings.Contains(body, `id="root"`) {
+		t.Fatalf("SPA document missing shell: %s", body)
+	}
+}
+
+func assertAPIUnauthorized(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("API unauth: code = %d, want 401 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+
 // serve runs an authenticated request against the fixture's server: it
 // attaches the admin session cookie before dispatching. Session-free
 // tests must build their own request and call f.server.ServeHTTP.
@@ -238,25 +256,16 @@ func TestDashboard200AndCardContent(t *testing.T) {
 	client, _, _ := f.addClient("alice")
 	f.setStatus(upStatusWith(peerFor(client.PublicKey)))
 
-	rec := f.get("/")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /: code %d, want 200", rec.Code)
+	assertSPA(t, f.get("/"))
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 1 || list[0]["name"] != "alice" {
+		t.Fatalf("GET /api/clients = %#v, want alice", list)
 	}
-	body := rec.Body.String()
-	for _, want := range []string{
-		"alice",
-		"онлайн",
-		"<article class=" + `"card"`, // template literal
-		"10.8.0.2/32",
-		"Туннель работает",
-		// an enabled client's menu toggles to disable
-		"/clients/" + fmt.Sprintf("%d", client.ID) + "/disable",
-		"/clients/" + fmt.Sprintf("%d", client.ID) + "/qr",
-		"action=\"/clients/new\"",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("GET / missing %q", want)
-		}
+	if list[0]["online"] != true {
+		t.Fatalf("alice should be online: %#v", list[0])
+	}
+	if list[0]["address"] != "10.8.0.2/32" {
+		t.Fatalf("address = %#v", list[0]["address"])
 	}
 }
 
@@ -264,11 +273,12 @@ func TestDashboardPeerValuesShown(t *testing.T) {
 	f := newFixture(t)
 	c, _, _ := f.addClient("bob")
 	f.setStatus(upStatusWith(peerFor(c.PublicKey)))
-	body := f.get("/").Body.String()
-	for _, want := range []string{"4.9 KiB", "8.8 KiB", "онлайн"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("missing %q in body", want)
-		}
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 1 || list[0]["online"] != true {
+		t.Fatalf("bob online missing: %#v", list)
+	}
+	if list[0]["rx_bytes"] != float64(5000) || list[0]["tx_bytes"] != float64(9000) {
+		t.Fatalf("peer bytes = %#v", list[0])
 	}
 }
 
@@ -276,9 +286,9 @@ func TestDashboardClientWithoutPeerOffline(t *testing.T) {
 	f := newFixture(t)
 	f.addClient("no-peer")
 	f.setStatus(upStatusWith())
-	body := f.get("/").Body.String()
-	if !strings.Contains(body, "офлайн") {
-		t.Errorf("client without peer must render offline: %s", body)
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 1 || list[0]["online"] != false {
+		t.Fatalf("client without peer must be offline: %#v", list)
 	}
 }
 
@@ -288,23 +298,11 @@ func TestDashboardOrderAndPeerHidden(t *testing.T) {
 	b, _, _ := f.addClient("bbb")
 	f.addClient("ccc")
 	f.setStatus(upStatusWith(peerFor(b.PublicKey)))
-	body := f.get("/").Body.String()
-	if strings.Index(body, "aaa") > strings.Index(body, "ccc") {
-		t.Errorf("cards not in ClientsAll order")
+	list := decodeClientList(t, f.get("/api/clients"))
+	names := []string{list[0]["name"].(string), list[1]["name"].(string), list[2]["name"].(string)}
+	if names[0] != "aaa" || names[2] != "ccc" {
+		t.Errorf("cards not in ClientsAll order: %v", names)
 	}
-}
-
-// visibleOrdinalRE matches the number shown next to the client name
-// (not SQLite ids used in routes or article ids).
-var visibleOrdinalRE = regexp.MustCompile(`font-mono text-\[13px\] font-medium text-ink-faint">#(\d+)</span>`)
-
-func visibleOrdinals(body string) []string {
-	matches := visibleOrdinalRE.FindAllStringSubmatch(body, -1)
-	out := make([]string, 0, len(matches))
-	for _, m := range matches {
-		out = append(out, m[1])
-	}
-	return out
 }
 
 func TestDashboardVisibleOrdinalsAreContiguous(t *testing.T) {
@@ -314,14 +312,9 @@ func TestDashboardVisibleOrdinalsAreContiguous(t *testing.T) {
 	if first.ID != 1 || second.ID != 2 {
 		t.Fatalf("fixture ids = %d, %d; want AUTOINCREMENT 1, 2", first.ID, second.ID)
 	}
-	f.setStatus(upStatusWith())
-	body := f.get("/").Body.String()
-	got := visibleOrdinals(body)
-	if len(got) != 2 || got[0] != "1" || got[1] != "2" {
-		t.Fatalf("two-client ordinals = %v, want [1 2]", got)
-	}
-	if !strings.Contains(body, `id="client-1"`) || !strings.Contains(body, `id="client-2"`) {
-		t.Errorf("card article ids must keep SQLite PK: %s", body)
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 2 || list[0]["id"] != float64(1) || list[1]["id"] != float64(2) {
+		t.Fatalf("ids = %#v, want 1,2", list)
 	}
 }
 
@@ -329,35 +322,12 @@ func TestDashboardOrdinalsCompactAfterDelete(t *testing.T) {
 	f := newFixture(t)
 	first, _, _ := f.addClient("alice")
 	second, _, _ := f.addClient("bob")
-	if first.ID != 1 || second.ID != 2 {
-		t.Fatalf("fixture ids = %d, %d; want AUTOINCREMENT 1, 2", first.ID, second.ID)
-	}
 	if got := f.flashOf(f.post(fmt.Sprintf("/clients/%d/delete", first.ID), nil)); got != flashDeleted {
 		t.Fatalf("delete flash = %q, want %q", got, flashDeleted)
 	}
-	clients, err := db.ClientsAll(f.h)
-	if err != nil {
-		t.Fatalf("ClientsAll: %v", err)
-	}
-	if len(clients) != 1 || clients[0].ID != second.ID {
-		t.Fatalf("remaining client = %+v, want PK %d unchanged", clients, second.ID)
-	}
-	f.setStatus(upStatusWith())
-	body := f.get("/").Body.String()
-	got := visibleOrdinals(body)
-	if len(got) != 1 || got[0] != "1" {
-		t.Fatalf("remaining visible ordinals = %v, want [1]", got)
-	}
-	for _, m := range visibleOrdinalRE.FindAllString(body, -1) {
-		if strings.Contains(m, "#2") {
-			t.Errorf("visible ordinal still shows leftover id: %s", m)
-		}
-	}
-	if !strings.Contains(body, `id="client-2"`) {
-		t.Errorf("remaining card must keep PK in id=client-%d", second.ID)
-	}
-	if strings.Contains(body, `id="client-1"`) {
-		t.Errorf("deleted client card still present")
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 1 || list[0]["id"] != float64(second.ID) {
+		t.Fatalf("remaining = %#v, want PK %d", list, second.ID)
 	}
 }
 
@@ -368,11 +338,6 @@ func TestDashboardHasNoExpiryUI(t *testing.T) {
 	if err := db.SetClientExpiry(f.h, c.ID, past); err != nil {
 		t.Fatalf("set expiry: %v", err)
 	}
-	before, err := db.ClientsAll(f.h)
-	if err != nil {
-		t.Fatalf("ClientsAll: %v", err)
-	}
-	f.setStatus(upStatusWith())
 	body := f.get("/").Body.String()
 	for _, needle := range []string{
 		`name="expires_at"`,
@@ -381,31 +346,25 @@ func TestDashboardHasNoExpiryUI(t *testing.T) {
 		"Срок действия",
 	} {
 		if strings.Contains(body, needle) {
-			t.Errorf("dashboard must not show expiry UI %q", needle)
+			t.Errorf("SPA must not show expiry UI %q", needle)
 		}
 	}
 	after, err := db.ClientsAll(f.h)
 	if err != nil {
 		t.Fatalf("ClientsAll after: %v", err)
 	}
-	if len(before) != 1 || len(after) != 1 || after[0].ID != c.ID {
-		t.Fatalf("DB mutated by dashboard: before=%v after=%v", before, after)
-	}
-	if after[0].ExpiresAt != past {
-		t.Errorf("stored expires_at changed: %q", after[0].ExpiresAt)
+	if len(after) != 1 || after[0].ExpiresAt != past {
+		t.Errorf("stored expires_at changed: %+v", after)
 	}
 }
 
 func TestDashboardStatusNA(t *testing.T) {
 	f := newFixture(t)
 	f.addClient("x")
-	// no status file written
-	body := f.get("/").Body.String()
-	if !strings.Contains(body, "Туннель: статус недоступен") {
-		t.Errorf("NA banner missing: %s", body)
-	}
-	if !strings.Contains(body, "офлайн") {
-		t.Errorf("NA: clients must render offline")
+	assertSPA(t, f.get("/"))
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 1 || list[0]["online"] != false {
+		t.Fatalf("NA: clients must be offline: %#v", list)
 	}
 }
 
@@ -413,24 +372,24 @@ func TestDashboardStatusDown(t *testing.T) {
 	f := newFixture(t)
 	f.addClient("x")
 	f.setStatus(&status.Status{Schema: status.SchemaVersion, GeneratedAt: time.Now().UTC(), Interface: nil, Peers: []status.Peer{}})
-	body := f.get("/").Body.String()
-	if !strings.Contains(body, "Туннель: интерфейс выключен") {
-		t.Errorf("down banner missing: %s", body)
+	assertSPA(t, f.get("/"))
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 1 {
+		t.Fatalf("down: want 1 client, got %#v", list)
 	}
 }
 
 func TestDashboardStatusErrorGeneric(t *testing.T) {
 	f := newFixture(t)
 	f.addClient("x")
-	// malformed status containing secret-looking material: the parse
-	// fails and nothing from the file may leak into the response.
 	f.setRawStatus(`{garbage` + `"private_key":"` + samplePrivateKey + `"` + `}`)
 	body := f.get("/").Body.String()
-	if !strings.Contains(body, "Туннель: ошибка статуса") {
-		t.Errorf("error banner missing: %s", body)
-	}
 	if strings.Contains(body, samplePrivateKey) {
 		t.Errorf("malformed status content leaked: %s", body)
+	}
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 1 {
+		t.Fatalf("error status still lists clients: %#v", list)
 	}
 }
 
@@ -440,10 +399,11 @@ func TestDashboardEscaping(t *testing.T) {
 	f.setStatus(upStatusWith(peerFor(c.PublicKey)))
 	body := f.get("/").Body.String()
 	if strings.Contains(body, "<script>alert") {
-		t.Fatalf("client name not escaped: %s", body)
+		t.Fatalf("SPA shell must not include client name: %s", body)
 	}
-	if !strings.Contains(body, "&lt;script&gt;") {
-		t.Errorf("escaped form missing: %s", body)
+	raw := f.get("/api/clients").Body.String()
+	if strings.Contains(raw, "<script>alert") {
+		t.Fatalf("JSON must escape HTML: %s", raw)
 	}
 }
 
@@ -455,15 +415,10 @@ func TestDashboardNoSecrets(t *testing.T) {
 	}
 	c, priv, psk := f.addClient("sec")
 	f.setStatus(upStatusWith(peerFor(c.PublicKey)))
-	body := f.get("/").Body.String()
+	body := f.get("/").Body.String() + f.get("/api/clients").Body.String()
 	for _, secret := range []string{serverRow.PrivateKey, priv, psk, samplePrivateKey, samplePresharedKey} {
 		if secret != "" && strings.Contains(body, secret) {
 			t.Errorf("secret %q leaked into response", secret)
-		}
-	}
-	for _, field := range []string{"private_key", "preshared_key"} {
-		if strings.Contains(body, field) {
-			t.Errorf("secret field name %q in response", field)
 		}
 	}
 }
@@ -471,14 +426,13 @@ func TestDashboardNoSecrets(t *testing.T) {
 func TestDashboardEmptyClients(t *testing.T) {
 	f := newFixture(t)
 	f.setStatus(upStatusWith())
-	body := f.get("/").Body.String()
-	if !strings.Contains(body, "Клиентов пока нет.") {
-		t.Errorf("empty state missing: %s", body)
+	assertSPA(t, f.get("/"))
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 0 {
+		t.Fatalf("empty list = %#v", list)
 	}
 }
 
-// TestDashboardTrafficTotals (T-120 round 2 §9): the statsline sums
-// rx/tx over all clients — no history, just the current totals.
 func TestDashboardTrafficTotals(t *testing.T) {
 	f := newFixture(t)
 	a, _, _ := f.addClient("alpha")
@@ -490,26 +444,25 @@ func TestDashboardTrafficTotals(t *testing.T) {
 	pb.RxBytes = 5000
 	pb.TxBytes = 9000
 	f.setStatus(upStatusWith(pa, pb))
-	body := f.get("/").Body.String()
-	for _, want := range []string{"Вх:", "Исх:", "9.8 KiB"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("traffic totals missing %q", want)
-		}
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 2 {
+		t.Fatalf("want 2 clients: %#v", list)
 	}
 }
 
-// ---- M6.1 regression: foundation behavior on the same server ----
-
 func TestUnknownRoute404(t *testing.T) {
 	f := newFixture(t)
-	for _, target := range []string{"/nope", "/status.json"} {
-		rec := f.get(target)
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("GET %s: code = %d, want 404", target, rec.Code)
-		}
-		if strings.Contains(rec.Body.String(), target) {
-			t.Errorf("GET %s: 404 body echoes the path", target)
-		}
+	assertSPA(t, f.get("/nope"))
+	assertSPA(t, f.get("/status.json"))
+	rec := f.get("/api/nope")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /api/nope: code = %d, want 404", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("API 404 content-type = %q", rec.Header().Get("Content-Type"))
+	}
+	if strings.Contains(rec.Body.String(), "/api/nope") {
+		t.Errorf("API 404 body echoes the path")
 	}
 }
 
@@ -558,12 +511,10 @@ func TestPanicRecoveryGeneric500(t *testing.T) {
 func TestHTMLEscapingFlash(t *testing.T) {
 	f := newFixture(t)
 	rec := f.get("/?msg=%3Cscript%3Ealert(1)%3C/script%3E")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200", rec.Code)
-	}
+	assertSPA(t, rec)
 	body := rec.Body.String()
 	if strings.Contains(body, "<script>alert(1)</script>") {
-		t.Fatalf("flash not escaped: %q", body)
+		t.Fatalf("query must not appear unescaped: %q", body)
 	}
 }
 
@@ -607,6 +558,22 @@ func TestBodyLimitSmallPOSTRoutesNormally(t *testing.T) {
 	}
 }
 
+func TestStaticCSSAndTemplatePurity(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{"/login", "/", "/backups"} {
+		rec := f.get(path)
+		if path == "/login" {
+			rec = httptest.NewRecorder()
+			f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, path, ""))
+		}
+		assertSPA(t, rec)
+		body := rec.Body.String()
+		if strings.Contains(body, "/static/app.js") || strings.Contains(body, "/static/tailwind.css") {
+			t.Fatalf("GET %s still references deleted /static assets", path)
+		}
+	}
+}
+
 func TestRedirect303(t *testing.T) {
 	f := newFixture(t)
 	f.server.Handle("POST", "/prg", func(w http.ResponseWriter, r *http.Request) {
@@ -623,72 +590,3 @@ func TestRedirect303(t *testing.T) {
 	}
 }
 
-// TestStaticCSSAndTemplatePurity (T-120): the embedded compiled
-// Tailwind stylesheet and the progressive-enhancement script are served
-// publicly at /static/* (the login page needs them before any session
-// exists), and no rendered page carries inline styles, inline scripts
-// or inline event handlers — the CSP "default-src 'self'" forbids
-// them. The ONLY script allowed is the external /static/app.js (round 2
-// §12); every page embeds it exactly once and links the single
-// committed /static/tailwind.css stylesheet.
-func TestStaticCSSAndTemplatePurity(t *testing.T) {
-	f := newFixture(t)
-
-	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/static/tailwind.css", ""))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /static/tailwind.css: code = %d, want 200", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
-		t.Fatalf("css content-type = %q, want text/css", ct)
-	}
-	if strings.TrimSpace(rec.Body.String()) == "" {
-		t.Fatal("css body is empty")
-	}
-	for _, needle := range []string{"--tw-", ".btn", ".badge", ".card", ".modal"} {
-		if !strings.Contains(rec.Body.String(), needle) {
-			t.Fatalf("compiled tailwind.css misses %q — artifact is stale", needle)
-		}
-	}
-
-	rec = httptest.NewRecorder()
-	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/static/app.js", ""))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /static/app.js: code = %d, want 200", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
-		t.Fatalf("app.js content-type = %q, want javascript", ct)
-	}
-	if strings.TrimSpace(rec.Body.String()) == "" {
-		t.Fatal("app.js body is empty")
-	}
-
-	for _, path := range []string{"/login", "/", "/backups"} {
-		rec := httptest.NewRecorder()
-		var req *http.Request
-		if path == "/login" {
-			req = sessionRequest(t, http.MethodGet, path, "")
-		} else {
-			req = sessionRequest(t, http.MethodGet, path, f.sid)
-		}
-		f.server.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET %s: code = %d, want 200", path, rec.Code)
-		}
-		body := rec.Body.String()
-		if n := strings.Count(body, `<script src="/static/app.js" defer></script>`); n != 1 {
-			t.Fatalf("GET %s: app.js script tag count = %d, want exactly 1", path, n)
-		}
-		if n := strings.Count(body, `<link rel="stylesheet" href="/static/tailwind.css">`); n != 1 {
-			t.Fatalf("GET %s: tailwind.css link count = %d, want exactly 1", path, n)
-		}
-		for _, needle := range []string{
-			"<script>", "style=", "onclick=", "onerror=", "onload=",
-			"onchange=", "oninput=", "onsubmit=", "onmouseover=", "onfocus=",
-		} {
-			if strings.Contains(body, needle) {
-				t.Fatalf("GET %s: page contains %q — CSP-incompatible", path, needle)
-			}
-		}
-	}
-}

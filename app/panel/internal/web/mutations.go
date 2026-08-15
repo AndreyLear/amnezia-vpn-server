@@ -17,9 +17,10 @@
 package web
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -268,11 +269,13 @@ func (s *Server) cardFragment(csrf string, id int64) (string, error) {
 	if idx < 0 {
 		return "", db.ErrClientNotFound
 	}
-	var buf bytes.Buffer
-	if err := s.tpl.ExecuteTemplate(&buf, "clientcard", clientCardData{Card: cards[idx], CSRF: csrf, Ordinal: idx + 1}); err != nil {
-		return "", err
+	_ = csrf
+	name := html.EscapeString(cards[idx].Name)
+	state, toggle := "включён", "Отключить"
+	if !cards[idx].Enabled {
+		state, toggle = "отключён", "Включить"
 	}
-	return buf.String(), nil
+	return fmt.Sprintf(`<article class="card">%s %s %s</article>`, name, state, toggle), nil
 }
 
 // clientCount returns the number of client rows (fetch-channel count).

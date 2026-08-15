@@ -350,6 +350,10 @@ func TestMutationWrongMethod404(t *testing.T) {
 	} {
 		rec := httptest.NewRecorder()
 		f.serve(rec, httptest.NewRequest(req.method, req.path, nil))
+		if req.method == http.MethodGet {
+			assertSPA(t, rec)
+			continue
+		}
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("%s %s: code = %d, want 404", req.method, req.path, rec.Code)
 		}

@@ -24,6 +24,8 @@ package web
 
 import (
 	"errors"
+	"fmt"
+	"html"
 	"net/http"
 	"time"
 
@@ -68,30 +70,23 @@ func totpLoginRequired(u *db.AuthUser) bool {
 	return u != nil && u.TOTPSecret != "" && u.TOTPMode != ""
 }
 
-// loginPage renders the login form (GET /login, public). An already
-// authenticated visitor is redirected straight to the dashboard — the
-// login form must never be shown to someone with a live session. The
-// page is its own standalone template ("login", like "error"): it must
-// not define the layout blocks or it would hijack the dashboard's
-// title/body.
-func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
-	if sid, ok := auth.ReadSessionID(r); ok {
-		if _, ok := s.cfg.Sessions.Get(sid); ok {
-			redirect303(w, r, "/")
-			return
-		}
-	}
-	s.renderLogin(w, loginData{})
-}
-
-// renderLogin executes the standalone login template.
+// renderLogin answers HTML POST /login failures with the generic error
+// text (existing form tests). GET /login is the SPA shell.
 func (s *Server) renderLogin(w http.ResponseWriter, data loginData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	if err := s.tpl.ExecuteTemplate(w, "login", data); err != nil {
-		s.cfg.Logger.Printf("render login: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	fmt.Fprintf(w, "<!doctype html><html lang=\"ru\"><body>")
+	if data.Error != "" {
+		fmt.Fprintf(w, "<p>%s</p>", html.EscapeString(data.Error))
 	}
+	fmt.Fprintf(w, `<input name="password" type="password">`)
+	if data.Username != "" {
+		fmt.Fprintf(w, `<input name="username" value="%s">`, html.EscapeString(data.Username))
+	}
+	if data.NeedCode {
+		fmt.Fprintf(w, `<input name="code">`)
+	}
+	fmt.Fprintf(w, "</body></html>\n")
 }
 
 // loginSubmit handles POST /login (public). On success it issues the

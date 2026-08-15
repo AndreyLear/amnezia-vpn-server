@@ -117,16 +117,11 @@ func TestLoginPageRendersForm(t *testing.T) {
 		t.Fatalf("code = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{
-		`action="/login"`, `method="post"`,
-		`name="username"`, `autocomplete="username"`,
-		`name="password"`, `type="password"`, `autocomplete="current-password"`,
-		`set-password`,
-		`id="login-2fa"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("login form misses %q", want)
-		}
+	if !strings.Contains(body, "<!doctype html>") {
+		t.Errorf("GET /login must serve the SPA shell, missing %q", "<!doctype html>")
+	}
+	if !strings.Contains(body, `id="root"`) {
+		t.Errorf("GET /login must serve the SPA shell, missing %q", `id="root"`)
 	}
 	for _, leak := range []string{"/forgot", "mailto:"} {
 		if strings.Contains(body, leak) {
@@ -514,10 +509,8 @@ func TestLoginWithExistingSessionRotates(t *testing.T) {
 
 	// The old SID no longer authenticates a dashboard request.
 	rec = httptest.NewRecorder()
-	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/", s1.Value))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("GET / with old SID: code = %d, want 303 /login", rec.Code)
-	}
+	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/api/me", s1.Value))
+	assertAPIUnauthorized(t, rec)
 }
 
 func TestLoginRepeatedNoDoubleSession(t *testing.T) {
@@ -616,10 +609,8 @@ func TestLogout(t *testing.T) {
 
 	// The old SID no longer authenticates anything.
 	rec = httptest.NewRecorder()
-	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/", c.Value))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("GET / after logout: code = %d, want 303 /login", rec.Code)
-	}
+	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/api/me", c.Value))
+	assertAPIUnauthorized(t, rec)
 	if strings.Contains(rec.Body.String(), c.Value) {
 		t.Error("post-logout challenge leaks the SID")
 	}

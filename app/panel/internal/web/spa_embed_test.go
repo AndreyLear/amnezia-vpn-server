@@ -33,10 +33,8 @@ func TestAssetsServedFromEmbed(t *testing.T) {
 		t.Fatalf("CSP=%q", rec.Header().Get("Content-Security-Policy"))
 	}
 
-	cssReq := httptest.NewRequest(http.MethodGet, "/static/tailwind.css", nil)
-	cssRec := httptest.NewRecorder()
-	f.serve(cssRec, cssReq)
-	if cssRec.Code != http.StatusOK {
-		t.Fatalf("GET /static/tailwind.css code=%d", cssRec.Code)
-	}
+	idx := httptest.NewRequest(http.MethodGet, "/", nil)
+	idxRec := httptest.NewRecorder()
+	f.server.ServeHTTP(idxRec, idx)
+	assertSPA(t, idxRec)
 }

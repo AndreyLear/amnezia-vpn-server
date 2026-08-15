@@ -106,7 +106,7 @@ export default function HomePage() {
 
   return (
     <AppShell totpEnabled={totpEnabled} onTotpChange={setTotpEnabled}>
-      <div className="grid grid-cols-1 gap-4 pb-8 min-[752px]:grid-cols-2">
+      <div data-testid="client-grid" className="grid grid-cols-1 gap-4 pb-8 min-[752px]:grid-cols-2">
         <AddClientCard onClick={() => setAddOpen(true)} />
         {clients.map((client) => (
           <ClientCard

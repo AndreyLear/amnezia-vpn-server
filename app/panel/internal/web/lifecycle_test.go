@@ -93,12 +93,15 @@ func TestAuthFullLifecycle(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("dashboard: code = %d, want 200", rec.Code)
 	}
+	assertSPA(t, rec)
 	dash := rec.Body.String()
 	if strings.Contains(dash, "Вы вошли как alice") {
 		t.Fatalf("dashboard must not expose the signed-in principal: %q", dash)
 	}
-	if !strings.Contains(dash, `<input type="hidden" name="_csrf" value="`+sess.CSRFToken+`">`) {
-		t.Fatal("dashboard must embed the session CSRF token in a hidden input")
+	me := httptest.NewRecorder()
+	f.server.ServeHTTP(me, sessionRequest(t, http.MethodGet, "/api/me", c.Value))
+	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), sess.CSRFToken) {
+		t.Fatalf("GET /api/me must return CSRF: %d %s", me.Code, me.Body.String())
 	}
 
 	// 5. Full CRUD over HTTP (PRG 303 everywhere, real token).
@@ -169,9 +172,10 @@ func TestAuthFullLifecycle(t *testing.T) {
 	//    nothing anymore.
 	rec = httptest.NewRecorder()
 	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/", c.Value))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("GET / after logout: code = %d, want 303 /login", rec.Code)
-	}
+	assertSPA(t, rec)
+	rec = httptest.NewRecorder()
+	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/api/me", c.Value))
+	assertAPIUnauthorized(t, rec)
 	rec = postAuth(f, "/clients/new", c.Value, sess.CSRFToken, url.Values{"name": {"intruder"}})
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("POST after logout: code = %d, want 401", rec.Code)
@@ -195,7 +199,9 @@ func TestAuthFullLifecycle(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("dashboard after re-login: code = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "carol-renamed") {
-		t.Fatal("dashboard after re-login must still show the renamed client")
+	assertSPA(t, rec)
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) != 1 || list[0]["name"] != "carol-renamed" {
+		t.Fatalf("clients after re-login = %#v", list)
 	}
 }

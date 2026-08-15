@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 )
 
@@ -61,34 +60,6 @@ type backupsData struct {
 // message.
 func (s *Server) flashBackups(w http.ResponseWriter, r *http.Request, msg string) {
 	redirect303(w, r, "/backups?msg="+url.QueryEscape(msg))
-}
-
-// backupsPage handles GET /backups: the upload form. A missing backups
-// directory is fine — the page never lists archives.
-func (s *Server) backupsPage(w http.ResponseWriter, r *http.Request) {
-	pending, ok := s.pendingExists(w)
-	if !ok {
-		return
-	}
-	sess, _ := auth.CurrentUser(r.Context())
-	s.renderBackups(w, backupsData{
-		Flash:    r.URL.Query().Get("msg"),
-		Username: sess.Username,
-		CSRF:     sess.CSRFToken,
-		Pending:  pending,
-	})
-}
-
-// renderBackups executes the standalone "backups" template (like
-// "login"/"error": it must not define the layout blocks or it would
-// hijack the dashboard's title/body).
-func (s *Server) renderBackups(w http.ResponseWriter, data backupsData) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	if err := s.tpl.ExecuteTemplate(w, "backups", data); err != nil {
-		s.cfg.Logger.Printf("render backups: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
 }
 
 // backupDownloadNow handles POST /backups/download (T-125/T-143): a

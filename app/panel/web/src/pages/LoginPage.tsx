@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { TotpDialog } from "@/components/TotpDialog";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,19 @@ export default function LoginPage() {
   const [totpError, setTotpError] = useState("");
   const [needCode, setNeedCode] = useState(false);
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch("/api/me", { credentials: "same-origin" });
+      if (!cancelled && res.ok) {
+        window.location.assign("/");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function submit(nextCode = "") {
     setPending(true);
