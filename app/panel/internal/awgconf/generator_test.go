@@ -42,12 +42,28 @@ func TestGenerateParamsRangesAndValidity(t *testing.T) {
 			if err := validateHeaderSpec(h); err != nil {
 				t.Fatalf("%s = %q: %v", name, h, err)
 			}
-			if len(h) != 7 {
-				t.Fatalf("%s = %q: want 7-digit header", name, h)
+			if !strings.Contains(h, "-") {
+				t.Fatalf("%s = %q: want N-M range", name, h)
 			}
 		}
-		if p.H1 == p.H2 || p.H1 == p.H3 || p.H1 == p.H4 || p.H2 == p.H3 || p.H2 == p.H4 || p.H3 == p.H4 {
-			t.Fatalf("headers must be unique: %s %s %s %s", p.H1, p.H2, p.H3, p.H4)
+		seen := []headerInterval{}
+		for _, h := range []string{p.H1, p.H2, p.H3, p.H4} {
+			iv, err := parseHeaderSpec(h)
+			if err != nil {
+				t.Fatalf("parse %q: %v", h, err)
+			}
+			if iv.lo == iv.hi {
+				t.Fatalf("header %q: degenerate range", h)
+			}
+			if iv.hi-iv.lo+1 < genHSpanMin || iv.hi-iv.lo+1 > genHSpanMax {
+				t.Fatalf("header %q: span %d, want %d..%d", h, iv.hi-iv.lo+1, genHSpanMin, genHSpanMax)
+			}
+			for _, old := range seen {
+				if headerIntervalsOverlap(old, iv) {
+					t.Fatalf("headers overlap: %s %s %s %s", p.H1, p.H2, p.H3, p.H4)
+				}
+			}
+			seen = append(seen, iv)
 		}
 		for name, chain := range map[string]string{
 			"i1": p.I1, "i2": p.I2, "i3": p.I3, "i4": p.I4, "i5": p.I5,

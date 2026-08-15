@@ -3,8 +3,9 @@
 //
 //	DB rows → typed structs → validation → deterministic render → atomic write
 //
-// All validation rules mirror the pinned amneziawg-tools 1.0.20260223 and
-// amneziawg-go 0.2.19 parsers (see docs/TECHNICAL_SPEC_v2.0.md §3).
+// Header specs (H1–H4) follow amneziawg-tools 3.1: a 7-digit scalar or
+// an inclusive N-M range in [1000000, 9999999]. I-tags still match
+// 1.0.20260223 (t/r/rc/rd/b; d/ds/dz rejected).
 package awgconf
 
 import (
@@ -170,8 +171,20 @@ func ParseParams(raw string) (*Params, error) {
 	return p, nil
 }
 
+// headerBoundMin/Max are the inclusive 7-digit window tools 3.1 store
+// as a degenerate or proper H range without wrapping a u32.
+const (
+	headerBoundMin uint64 = 1000000
+	headerBoundMax uint64 = 9999999
+)
+
+// headerInterval is an inclusive H1–H4 window.
+type headerInterval struct {
+	lo, hi uint64
+}
+
 // validateParams applies the ranges/relations enforced by pinned
-// amneziawg-tools 1.0.20260223 (H 7-digit; I-tags t/r/rc/rd/b).
+// amneziawg-tools 3.1 (H scalar or N-M; I-tags t/r/rc/rd/b).
 func validateParams(p *Params) error {
 	if p.Jc != nil && *p.Jc < 1 {
 		return fmt.Errorf("awg_params.jc must be >= 1")
@@ -185,13 +198,21 @@ func validateParams(p *Params) error {
 	if p.Jmin != nil && p.Jmax != nil && *p.Jmin > *p.Jmax {
 		return fmt.Errorf("awg_params.jmin (%d) must be <= jmax (%d)", *p.Jmin, *p.Jmax)
 	}
+	var seen []headerInterval
 	for _, hv := range []string{p.H1, p.H2, p.H3, p.H4} {
 		if hv == "" {
 			continue
 		}
-		if err := validateHeaderSpec(hv); err != nil {
+		iv, err := parseHeaderSpec(hv)
+		if err != nil {
 			return err
 		}
+		for _, old := range seen {
+			if headerIntervalsOverlap(old, iv) {
+				return fmt.Errorf("awg_params headers overlap: %q", hv)
+			}
+		}
+		seen = append(seen, iv)
 	}
 	for _, iv := range []string{p.I1, p.I2, p.I3, p.I4, p.I5} {
 		if iv == "" {
@@ -204,26 +225,58 @@ func validateParams(p *Params) error {
 	return nil
 }
 
-// validateHeaderSpec mirrors pinned amneziawg-tools 1.0.20260223:
-// a single 7-digit decimal in [1000000, 9999999]. "N-M" is rejected.
+// validateHeaderSpec accepts a 7-digit scalar or an inclusive N-M range
+// in [1000000, 9999999] (amneziawg-tools 3.1).
 func validateHeaderSpec(spec string) error {
+	_, err := parseHeaderSpec(spec)
+	return err
+}
+
+func parseHeaderSpec(spec string) (headerInterval, error) {
 	if spec == "" {
-		return nil
+		return headerInterval{}, nil
 	}
-	if strings.Contains(spec, "-") {
-		return fmt.Errorf("awg_params header %q: bad format, want 7-digit N in [1000000, 9999999]", spec)
+	loStr, hiStr, isRange := strings.Cut(spec, "-")
+	if isRange {
+		if hiStr == "" || strings.Contains(hiStr, "-") {
+			return headerInterval{}, fmt.Errorf("awg_params header %q: bad format, want 7-digit N or N-M in [1000000, 9999999]", spec)
+		}
+		lo, err := parseHeaderBound(spec, loStr)
+		if err != nil {
+			return headerInterval{}, err
+		}
+		hi, err := parseHeaderBound(spec, hiStr)
+		if err != nil {
+			return headerInterval{}, err
+		}
+		if lo > hi {
+			return headerInterval{}, fmt.Errorf("awg_params header %q: inverted range, want N <= M", spec)
+		}
+		return headerInterval{lo: lo, hi: hi}, nil
 	}
-	n, err := strconv.ParseUint(spec, 10, 32)
+	n, err := parseHeaderBound(spec, spec)
 	if err != nil {
-		return fmt.Errorf("awg_params header %q: failed to parse %q", spec, spec)
+		return headerInterval{}, err
 	}
-	if strconv.FormatUint(n, 10) != spec {
-		return fmt.Errorf("awg_params header %q: bad format, want 7-digit N in [1000000, 9999999]", spec)
+	return headerInterval{lo: n, hi: n}, nil
+}
+
+func parseHeaderBound(spec, token string) (uint64, error) {
+	n, err := strconv.ParseUint(token, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("awg_params header %q: failed to parse %q", spec, token)
 	}
-	if n < 1000000 || n > 9999999 {
-		return fmt.Errorf("awg_params header %q: out of range, want 7-digit N in [1000000, 9999999]", spec)
+	if strconv.FormatUint(n, 10) != token {
+		return 0, fmt.Errorf("awg_params header %q: bad format, want 7-digit N or N-M in [1000000, 9999999]", spec)
 	}
-	return nil
+	if n < headerBoundMin || n > headerBoundMax {
+		return 0, fmt.Errorf("awg_params header %q: out of range, want 7-digit N or N-M in [1000000, 9999999]", spec)
+	}
+	return n, nil
+}
+
+func headerIntervalsOverlap(a, b headerInterval) bool {
+	return a.lo <= b.hi && b.lo <= a.hi
 }
 
 // validateObfChain accepts a sequence of <tag ...> blocks. Text outside

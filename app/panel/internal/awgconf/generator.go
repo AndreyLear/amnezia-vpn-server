@@ -3,8 +3,8 @@
 //
 // Everything here draws from crypto/rand and every generated value lies
 // inside the ranges enforced by validateParams/validateHeaderSpec/
-// validateObfChain (awgconf.go), which mirror pinned
-// amneziawg-tools 1.0.20260223 (not the wider amneziawg-go parsers).
+// validateObfChain (awgconf.go). H1–H4 are inclusive 7-digit N-M ranges
+// (amneziawg-tools 3.1); I-tags match 1.0.20260223 (t/r/rc/rd/b).
 package awgconf
 
 import (
@@ -38,13 +38,16 @@ const (
 	genBBytesMax    = 2
 	genHMin         = 1000000
 	genHMax         = 9999999
+	genHSpanMin     = 100 // inclusive width of each H range
+	genHSpanMax     = 10000
+	genHAttempts    = 64
 )
 
 // GenerateParams builds a full random AWG 2.0 obfuscation set
 // (Jc/Jmin/Jmax/S1-S4/H1-H4/I1-I5) from crypto/rand. S3 and S4 are
 // required: the AmneziaVPN app treats a .conf with I1–I5 but no S3/S4
 // as protocol 1.5, which does not handshake with a 2.x runtime.
-// H1–H4 stay 7-digit scalars (pinned amneziawg-tools reject N-M ranges).
+// H1–H4 are inclusive 7-digit N-M ranges that do not overlap.
 func GenerateParams() (*Params, error) {
 	jc, err := randRange(genJcMin, genJcMax)
 	if err != nil {
@@ -75,21 +78,14 @@ func GenerateParams() (*Params, error) {
 		return nil, err
 	}
 	headers := make([]string, 4)
-	seen := make(map[string]struct{}, 4)
+	used := make([]headerInterval, 0, 4)
 	for i := range headers {
-		for {
-			h, err := randRange(genHMin, genHMax)
-			if err != nil {
-				return nil, err
-			}
-			hs := strconv.FormatUint(h, 10)
-			if _, dup := seen[hs]; dup {
-				continue
-			}
-			seen[hs] = struct{}{}
-			headers[i] = hs
-			break
+		hs, iv, err := randomHeaderRange(used)
+		if err != nil {
+			return nil, err
 		}
+		headers[i] = hs
+		used = append(used, iv)
 	}
 	chains := make([]string, 5)
 	for i := range chains {
@@ -163,6 +159,36 @@ type paramsJSON struct {
 // genObfTags is the pool accepted by pinned amneziawg-tools 1.0.20260223:
 // t (no arg), r/rc/rd (int), b (hex). d/ds/dz are rejected by those tools.
 var genObfTags = []string{"t", "r", "rc", "rd", "b"}
+
+// randomHeaderRange picks a 7-digit inclusive N-M window that does not
+// overlap any already chosen H interval.
+func randomHeaderRange(used []headerInterval) (string, headerInterval, error) {
+	for attempt := 0; attempt < genHAttempts; attempt++ {
+		span, err := randRange(genHSpanMin, genHSpanMax)
+		if err != nil {
+			return "", headerInterval{}, err
+		}
+		loMax := genHMax - span + 1
+		lo, err := randRange(genHMin, loMax)
+		if err != nil {
+			return "", headerInterval{}, err
+		}
+		hi := lo + span - 1
+		iv := headerInterval{lo: lo, hi: hi}
+		overlap := false
+		for _, old := range used {
+			if headerIntervalsOverlap(old, iv) {
+				overlap = true
+				break
+			}
+		}
+		if overlap {
+			continue
+		}
+		return strconv.FormatUint(lo, 10) + "-" + strconv.FormatUint(hi, 10), iv, nil
+	}
+	return "", headerInterval{}, fmt.Errorf("awgconf: could not place a non-overlapping H range")
+}
 
 // randomObfChain builds one random signature-packet obfuscation chain:
 // 1..3 well-formed <tag ...> blocks, e.g. "<t><r 4><b 0x1a>".

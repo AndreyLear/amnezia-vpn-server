@@ -169,10 +169,11 @@ func TestParseParamsValidation(t *testing.T) {
 		{"negative s", `{"s2":-1}`, "not an integer"},
 		{"overflow s", `{"s2":70000}`, "not an integer"},
 		{"string for jc", `{"jc":"3"}`, "not an integer"},
-		{"header range inverted", `{"h1":"10-5"}`, "bad format"},
+		{"header range inverted", `{"h1":"1000100-1000000"}`, "inverted range"},
 		{"bad header token", `{"h1":"abc"}`, "failed to parse"},
 		{"header range form", `{"h1":"1-2-3"}`, "bad format"},
-		{"header N-M", `{"h1":"3-5"}`, "bad format"},
+		{"header N-M below 7 digits", `{"h1":"3-5"}`, "out of range"},
+		{"header overlap", `{"h1":"1000000-1000100","h2":"1000050-1000200"}`, "overlap"},
 		{"bad header hex", `{"h2":"0x10"}`, "failed to parse"},
 		{"huge header", `{"h1":"4294967296"}`, "failed to parse"},
 		{"header below 7 digits", `{"h1":"999999"}`, "out of range"},
@@ -220,6 +221,8 @@ func TestParseParamsAcceptsPinnedToolsFormats(t *testing.T) {
 		`{"h1":"1000000"}`,
 		`{"h2":"9999999"}`,
 		`{"h3":"1234567"}`,
+		`{"h1":"1000000-1000100"}`,
+		`{"h1":"1000000-1000100","h2":"2000000-2000500","h3":"3000000-3000001","h4":"9999900-9999999"}`,
 	}
 	for _, raw := range oKs {
 		if _, err := ParseParams(raw); err != nil {
