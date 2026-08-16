@@ -166,4 +166,16 @@ describe("AppShell header", () => {
     expect(header).toHaveClass("pt-4");
     expect(header).not.toHaveClass("py-4");
   });
+
+  it("uses outline variant on the overflow Меню button", () => {
+    render(
+      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const menu = screen.getByRole("button", { name: "Меню" });
+    expect(menu).toHaveAttribute("data-variant", "outline");
+    expect(menu).not.toHaveAttribute("data-variant", "ghost");
+  });
 });

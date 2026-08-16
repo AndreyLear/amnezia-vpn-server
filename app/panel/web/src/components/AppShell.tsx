@@ -69,7 +69,7 @@ export function AppShell({
               <BackupMenu restorePending={restorePending} />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" aria-label="Меню">
+                  <Button variant="outline" size="icon" aria-label="Меню">
                     <EllipsisVerticalIcon />
                   </Button>
                 </DropdownMenuTrigger>
