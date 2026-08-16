@@ -14,7 +14,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -37,6 +36,66 @@ type ClientInfoDialogProps = {
   onDelete?: () => void;
 };
 
+function PropertyEditButtons({
+  editing,
+  pending,
+  editLabel,
+  saveLabel,
+  cancelLabel,
+  onEdit,
+  onSave,
+  onCancel,
+}: {
+  editing: boolean;
+  pending?: boolean;
+  editLabel: string;
+  saveLabel: string;
+  cancelLabel: string;
+  onEdit: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  if (editing) {
+    return (
+      <div className="flex gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={saveLabel}
+          disabled={pending}
+          onClick={onSave}
+        >
+          Сохранить
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={cancelLabel}
+          disabled={pending}
+          onClick={onCancel}
+        >
+          Отменить
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-label={editLabel}
+      disabled={pending}
+      onClick={onEdit}
+    >
+      Изменить
+    </Button>
+  );
+}
+
 export function ClientInfoDialog({
   client,
   pending,
@@ -48,13 +107,80 @@ export function ClientInfoDialog({
   onDelete,
 }: ClientInfoDialogProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const [viewName, setViewName] = useState("");
+  const [viewDescription, setViewDescription] = useState("");
+  const [nameDraft, setNameDraft] = useState("");
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [editingDescription, setEditingDescription] = useState(false);
 
   useEffect(() => {
-    setName(client?.name ?? "");
-    setDescription(client?.description ?? "");
+    setViewName(client?.name ?? "");
+    setViewDescription(client?.description ?? "");
+    setNameDraft(client?.name ?? "");
+    setDescriptionDraft(client?.description ?? "");
+    setEditingName(false);
+    setEditingDescription(false);
   }, [client?.id, client == null]);
+
+  useEffect(() => {
+    setViewName(client?.name ?? "");
+  }, [client?.name]);
+
+  useEffect(() => {
+    setViewDescription(client?.description ?? "");
+  }, [client?.description]);
+
+  const committedDescription = client?.description ?? "";
+
+  function startNameEdit() {
+    setNameDraft(viewName);
+    setEditingName(true);
+  }
+
+  function startDescriptionEdit() {
+    setDescriptionDraft(viewDescription);
+    setEditingDescription(true);
+  }
+
+  function cancelNameEdit() {
+    setNameDraft(viewName);
+    setEditingName(false);
+  }
+
+  function cancelDescriptionEdit() {
+    setDescriptionDraft(viewDescription);
+    setEditingDescription(false);
+  }
+
+  async function saveName() {
+    if (!client) return;
+    if (!nameDraft.trim()) return;
+    if (nameDraft === client.name) {
+      setEditingName(false);
+      return;
+    }
+    const payload = { name: nameDraft, description: committedDescription };
+    const saved = await onSave?.(payload);
+    if (saved) {
+      setViewName(payload.name);
+      setEditingName(false);
+    }
+  }
+
+  async function saveDescription() {
+    if (!client) return;
+    if (descriptionDraft === committedDescription) {
+      setEditingDescription(false);
+      return;
+    }
+    const payload = { name: client.name, description: descriptionDraft };
+    const saved = await onSave?.(payload);
+    if (saved) {
+      setViewDescription(payload.description);
+      setEditingDescription(false);
+    }
+  }
 
   return (
     <>
@@ -68,59 +194,82 @@ export function ClientInfoDialog({
               <DialogHeader>
                 <DialogTitle>Клиент</DialogTitle>
               </DialogHeader>
-              <form
-                className="grid gap-3"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!client) return;
-
-                  const unchanged =
-                    name === client.name &&
-                    description === (client.description ?? "");
-
-                  if (unchanged) {
-                    onOpenChange(false);
-                    return;
-                  }
-
-                  void (async () => {
-                    const saved = await onSave?.({ name, description });
-                    if (saved) {
-                      onOpenChange(false);
-                    }
-                  })();
-                }}
-              >
-                <div className="grid gap-2">
-                  <Label htmlFor="info-name">Имя</Label>
-                  <Input
-                    id="info-name"
-                    required
-                    maxLength={64}
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    disabled={pending}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="info-description">
-                    Описание{" "}
-                    <span className="font-normal text-muted-foreground">(опционально)</span>
-                  </Label>
-                  <Textarea
-                    id="info-description"
-                    rows={1}
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.stopPropagation();
-                      }
-                    }}
-                    disabled={pending}
-                  />
-                </div>
+              <div className="grid gap-3">
                 <dl className="grid gap-2 text-sm">
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      {editingName ? (
+                        <Label htmlFor="info-name" className="text-muted-foreground">
+                          Имя
+                        </Label>
+                      ) : (
+                        <dt className="text-muted-foreground">Имя</dt>
+                      )}
+                      <PropertyEditButtons
+                        editing={editingName}
+                        pending={pending}
+                        editLabel="Изменить имя"
+                        saveLabel="Сохранить имя"
+                        cancelLabel="Отменить имя"
+                        onEdit={startNameEdit}
+                        onSave={() => void saveName()}
+                        onCancel={cancelNameEdit}
+                      />
+                    </div>
+                    {editingName ? (
+                      <Input
+                        id="info-name"
+                        required
+                        maxLength={64}
+                        value={nameDraft}
+                        onChange={(e) => setNameDraft(e.target.value)}
+                        disabled={pending}
+                      />
+                    ) : (
+                      <dd>{viewName}</dd>
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      {editingDescription ? (
+                        <Label htmlFor="info-description" className="text-muted-foreground">
+                          Описание{" "}
+                          <span className="font-normal text-muted-foreground">(опционально)</span>
+                        </Label>
+                      ) : (
+                        <dt className="text-muted-foreground">
+                          Описание{" "}
+                          <span className="font-normal text-muted-foreground">(опционально)</span>
+                        </dt>
+                      )}
+                      <PropertyEditButtons
+                        editing={editingDescription}
+                        pending={pending}
+                        editLabel="Изменить описание"
+                        saveLabel="Сохранить описание"
+                        cancelLabel="Отменить описание"
+                        onEdit={startDescriptionEdit}
+                        onSave={() => void saveDescription()}
+                        onCancel={cancelDescriptionEdit}
+                      />
+                    </div>
+                    {editingDescription ? (
+                      <Textarea
+                        id="info-description"
+                        rows={1}
+                        value={descriptionDraft}
+                        onChange={(e) => setDescriptionDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.stopPropagation();
+                          }
+                        }}
+                        disabled={pending}
+                      />
+                    ) : (
+                      <dd>{viewDescription}</dd>
+                    )}
+                  </div>
                   <div>
                     <dt className="text-muted-foreground">Статус</dt>
                     <dd>
@@ -165,12 +314,7 @@ export function ClientInfoDialog({
                     Удалить
                   </Button>
                 </div>
-                <DialogFooter>
-                  <Button type="submit" disabled={pending}>
-                    Сохранить
-                  </Button>
-                </DialogFooter>
-              </form>
+              </div>
             </>
           ) : null}
         </DialogContent>

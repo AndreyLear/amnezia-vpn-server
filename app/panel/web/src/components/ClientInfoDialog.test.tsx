@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,16 +18,12 @@ const client: Client = {
 };
 
 describe("ClientInfoDialog", () => {
-  it("does not autofocus the name field when opened", async () => {
+  it("does not render a name input when opened", () => {
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 
-    const name = await screen.findByLabelText("Имя");
-    await waitFor(() => {
-      expect(name).toBeInTheDocument();
-    });
-
-    expect(name).not.toHaveFocus();
-    expect(document.activeElement).not.toBe(name);
+    expect(screen.queryByLabelText("Имя")).toBeNull();
+    expect(document.querySelector("#info-name")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Клиент" })).toBeInTheDocument();
   });
 
   it("uses a fixed dialog title", () => {
@@ -113,67 +109,50 @@ describe("ClientInfoDialog", () => {
     ).toBeNull();
   });
 
-  it("closes without saving when name and description are unchanged", async () => {
+  it("shows name and description as read-only text with Изменить buttons", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("phone")).toBeInTheDocument();
+    expect(screen.getByText("(опционально)")).toHaveClass("text-muted-foreground");
+
+    const editName = screen.getByRole("button", { name: "Изменить имя" });
+    const editDescription = screen.getByRole("button", { name: "Изменить описание" });
+    expect(editName).toHaveTextContent("Изменить");
+    expect(editDescription).toHaveTextContent("Изменить");
+
+    expect(document.querySelector("#info-name")).toBeNull();
+    expect(document.querySelector("#info-description")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Сохранить" })).toBeNull();
+  });
+
+  it("cancels name edit without calling onSave", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
-    const onOpenChange = vi.fn();
 
     render(
       <ClientInfoDialog
         client={client}
-        onOpenChange={onOpenChange}
+        onOpenChange={() => {}}
         onSave={onSave}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Сохранить" }));
+    await user.click(screen.getByRole("button", { name: "Изменить имя" }));
 
+    const name = screen.getByLabelText("Имя");
+    expect(name).toHaveValue("Alice");
+    await user.clear(name);
+    await user.type(name, "Bob");
+    await user.click(screen.getByRole("button", { name: "Отменить имя" }));
+
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(document.querySelector("#info-name")).toBeNull();
     expect(onSave).not.toHaveBeenCalled();
-    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("uses a growing textarea for the optional description", () => {
-    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
-
-    expect(screen.getByText("(опционально)")).toHaveClass("text-muted-foreground");
-
-    const description = screen.getByLabelText(/Описание/);
-    expect(description.tagName).toBe("TEXTAREA");
-    expect(description).toHaveClass("field-sizing-content", "min-h-8", "resize-none");
-    expect(description).not.toHaveClass("h-8");
-  });
-
-  it("inserts a newline in description on Enter without saving or closing", async () => {
-    const user = userEvent.setup();
-    const onSave = vi.fn();
-    const onOpenChange = vi.fn();
-
-    const { rerender } = render(
-      <ClientInfoDialog
-        client={client}
-        onOpenChange={onOpenChange}
-        onSave={onSave}
-      />,
-    );
-
-    const description = screen.getByLabelText(/Описание/);
-    await user.click(description);
-    await user.type(description, "{Enter}more");
-
-    rerender(
-      <ClientInfoDialog
-        client={{ ...client }}
-        onOpenChange={onOpenChange}
-        onSave={onSave}
-      />,
-    );
-
-    expect(description).toHaveValue("phone\nmore");
-    expect(onSave).not.toHaveBeenCalled();
-    expect(onOpenChange).not.toHaveBeenCalled();
-  });
-
-  it("saves and closes when name changes", async () => {
+  it("saves a changed name without closing the dialog", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(true);
     const onOpenChange = vi.fn();
@@ -186,12 +165,69 @@ describe("ClientInfoDialog", () => {
       />,
     );
 
+    await user.click(screen.getByRole("button", { name: "Изменить имя" }));
     const name = screen.getByLabelText("Имя");
     await user.clear(name);
     await user.type(name, "Bob");
-    await user.click(screen.getByRole("button", { name: "Сохранить" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить имя" }));
 
     expect(onSave).toHaveBeenCalledWith({ name: "Bob", description: "phone" });
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(document.querySelector("#info-name")).toBeNull();
+    expect(screen.getByText("Bob")).toBeInTheDocument();
+  });
+
+  it("edits description in a growing textarea and saves without closing", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(true);
+    const onOpenChange = vi.fn();
+
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={onOpenChange}
+        onSave={onSave}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Изменить описание" }));
+
+    const description = screen.getByLabelText(/Описание/);
+    expect(description.tagName).toBe("TEXTAREA");
+    expect(description).toHaveClass("field-sizing-content", "min-h-8", "resize-none");
+    expect(description).not.toHaveClass("h-8");
+
+    await user.click(description);
+    await user.type(description, "{Enter}more");
+
+    expect(description).toHaveValue("phone\nmore");
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Сохранить описание" }));
+
+    expect(onSave).toHaveBeenCalledWith({ name: "Alice", description: "phone\nmore" });
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(document.querySelector("#info-description")).toBeNull();
+  });
+
+  it("exits name edit without onSave when the value is unchanged", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={() => {}}
+        onSave={onSave}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Изменить имя" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить имя" }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(document.querySelector("#info-name")).toBeNull();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
   });
 });
