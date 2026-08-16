@@ -49,6 +49,12 @@ PANEL_PORT_SET=0
 DOMAIN_SET=0
 CLIENT_DOMAIN_SET=0
 NONINTERACTIVE=0
+USE_COLOR=0
+C_RESET=""
+C_BOLD=""
+C_CYAN=""
+C_GREEN=""
+C_RED=""
 
 BIND_CLIENTS=0
 AUTH_MODE="" # key | password
@@ -108,7 +114,7 @@ EOF
 log() { printf 'bootstrap: %s\n' "$*" >&2; }
 
 die() {
-    printf 'bootstrap: ERROR: %s\n' "$2" >&2
+    printf '%sbootstrap: ERROR: %s%s\n' "$C_RED" "$2" "$C_RESET" >&2
     exit "$1"
 }
 die_usage() { die "$FAIL_STYLE_USAGE" "$1"; }
@@ -246,6 +252,30 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+init_wizard_color() {
+    USE_COLOR=0
+    C_RESET=""
+    C_BOLD=""
+    C_CYAN=""
+    C_GREEN=""
+    C_RED=""
+    # Interactive chrome only. Piped harnesses (test_m123) have no TTY.
+    [ "$NONINTERACTIVE" = "0" ] || return 0
+    [ -z "${NO_COLOR:-}" ] || return 0
+    if [ -t 1 ] || [ -t 2 ]; then
+        USE_COLOR=1
+        C_RESET=$'\033[0m'
+        C_BOLD=$'\033[1m'
+        C_CYAN=$'\033[36m'
+        C_GREEN=$'\033[32m'
+        C_RED=$'\033[31m'
+    fi
+}
+
+step_label() { # n total text — color the N/M prefix on a TTY
+    printf '%s%s/%s%s %s' "$C_CYAN" "$1" "$2" "$C_RESET" "$3"
+}
+
 prompt() { # prompt VAR "question" [default]
     local __var="$1" __q="$2" __def="${3:-}" __ans
     if [ -n "$__def" ]; then
@@ -269,10 +299,12 @@ prompt_secret() { # prompt_secret VAR "question"
 }
 
 if [ "$NONINTERACTIVE" = "0" ]; then
-    prompt SSH_HOST "1/6 IP сервера"
+    init_wizard_color
+    printf '%sAmneziaWG VPN Server%s — установка (Enter = значение в скобках)\n' "$C_BOLD" "$C_RESET" >&2
+    prompt SSH_HOST "$(step_label 1 6 "IP сервера")"
     [ -n "$SSH_HOST" ] || die_op "IP сервера обязателен"
-    prompt SSH_USER "2/6 Пользователь SSH" "$DEFAULT_USER"
-    printf '3/6 Вход на сервер: пароль (по умолчанию) или ключ: ' >&2
+    prompt SSH_USER "$(step_label 2 6 "Пользователь SSH")" "$DEFAULT_USER"
+    printf '%s3/6%s Вход на сервер: пароль (по умолчанию) или ключ: ' "$C_CYAN" "$C_RESET" >&2
     IFS= read -r AUTH_CHOICE || true
     AUTH_NORM="$(printf '%s' "$AUTH_CHOICE" | tr '[:upper:]' '[:lower:]')"
     case "$AUTH_CHOICE" in
@@ -300,19 +332,19 @@ if [ "$NONINTERACTIVE" = "0" ]; then
         prompt_secret SSH_PASSWORD "Пароль SSH (ввод скрыт)"
         [ -n "$SSH_PASSWORD" ] || die_op "пароль SSH пустой"
     fi
-    prompt DOMAIN "4/6 Домен панели (пусто = панель на IP)"
+    prompt DOMAIN "$(step_label 4 6 "Домен панели (пусто = панель на IP)")"
     if [ -n "$DOMAIN" ]; then
         DOMAIN_SET=1
-        printf '5/6 Порт панели [443]: ' >&2
+        printf '%s5/6%s Порт панели [443]: ' "$C_CYAN" "$C_RESET" >&2
         IFS= read -r PANEL_PORT || true
         if [ -n "$PANEL_PORT" ]; then
             PANEL_PORT_SET=1
         fi
     else
-        prompt PANEL_PORT "5/6 Порт панели" "$DEFAULT_PANEL_PORT"
+        prompt PANEL_PORT "$(step_label 5 6 "Порт панели")" "$DEFAULT_PANEL_PORT"
         PANEL_PORT_SET=1
     fi
-    prompt CLIENT_DOMAIN "6/6 Домен VPN для клиентов (пусто = IP сервера)"
+    prompt CLIENT_DOMAIN "$(step_label 6 6 "Домен VPN для клиентов (пусто = IP сервера)")"
     if [ -n "$CLIENT_DOMAIN" ]; then
         CLIENT_DOMAIN_SET=1
         BIND_CLIENTS=1
@@ -682,7 +714,11 @@ esac
 
 {
     printf '\n'
-    printf 'bootstrap: DONE — run this summary in a trusted environment; the password is not saved.\n'
+    if [ "$USE_COLOR" = "1" ]; then
+        printf '%sOK%s  bootstrap: DONE — run this summary in a trusted environment; the password is not saved.\n' "$C_GREEN" "$C_RESET"
+    else
+        printf 'bootstrap: DONE — run this summary in a trusted environment; the password is not saved.\n'
+    fi
     printf 'Panel:     %s\n' "$PANEL_URL"
     printf 'Login:     admin\n'
     printf 'Password:  %s\n' "$ADMIN_PASSWORD"

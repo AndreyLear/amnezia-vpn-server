@@ -1,6 +1,7 @@
 # AmneziaWG VPN Server
 
-Self-hosted VPN server based on AmneziaWG 2.0+.
+Self-hosted VPN server based on AmneziaWG 2.0+. Released under the MIT
+License (see `LICENSE`).
 
 ## Architecture
 
@@ -24,18 +25,27 @@ Self-hosted VPN server based on AmneziaWG 2.0+.
 
 ## Install
 
-Beginner path from the operator machine: run the Russian wizard (Enter
-accepts the default in brackets). It asks for server IP, SSH user
-(`[root]`), password or key (password is the default; a key in
-`~/.ssh` is not used unless you answer `ключ` or `2`), panel domain
-(empty = panel on the server IP, then panel port `[8443]`), panel port
-`[443]` when a domain is set (empty = TLS on 443), and VPN client
-domain (empty = public IP — never copied from the panel hostname).
-AmneziaWG stays on UDP 443 and the deploy root is `/opt/amnezia-vpn`.
+From the operator machine, run the Russian wizard. Enter accepts the
+default in brackets. Password SSH needs `sshpass` or `expect` on the
+operator host (`brew install sshpass` / `apt install sshpass`).
 
 ```sh
-bash bootstrap.sh
-# or: ./bootstrap.sh
+./bootstrap.sh
+```
+
+The wizard asks for server IP, SSH user (`[root]`), password or key
+(password is the default; a key in `~/.ssh` is not used unless you
+answer `ключ` or `2`), panel domain (empty = panel on the server IP,
+then panel port `[8443]`), panel port `[443]` when a domain is set
+(empty = TLS on 443), and VPN client domain (empty = public IP — never
+copied from the panel hostname). AmneziaWG stays on UDP 443 and the
+deploy root is `/opt/amnezia-vpn`.
+
+After the repository is on GitHub, the same wizard can be fetched with
+(replace `OWNER`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/OWNER/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh && bash bootstrap.sh
 ```
 
 CI / flags: `bootstrap.sh` SSHes to the VPS, runs `install.sh`, creates
@@ -121,11 +131,20 @@ Install).
 
 ## Status
 
-**v2.0.0** (tag `v2.0.0`) — production-ready. Milestones M1–M10.2
-completed; full regression green (`go test -race`, all scripted and live
-harnesses) and verified on a clean VPS: fresh install, external full-tunnel
-client, backup/restore DR cycle, reboot survival.
+**1.0** — install via `./bootstrap.sh` (wizard) or flags, then
+`install.sh` on the VPS. License: MIT (`LICENSE`).
 
-Known accepted risks (future milestones, out of scope for v2.0.0): no TLS
-for the panel (loopback + SSH tunnel), no login rate limiting,
-TOTP/RBAC/password reset not implemented.
+In 1.0:
+
+- Panel TLS for users: nginx + Let's Encrypt when `--panel-domain` is
+  set; without a domain, HTTPS on `--panel-port` (CI default 8443,
+  self-signed). Loopback `8787` stays the compose panel port.
+- Login rate limiting (T-105).
+- TOTP for panel login.
+- CLI `panel auth set-password` (password reset). Restore (panel
+  upload / `panel restore`) does not replace the panel user.
+- Independent panel vs VPN hostnames (`--panel-domain` /
+  `--vpn-domain`).
+
+Out of 1.0: T-104 in-process panel TLS (TLS in the Go process instead
+of nginx) and T-106 RBAC.

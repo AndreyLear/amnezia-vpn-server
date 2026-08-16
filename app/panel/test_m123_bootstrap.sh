@@ -213,6 +213,14 @@ run_bootstrap() {
 stdout() { cat "$TMP_TEST/out"; }
 stderr() { cat "$TMP_TEST/err"; }
 
+assert_no_ansi() {
+    if grep -q $'\033' "$TMP_TEST/out" "$TMP_TEST/err" 2>/dev/null; then
+        fail "$1: ANSI escape found on piped stdout/stderr"
+        return 1
+    fi
+    pass "$1: no ANSI when piped"
+}
+
 # --- tests ---------------------------------------------------------------
 
 test_bash_syntax() {
@@ -233,6 +241,7 @@ test_help() {
         || fail "help: --vpn-domain missing"
     grep -q "Russian wizard" "$TMP_TEST/out" && pass "help: no-args Russian wizard" \
         || fail "help: no-args Russian wizard line missing"
+    assert_no_ansi "help"
 }
 
 test_unknown_argument() {
@@ -393,6 +402,9 @@ ANSWERS
         || fail "interactive domains: endpoint missing/wrong"
     grep -q "sshpass" "$FAKE_CALLS" && fail "interactive domains: sshpass invoked despite ключ" \
         || pass "interactive domains: key auth (no sshpass)"
+    grep -q "AmneziaWG VPN Server" "$TMP_TEST/err" && pass "interactive domains: wizard header" \
+        || fail "interactive domains: wizard header missing"
+    assert_no_ansi "interactive domains"
 }
 
 test_interactive_empty_vpn_domain_uses_ip_endpoint() {
@@ -576,6 +588,7 @@ test_default_panel_port_without_domain() {
     grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
         && pass "default panel-port: server init uses the public IP endpoint" \
         || fail "default panel-port: IP endpoint missing"
+    assert_no_ansi "default panel-port"
 }
 
 # --- main ---------------------------------------------------------------
