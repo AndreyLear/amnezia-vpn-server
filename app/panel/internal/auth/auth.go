@@ -249,6 +249,12 @@ func (a *Auth) RequireCSRF(next http.Handler) http.Handler {
 			if err := r.ParseForm(); err != nil {
 				var mbe *http.MaxBytesError
 				if ok := errors.As(err, &mbe); ok {
+					if strings.HasPrefix(r.URL.Path, "/api/") {
+						w.Header().Set("Content-Type", "application/json; charset=utf-8")
+						w.WriteHeader(http.StatusRequestEntityTooLarge)
+						_, _ = w.Write([]byte(`{"ok":false,"message":"Тело запроса слишком большое."}` + "\n"))
+						return
+					}
 					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 					http.Error(w, "Request body too large.", http.StatusRequestEntityTooLarge)
 					return

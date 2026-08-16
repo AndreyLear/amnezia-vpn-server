@@ -17,4 +17,12 @@ describe("BackupUploadDialog", () => {
     expect(screen.getByText("backup.tar.zst")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
   });
+
+  it("disables upload and shows restart copy when restore is pending", () => {
+    render(<BackupUploadDialog open restorePending onOpenChange={() => {}} />);
+
+    expect(screen.getByText("Восстановление уже подготовлено. Требуется перезапуск.")).toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+  });
 });

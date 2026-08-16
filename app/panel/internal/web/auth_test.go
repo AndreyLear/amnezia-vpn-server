@@ -58,7 +58,6 @@ var protectedRoutes = []struct {
 	{http.MethodPost, func(f *fixture) string { c, _, _ := f.addClient("c2"); return fmt.Sprintf("/clients/%d/disable", c.ID) }},
 	{http.MethodPost, func(f *fixture) string { c, _, _ := f.addClient("c3"); return fmt.Sprintf("/clients/%d/delete", c.ID) }},
 	{http.MethodPost, func(f *fixture) string { c, _, _ := f.addClient("c4"); return fmt.Sprintf("/clients/%d/rename", c.ID) }},
-	{http.MethodPost, func(f *fixture) string { c, _, _ := f.addClient("c5"); return fmt.Sprintf("/clients/%d/expiry", c.ID) }},
 	{http.MethodGet, func(f *fixture) string { c, _, _ := f.addClient("c6"); return fmt.Sprintf("/clients/%d/config", c.ID) }},
 	{http.MethodGet, func(f *fixture) string { c, _, _ := f.addClient("c7"); return fmt.Sprintf("/clients/%d/qr", c.ID) }},
 }
@@ -96,7 +95,6 @@ func TestAuthEveryRouteAvailableWithSession(t *testing.T) {
 	f.addClient("m-disable")
 	f.addClient("m-delete")
 	f.addClient("m-rename")
-	f.addClient("m-expiry")
 	dl, _, _ := f.addClient("download")
 	cases := []struct {
 		method string
@@ -110,7 +108,6 @@ func TestAuthEveryRouteAvailableWithSession(t *testing.T) {
 		{http.MethodPost, "/clients/2/disable", http.StatusSeeOther, func(p string) *httptest.ResponseRecorder { return f.post(p, url.Values{}) }},
 		{http.MethodPost, "/clients/3/delete", http.StatusSeeOther, func(p string) *httptest.ResponseRecorder { return f.post(p, url.Values{}) }},
 		{http.MethodPost, "/clients/4/rename", http.StatusSeeOther, func(p string) *httptest.ResponseRecorder { return f.post(p, url.Values{}) }},
-		{http.MethodPost, "/clients/5/expiry", http.StatusSeeOther, func(p string) *httptest.ResponseRecorder { return f.post(p, url.Values{}) }},
 		{http.MethodGet, fmt.Sprintf("/clients/%d/config", dl.ID), http.StatusOK, nil},
 		{http.MethodGet, fmt.Sprintf("/clients/%d/qr", dl.ID), http.StatusOK, nil},
 		// /logout is protected too; it must be the last case because it

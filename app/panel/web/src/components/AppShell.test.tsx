@@ -31,5 +31,7 @@ describe("AppShell header", () => {
     expect(screen.getByText("Системная")).toBeInTheDocument();
     expect(screen.getByText("Изменить пароль")).toBeInTheDocument();
     expect(screen.getByText("Выйти")).toBeInTheDocument();
+    expect(screen.getByText("AWG Panel")).toBeInTheDocument();
+    expect(screen.queryByText("AmneziaVPN")).not.toBeInTheDocument();
   });
 });

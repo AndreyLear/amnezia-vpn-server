@@ -1,10 +1,17 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PasswordDialog } from "@/components/PasswordDialog";
+import { setCsrf } from "@/lib/api";
 
 describe("PasswordDialog", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    setCsrf("");
+  });
+
   it("asks for old and new password and has no passwordless control", async () => {
     const user = userEvent.setup();
     render(
@@ -36,5 +43,45 @@ describe("PasswordDialog", () => {
       />,
     );
     expect(screen.getByLabelText("Код 2FA")).toBeInTheDocument();
+  });
+
+  it("shows a same-origin QR URL and the TOTP secret", async () => {
+    const user = userEvent.setup();
+    setCsrf("csrf");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/account/totp/enroll")) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              qr: "/account/totp/qr",
+              secret: "JBSWY3DPEHPK3PXP",
+              otpauth: "otpauth://totp/test",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(
+      <PasswordDialog
+        open
+        totpEnabled={false}
+        onOpenChange={() => {}}
+        onTotpChange={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Пароль для 2FA"), "secret-pass");
+    await user.click(screen.getByLabelText("Двухфакторная аутентификация"));
+
+    const img = await screen.findByAltText("QR-код 2FA");
+    expect(img).toHaveAttribute("src", "/account/totp/qr");
+    expect(img.getAttribute("src")?.startsWith("data:")).toBe(false);
+    expect(screen.getByText("JBSWY3DPEHPK3PXP")).toBeInTheDocument();
   });
 });

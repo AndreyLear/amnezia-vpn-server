@@ -18,6 +18,7 @@ import {
 export default function HomePage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [totpEnabled, setTotpEnabled] = useState(false);
+  const [restorePending, setRestorePending] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [infoId, setInfoId] = useState<number | null>(null);
   const [qrId, setQrId] = useState<number | null>(null);
@@ -36,6 +37,7 @@ export default function HomePage() {
       setCsrf(me.csrf);
       if (!stopped) {
         setTotpEnabled(me.totp.enabled);
+        setRestorePending(Boolean(me.restore_pending));
         await load();
       }
     }
@@ -104,8 +106,24 @@ export default function HomePage() {
     }
   }
 
+  async function saveClientInfo(payload: { name: string; description: string }) {
+    if (!infoClient) return;
+    setPendingId(infoClient.id);
+    try {
+      const data = await api<MutationResponse>(`/api/clients/${infoClient.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      if (!mutationSucceeded(data)) return;
+      toast.success("Клиент обновлён");
+      await load();
+    } finally {
+      setPendingId(null);
+    }
+  }
+
   return (
-    <AppShell totpEnabled={totpEnabled} onTotpChange={setTotpEnabled}>
+    <AppShell totpEnabled={totpEnabled} restorePending={restorePending} onTotpChange={setTotpEnabled}>
       <div data-testid="client-grid" className="grid grid-cols-1 gap-4 pb-8 min-[752px]:grid-cols-2">
         <AddClientCard onClick={() => setAddOpen(true)} />
         {clients.map((client) => (
@@ -137,6 +155,7 @@ export default function HomePage() {
         onDownload={() => infoClient && downloadConfig(infoClient.id)}
         onToggle={() => infoClient && void toggleClient(infoClient)}
         onDelete={() => infoClient && void deleteClient(infoClient)}
+        onSave={saveClientInfo}
       />
       <QrDialog
         clientId={qrId}

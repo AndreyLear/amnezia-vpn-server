@@ -221,6 +221,57 @@ func TestAPICSRFFormFieldOK(t *testing.T) {
 	}
 }
 
+func TestAPIMeRestorePending(t *testing.T) {
+	f := newFixture(t)
+	rec := f.get("/api/me")
+	got := decodeAPI(t, rec)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got["restore_pending"] != false {
+		t.Fatalf("restore_pending = %v, want false", got["restore_pending"])
+	}
+
+	dir := setBackupsPath(t)
+	preparedRestore(t, f, dir)
+	again := decodeAPI(t, f.get("/api/me"))
+	if again["restore_pending"] != true {
+		t.Fatalf("after prepare restore_pending = %v, want true", again["restore_pending"])
+	}
+}
+
+func TestAPIOversizedJSON413(t *testing.T) {
+	f := newFixture(t)
+	big := strings.Repeat("x", MaxBodyBytes+1)
+	req := httptest.NewRequest(http.MethodPost, "/api/clients", strings.NewReader(`{"name":"`+big+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(auth.CSRFHeaderName, f.csrf)
+	rec := httptest.NewRecorder()
+	f.serve(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("code = %d, want 413; body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeAPI(t, rec)
+	if got["ok"] != false || got["message"] != "Тело запроса слишком большое." {
+		t.Fatalf("413 JSON = %v", got)
+	}
+}
+
+func TestAPIInternalFailureJSON(t *testing.T) {
+	f := newFixture(t)
+	if err := f.h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.get("/api/clients")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("code = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeAPI(t, rec)
+	if got["ok"] != false || got["message"] != "Внутренняя ошибка сервера." {
+		t.Fatalf("500 JSON = %v", got)
+	}
+}
+
 func TestHTMLClientsNewCSRFHeaderOK(t *testing.T) {
 	f := newFixture(t)
 	req := httptest.NewRequest(http.MethodPost, "/clients/new", strings.NewReader("name=header-csrf"))

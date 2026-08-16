@@ -39,6 +39,7 @@ export function PasswordDialog({
   const [code, setCode] = useState("");
   const [enrollPassword, setEnrollPassword] = useState("");
   const [qr, setQr] = useState("");
+  const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
 
@@ -50,6 +51,7 @@ export function PasswordDialog({
       setCode("");
       setEnrollPassword("");
       setQr("");
+      setSecret("");
       setError("");
     }
   }, [open]);
@@ -98,6 +100,7 @@ export function PasswordDialog({
         return;
       }
       setQr(data.qr);
+      setSecret(data.secret ?? "");
     } finally {
       setPending(false);
     }
@@ -120,6 +123,7 @@ export function PasswordDialog({
       }
       toast.success(data.message ?? "2FA включена.");
       setQr("");
+      setSecret("");
       setCode("");
       await refreshMe();
     } finally {
@@ -236,6 +240,12 @@ export function PasswordDialog({
           {qr ? (
             <div className="grid justify-items-center gap-2">
               <img src={qr} alt="QR-код 2FA" className="size-40" />
+              {secret ? (
+                <p className="font-mono text-sm break-all">
+                  <span className="text-muted-foreground">Секрет: </span>
+                  {secret}
+                </p>
+              ) : null}
               <Label htmlFor="confirm-totp">Код подтверждения</Label>
               <Input
                 id="confirm-totp"

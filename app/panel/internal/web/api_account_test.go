@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -105,8 +106,14 @@ func TestAPITOTPEnrollJSONContract(t *testing.T) {
 		t.Fatalf("ok = %v", got)
 	}
 	qr, _ := got["qr"].(string)
-	if qr != "/account/totp/qr" && !strings.HasPrefix(qr, "data:image/png") {
-		t.Fatalf("qr = %q, want data URL or /account/totp/qr", qr)
+	if qr != "/account/totp/qr" {
+		t.Fatalf("qr = %q, want same-origin /account/totp/qr (not data:)", qr)
+	}
+	qrRec := httptest.NewRecorder()
+	qrReq := httptest.NewRequest(http.MethodGet, qr, nil)
+	f.serve(qrRec, qrReq)
+	if qrRec.Code != http.StatusOK || !strings.Contains(qrRec.Header().Get("Content-Type"), "image/png") {
+		t.Fatalf("GET %s: code=%d ct=%q", qr, qrRec.Code, qrRec.Header().Get("Content-Type"))
 	}
 	otpauth, _ := got["otpauth"].(string)
 	if !strings.HasPrefix(otpauth, "otpauth://totp/") {

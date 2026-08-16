@@ -15,12 +15,16 @@ const ACCEPT = ".tar.zst,.zst";
 
 type BackupUploadDialogProps = {
   open: boolean;
+  restorePending?: boolean;
   onOpenChange: (open: boolean) => void;
+  onPrepared?: () => void;
 };
 
 export function BackupUploadDialog({
   open,
+  restorePending = false,
   onOpenChange,
+  onPrepared,
 }: BackupUploadDialogProps) {
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
@@ -40,8 +44,8 @@ export function BackupUploadDialog({
         return;
       }
       toast.success(data.message ?? "Бэкап подготовлен. Требуется перезапуск.");
+      onPrepared?.();
       setFile(null);
-      onOpenChange(false);
     } finally {
       setPending(false);
     }
@@ -62,6 +66,11 @@ export function BackupUploadDialog({
         <DialogHeader>
           <DialogTitle>Загрузить бэкап</DialogTitle>
         </DialogHeader>
+        {restorePending ? (
+          <p className="text-sm text-muted-foreground">
+            Восстановление уже подготовлено. Требуется перезапуск.
+          </p>
+        ) : null}
         <form
           className="grid gap-3"
           onSubmit={(e) => {
@@ -93,12 +102,12 @@ export function BackupUploadDialog({
               type="file"
               accept={ACCEPT}
               className="sr-only"
-              disabled={pending}
+              disabled={pending || restorePending}
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
           </label>
           <DialogFooter>
-            <Button type="submit" disabled={pending || !file}>
+            <Button type="submit" disabled={pending || restorePending || !file}>
               Загрузить
             </Button>
           </DialogFooter>

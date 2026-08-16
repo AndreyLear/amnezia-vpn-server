@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -76,7 +75,7 @@ func (s *Server) writeClientJSON(w http.ResponseWriter, code int, c db.ClientRec
 func (s *Server) apiClientsList(w http.ResponseWriter, r *http.Request) {
 	clients, err := db.ClientsAll(s.db())
 	if err != nil {
-		internalFailure(w, s, "api clients list", err)
+		internalFailure(w, r, s, "api clients list", err)
 		return
 	}
 	st := s.loadStatus()
@@ -100,7 +99,7 @@ func (s *Server) apiClientsGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		internalFailure(w, s, "api clients get", err)
+		internalFailure(w, r, s, "api clients get", err)
 		return
 	}
 	s.writeClientJSON(w, http.StatusOK, *c)
@@ -108,8 +107,7 @@ func (s *Server) apiClientsGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiClientsCreate(w http.ResponseWriter, r *http.Request) {
 	var req clientCreateReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": "Bad request."})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	name, err := validateName(req.Name)
@@ -119,12 +117,12 @@ func (s *Server) apiClientsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	privateKey, publicKey, err := keys.GenerateKeyPair()
 	if err != nil {
-		internalFailure(w, s, "api clients create keys", err)
+		internalFailure(w, r, s, "api clients create keys", err)
 		return
 	}
 	presharedKey, err := keys.GeneratePresharedKey()
 	if err != nil {
-		internalFailure(w, s, "api clients create psk", err)
+		internalFailure(w, r, s, "api clients create psk", err)
 		return
 	}
 
@@ -136,7 +134,7 @@ func (s *Server) apiClientsCreate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": msg})
 			return
 		}
-		internalFailure(w, s, "api clients create server", err)
+		internalFailure(w, r, s, "api clients create server", err)
 		return
 	}
 	record, err := db.CreateClient(s.db(), server.Address, db.NewClient{
@@ -151,11 +149,11 @@ func (s *Server) apiClientsCreate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": msg})
 			return
 		}
-		internalFailure(w, s, "api clients create", err)
+		internalFailure(w, r, s, "api clients create", err)
 		return
 	}
 	if err := awgconf.Generate(s.db(), s.cfg.ConfPath); err != nil {
-		internalFailure(w, s, "api clients create conf", err)
+		internalFailure(w, r, s, "api clients create conf", err)
 		return
 	}
 	s.writeClientJSON(w, http.StatusCreated, *record)
@@ -168,8 +166,7 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req clientPatchReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": "Bad request."})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name != nil {
@@ -187,7 +184,7 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": flashNotFound})
 		return
 	} else if err != nil {
-		internalFailure(w, s, "api clients patch load", err)
+		internalFailure(w, r, s, "api clients patch load", err)
 		return
 	}
 	if req.Name != nil {
@@ -196,7 +193,7 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": msg})
 				return
 			}
-			internalFailure(w, s, "api clients patch name", err)
+			internalFailure(w, r, s, "api clients patch name", err)
 			return
 		}
 	}
@@ -206,7 +203,7 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": msg})
 				return
 			}
-			internalFailure(w, s, "api clients patch description", err)
+			internalFailure(w, r, s, "api clients patch description", err)
 			return
 		}
 	}
@@ -216,17 +213,17 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": msg})
 				return
 			}
-			internalFailure(w, s, "api clients patch enabled", err)
+			internalFailure(w, r, s, "api clients patch enabled", err)
 			return
 		}
 	}
 	if err := awgconf.Generate(s.db(), s.cfg.ConfPath); err != nil {
-		internalFailure(w, s, "api clients patch conf", err)
+		internalFailure(w, r, s, "api clients patch conf", err)
 		return
 	}
 	c, err := db.ClientByID(s.db(), id)
 	if err != nil {
-		internalFailure(w, s, "api clients patch reload", err)
+		internalFailure(w, r, s, "api clients patch reload", err)
 		return
 	}
 	s.writeClientJSON(w, http.StatusOK, *c)
@@ -245,11 +242,11 @@ func (s *Server) apiClientsDelete(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": flashNotFound})
 			return
 		}
-		internalFailure(w, s, "api clients delete", err)
+		internalFailure(w, r, s, "api clients delete", err)
 		return
 	}
 	if err := awgconf.Generate(s.db(), s.cfg.ConfPath); err != nil {
-		internalFailure(w, s, "api clients delete conf", err)
+		internalFailure(w, r, s, "api clients delete conf", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

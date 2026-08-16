@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { AmbientBackground } from "@/components/AmbientBackground";
 import { TotpDialog } from "@/components/TotpDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,7 +57,9 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-svh items-center justify-center p-6">
+    <div className="relative min-h-svh">
+      <AmbientBackground />
+      <main className="relative flex min-h-svh items-center justify-center p-6">
       <form
         className="grid w-full max-w-sm gap-4"
         onSubmit={(e) => {
@@ -70,6 +73,7 @@ export default function LoginPage() {
             id="username"
             name="username"
             autoComplete="username"
+            required
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             disabled={pending}
@@ -82,6 +86,7 @@ export default function LoginPage() {
             name="password"
             type="password"
             autoComplete="current-password"
+            required
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             disabled={pending}
@@ -101,6 +106,7 @@ export default function LoginPage() {
         onSubmit={() => void submit(code)}
         onOpenChange={setNeedCode}
       />
-    </main>
+      </main>
+    </div>
   );
 }

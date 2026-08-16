@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { BackupUploadDialog } from "@/components/BackupUploadDialog";
 import { Button } from "@/components/ui/button";
@@ -17,8 +17,13 @@ function filenameFromDisposition(header: string | null): string {
   return match?.[1] ?? "backup.tar.zst";
 }
 
-export function BackupMenu() {
+export function BackupMenu({ restorePending = false }: { restorePending?: boolean }) {
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [blocked, setBlocked] = useState(restorePending);
+
+  useEffect(() => {
+    setBlocked(restorePending);
+  }, [restorePending]);
 
   async function download() {
     const res = await apiRequest("/api/backups/download", { method: "POST" });
@@ -57,7 +62,12 @@ export function BackupMenu() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <BackupUploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
+      <BackupUploadDialog
+        open={uploadOpen}
+        restorePending={blocked}
+        onOpenChange={setUploadOpen}
+        onPrepared={() => setBlocked(true)}
+      />
     </>
   );
 }

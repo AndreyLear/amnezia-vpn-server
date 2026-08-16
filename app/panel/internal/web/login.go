@@ -98,7 +98,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		requestBodyError(err, w)
+		requestBodyError(err, w, r)
 		return
 	}
 	username := r.PostForm.Get("username")
@@ -107,7 +107,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 
 	outcome, err := s.evaluateLogin(r, username, password, code)
 	if err != nil {
-		internalFailure(w, s, "login: read user", err)
+		internalFailure(w, r, s, "login: read user", err)
 		return
 	}
 	if outcome.message != "" {
@@ -119,7 +119,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.issueLoginSession(w, r, username); err != nil {
-		internalFailure(w, s, "login: create session", err)
+		internalFailure(w, r, s, "login: create session", err)
 		return
 	}
 	redirect303(w, r, "/")

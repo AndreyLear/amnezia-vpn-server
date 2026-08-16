@@ -38,19 +38,17 @@ import (
 // Flash messages are fixed strings; they never contain request input,
 // ids or secrets. The whole panel is Russian (T-120 round 2).
 const (
-	flashInvalidID     = "Некорректный ID клиента."
-	flashNotFound      = "Клиент не найден."
-	flashInvalidName   = "Недопустимое имя клиента."
-	flashNameTaken     = "Клиент с таким именем уже существует."
-	flashInvalidExpiry = "Недопустимый срок. Формат: ГГГГ-ММ-ДДTЧЧ:ММ."
-	flashNoServer      = "Сервер не инициализирован."
-	flashNoAddress     = "Нет свободных адресов в пуле."
-	flashAdded         = "Клиент добавлен."
-	flashDeleted       = "Клиент удалён."
-	flashEnabled       = "Клиент включён."
-	flashDisabled      = "Клиент отключён."
-	flashRenamed       = "Клиент переименован."
-	flashExpirySet     = "Срок действия обновлён."
+	flashInvalidID   = "Некорректный ID клиента."
+	flashNotFound    = "Клиент не найден."
+	flashInvalidName = "Недопустимое имя клиента."
+	flashNameTaken   = "Клиент с таким именем уже существует."
+	flashNoServer    = "Сервер не инициализирован."
+	flashNoAddress   = "Нет свободных адресов в пуле."
+	flashAdded       = "Клиент добавлен."
+	flashDeleted     = "Клиент удалён."
+	flashEnabled     = "Клиент включён."
+	flashDisabled    = "Клиент отключён."
+	flashRenamed     = "Клиент переименован."
 )
 
 // clientNameMaxRunes mirrors cli.clientNameMaxRunes: the web layer uses
@@ -71,19 +69,6 @@ func validateName(raw string) (string, error) {
 		return "", errors.New("name too long")
 	}
 	return name, nil
-}
-
-// normalizeExpiry mirrors cli.normalizeRFC3339: canonical UTC form.
-// The UI submits either a full RFC3339 timestamp (cli parity) or the
-// browser's datetime-local shape "2006-01-02T15:04" (wall time,
-// interpreted as UTC server-side, T-120 round 2 §8).
-func normalizeExpiry(raw string) (string, error) {
-	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04"} {
-		if t, err := time.Parse(layout, raw); err == nil {
-			return t.UTC().Format(time.RFC3339), nil
-		}
-	}
-	return "", errors.New("invalid expiry")
 }
 
 // parseClientID mirrors cli.parseClientID: positive integer only.
@@ -213,9 +198,20 @@ func (s *Server) mutateWith(w http.ResponseWriter, r *http.Request, okFlash stri
 
 // requestBodyError maps body read failures: over the limit → 413,
 // anything else → generic 400.
-func requestBodyError(err error, w http.ResponseWriter) {
+func requestBodyError(err error, w http.ResponseWriter, r *http.Request) {
 	var mbe *http.MaxBytesError
-	if errors.As(err, &mbe) {
+	tooLarge := errors.As(err, &mbe)
+	if r != nil && strings.HasPrefix(r.URL.Path, "/api/") {
+		code := http.StatusBadRequest
+		msg := "Некорректный запрос."
+		if tooLarge {
+			code = http.StatusRequestEntityTooLarge
+			msg = "Тело запроса слишком большое."
+		}
+		writeJSON(w, code, map[string]any{"ok": false, "message": msg})
+		return
+	}
+	if tooLarge {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Request body too large.", http.StatusRequestEntityTooLarge)
 		return
@@ -313,7 +309,7 @@ func (s *Server) countPayload() (mutationPayload, error) {
 // (T-145): the web form does not set a deadline.
 func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		requestBodyError(err, w)
+		requestBodyError(err, w, r)
 		return
 	}
 	name, err := validateName(r.FormValue("name"))
@@ -323,12 +319,12 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 	}
 	privateKey, publicKey, err := keys.GenerateKeyPair()
 	if err != nil {
-		internalFailure(w, s, "generate keys", err)
+		internalFailure(w, r, s, "generate keys", err)
 		return
 	}
 	presharedKey, err := keys.GeneratePresharedKey()
 	if err != nil {
-		internalFailure(w, s, "generate preshared key", err)
+		internalFailure(w, r, s, "generate preshared key", err)
 		return
 	}
 	var createdID int64
@@ -363,8 +359,12 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 }
 
 // internalFailure logs the real error and renders the generic 500 page.
-func internalFailure(w http.ResponseWriter, s *Server, what string, err error) {
+func internalFailure(w http.ResponseWriter, r *http.Request, s *Server, what string, err error) {
 	s.cfg.Logger.Printf("%s: %v", what, err)
+	if r != nil && strings.HasPrefix(r.URL.Path, "/api/") {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "Внутренняя ошибка сервера."})
+		return
+	}
 	s.errorPage(w, http.StatusInternalServerError)
 }
 
@@ -398,7 +398,7 @@ func (s *Server) clientDelete(w http.ResponseWriter, r *http.Request) {
 // rules as add.
 func (s *Server) clientRename(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		requestBodyError(err, w)
+		requestBodyError(err, w, r)
 		return
 	}
 	name, err := validateName(r.FormValue("name"))
@@ -410,33 +410,5 @@ func (s *Server) clientRename(w http.ResponseWriter, r *http.Request) {
 		return s.cardPayload(r, id)
 	}, func(id int64) error {
 		return db.UpdateClientName(s.db(), id, name)
-	})
-}
-
-// clientExpiry handles POST /clients/{id}/expiry: an RFC3339 or
-// datetime-local value (YYYY-MM-DDTHH:MM) is stored in canonical UTC
-// form; "none" or an empty value clears the expiry (T-120 round 2 §8:
-// empty input = no deadline).
-func (s *Server) clientExpiry(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		requestBodyError(err, w)
-		return
-	}
-	value := r.FormValue("expires_at")
-	expiresAt := ""
-	switch {
-	case value == "none" || value == "":
-	default:
-		var err error
-		expiresAt, err = normalizeExpiry(value)
-		if err != nil {
-			s.flash(w, r, flashInvalidExpiry)
-			return
-		}
-	}
-	s.withID(w, r, flashExpirySet, func(id int64) (mutationPayload, error) {
-		return s.cardPayload(r, id)
-	}, func(id int64) error {
-		return db.SetClientExpiry(s.db(), id, expiresAt)
 	})
 }

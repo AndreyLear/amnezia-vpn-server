@@ -197,7 +197,6 @@ func assertAPIUnauthorized(t *testing.T, rec *httptest.ResponseRecorder) {
 	}
 }
 
-
 // serve runs an authenticated request against the fixture's server: it
 // attaches the admin session cookie before dispatching. Session-free
 // tests must build their own request and call f.server.ServeHTTP.
@@ -589,4 +588,3 @@ func TestRedirect303(t *testing.T) {
 		t.Errorf("Location = %q, want /?msg=ok", loc)
 	}
 }
-

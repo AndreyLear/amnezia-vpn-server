@@ -1,14 +1,11 @@
 package web
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
-	"github.com/skip2/go-qrcode"
 )
 
 type accountPasswordReq struct {
@@ -24,11 +21,7 @@ type accountTOTPReq struct {
 }
 
 func decodeAccountJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": "Bad request."})
-		return false
-	}
-	return true
+	return decodeJSON(w, r, dst)
 }
 
 func accountJSONError(w http.ResponseWriter, msg string) {
@@ -64,7 +57,7 @@ func (s *Server) apiChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.rotateCurrentSession(w, r); err != nil {
-		internalFailure(w, s, "api password rotate", err)
+		internalFailure(w, r, s, "api password rotate", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "Пароль изменён."})
@@ -83,21 +76,16 @@ func (s *Server) apiTOTPEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	secret, err := auth.NewTOTPSecret()
 	if err != nil {
-		internalFailure(w, s, "api totp enroll", err)
+		internalFailure(w, r, s, "api totp enroll", err)
 		return
 	}
 	s.mutex.Lock()
 	s.pendingTOTP[sess.Username] = secret
 	s.mutex.Unlock()
 	payload := otpAuthURL(sess.Username, secret)
-	png, err := qrcode.Encode(payload, qrcode.Medium, 256)
-	if err != nil {
-		internalFailure(w, s, "api totp qr", err)
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
-		"qr":      "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
+		"qr":      "/account/totp/qr",
 		"otpauth": payload,
 		"secret":  secret,
 	})
@@ -133,7 +121,7 @@ func (s *Server) apiTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 	delete(s.pendingTOTP, sess.Username)
 	s.mutex.Unlock()
 	if err := s.rotateCurrentSession(w, r); err != nil {
-		internalFailure(w, s, "api totp confirm rotate", err)
+		internalFailure(w, r, s, "api totp confirm rotate", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "2FA включена."})
@@ -156,7 +144,7 @@ func (s *Server) apiTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = db.SetTotpMode(s.db(), sess.Username, "")
 	if err := s.rotateCurrentSession(w, r); err != nil {
-		internalFailure(w, s, "api totp disable rotate", err)
+		internalFailure(w, r, s, "api totp disable rotate", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "2FA отключена."})

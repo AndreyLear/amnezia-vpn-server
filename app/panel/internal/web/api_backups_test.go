@@ -145,6 +145,10 @@ func TestAPIRestoreOversized413(t *testing.T) {
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("code = %d, want 413; body=%s", rec.Code, rec.Body.String())
 	}
+	got := decodeAPI(t, rec)
+	if got["ok"] != false || got["message"] != "Тело запроса слишком большое." {
+		t.Fatalf("413 JSON = %v", got)
+	}
 }
 
 func TestAPIBackupJSONOmitsSecrets(t *testing.T) {

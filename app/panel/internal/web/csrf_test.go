@@ -53,7 +53,6 @@ func protectedPosts(f *fixture) []struct {
 		{"disable", mk("disable"), nil, 0},
 		{"delete", mk("delete"), nil, 0},
 		{"rename", mk("rename"), nil, 0},
-		{"expiry", mk("expiry"), nil, 0},
 		{"backup download", func() string { return "/backups/download" }, nil, http.StatusOK},
 		{"backup restore", func() string { return "/backups/restore" }, restoreCSRFPost, 0},
 		// logout invalidates the session; it must stay the last entry
@@ -159,13 +158,13 @@ func TestCSRFMissingTokenForbidden(t *testing.T) {
 		})
 	}
 	// The rejected POST must not have mutated anything: only the
-	// per-route fixture clients exist (enable/disable/delete/rename/
-	// expiry = 5), and none of the rejected adds happened.
+	// per-route fixture clients exist (enable/disable/delete/rename = 4),
+	// and none of the rejected adds happened.
 	clients, err := db.ClientsAll(f.h)
 	if err != nil {
 		t.Fatalf("ClientsAll: %v", err)
 	}
-	if len(clients) != 5 {
+	if len(clients) != 4 {
 		t.Fatalf("rejected POSTs mutated the db: %d clients", len(clients))
 	}
 }

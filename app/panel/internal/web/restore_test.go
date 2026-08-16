@@ -272,7 +272,6 @@ func TestRestoreFullFlow(t *testing.T) {
 
 	assertSPA(t, f.get("/backups"))
 
-
 	// download/restore are blocked while pending
 	rec := csrfPOST(f, "/backups/download", f.csrf)
 	if got := restoreFlashOf(t, rec); got != flashRestoreBlockedByPending {
@@ -307,7 +306,6 @@ func TestRestorePreparedStateSurvivesRestart(t *testing.T) {
 		t.Fatalf("download after marker removal: code = %d, want 200", rec.Code)
 	}
 }
-
 
 // clientCount queries the fixture DB directly.
 func clientCount(f *fixture) int {

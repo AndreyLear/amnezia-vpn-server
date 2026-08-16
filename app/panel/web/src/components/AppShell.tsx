@@ -21,10 +21,12 @@ import { applyTheme, getTheme, type Theme } from "@/lib/theme";
 export function AppShell({
   children,
   totpEnabled,
+  restorePending = false,
   onTotpChange,
 }: {
   children: ReactNode;
   totpEnabled: boolean;
+  restorePending?: boolean;
   onTotpChange: (enabled: boolean) => void;
 }) {
   const [theme, setThemeState] = useState<Theme>(() =>
@@ -47,9 +49,9 @@ export function AppShell({
       <AmbientBackground />
       <div className="relative mx-auto w-full max-w-[752px] px-4">
         <header className="flex items-center gap-2 py-4">
-          <p className="text-sm font-medium">AmneziaVPN</p>
+          <p className="font-mono text-sm font-medium">AWG Panel</p>
           <div className="ml-auto flex items-center gap-2">
-            <BackupMenu />
+            <BackupMenu restorePending={restorePending} />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" aria-label="Меню">

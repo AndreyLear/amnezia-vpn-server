@@ -57,3 +57,23 @@ test("unknown route shows не найдено", async ({ page }) => {
   await page.goto("/does-not-exist");
   await expect(page.getByText("не найдено")).toBeVisible();
 });
+
+test("enroll QR renders in the 2FA dialog at 375px", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 720 });
+  await login(page);
+
+  await page.getByRole("button", { name: "Бэкап" }).click();
+  await page.getByRole("menuitem", { name: "Загрузить" }).click();
+  await expect(page.getByRole("heading", { name: "Загрузить бэкап" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Меню" }).click();
+  await page.getByRole("menuitem", { name: "Изменить пароль" }).click();
+  await expect(page.getByRole("heading", { name: "Изменить пароль" })).toBeVisible();
+  await page.getByLabel("Пароль для 2FA").fill(password);
+  await page.getByLabel("Двухфакторная аутентификация").click();
+  const qr = page.getByAltText("QR-код 2FA");
+  await expect(qr).toBeVisible();
+  await expect.poll(async () => qr.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  await expect(qr).not.toHaveAttribute("src", /^data:/);
+});

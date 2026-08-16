@@ -126,13 +126,13 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 	r.Body = http.MaxBytesReader(w, r.Body, MaxRestoreBodyBytes)
 	mr, err := r.MultipartReader()
 	if err != nil {
-		requestBodyError(err, w)
+		requestBodyError(err, w, r)
 		return
 	}
 
 	tmp, err := os.MkdirTemp("", "panel-restore-*")
 	if err != nil {
-		internalFailure(w, s, "restore: create temp dir", err)
+		internalFailure(w, r, s, "restore: create temp dir", err)
 		return
 	}
 	removeTemp := func() { os.RemoveAll(tmp) }
@@ -150,7 +150,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 			break
 		}
 		if err != nil {
-			requestBodyError(err, w)
+			requestBodyError(err, w, r)
 			return
 		}
 		switch part.FormName() {
@@ -162,7 +162,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 				break // a field-shaped part, not a file
 			}
 			if err := saveUpload(part, uploadPath); err != nil {
-				requestBodyError(err, w)
+				requestBodyError(err, w, r)
 				return
 			}
 			uploaded = true

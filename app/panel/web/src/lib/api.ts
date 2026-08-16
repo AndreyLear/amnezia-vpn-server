@@ -1,3 +1,5 @@
+import { toast } from "sonner";
+
 let csrf = "";
 let csrfWaiters: Array<() => void> = [];
 
@@ -12,7 +14,15 @@ export function setCsrf(token: string) {
 function waitForCsrf(): Promise<void> {
   if (csrf) return Promise.resolve();
   return new Promise((resolve) => {
-    csrfWaiters.push(resolve);
+    const timer = window.setTimeout(() => {
+      csrfWaiters = csrfWaiters.filter((w) => w !== done);
+      resolve();
+    }, 50);
+    const done = () => {
+      window.clearTimeout(timer);
+      resolve();
+    };
+    csrfWaiters.push(done);
   });
 }
 
@@ -41,6 +51,18 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await apiRequest(path, init);
+  if (res.status === 403 && path !== "/api/me" && path !== "/api/login") {
+    try {
+      const meRes = await fetch("/api/me", { credentials: "same-origin" });
+      if (meRes.ok) {
+        const me = (await meRes.json()) as MeResponse;
+        if (me.csrf) setCsrf(me.csrf);
+      }
+    } catch {
+      // keep going so the original JSON body can still be parsed
+    }
+    toast.error("сессия устарела");
+  }
   let data: T | undefined;
   try {
     data = (await res.json()) as T;
@@ -60,6 +82,7 @@ export type MeResponse = {
   username: string;
   csrf: string;
   totp: { enabled: boolean };
+  restore_pending?: boolean;
 };
 
 export type Client = {

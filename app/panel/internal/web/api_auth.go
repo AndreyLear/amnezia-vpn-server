@@ -1,10 +1,10 @@
 package web
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
 
@@ -19,13 +19,12 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req loginReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": "Bad request."})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	outcome, err := s.evaluateLogin(r, req.Username, req.Password, req.Code)
 	if err != nil {
-		internalFailure(w, s, "api login: read user", err)
+		internalFailure(w, r, s, "api login: read user", err)
 		return
 	}
 	if outcome.message != "" {
@@ -37,7 +36,7 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.issueLoginSession(w, r, req.Username); err != nil {
-		internalFailure(w, s, "api login: create session", err)
+		internalFailure(w, r, s, "api login: create session", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -49,10 +48,15 @@ func (s *Server) apiMe(w http.ResponseWriter, r *http.Request) {
 	if u, err := db.AuthUserByUsername(s.db(), sess.Username); err == nil {
 		enabled = totpLoginRequired(u)
 	}
+	pending := false
+	if _, ok, err := backup.PendingPath(s.cfg.DBPath); err == nil {
+		pending = ok
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"username": sess.Username,
-		"csrf":     sess.CSRFToken,
-		"totp":     map[string]any{"enabled": enabled},
+		"username":        sess.Username,
+		"csrf":            sess.CSRFToken,
+		"totp":            map[string]any{"enabled": enabled},
+		"restore_pending": pending,
 	})
 }
 
