@@ -513,6 +513,19 @@ test_unknown_argument() {
     pass "unknown arguments rejected (exit 2)"
 }
 
+test_help_examples() {
+    AMNEZIA_INSTALL_TEST=1 bash "$INSTALL_SH" --help \
+        > "$TMP_TEST/help.out" 2> "$TMP_TEST/help.err"
+    rc=$?
+    [ "$rc" = "0" ] || fail "install --help: exit $rc"
+    grep -q "Examples:" "$TMP_TEST/help.out" && pass "install --help: Examples section" \
+        || fail "install --help: Examples section missing"
+    grep -q -- "--panel-domain" "$TMP_TEST/help.out" && pass "install --help: --panel-domain" \
+        || fail "install --help: --panel-domain missing"
+    grep -q -- "--vpn-domain" "$TMP_TEST/help.out" && pass "install --help: --vpn-domain" \
+        || fail "install --help: --vpn-domain missing"
+}
+
 test_panel_loopback_and_no_sock() {
     fakes_reset
     os_release debian 12 bookworm
@@ -794,9 +807,6 @@ test_panel_port_invalid_values() {
         [ "$rc" = "2" ] || fail "invalid panel port '$bad': exit $rc, want 2"
     done
     pass "invalid --panel-port values rejected (exit 2)"
-    rc="$(run_install --domain panel.example.com --panel-port 8443)"
-    [ "$rc" = "2" ] || fail "domain+panel-port conflict: exit $rc, want 2"
-    pass "--domain + --panel-port conflict rejected (exit 2)"
     rc="$(run_install --panel-tls-regen)"
     [ "$rc" = "2" ] || fail "--panel-tls-regen without --panel-port: exit $rc, want 2"
     pass "--panel-tls-regen without --panel-port rejected (exit 2)"
@@ -864,33 +874,83 @@ test_panel_port_switch_back_to_loopback() {
         || fail "panel-port switchback: cert file was deleted"
 }
 
-# --- T-129: client endpoint domain ---------------------------------------
+# --- T-129 / T-156: client endpoint domain --------------------------------
 
-test_client_domain_defaults_to_domain() {
-    # --domain without --client-domain: the panel domain doubles as the
-    # client endpoint — the next-steps hint carries <domain>:<port> and
-    # the migration note, the IP endpoint line is gone, and the DNS
-    # record is pre-flighted only once (shared hostname).
+test_domain_does_not_bind_clients() {
+    # T-156: --domain / --panel-domain without --vpn-domain must NOT copy
+    # the panel hostname onto client endpoints. Endpoint stays public IP.
     fakes_reset
     os_release debian 12 bookworm
     rc="$(run_install --domain panel.example.com)"
-    [ "$rc" = "0" ] || fail "client-domain default flow: exit $rc"
-    grep -q "endpoint panel.example.com:443" "$TMP_TEST/out" \
-        && pass "client-domain: hint carries domain:port endpoint" \
-        || fail "client-domain: hint missing domain:port endpoint"
-    grep -q "A-record change" "$TMP_TEST/out" && pass "client-domain: migration note printed" \
-        || fail "client-domain: migration note missing"
-    if grep -q "endpoint <public-ip>" "$TMP_TEST/out"; then
-        fail "client-domain: IP endpoint hint still printed"
-    else
-        pass "client-domain: IP endpoint hint replaced"
-    fi
-    grep -q "CLIENT_DOMAIN=panel.example.com" "$ROOT/.env" \
-        && pass "client-domain: CLIENT_DOMAIN persisted in .env" \
-        || fail "client-domain: CLIENT_DOMAIN missing from .env"
+    [ "$rc" = "0" ] || fail "domain-no-vpn-bind: exit $rc"
+    grep -q "endpoint <public-ip>:443" "$TMP_TEST/out" \
+        && pass "domain-no-vpn-bind: IP endpoint hint kept" \
+        || fail "domain-no-vpn-bind: IP endpoint hint missing"
+    grep -q "endpoint panel.example.com" "$TMP_TEST/out" \
+        && fail "domain-no-vpn-bind: panel hostname leaked into the client endpoint" \
+        || pass "domain-no-vpn-bind: panel hostname not used as endpoint"
+    grep -q "A-record change" "$TMP_TEST/out" && fail "domain-no-vpn-bind: migration note printed" \
+        || pass "domain-no-vpn-bind: no client-domain migration note"
+    grep -qE "^CLIENT_DOMAIN=panel\.example\.com$" "$ROOT/.env" \
+        && fail "domain-no-vpn-bind: CLIENT_DOMAIN copied from the panel domain" \
+        || pass "domain-no-vpn-bind: CLIENT_DOMAIN not set to the panel domain"
     [ "$(grep -c "dig " "$FAKE_CALLS")" = "2" ] \
-        && pass "client-domain: shared domain pre-flighted once (A+AAAA)" \
-        || fail "client-domain: dig count $(grep -c "dig " "$FAKE_CALLS"), want 2"
+        && pass "domain-no-vpn-bind: only the panel domain pre-flighted (A+AAAA)" \
+        || fail "domain-no-vpn-bind: dig count $(grep -c "dig " "$FAKE_CALLS"), want 2"
+}
+
+test_panel_domain_and_vpn_domain_aliases() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-domain panel.example.com --vpn-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "aliases flow: exit $rc"
+    grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "aliases: panel URL uses --panel-domain" \
+        || fail "aliases: panel URL missing"
+    grep -q "endpoint vpn.example.com:443" "$TMP_TEST/out" \
+        && pass "aliases: client endpoint uses --vpn-domain" \
+        || fail "aliases: vpn endpoint missing"
+    grep -q "CLIENT_DOMAIN=vpn.example.com" "$ROOT/.env" \
+        && pass "aliases: CLIENT_DOMAIN persisted from --vpn-domain" \
+        || fail "aliases: CLIENT_DOMAIN missing"
+}
+
+test_domain_with_panel_port() {
+    # T-156: domain + panel-port is allowed. nginx TLS listens on the
+    # chosen TCP port; ACME stays on 80; nftables opens 80 + PANEL_PORT
+    # (not 443 TCP). Let's Encrypt, not a self-signed cert.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-domain panel.example.com --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "domain+panel-port: exit $rc"
+    grep -q "listen 8443 ssl" "$ROOT/nginx/panel.conf" && pass "domain+panel-port: nginx TLS on 8443" \
+        || fail "domain+panel-port: nginx listen 8443 missing"
+    grep -q "listen 80" "$ROOT/nginx/panel.conf" && pass "domain+panel-port: ACME HTTP-01 on 80" \
+        || fail "domain+panel-port: listen 80 missing"
+    if grep -qE "listen 443" "$ROOT/nginx/panel.conf"; then
+        fail "domain+panel-port: nginx still listens on 443 TCP"
+    else
+        pass "domain+panel-port: nginx does not listen on 443 TCP"
+    fi
+    grep -qE "^[[:space:]]*tcp dport 80 accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "domain+panel-port: nft tcp 80 for ACME" \
+        || fail "domain+panel-port: nft 80 missing"
+    grep -qE "^[[:space:]]*tcp dport 8443 accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "domain+panel-port: nft tcp 8443 for the panel" \
+        || fail "domain+panel-port: nft 8443 missing"
+    if grep -qE "^[[:space:]]*tcp dport 443 accept" "$ROOT/nftables/amnezia-vpn.nft"; then
+        fail "domain+panel-port: nft still opens tcp 443"
+    else
+        pass "domain+panel-port: nft does not open tcp 443"
+    fi
+    grep -q "https://panel.example.com:8443" "$TMP_TEST/out" \
+        && pass "domain+panel-port: panel URL includes the port" \
+        || fail "domain+panel-port: https://host:port missing from the summary"
+    grep -q "certbot certonly" "$FAKE_CALLS" && pass "domain+panel-port: certbot invoked" \
+        || fail "domain+panel-port: certbot not invoked"
+    if grep -q "openssl req" "$FAKE_CALLS"; then fail "domain+panel-port: openssl req (self-signed) invoked"; else pass "domain+panel-port: no self-signed certificate"; fi
+    grep -q "udp dport 443 accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "domain+panel-port: UDP AWG 443 still open" \
+        || fail "domain+panel-port: UDP AWG missing"
 }
 
 test_client_domain_standalone() {
@@ -1075,6 +1135,7 @@ test_invalid_port
 test_default_port
 test_custom_port
 test_unknown_argument
+test_help_examples
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
 test_layout_and_permissions
@@ -1096,7 +1157,9 @@ test_panel_port_invalid_values
 test_panel_port_idempotent
 test_panel_port_regen_flag
 test_panel_port_switch_back_to_loopback
-test_client_domain_defaults_to_domain
+test_domain_does_not_bind_clients
+test_panel_domain_and_vpn_domain_aliases
+test_domain_with_panel_port
 test_client_domain_standalone
 test_client_domain_overrides_domain
 test_client_domain_preflight_before_certbot

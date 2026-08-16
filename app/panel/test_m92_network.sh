@@ -50,6 +50,10 @@ IP_FORWARD=1
 NFT_CHECK_RC=0
 NFT_APPLY_RC=0
 NFT_APPLIED=0
+PUBLIC_IP=2.26.93.192
+DNS_A=2.26.93.192
+DNS_AAAA=
+CERTBOT_RC=0
 NFTABLES_ACTIVE=yes
 DOCKER_ACTIVE=yes
 DU_CHAIN=yes
@@ -196,6 +200,11 @@ for a in "$@"; do
     [ "$prev" = "-o" ] && oarg="$a"
     prev="$a"
 done
+if printf '%s' "$*" | grep -q "api.ipify.org"; then
+    . "${FAKE_STATE:?}"
+    printf '%s\n' "${PUBLIC_IP}"
+    exit 0
+fi
 if [ -n "$oarg" ]; then
     mkdir -p "$(dirname "$oarg")"
     printf 'FAKE-DOCKER-GPG-KEY\n' > "$oarg"
@@ -203,8 +212,34 @@ fi
 exit 0
 FAKE_EOF
 
+cat > "$FAKE_DIR/dig" <<'FAKE_EOF'
+#!/bin/bash
+echo "dig $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+case "$*" in
+    *" A"*) [ -n "${DNS_A}" ] && printf '%s\n' "${DNS_A}" ;;
+    *" AAAA"*) [ -n "${DNS_AAAA}" ] && printf '%s\n' "${DNS_AAAA}" ;;
+esac
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
+#!/bin/bash
+echo "nginx $*" >> "${FAKE_CALLS:?}"
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/certbot" <<'FAKE_EOF'
+#!/bin/bash
+echo "certbot $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+[ "${CERTBOT_RC:-0}" = "0" ] || exit 1
+exit 0
+FAKE_EOF
+
 chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" \
-    "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl"
+    "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl" \
+    "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot"
 
 cat > "$FAKE_DIR/modprobe" <<'FAKE_EOF'
 #!/bin/bash
@@ -300,6 +335,7 @@ run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_NFTABLES_CONF="$NFTABLES_CONF_TEST" \
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
     AMNEZIA_INSTALL_MODULES_DIR="$TMP_TEST/modules-load.d" \
+    AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
     PATH="${M92_PATH:-$FAKE_DIR:$PATH}" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
@@ -764,6 +800,29 @@ test_forward_accept_no_docker_user() {
         || fail "-o awg0 FORWARD insert missing"
 }
 
+test_nft_panel_domain_with_panel_port() {
+    # T-156: panel domain + panel-port opens tcp 80 (ACME) and tcp
+    # PANEL_PORT, not tcp 443. UDP AWG stays on 443. --vpn-domain does
+    # not open extra TCP ports.
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-domain panel.example.com --panel-port 8443 --vpn-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "nft domain+port: exit $rc"
+    assert_in "^[[:space:]]*tcp dport 80 accept" "$NFT_SYS_FILE" "nft domain+port: tcp 80 (ACME)"
+    assert_in "^[[:space:]]*tcp dport 8443 accept" "$NFT_SYS_FILE" "nft domain+port: tcp 8443 (panel)"
+    assert_not_in "^[[:space:]]*tcp dport 443 accept" "$NFT_SYS_FILE" "nft domain+port: no tcp 443"
+    assert_in "udp dport 443 accept" "$NFT_SYS_FILE" "nft domain+port: UDP AWG 443"
+}
+
+test_nft_panel_domain_default_443() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "nft domain-443: exit $rc"
+    assert_in "^[[:space:]]*tcp dport 80 accept" "$NFT_SYS_FILE" "nft domain: tcp 80"
+    assert_in "^[[:space:]]*tcp dport 443 accept" "$NFT_SYS_FILE" "nft domain: tcp 443"
+}
+
 # --- main ---------------------------------------------------------------
 
 test_bash_syntax
@@ -796,6 +855,8 @@ test_awg_stack_present_skips_install
 test_awg_stack_forced_install
 test_forward_accept_docker_user
 test_forward_accept_no_docker_user
+test_nft_panel_domain_with_panel_port
+test_nft_panel_domain_default_443
 
 echo
 if [ "$M92_ERRORS" -eq 0 ]; then
