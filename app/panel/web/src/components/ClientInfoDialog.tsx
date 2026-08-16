@@ -57,7 +57,7 @@ function PropertyEditButtons({
 }) {
   if (editing) {
     return (
-      <div className="flex gap-1">
+      <div className="flex">
         <Button
           type="button"
           variant="ghost"

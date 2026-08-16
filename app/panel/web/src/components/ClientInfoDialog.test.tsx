@@ -230,4 +230,22 @@ describe("ClientInfoDialog", () => {
     expect(document.querySelector("#info-name")).toBeNull();
     expect(screen.getByText("Alice")).toBeInTheDocument();
   });
+
+  it("keeps Save and Cancel flush without a flex gap", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={() => {}}
+        onSave={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Изменить имя" }));
+
+    const save = screen.getByRole("button", { name: "Сохранить имя" });
+    expect(save.parentElement).toHaveClass("flex");
+    expect(save.parentElement).not.toHaveClass("gap-1");
+  });
 });
