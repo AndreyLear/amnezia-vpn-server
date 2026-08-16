@@ -24,15 +24,28 @@ Self-hosted VPN server based on AmneziaWG 2.0+.
 
 ## Install
 
-From the operator machine, one-shot install is `bootstrap.sh` (T-123):
-SSH to the VPS, run `install.sh`, create admin, print panel URL +
-temporary password. Panel and VPN endpoints are independent. CI flags:
-`--ip`, `--panel-domain` (alias `--domain`), `--vpn-domain` (alias
-`--client-domain`), optional `--panel-port` (without a panel domain,
-CI defaults to 8443; do not use 8787 — that port is the loopback
-panel). `--panel-domain` does **not** bind VPN clients; only
-`--vpn-domain` / `--client-domain` does. Restore is an upload in the
-panel (Backups) and does not change the panel user (T-155).
+Beginner path from the operator machine: run the Russian wizard (Enter
+accepts the default in brackets). It asks for server IP, SSH user
+(`[root]`), password or key (password is the default; a key in
+`~/.ssh` is not used unless you answer `ключ` or `2`), panel domain
+(empty = panel on the server IP, then panel port `[8443]`), panel port
+`[443]` when a domain is set (empty = TLS on 443), and VPN client
+domain (empty = public IP — never copied from the panel hostname).
+AmneziaWG stays on UDP 443 and the deploy root is `/opt/amnezia-vpn`.
+
+```sh
+bash bootstrap.sh
+# or: ./bootstrap.sh
+```
+
+CI / flags: `bootstrap.sh` SSHes to the VPS, runs `install.sh`, creates
+admin, prints panel URL + temporary password. Panel and VPN endpoints
+are independent. Flags: `--ip`, `--panel-domain` (alias `--domain`),
+`--vpn-domain` (alias `--client-domain`), optional `--panel-port`
+(without a panel domain, CI defaults to 8443; do not use 8787 — that
+port is the loopback panel). `--panel-domain` does **not** bind VPN
+clients; only `--vpn-domain` / `--client-domain` does. Restore is an
+upload in the panel (Backups) and does not change the panel user (T-155).
 
 ```sh
 ./bootstrap.sh --ip HOST --panel-domain panel.example.com --vpn-domain example.com

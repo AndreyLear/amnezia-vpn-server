@@ -231,6 +231,8 @@ test_help() {
         || fail "help: --panel-domain missing"
     grep -q -- "--vpn-domain" "$TMP_TEST/out" && pass "help: --vpn-domain" \
         || fail "help: --vpn-domain missing"
+    grep -q "Russian wizard" "$TMP_TEST/out" && pass "help: no-args Russian wizard" \
+        || fail "help: no-args Russian wizard line missing"
 }
 
 test_unknown_argument() {
@@ -363,55 +365,64 @@ test_flags_panel_port_uses_ip_endpoint() {
         || fail "panel-port IP endpoint: summary endpoint missing/wrong"
 }
 
-test_interactive_key_bind_yes() {
+test_interactive_key_explicit_domains() {
+    # FAKE_HOME still has keys; wizard must be told «ключ» (or 2) to use them.
     fakes_reset
     rc="$(
         HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
         bash "$BOOTSTRAP_SH" > "$TMP_TEST/out" 2> "$TMP_TEST/err" <<'ANSWERS'
 2.26.93.192
 root
+ключ
 panel.example.com
-y
 
-
-/opt/amnezia-vpn
+vpn.example.com
 ANSWERS
         echo $?
     )"
-    [ "$rc" = "0" ] || { fail "interactive bind: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
-    grep -q -- "--domain 'panel.example.com'" "$FAKE_CALLS" && pass "interactive bind: --domain passed" \
-        || fail "interactive bind: --domain missing"
-    grep -q -- "--client-domain 'panel.example.com'" "$FAKE_CALLS" \
-        && pass "interactive bind: client domain defaults to the panel domain" \
-        || fail "interactive bind: --client-domain missing"
-    grep -q "Endpoint:  panel.example.com:443" "$TMP_TEST/out" \
-        && pass "interactive bind: endpoint in summary" \
-        || fail "interactive bind: endpoint missing"
+    [ "$rc" = "0" ] || { fail "interactive domains: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q -- "--domain 'panel.example.com'" "$FAKE_CALLS" && pass "interactive domains: --domain passed" \
+        || fail "interactive domains: --domain missing"
+    grep -q -- "--client-domain 'vpn.example.com'" "$FAKE_CALLS" \
+        && pass "interactive domains: --client-domain is the typed VPN domain" \
+        || fail "interactive domains: --client-domain missing/wrong"
+    grep -q -- "--panel-port" "$FAKE_CALLS" && fail "interactive domains: empty panel port still passed --panel-port" \
+        || pass "interactive domains: empty panel port omits --panel-port"
+    grep -q "Endpoint:  vpn.example.com:443" "$TMP_TEST/out" \
+        && pass "interactive domains: endpoint is the VPN domain" \
+        || fail "interactive domains: endpoint missing/wrong"
+    grep -q "sshpass" "$FAKE_CALLS" && fail "interactive domains: sshpass invoked despite ключ" \
+        || pass "interactive domains: key auth (no sshpass)"
 }
 
-test_interactive_bind_no_uses_ip_endpoint() {
+test_interactive_empty_vpn_domain_uses_ip_endpoint() {
     fakes_reset
     rc="$(
         HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
         bash "$BOOTSTRAP_SH" > "$TMP_TEST/out" 2> "$TMP_TEST/err" <<'ANSWERS'
 2.26.93.192
 root
+2
 panel.example.com
-n
 
-/opt/amnezia-vpn
+
 ANSWERS
         echo $?
     )"
-    [ "$rc" = "0" ] || { fail "interactive no-bind: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
-    grep -q -- "--domain 'panel.example.com'" "$FAKE_CALLS" && pass "interactive no-bind: --domain passed" \
-        || fail "interactive no-bind: --domain missing"
+    [ "$rc" = "0" ] || { fail "interactive empty-vpn: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q -- "--domain 'panel.example.com'" "$FAKE_CALLS" && pass "interactive empty-vpn: --domain passed" \
+        || fail "interactive empty-vpn: --domain missing"
     grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
-        && pass "interactive no-bind: server init uses PUBLIC_IP:awg-port" \
-        || fail "interactive no-bind: IP endpoint missing from server init"
+        && pass "interactive empty-vpn: server init uses PUBLIC_IP:awg-port" \
+        || fail "interactive empty-vpn: IP endpoint missing from server init"
     grep -q "Endpoint:  2.26.93.192:443" "$TMP_TEST/out" \
-        && pass "interactive no-bind: summary uses the public IP" \
-        || fail "interactive no-bind: summary endpoint missing/wrong"
+        && pass "interactive empty-vpn: summary uses the public IP" \
+        || fail "interactive empty-vpn: summary endpoint missing/wrong"
+    grep -q -- "--client-domain" "$FAKE_CALLS" && fail "interactive empty-vpn: --client-domain passed" \
+        || pass "interactive empty-vpn: --client-domain not passed"
+    grep -q -- "--endpoint 'panel.example.com:443'" "$FAKE_CALLS" \
+        && fail "interactive empty-vpn: panel hostname leaked into endpoint" \
+        || pass "interactive empty-vpn: panel hostname not used as endpoint"
 }
 
 test_interactive_no_domain_panel_port() {
@@ -421,10 +432,10 @@ test_interactive_no_domain_panel_port() {
         bash "$BOOTSTRAP_SH" > "$TMP_TEST/out" 2> "$TMP_TEST/err" <<'ANSWERS'
 2.26.93.192
 root
+ключ
 
 8443
 
-/opt/amnezia-vpn
 ANSWERS
         echo $?
     )"
@@ -433,6 +444,40 @@ ANSWERS
         || fail "interactive IP:port: --panel-port missing"
     grep -q "https://2.26.93.192:8443" "$TMP_TEST/out" && pass "interactive IP:port: URL in summary" \
         || fail "interactive IP:port: URL missing"
+    grep -q -- "--client-domain" "$FAKE_CALLS" && fail "interactive IP:port: --client-domain passed" \
+        || pass "interactive IP:port: empty VPN domain omits --client-domain"
+}
+
+test_interactive_password_with_keys_present() {
+    # Keys exist in FAKE_HOME; empty/пароль/1 must use sshpass, not default_key.
+    fakes_reset
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
+        bash "$BOOTSTRAP_SH" > "$TMP_TEST/out" 2> "$TMP_TEST/err" <<'ANSWERS'
+2.26.93.192
+root
+
+s3cret-interactive
+
+8443
+
+ANSWERS
+        echo $?
+    )"
+    [ "$rc" = "0" ] || { fail "interactive password: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q "sshpass -e" "$FAKE_CALLS" && pass "interactive password: sshpass -e" \
+        || fail "interactive password: sshpass -e missing"
+    grep -q "id_ed25519" "$FAKE_CALLS" && fail "interactive password: used ~/.ssh/id_ed25519 despite password choice" \
+        || pass "interactive password: did not auto-pick id_ed25519"
+    grep -q "BatchMode=yes" "$FAKE_CALLS" && fail "interactive password: BatchMode=yes used with password auth" \
+        || pass "interactive password: BatchMode=yes not used"
+    if grep -F "s3cret-interactive" "$FAKE_CALLS" "$TMP_TEST/err" >/dev/null 2>&1; then
+        fail "interactive password: SSH password leaked into argv/logs"
+    else
+        pass "interactive password: SSH password absent from argv/logs"
+    fi
+    grep -q -- "--panel-port '8443'" "$FAKE_CALLS" && pass "interactive password: default panel port 8443" \
+        || fail "interactive password: --panel-port 8443 missing"
 }
 
 test_ssh_failure() {
@@ -543,9 +588,10 @@ test_key_flags_domain_client_domain
 test_password_env_panel_port
 test_flags_domain_without_vpn_domain_uses_ip_endpoint
 test_flags_panel_port_uses_ip_endpoint
-test_interactive_key_bind_yes
-test_interactive_bind_no_uses_ip_endpoint
+test_interactive_key_explicit_domains
+test_interactive_empty_vpn_domain_uses_ip_endpoint
 test_interactive_no_domain_panel_port
+test_interactive_password_with_keys_present
 test_ssh_failure
 test_install_failure
 test_dns_mismatch

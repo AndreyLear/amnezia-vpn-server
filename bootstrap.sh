@@ -101,8 +101,7 @@ Examples:
   ./bootstrap.sh --ip 203.0.113.10 --panel-domain panel.example.com --panel-port 8443 --vpn-domain example.com
   ./bootstrap.sh --ip 203.0.113.10 --panel-port 8443
 
-Interactive mode (no --ip) asks for host, SSH user, authentication,
-panel domain or IP:port, and whether to bind clients to a domain.
+Without --ip, starts a numbered Russian wizard (Enter accepts defaults).
 EOF
 }
 
@@ -269,39 +268,58 @@ prompt_secret() { # prompt_secret VAR "question"
     printf -v "$__var" '%s' "$__ans"
 }
 
-prompt_yesno() { # prompt_yesno VAR "question" default_y_or_n
-    local __var="$1" __q="$2" __def="$3" __ans __show
-    if [ "$__def" = "y" ]; then __show="Y/n"; else __show="y/N"; fi
-    printf '%s [%s]: ' "$__q" "$__show" >&2
-    IFS= read -r __ans || true
-    __ans="$(printf '%s' "$__ans" | tr '[:upper:]' '[:lower:]')"
-    if [ -z "$__ans" ]; then
-        __ans="$__def"
-    fi
-    case "$__ans" in
-        y | yes) printf -v "$__var" '1' ;;
-        n | no) printf -v "$__var" '0' ;;
-        *) die_op "please answer yes or no" ;;
-    esac
-}
-
 if [ "$NONINTERACTIVE" = "0" ]; then
-    prompt SSH_HOST "Server IP or hostname"
-    prompt SSH_USER "SSH user" "$DEFAULT_USER"
-    prompt DOMAIN "Panel domain (empty for IP:port HTTPS)"
+    prompt SSH_HOST "1/6 IP сервера"
+    [ -n "$SSH_HOST" ] || die_op "IP сервера обязателен"
+    prompt SSH_USER "2/6 Пользователь SSH" "$DEFAULT_USER"
+    printf '3/6 Вход на сервер: пароль (по умолчанию) или ключ: ' >&2
+    IFS= read -r AUTH_CHOICE || true
+    AUTH_NORM="$(printf '%s' "$AUTH_CHOICE" | tr '[:upper:]' '[:lower:]')"
+    case "$AUTH_CHOICE" in
+        "" | пароль | 1)
+            AUTH_MODE=password
+            ;;
+        ключ | 2)
+            AUTH_MODE=key
+            ;;
+        *)
+            case "$AUTH_NORM" in
+                password | pass)
+                    AUTH_MODE=password
+                    ;;
+                key)
+                    AUTH_MODE=key
+                    ;;
+                *)
+                    die_op "укажите пароль или ключ (Enter / 1 — пароль, 2 — ключ)"
+                    ;;
+            esac
+            ;;
+    esac
+    if [ "$AUTH_MODE" = "password" ]; then
+        prompt_secret SSH_PASSWORD "Пароль SSH (ввод скрыт)"
+        [ -n "$SSH_PASSWORD" ] || die_op "пароль SSH пустой"
+    fi
+    prompt DOMAIN "4/6 Домен панели (пусто = панель на IP)"
     if [ -n "$DOMAIN" ]; then
         DOMAIN_SET=1
-        prompt_yesno BIND_CLIENTS "Bind VPN clients to a domain?" y
-        if [ "$BIND_CLIENTS" = "1" ]; then
-            prompt CLIENT_DOMAIN "Client endpoint domain" "$DOMAIN"
-            CLIENT_DOMAIN_SET=1
+        printf '5/6 Порт панели [443]: ' >&2
+        IFS= read -r PANEL_PORT || true
+        if [ -n "$PANEL_PORT" ]; then
+            PANEL_PORT_SET=1
         fi
     else
-        prompt PANEL_PORT "Panel TLS port" "$DEFAULT_PANEL_PORT"
+        prompt PANEL_PORT "5/6 Порт панели" "$DEFAULT_PANEL_PORT"
         PANEL_PORT_SET=1
     fi
-    prompt AWG_PORT "AmneziaWG UDP port" "$DEFAULT_AWG_PORT"
-    prompt ROOT_DIR "Deployment root on the server" "$DEFAULT_ROOT"
+    prompt CLIENT_DOMAIN "6/6 Домен VPN для клиентов (пусто = IP сервера)"
+    if [ -n "$CLIENT_DOMAIN" ]; then
+        CLIENT_DOMAIN_SET=1
+        BIND_CLIENTS=1
+    else
+        CLIENT_DOMAIN_SET=0
+        BIND_CLIENTS=0
+    fi
 fi
 
 [ -n "$SSH_HOST" ] || die_usage "server host is required (--ip, or answer the prompt)"
@@ -366,7 +384,16 @@ default_key() {
     return 1
 }
 
-if [ -n "$KEY_FILE" ]; then
+if [ "$NONINTERACTIVE" = "0" ]; then
+    if [ "$AUTH_MODE" = "key" ]; then
+        KEY_FILE="$(default_key)" || die_op "SSH-ключ не найден (~/.ssh/id_ed25519, ~/.ssh/id_rsa)"
+        AUTH_MODE=key
+    elif [ "$AUTH_MODE" = "password" ]; then
+        [ -n "$SSH_PASSWORD" ] || die_op "пароль SSH пустой"
+    else
+        die_op "не выбран способ входа на сервер"
+    fi
+elif [ -n "$KEY_FILE" ]; then
     [ -f "$KEY_FILE" ] || die_op "SSH key not found: $KEY_FILE"
     AUTH_MODE=key
 elif [ -n "$PASSWORD_ENV" ]; then
@@ -376,12 +403,8 @@ elif [ -n "$PASSWORD_ENV" ]; then
     AUTH_MODE=password
 elif KEY_FILE="$(default_key)"; then
     AUTH_MODE=key
-elif [ "$NONINTERACTIVE" = "1" ]; then
-    die_op "no SSH key found (~/.ssh/id_ed25519, ~/.ssh/id_rsa); pass --key or --password-env"
 else
-    prompt_secret SSH_PASSWORD "SSH password (input is hidden; never passed on argv)"
-    [ -n "$SSH_PASSWORD" ] || die_op "SSH password is empty and no key was found"
-    AUTH_MODE=password
+    die_op "no SSH key found (~/.ssh/id_ed25519, ~/.ssh/id_rsa); pass --key or --password-env"
 fi
 
 if [ "$AUTH_MODE" = "password" ]; then
@@ -390,7 +413,11 @@ if [ "$AUTH_MODE" = "password" ]; then
     elif command -v expect >/dev/null 2>&1; then
         PASS_HELPER=expect
     else
-        die_op "password authentication requires sshpass or expect (install one of them, or use --key)"
+        if [ "$NONINTERACTIVE" = "0" ]; then
+            die_op "для входа по паролю нужен sshpass или expect (brew install sshpass / apt install sshpass)"
+        else
+            die_op "password authentication requires sshpass or expect (install one of them, or use --key)"
+        fi
     fi
 fi
 
