@@ -1,26 +1,65 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BackupUploadDialog } from "@/components/BackupUploadDialog";
 
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+
+const rejectCopy = "Нужен файл бэкапа (.tar.zst).";
+const archiveName = "backup-2026-08-16.tar.zst";
+
 describe("BackupUploadDialog drop", () => {
-  it("accepts a dropped file", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("accepts a dropped backup archive", () => {
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
     const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
     expect(dropzone).toBeTruthy();
-    const file = new File(["archive"], "panel.zst");
+    const file = new File(["archive"], archiveName);
     fireEvent.drop(dropzone!, {
       dataTransfer: { files: [file] },
     });
-    expect(screen.getByText("panel.zst")).toBeInTheDocument();
+    expect(screen.getByText(archiveName)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
   });
 
-  it("accepts a file dropped on the overlay without closing", () => {
+  it("rejects notes.txt dropped on the dashed box", () => {
+    render(<BackupUploadDialog open onOpenChange={() => {}} />);
+    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
+    fireEvent.drop(dropzone!, {
+      dataTransfer: { files: [new File(["x"], "notes.txt")] },
+    });
+    expect(screen.queryByText("notes.txt")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith(rejectCopy);
+  });
+
+  it("rejects panel.zst dropped on the overlay", () => {
     const onOpenChange = vi.fn();
     render(<BackupUploadDialog open onOpenChange={onOpenChange} />);
     const overlay = document.querySelector("[data-slot=dialog-overlay]");
     expect(overlay).toBeTruthy();
-    const file = new File(["archive"], "overlay.zst");
+    fireEvent.drop(overlay!, {
+      dataTransfer: { files: [new File(["archive"], "panel.zst")] },
+    });
+    expect(screen.queryByText("panel.zst")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+    expect(toast.error).toHaveBeenCalledWith(rejectCopy);
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("accepts a backup archive dropped on the overlay without closing", () => {
+    const onOpenChange = vi.fn();
+    render(<BackupUploadDialog open onOpenChange={onOpenChange} />);
+    const overlay = document.querySelector("[data-slot=dialog-overlay]");
+    expect(overlay).toBeTruthy();
+    const file = new File(["archive"], archiveName);
     const dragOver = fireEvent.dragOver(overlay!, {
       dataTransfer: { files: [file] },
     });
@@ -30,7 +69,7 @@ describe("BackupUploadDialog drop", () => {
     fireEvent.drop(overlay!, {
       dataTransfer: { files: [file] },
     });
-    expect(screen.getByText("overlay.zst")).toBeInTheDocument();
+    expect(screen.getByText(archiveName)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });

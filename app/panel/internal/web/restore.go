@@ -337,13 +337,17 @@ func saveUpload(part *multipart.Part, dst string) error {
 	return closeErr
 }
 
-// validUploadName refuses traversal-shaped file names: the upload is
-// always written to a private temp path (the name is never used as a
-// path), but a name carrying path separators or ".." segments is
-// rejected up front (M8.6 requirement).
+// validUploadName refuses traversal-shaped file names and anything that
+// is not a panel backup archive (.tar.zst). The upload is always
+// written to a private temp path (the name is never used as a path),
+// but a name carrying path separators or ".." segments is rejected up
+// front (M8.6 requirement).
 func validUploadName(name string) bool {
 	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
 		return false
 	}
-	return filepath.Base(name) == name
+	if filepath.Base(name) != name {
+		return false
+	}
+	return strings.HasSuffix(strings.ToLower(name), ".tar.zst")
 }

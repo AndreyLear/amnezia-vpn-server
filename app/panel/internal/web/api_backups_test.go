@@ -84,6 +84,27 @@ func TestAPIRestoreMissingFileJSON(t *testing.T) {
 	}
 }
 
+func TestAPIRestoreRejectsNonArchiveName(t *testing.T) {
+	f := newFixture(t)
+	setBackupsPath(t)
+	for _, name := range []string{"notes.txt", "foo.zip"} {
+		rec := postAPIRestore(t, f, f.csrf, true, map[string][]byte{name: []byte("x")})
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: code = %d, want 400; body=%s", name, rec.Code, rec.Body.String())
+		}
+		got := decodeAPI(t, rec)
+		if got["ok"] != false {
+			t.Fatalf("%s: ok = %v", name, got["ok"])
+		}
+		if got["message"] != flashRestoreInvalidFileName {
+			t.Fatalf("%s: message = %q, want %q", name, got["message"], flashRestoreInvalidFileName)
+		}
+		if _, ok, err := backup.PendingPath(f.dbPath); err != nil || ok {
+			t.Fatalf("%s: pending marker after reject: ok=%v err=%v", name, ok, err)
+		}
+	}
+}
+
 func TestAPIRestorePendingJSON409(t *testing.T) {
 	f := newFixture(t)
 	dir := setBackupsPath(t)

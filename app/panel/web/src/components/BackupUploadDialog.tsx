@@ -11,8 +11,10 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { api, mutationSucceeded, type MutationResponse } from "@/lib/api";
+import { isBackupArchiveName } from "@/lib/backupArchive";
 
-const ACCEPT = ".tar.zst,.zst";
+const ACCEPT = ".tar.zst";
+const rejectCopy = "Нужен файл бэкапа (.tar.zst).";
 
 type BackupUploadDialogProps = {
   open: boolean;
@@ -42,8 +44,7 @@ export function BackupUploadDialog({
     function onDrop(e: DragEvent) {
       e.preventDefault();
       setDragOver(false);
-      const dropped = e.dataTransfer?.files[0];
-      if (dropped) setFile(dropped);
+      takeDropped(e.dataTransfer?.files[0]);
     }
 
     function clearDragOver() {
@@ -59,6 +60,15 @@ export function BackupUploadDialog({
       document.removeEventListener("dragend", clearDragOver);
     };
   }, [open]);
+
+  function takeDropped(next: File | undefined) {
+    if (!next) return;
+    if (!isBackupArchiveName(next.name)) {
+      toast.error(rejectCopy);
+      return;
+    }
+    setFile(next);
+  }
 
   async function upload(next: File) {
     setPending(true);
@@ -114,14 +124,15 @@ export function BackupUploadDialog({
             }`}
             onDragOver={(e) => {
               e.preventDefault();
+              e.stopPropagation();
               setDragOver(true);
             }}
             onDragLeave={() => setDragOver(false)}
             onDrop={(e) => {
               e.preventDefault();
+              e.stopPropagation();
               setDragOver(false);
-              const dropped = e.dataTransfer.files[0];
-              if (dropped) setFile(dropped);
+              takeDropped(e.dataTransfer.files[0]);
             }}
           >
             <span>Перетащите файл сюда или выберите на диске</span>
@@ -129,14 +140,22 @@ export function BackupUploadDialog({
               className="block min-w-0 truncate text-muted-foreground"
               title={file?.name}
             >
-              {file ? file.name : "Формат: .tar.zst, .zst"}
+              {file ? file.name : "Формат: .tar.zst"}
             </span>
             <input
               type="file"
               accept={ACCEPT}
               className="sr-only"
               disabled={pending || restorePending}
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => {
+                const next = e.target.files?.[0];
+                if (!next) {
+                  setFile(null);
+                  return;
+                }
+                takeDropped(next);
+                e.target.value = "";
+              }}
             />
           </label>
           <DialogFooter>
