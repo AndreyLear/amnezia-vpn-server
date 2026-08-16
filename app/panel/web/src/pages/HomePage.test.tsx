@@ -1,4 +1,5 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrf, type Client } from "@/lib/api";
@@ -63,5 +64,74 @@ describe("HomePage load", () => {
 
     expect(clientCalls).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("Alice")).toBeInTheDocument();
+  });
+
+  it("lists clients in one column with mt-6 gap-2 and no add tile", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/me")) {
+          return jsonResponse({
+            username: "admin",
+            csrf: "token",
+            totp: { enabled: false },
+          });
+        }
+        if (path.includes("/api/clients")) {
+          return jsonResponse([alice]);
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<HomePage />);
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+
+    const grid = screen.getByTestId("client-grid");
+    expect(grid).toHaveClass("mt-6", "gap-2", "sm:gap-x-3", "pb-8", "max-sm:pb-28");
+    expect(grid).toHaveClass("sm:grid");
+    expect(grid.className).toContain(
+      "sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]",
+    );
+    expect(grid).not.toHaveClass("flex", "flex-col");
+    expect(grid.className).not.toMatch(/min-\[752px\]:grid-cols-2/);
+    expect(within(grid).queryByRole("button", { name: /добавить клиента/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Добавить клиента" })).toHaveLength(2);
+  });
+
+  it("flips enabled locally after a successful toggle even if GET stays stale", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (path.includes("/api/me")) {
+          return jsonResponse({
+            username: "admin",
+            csrf: "token",
+            totp: { enabled: false },
+          });
+        }
+        if (path.includes("/api/clients/1") && method === "PATCH") {
+          return jsonResponse({ ok: true });
+        }
+        if (path.includes("/api/clients")) {
+          return jsonResponse([alice]);
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<HomePage />);
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Действия для Alice" }));
+    await user.click(screen.getByRole("menuitem", { name: "Отключить" }));
+
+    expect(await screen.findByText("Пауза")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Действия для Alice" }));
+    expect(screen.getByRole("menuitem", { name: "Включить" })).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,35 @@ export function BackupUploadDialog({
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function onDragOver(e: DragEvent) {
+      e.preventDefault();
+      setDragOver(true);
+    }
+
+    function onDrop(e: DragEvent) {
+      e.preventDefault();
+      setDragOver(false);
+      const dropped = e.dataTransfer?.files[0];
+      if (dropped) setFile(dropped);
+    }
+
+    function clearDragOver() {
+      setDragOver(false);
+    }
+
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("drop", onDrop);
+    document.addEventListener("dragend", clearDragOver);
+    return () => {
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("drop", onDrop);
+      document.removeEventListener("dragend", clearDragOver);
+    };
+  }, [open]);
 
   async function upload(next: File) {
     setPending(true);
@@ -63,7 +92,7 @@ export function BackupUploadDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent>
+      <DialogContent className="sm:max-w-md overflow-hidden">
         <DialogHeader>
           <DialogTitle>Загрузить бэкап</DialogTitle>
         </DialogHeader>
@@ -80,7 +109,7 @@ export function BackupUploadDialog({
           }}
         >
           <label
-            className={`grid cursor-pointer gap-2 rounded-lg border border-dashed p-6 text-center text-sm ${
+            className={`grid min-w-0 cursor-pointer gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm ${
               dragOver ? "border-primary bg-muted" : "border-border"
             }`}
             onDragOver={(e) => {
@@ -96,7 +125,10 @@ export function BackupUploadDialog({
             }}
           >
             <span>Перетащите файл сюда или выберите на диске</span>
-            <span className="text-muted-foreground">
+            <span
+              className="block min-w-0 truncate text-muted-foreground"
+              title={file?.name}
+            >
               {file ? file.name : "Формат: .tar.zst, .zst"}
             </span>
             <input

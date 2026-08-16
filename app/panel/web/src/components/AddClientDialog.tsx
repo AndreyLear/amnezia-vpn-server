@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 export type AddClientPayload = {
   name: string;
@@ -67,10 +68,14 @@ export function AddClientDialog({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="client-description">Описание</Label>
-            <Input
+            <Label htmlFor="client-description">
+              Описание{" "}
+              <span className="font-normal text-muted-foreground">(опционально)</span>
+            </Label>
+            <Textarea
               id="client-description"
               name="description"
+              rows={1}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               disabled={pending}

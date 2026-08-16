@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowDownIcon, ArrowUpIcon, HandshakeIcon, MoreVerticalIcon } from "lucide-react";
 
 import {
   AlertDialog,
@@ -11,9 +11,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,8 +20,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Client } from "@/lib/api";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatHandshakeAge } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export type ClientActions = {
   onInfo?: () => void;
@@ -33,17 +34,30 @@ export type ClientActions = {
   pending?: boolean;
 };
 
-export function AddClientCard({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-full w-full min-h-36 flex-col items-center justify-center gap-2 rounded-xl bg-card text-sm text-muted-foreground ring-1 ring-foreground/10 transition-colors hover:bg-muted/40"
-    >
-      <PlusIcon className="size-6" />
-      Добавить клиента
-    </button>
-  );
+const SM_MIN_WIDTH = "(min-width: 640px)";
+
+function isMinWidthSm(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
+  }
+  return window.matchMedia(SM_MIN_WIDTH).matches;
+}
+
+function useMinWidthSm() {
+  const [matches, setMatches] = useState(isMinWidthSm);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mq = window.matchMedia(SM_MIN_WIDTH);
+    const onChange = () => setMatches(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  return matches;
 }
 
 export function ClientMenu({
@@ -63,8 +77,9 @@ export function ClientMenu({
           size="icon-sm"
           disabled={pending}
           aria-label={`Действия для ${client.name}`}
+          onClick={(event) => event.stopPropagation()}
         >
-          <MoreHorizontalIcon />
+          <MoreVerticalIcon />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
@@ -83,25 +98,6 @@ export function ClientMenu({
   );
 }
 
-export function ClientPills({ client }: { client: Client }) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      <Badge
-        variant={client.online ? "secondary" : "destructive"}
-        className={
-          client.online
-            ? "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400"
-            : undefined
-        }
-      >
-        {client.online ? "онлайн" : "офлайн"}
-      </Badge>
-      <Badge variant="outline">{formatBytes(client.rx_bytes)}</Badge>
-      <Badge variant="outline">{formatBytes(client.tx_bytes)}</Badge>
-    </div>
-  );
-}
-
 export function ClientCard({
   client,
   onInfo,
@@ -112,25 +108,88 @@ export function ClientCard({
   pending,
 }: { client: Client } & ClientActions) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const isSmUp = useMinWidthSm();
 
   return (
-    <Card className="h-full min-h-36">
-      <CardHeader className="border-b">
-        <CardTitle>{client.name}</CardTitle>
-        <CardAction>
-          <ClientMenu
-            client={client}
-            pending={pending}
-            onInfo={onInfo}
-            onQr={onQr}
-            onDownload={onDownload}
-            onToggle={onToggle}
-            onDelete={() => setConfirmOpen(true)}
-          />
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        <ClientPills client={client} />
+    <Card
+      className={cn(
+        "relative client-card-sweep flex-row items-center hover:ring-foreground/25 sm:col-span-full sm:grid sm:grid-cols-subgrid py-2 sm:py-1",
+        !client.enabled && "opacity-60",
+      )}
+    >
+      <CardContent className="flex min-w-0 flex-1 items-center max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 sm:col-span-full sm:grid sm:grid-cols-subgrid px-2 sm:px-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <button
+            type="button"
+            className="min-w-0 truncate text-left font-heading text-base font-medium"
+            onClick={onInfo}
+          >
+            {client.name}
+          </button>
+          {!client.enabled ? (
+            <span className="shrink-0 text-muted-foreground">Пауза</span>
+          ) : null}
+        </div>
+        <TooltipProvider>
+          <div className="flex shrink-0 items-center gap-3 text-muted-foreground max-sm:col-span-2 sm:contents">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-[0.4rem]">
+                  <HandshakeIcon
+                    className={cn("size-4", client.online && "text-emerald-500")}
+                    aria-hidden
+                  />
+                  <span className="tabular-nums">{formatHandshakeAge(client.last_handshake_utc)}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Последний handshake</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-[0.25rem]">
+                  <ArrowDownIcon className="size-4" aria-hidden />
+                  <span className="tabular-nums">{formatBytes(client.rx_bytes)}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Входящий трафик</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-[0.25rem]">
+                  <ArrowUpIcon className="size-4" aria-hidden />
+                  <span className="tabular-nums">{formatBytes(client.tx_bytes)}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Исходящий трафик</TooltipContent>
+            </Tooltip>
+          </div>
+          <div className="max-sm:col-start-2 max-sm:row-start-1">
+            {isSmUp ? (
+              <ClientMenu
+                client={client}
+                pending={pending}
+                onInfo={onInfo}
+                onQr={onQr}
+                onDownload={onDownload}
+                onToggle={onToggle}
+                onDelete={() => setConfirmOpen(true)}
+              />
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={pending}
+                aria-label={`Действия для ${client.name}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onInfo?.();
+                }}
+              >
+                <MoreVerticalIcon />
+              </Button>
+            )}
+          </div>
+        </TooltipProvider>
       </CardContent>
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>

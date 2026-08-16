@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { AddClientDialog } from "@/components/AddClientDialog";
 import { AppShell } from "@/components/AppShell";
-import { AddClientCard, ClientCard } from "@/components/ClientCard";
+import { ClientCard } from "@/components/ClientCard";
 import { ClientInfoDialog } from "@/components/ClientInfoDialog";
 import { QrDialog } from "@/components/QrDialog";
 import {
@@ -17,7 +17,6 @@ import {
 
 export default function HomePage() {
   const [clients, setClients] = useState<Client[]>([]);
-  const [totpEnabled, setTotpEnabled] = useState(false);
   const [restorePending, setRestorePending] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [infoId, setInfoId] = useState<number | null>(null);
@@ -36,7 +35,6 @@ export default function HomePage() {
       const me = await api<MeResponse>("/api/me");
       setCsrf(me.csrf);
       if (!stopped) {
-        setTotpEnabled(me.totp.enabled);
         setRestorePending(Boolean(me.restore_pending));
         await load();
       }
@@ -84,8 +82,15 @@ export default function HomePage() {
         body: JSON.stringify({ enabled: !client.enabled }),
       });
       if (!mutationSucceeded(data)) return;
+      const enabled = !client.enabled;
+      setClients((list) =>
+        list.map((c) => (c.id === client.id ? { ...c, enabled } : c)),
+      );
       toast.success(client.enabled ? "Клиент отключён" : "Клиент включён");
       await load();
+      setClients((list) =>
+        list.map((c) => (c.id === client.id ? { ...c, enabled } : c)),
+      );
     } finally {
       setPendingId(null);
     }
@@ -124,9 +129,11 @@ export default function HomePage() {
   }
 
   return (
-    <AppShell totpEnabled={totpEnabled} restorePending={restorePending} onTotpChange={setTotpEnabled}>
-      <div data-testid="client-grid" className="grid grid-cols-1 items-stretch gap-4 pb-8 min-[752px]:grid-cols-2">
-        <AddClientCard onClick={() => setAddOpen(true)} />
+    <AppShell restorePending={restorePending} onAddClient={() => setAddOpen(true)}>
+      <div
+        data-testid="client-grid"
+        className="mt-6 gap-2 sm:gap-x-3 pb-8 max-sm:flex max-sm:flex-col max-sm:pb-28 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]"
+      >
         {clients.map((client) => (
           <ClientCard
             key={client.id}
