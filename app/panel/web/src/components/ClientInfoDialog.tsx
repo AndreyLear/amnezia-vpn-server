@@ -270,7 +270,7 @@ export function ClientInfoDialog({
                       <dd>{viewDescription}</dd>
                     )}
                   </div>
-                  <div>
+                  <div className="grid gap-0.5">
                     <dt className="text-muted-foreground">Статус</dt>
                     <dd>
                       {!client.enabled
@@ -280,15 +280,15 @@ export function ClientInfoDialog({
                           : "офлайн"}
                     </dd>
                   </div>
-                  <div>
+                  <div className="grid gap-0.5">
                     <dt className="text-muted-foreground">IP</dt>
                     <dd className="font-mono">{client.address}</dd>
                   </div>
-                  <div>
+                  <div className="grid gap-0.5">
                     <dt className="text-muted-foreground">Handshake</dt>
                     <dd>{formatHandshake(client.last_handshake_utc)}</dd>
                   </div>
-                  <div>
+                  <div className="grid gap-0.5">
                     <dt className="text-muted-foreground">Трафик</dt>
                     <dd>
                       ↓ {formatBytes(client.rx_bytes)} · ↑ {formatBytes(client.tx_bytes)}

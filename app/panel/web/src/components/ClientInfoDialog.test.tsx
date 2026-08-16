@@ -248,4 +248,22 @@ describe("ClientInfoDialog", () => {
     expect(save.parentElement).toHaveClass("flex");
     expect(save.parentElement).not.toHaveClass("gap-1");
   });
+
+  it("adds a 2px label-value gap on read-only rows only", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    const trafficDt = screen.getByText("Трафик");
+    expect(trafficDt.tagName).toBe("DT");
+    expect(trafficDt.parentElement).toHaveClass("gap-0.5");
+
+    const statusDt = screen.getByText("Статус");
+    expect(statusDt.parentElement).toHaveClass("gap-0.5");
+
+    const nameDt = screen.getByText("Имя");
+    expect(nameDt.tagName).toBe("DT");
+    expect(nameDt.parentElement).not.toHaveClass("gap-0.5");
+    const nameStack = nameDt.closest("dl")?.querySelector("div");
+    expect(nameStack).toBeTruthy();
+    expect(nameStack).not.toHaveClass("gap-0.5");
+  });
 });
