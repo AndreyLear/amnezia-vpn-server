@@ -43,6 +43,14 @@ describe("ClientCard", () => {
     expect(card).not.toHaveClass("h-full", "min-h-36");
   });
 
+  it("puts a one-shot hover sweep on the card frame", () => {
+    render(<ClientCard client={base} />);
+
+    const card = screen.getByText("Alice").closest("[data-slot=card]");
+    expect(card).toHaveClass("client-card-sweep");
+    expect(card).toHaveClass("relative");
+  });
+
   it("packs metrics and places the menu opposite the name on max-sm", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));

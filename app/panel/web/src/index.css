@@ -176,3 +176,47 @@
     animation: none;
   }
 }
+
+.client-card-sweep::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    105deg,
+    transparent 35%,
+    color-mix(in oklch, var(--foreground) 70%, transparent) 50%,
+    transparent 65%
+  );
+  background-size: 220% 100%;
+  background-position: 130% 0;
+  opacity: 0;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.client-card-sweep:hover::after {
+  animation: client-card-light-sweep 0.75s ease-out 1 forwards;
+}
+
+@keyframes client-card-light-sweep {
+  0% {
+    opacity: 1;
+    background-position: 130% 0;
+  }
+  100% {
+    opacity: 0;
+    background-position: -30% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .client-card-sweep:hover::after {
+    animation: none;
+  }
+}
