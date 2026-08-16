@@ -238,11 +238,6 @@ export function PasswordDialog({
           </div>
           {!totpEnabled ? (
             <>
-              {!qr ? (
-                <p className="text-muted-foreground text-sm">
-                  QR появится после подтверждения паролем.
-                </p>
-              ) : null}
               <div className="grid gap-2">
                 <Label htmlFor="totp-enroll-password">
                   Текущий пароль{" "}
@@ -256,6 +251,11 @@ export function PasswordDialog({
                   onChange={(e) => setEnrollPassword(e.target.value)}
                   disabled={pending}
                 />
+                {!qr ? (
+                  <p className="text-muted-foreground text-sm">
+                    QR появится после подтверждения паролем.
+                  </p>
+                ) : null}
               </div>
               {!qr ? (
                 <div>

@@ -42,6 +42,12 @@ describe("PasswordDialog", () => {
     expect(
       screen.getByText("QR появится после подтверждения паролем."),
     ).toBeInTheDocument();
+    const input = screen.getByLabelText(/для включения 2FA/);
+    const hint = screen.getByText("QR появится после подтверждения паролем.");
+    expect(input.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const heading = screen.getByRole("heading", { name: "Двухфакторная аутентификация" });
+    expect(heading.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(hint.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeFalsy();
     expect(screen.getByRole("button", { name: "Включить" })).toBeInTheDocument();
   });
 
