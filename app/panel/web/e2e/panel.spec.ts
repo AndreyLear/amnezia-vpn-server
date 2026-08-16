@@ -70,17 +70,11 @@ test("unknown route shows не найдено", async ({ page }) => {
   await expect(page.getByText("не найдено")).toBeVisible();
 });
 
-test("enroll QR renders in the 2FA dialog at 375px", async ({ page }) => {
+test("overflow menu has no account item at 375px", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 720 });
   await login(page);
 
   await page.getByRole("button", { name: "Меню" }).click();
-  await page.getByRole("menuitem", { name: "Аккаунт" }).click();
-  await expect(page.getByRole("heading", { name: "Аккаунт" })).toBeVisible();
-  await page.getByLabel(/для включения 2FA/).fill(password);
-  await page.getByRole("button", { name: "Включить" }).click();
-  const qr = page.getByAltText("QR-код 2FA");
-  await expect(qr).toBeVisible();
-  await expect.poll(async () => qr.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
-  await expect(qr).not.toHaveAttribute("src", /^data:/);
+  await expect(page.getByRole("menuitem", { name: "Аккаунт" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Аккаунт" })).toHaveCount(0);
 });

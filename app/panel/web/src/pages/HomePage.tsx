@@ -17,7 +17,6 @@ import {
 
 export default function HomePage() {
   const [clients, setClients] = useState<Client[]>([]);
-  const [totpEnabled, setTotpEnabled] = useState(false);
   const [restorePending, setRestorePending] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [infoId, setInfoId] = useState<number | null>(null);
@@ -36,7 +35,6 @@ export default function HomePage() {
       const me = await api<MeResponse>("/api/me");
       setCsrf(me.csrf);
       if (!stopped) {
-        setTotpEnabled(me.totp.enabled);
         setRestorePending(Boolean(me.restore_pending));
         await load();
       }
@@ -131,12 +129,7 @@ export default function HomePage() {
   }
 
   return (
-    <AppShell
-      totpEnabled={totpEnabled}
-      restorePending={restorePending}
-      onTotpChange={setTotpEnabled}
-      onAddClient={() => setAddOpen(true)}
-    >
+    <AppShell restorePending={restorePending} onAddClient={() => setAddOpen(true)}>
       <div
         data-testid="client-grid"
         className="mt-6 gap-2 sm:gap-x-3 pb-8 max-sm:flex max-sm:flex-col max-sm:pb-28 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]"

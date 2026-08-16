@@ -4,7 +4,6 @@ import { EllipsisVerticalIcon, PlusIcon } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { BackupMenu, BackupOverflowSub, BackupProvider } from "@/components/BackupMenu";
-import { PasswordDialog } from "@/components/PasswordDialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -23,21 +22,16 @@ import { applyTheme, getTheme, type Theme } from "@/lib/theme";
 
 export function AppShell({
   children,
-  totpEnabled,
   restorePending = false,
-  onTotpChange,
   onAddClient,
 }: {
   children: ReactNode;
-  totpEnabled: boolean;
   restorePending?: boolean;
-  onTotpChange: (enabled: boolean) => void;
   onAddClient: () => void;
 }) {
   const [theme, setThemeState] = useState<Theme>(() =>
     typeof window === "undefined" ? "system" : getTheme(),
   );
-  const [passwordOpen, setPasswordOpen] = useState(false);
 
   function chooseTheme(next: Theme) {
     setThemeState(next);
@@ -89,9 +83,6 @@ export function AppShell({
                   </DropdownMenuSub>
                   <BackupOverflowSub />
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={() => setPasswordOpen(true)}>
-                    Аккаунт
-                  </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => void logout()}>Выйти</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -114,12 +105,6 @@ export function AppShell({
           </Button>
         </div>
       </div>
-      <PasswordDialog
-        open={passwordOpen}
-        totpEnabled={totpEnabled}
-        onOpenChange={setPasswordOpen}
-        onTotpChange={onTotpChange}
-      />
     </div>
   );
 }

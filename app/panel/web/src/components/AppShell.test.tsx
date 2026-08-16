@@ -12,10 +12,10 @@ describe("AppShell header", () => {
     setCsrf("");
   });
 
-  it("shows backup actions, theme choices, password and logout", async () => {
+  it("shows backup actions, theme choices, and logout without account", async () => {
     const user = userEvent.setup();
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+      <AppShell onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
@@ -28,7 +28,7 @@ describe("AppShell header", () => {
     await user.click(screen.getByRole("button", { name: "Меню" }));
     expect(await screen.findByText("Тема")).toBeInTheDocument();
     expect(screen.queryByText("Светлая")).not.toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Аккаунт" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Аккаунт" })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Изменить пароль" })).not.toBeInTheDocument();
     expect(screen.queryByText("Изменить пароль")).not.toBeInTheDocument();
     expect(screen.getByText("Выйти")).toBeInTheDocument();
@@ -45,7 +45,7 @@ describe("AppShell header", () => {
     const user = userEvent.setup();
     const onAddClient = vi.fn();
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={onAddClient}>
+      <AppShell onAddClient={onAddClient}>
         <p>body</p>
       </AppShell>,
     );
@@ -66,7 +66,7 @@ describe("AppShell header", () => {
 
   it("hides the header Backup button below sm and shows it from sm up", () => {
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+      <AppShell onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
@@ -77,7 +77,7 @@ describe("AppShell header", () => {
   it("puts backup download and upload in the overflow menu", async () => {
     const user = userEvent.setup();
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+      <AppShell onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
@@ -93,7 +93,7 @@ describe("AppShell header", () => {
 
   it("uses text-base on the AWG Panel title, not text-sm", () => {
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+      <AppShell onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
@@ -105,7 +105,7 @@ describe("AppShell header", () => {
 
   it("hides the header add on max-sm and keeps icon plus label from sm up", () => {
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+      <AppShell onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
@@ -125,7 +125,7 @@ describe("AppShell header", () => {
     const user = userEvent.setup();
     const onAddClient = vi.fn();
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={onAddClient}>
+      <AppShell onAddClient={onAddClient}>
         <p>body</p>
       </AppShell>,
     );
@@ -157,7 +157,7 @@ describe("AppShell header", () => {
 
   it("uses pt-4 on the header without py-4 bottom padding", () => {
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+      <AppShell onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
@@ -169,7 +169,7 @@ describe("AppShell header", () => {
 
   it("uses outline variant on the overflow Меню button", () => {
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+      <AppShell onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
