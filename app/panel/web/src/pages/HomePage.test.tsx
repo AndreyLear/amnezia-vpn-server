@@ -66,7 +66,7 @@ describe("HomePage load", () => {
     expect(screen.getByText("Alice")).toBeInTheDocument();
   });
 
-  it("lists clients in one column with mt-8 gap-2 and no add tile", async () => {
+  it("lists clients in one column with mt-6 gap-2 and no add tile", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -89,7 +89,7 @@ describe("HomePage load", () => {
     expect(await screen.findByText("Alice")).toBeInTheDocument();
 
     const grid = screen.getByTestId("client-grid");
-    expect(grid).toHaveClass("mt-8", "flex", "flex-col", "gap-2", "pb-8");
+    expect(grid).toHaveClass("mt-6", "flex", "flex-col", "gap-2", "pb-8");
     expect(grid.className).not.toMatch(/min-\[752px\]:grid-cols-2/);
     expect(within(grid).queryByRole("button", { name: /добавить клиента/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();
