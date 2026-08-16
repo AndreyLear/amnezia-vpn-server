@@ -137,7 +137,7 @@ export function ClientCard({
           <AlertDialogHeader>
             <AlertDialogTitle>Удалить клиента «{client.name}»?</AlertDialogTitle>
             <AlertDialogDescription>
-              Конфигурация клиента будет убрана из awg0.conf. Действие необратимо.
+              Конфигурация клиента будет убрана из awg0.conf
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
