@@ -71,6 +71,19 @@ describe("AppShell header", () => {
     expect(title).not.toHaveClass("text-sm");
   });
 
+  it("keeps Добавить клиента as the accessible name and hides the label span below sm", () => {
+    render(
+      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const add = screen.getByRole("button", { name: "Добавить клиента" });
+    const label = add.querySelector("span");
+    expect(label).toHaveClass("hidden", "sm:inline");
+    expect(label).toHaveTextContent("Добавить клиента");
+  });
+
   it("uses pt-4 on the header without py-4 bottom padding", () => {
     render(
       <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>

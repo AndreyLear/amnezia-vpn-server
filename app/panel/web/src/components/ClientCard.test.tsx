@@ -41,6 +41,15 @@ describe("ClientCard", () => {
     expect(card).not.toHaveClass("h-full", "min-h-36");
   });
 
+  it("wraps the name onto a full-width row on max-sm", () => {
+    render(<ClientCard client={base} />);
+
+    const name = screen.getByText("Alice");
+    const content = name.closest("[data-slot=card-content]");
+    expect(content).toHaveClass("max-sm:flex-wrap");
+    expect(name.parentElement).toHaveClass("max-sm:basis-full");
+  });
+
   it("opens info from the name without nesting the menu in that control", async () => {
     const user = userEvent.setup();
     const onInfo = vi.fn();

@@ -53,12 +53,12 @@ export function AppShell({
     <div className="relative min-h-svh">
       <AmbientBackground />
       <div className="relative mx-auto w-full max-w-[752px] px-4">
-        <header className="flex items-center gap-2 pt-4">
-          <p className="font-mono text-base font-medium">AWG Panel</p>
-          <div className="ml-auto flex items-center gap-2">
-            <Button type="button" onClick={onAddClient}>
+        <header className="flex min-w-0 items-center gap-2 pt-4">
+          <p className="min-w-0 truncate font-mono text-base font-medium">AWG Panel</p>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <Button type="button" aria-label="Добавить клиента" onClick={onAddClient}>
               <PlusIcon />
-              Добавить клиента
+              <span className="hidden sm:inline">Добавить клиента</span>
             </Button>
             <BackupMenu restorePending={restorePending} />
             <DropdownMenu>

@@ -85,8 +85,8 @@ export function ClientCard({
 
   return (
     <Card className={cn("flex-row items-center py-2", !client.enabled && "opacity-60")}>
-      <CardContent className="flex min-w-0 flex-1 items-center gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+      <CardContent className="flex min-w-0 flex-1 items-center gap-3 max-sm:flex-wrap max-sm:gap-y-1">
+        <div className="flex min-w-0 flex-1 items-center gap-2 max-sm:basis-full">
           <button
             type="button"
             className="min-w-0 truncate text-left font-heading text-base font-medium"
@@ -99,7 +99,7 @@ export function ClientCard({
           ) : null}
         </div>
         <TooltipProvider>
-          <div className="flex shrink-0 items-center gap-3 text-muted-foreground">
+          <div className="flex shrink-0 items-center gap-3 text-muted-foreground max-sm:w-full max-sm:justify-between">
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-1">
