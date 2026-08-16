@@ -187,7 +187,7 @@
   background: linear-gradient(
     105deg,
     transparent 35%,
-    color-mix(in oklch, var(--foreground) 70%, transparent) 50%,
+    color-mix(in oklch, var(--foreground) 85%, transparent) 50%,
     transparent 65%
   );
   background-size: 220% 100%;
@@ -201,7 +201,7 @@
 }
 
 .client-card-sweep:hover::after {
-  animation: client-card-light-sweep 0.75s ease-out 1 forwards;
+  animation: client-card-light-sweep 1.4s ease-out 1 forwards;
 }
 
 @keyframes client-card-light-sweep {

@@ -51,6 +51,13 @@ describe("ClientCard", () => {
     expect(card).toHaveClass("relative");
   });
 
+  it("brightens the card ring on hover", () => {
+    render(<ClientCard client={base} />);
+
+    const card = screen.getByText("Alice").closest("[data-slot=card]");
+    expect(card).toHaveClass("hover:ring-foreground/25");
+  });
+
   it("packs metrics and places the menu opposite the name on max-sm", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));

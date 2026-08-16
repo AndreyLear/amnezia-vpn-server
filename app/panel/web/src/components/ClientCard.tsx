@@ -86,7 +86,7 @@ export function ClientCard({
   return (
     <Card
       className={cn(
-        "relative client-card-sweep flex-row items-center sm:col-span-full sm:grid sm:grid-cols-subgrid py-1",
+        "relative client-card-sweep flex-row items-center hover:ring-foreground/25 sm:col-span-full sm:grid sm:grid-cols-subgrid py-1",
         !client.enabled && "opacity-60",
       )}
     >

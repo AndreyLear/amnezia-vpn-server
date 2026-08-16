@@ -24,6 +24,14 @@ describe("index.css client-card-sweep", () => {
     expect(rest).toMatch(/opacity:\s*0/);
   });
 
+  it("runs the hover sweep in 1.4s, not 0.75s, as a one-shot", () => {
+    const hover = rule(".client-card-sweep:hover::after");
+    expect(hover).toContain("1.4s");
+    expect(hover).not.toContain("0.75s");
+    expect(hover).toMatch(/ease-out 1/);
+    expect(hover).not.toContain("infinite");
+  });
+
   it("disables the sweep when the user prefers reduced motion", () => {
     const reduced = css.match(
       /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.client-card-sweep:hover::after\s*\{[^}]*\}/,
