@@ -25,6 +25,24 @@ describe("BackupUploadDialog", () => {
     expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
   });
 
+  it("truncates the selected filename and keeps the dialog from growing", async () => {
+    const user = userEvent.setup();
+    render(<BackupUploadDialog open onOpenChange={() => {}} />);
+
+    const content = document.querySelector("[data-slot=dialog-content]");
+    expect(content?.className).toContain("sm:max-w-md");
+    expect(content?.className).toContain("overflow-hidden");
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["archive"], "backup.tar.zst", { type: "application/octet-stream" });
+    await user.upload(input, file);
+
+    const filename = screen.getByText("backup.tar.zst");
+    expect(filename).toBeInTheDocument();
+    expect(filename.className).toContain("truncate");
+    expect(filename.className).toContain("min-w-0");
+  });
+
   it("disables upload and shows restart copy when restore is pending", () => {
     render(<BackupUploadDialog open restorePending onOpenChange={() => {}} />);
 

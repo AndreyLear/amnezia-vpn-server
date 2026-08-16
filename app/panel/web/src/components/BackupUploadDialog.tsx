@@ -92,7 +92,7 @@ export function BackupUploadDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent>
+      <DialogContent className="sm:max-w-md overflow-hidden">
         <DialogHeader>
           <DialogTitle>Загрузить бэкап</DialogTitle>
         </DialogHeader>
@@ -109,7 +109,7 @@ export function BackupUploadDialog({
           }}
         >
           <label
-            className={`grid cursor-pointer gap-2 rounded-lg border border-dashed p-6 text-center text-sm ${
+            className={`grid min-w-0 cursor-pointer gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm ${
               dragOver ? "border-primary bg-muted" : "border-border"
             }`}
             onDragOver={(e) => {
@@ -125,7 +125,10 @@ export function BackupUploadDialog({
             }}
           >
             <span>Перетащите файл сюда или выберите на диске</span>
-            <span className="text-muted-foreground">
+            <span
+              className="block min-w-0 truncate text-muted-foreground"
+              title={file?.name}
+            >
               {file ? file.name : "Формат: .tar.zst, .zst"}
             </span>
             <input
