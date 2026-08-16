@@ -54,7 +54,7 @@ export function ClientInfoDialog({
   useEffect(() => {
     setName(client?.name ?? "");
     setDescription(client?.description ?? "");
-  }, [client]);
+  }, [client?.id, client == null]);
 
   return (
     <>
@@ -109,6 +109,11 @@ export function ClientInfoDialog({
                     rows={1}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.stopPropagation();
+                      }
+                    }}
                     disabled={pending}
                   />
                 </div>

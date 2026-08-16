@@ -131,6 +131,36 @@ describe("ClientInfoDialog", () => {
     expect(description).not.toHaveClass("h-8");
   });
 
+  it("inserts a newline in description on Enter without saving or closing", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const onOpenChange = vi.fn();
+
+    const { rerender } = render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={onOpenChange}
+        onSave={onSave}
+      />,
+    );
+
+    const description = screen.getByLabelText(/Описание/);
+    await user.click(description);
+    await user.type(description, "{Enter}more");
+
+    rerender(
+      <ClientInfoDialog
+        client={{ ...client }}
+        onOpenChange={onOpenChange}
+        onSave={onSave}
+      />,
+    );
+
+    expect(description).toHaveValue("phone\nmore");
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it("saves and closes when name changes", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(true);
