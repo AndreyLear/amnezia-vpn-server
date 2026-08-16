@@ -19,3 +19,11 @@ jobs:
         run: bash app/panel/test_m123_bootstrap.sh
       - name: Install harness
         run: bash app/panel/test_m91_install.sh
+      - name: Compose topology harness
+        run: bash app/panel/test_m92b_compose.sh
+      - name: Host network harness
+        run: bash app/panel/test_m92_network.sh
+      - name: AWG reload harness
+        run: bash app/awg/test_m32.sh
+      - name: AWG status harness
+        run: bash app/awg/test_m5.sh
