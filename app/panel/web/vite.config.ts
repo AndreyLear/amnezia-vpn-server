@@ -11,7 +11,12 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
   build: { outDir: "../internal/web/dist", emptyOutDir: true },
-  server: { proxy: { "/api": "http://127.0.0.1:8787" } },
+  server: {
+    proxy: {
+      "/api": "http://127.0.0.1:8787",
+      "/account": "http://127.0.0.1:8787",
+    },
+  },
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
