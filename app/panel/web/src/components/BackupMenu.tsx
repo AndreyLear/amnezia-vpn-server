@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { ChevronDownIcon } from "lucide-react";
 
 import { BackupUploadDialog } from "@/components/BackupUploadDialog";
@@ -7,6 +8,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { apiRequest } from "@/lib/api";
@@ -18,7 +22,14 @@ function filenameFromDisposition(header: string | null): string {
   return match?.[1] ?? "backup.tar.zst";
 }
 
-export function BackupMenu({ restorePending = false }: { restorePending?: boolean }) {
+type BackupMenuApi = {
+  download: () => Promise<void>;
+  setUploadOpen: (open: boolean) => void;
+};
+
+const BackupMenuContext = createContext<BackupMenuApi | null>(null);
+
+function useBackupMenuState(restorePending: boolean) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [blocked, setBlocked] = useState(restorePending);
 
@@ -48,37 +59,101 @@ export function BackupMenu({ restorePending = false }: { restorePending?: boolea
     URL.revokeObjectURL(url);
   }
 
+  return {
+    api: { download, setUploadOpen },
+    uploadOpen,
+    setUploadOpen,
+    blocked,
+    setBlocked,
+  };
+}
+
+function BackupItems({ api }: { api: BackupMenuApi }) {
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline">
-            Бэкап
-            <ChevronDownIcon
-              data-icon="inline-end"
-              aria-hidden
-              className="transition-transform group-aria-expanded/button:rotate-180"
-            />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          onCloseAutoFocus={(event) => event.preventDefault()}
-        >
-          <DropdownMenuItem onSelect={() => void download()}>
-            Скачать
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setUploadOpen(true)}>
-            Загрузить
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <DropdownMenuItem onSelect={() => void api.download()}>Скачать</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => api.setUploadOpen(true)}>Загрузить</DropdownMenuItem>
+    </>
+  );
+}
+
+export function BackupProvider({
+  restorePending = false,
+  children,
+}: {
+  restorePending?: boolean;
+  children: ReactNode;
+}) {
+  const { api, uploadOpen, setUploadOpen, blocked, setBlocked } =
+    useBackupMenuState(restorePending);
+
+  return (
+    <BackupMenuContext.Provider value={api}>
+      {children}
       <BackupUploadDialog
         open={uploadOpen}
         restorePending={blocked}
         onOpenChange={setUploadOpen}
         onPrepared={() => setBlocked(true)}
       />
-    </>
+    </BackupMenuContext.Provider>
+  );
+}
+
+function useBackupMenuApi(): BackupMenuApi {
+  const ctx = useContext(BackupMenuContext);
+  if (!ctx) {
+    throw new Error("BackupOverflowSub must be used within BackupProvider");
+  }
+  return ctx;
+}
+
+function BackupHeaderTrigger() {
+  const api = useBackupMenuApi();
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" className="hidden sm:inline-flex">
+          Бэкап
+          <ChevronDownIcon
+            data-icon="inline-end"
+            aria-hidden
+            className="transition-transform group-aria-expanded/button:rotate-180"
+          />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
+        <BackupItems api={api} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function BackupMenu({ restorePending = false }: { restorePending?: boolean }) {
+  const ctx = useContext(BackupMenuContext);
+  if (ctx) {
+    return <BackupHeaderTrigger />;
+  }
+  return (
+    <BackupProvider restorePending={restorePending}>
+      <BackupHeaderTrigger />
+    </BackupProvider>
+  );
+}
+
+export function BackupOverflowSub() {
+  const api = useBackupMenuApi();
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger className="sm:hidden">Бэкап</DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <BackupItems api={api} />
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }

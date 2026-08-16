@@ -26,6 +26,7 @@ describe("BackupMenu chevron", () => {
     render(<BackupMenu />);
 
     const button = screen.getByRole("button", { name: "Бэкап" });
+    expect(button).toHaveClass("hidden", "sm:inline-flex");
     expect(button).toHaveAttribute("aria-expanded", "false");
 
     const chevron = button.querySelector("svg");

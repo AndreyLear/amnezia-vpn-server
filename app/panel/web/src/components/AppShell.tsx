@@ -3,7 +3,7 @@ import { useState } from "react";
 import { EllipsisVerticalIcon, PlusIcon } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
-import { BackupMenu } from "@/components/BackupMenu";
+import { BackupMenu, BackupOverflowSub, BackupProvider } from "@/components/BackupMenu";
 import { PasswordDialog } from "@/components/PasswordDialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -60,34 +60,37 @@ export function AppShell({
               <PlusIcon />
               <span className="hidden sm:inline">Добавить клиента</span>
             </Button>
-            <BackupMenu restorePending={restorePending} />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="Меню">
-                  <EllipsisVerticalIcon />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-56 w-auto">
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>Тема</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuRadioGroup
-                      value={theme}
-                      onValueChange={(value) => chooseTheme(value as Theme)}
-                    >
-                      <DropdownMenuRadioItem value="light">Светлая</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="dark">Тёмная</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="system">Системная</DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => setPasswordOpen(true)}>
-                  Аккаунт
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void logout()}>Выйти</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <BackupProvider restorePending={restorePending}>
+              <BackupMenu restorePending={restorePending} />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label="Меню">
+                    <EllipsisVerticalIcon />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-56 w-auto">
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Тема</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <DropdownMenuRadioGroup
+                        value={theme}
+                        onValueChange={(value) => chooseTheme(value as Theme)}
+                      >
+                        <DropdownMenuRadioItem value="light">Светлая</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="dark">Тёмная</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="system">Системная</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <BackupOverflowSub />
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setPasswordOpen(true)}>
+                    Аккаунт
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => void logout()}>Выйти</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </BackupProvider>
           </div>
         </header>
         {children}

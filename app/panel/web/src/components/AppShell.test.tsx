@@ -61,6 +61,33 @@ describe("AppShell header", () => {
     expect(onAddClient).toHaveBeenCalledTimes(1);
   });
 
+  it("hides the header Backup button below sm and shows it from sm up", () => {
+    render(
+      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    expect(screen.getByRole("button", { name: "Бэкап" })).toHaveClass("hidden", "sm:inline-flex");
+  });
+
+  it("puts backup download and upload in the overflow menu", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Меню" }));
+    const overflowBackup = await screen.findByRole("menuitem", { name: "Бэкап" });
+    expect(overflowBackup).toHaveClass("sm:hidden");
+
+    await user.click(overflowBackup);
+    expect(await screen.findByRole("menuitem", { name: "Скачать" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Загрузить" })).toBeInTheDocument();
+  });
+
   it("uses text-base on the AWG Panel title, not text-sm", () => {
     render(
       <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
