@@ -21,7 +21,7 @@ export function formatHandshake(iso: string | null): string {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mm = String(d.getUTCMinutes()).padStart(2, "0");
   const ss = String(d.getUTCSeconds()).padStart(2, "0");
-  return `${day}.${m}.${y}, ${hh}:${mm}:${ss} UTC`;
+  return `${day}.${m}.${y}, ${hh}:${mm}:${ss}`;
 }
 
 export function formatHandshakeAge(iso: string | null, now = Date.now()): string {

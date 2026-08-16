@@ -6,8 +6,8 @@ const now = Date.parse("2026-08-16T12:00:00Z");
 
 describe("formatHandshake", () => {
   it("writes the same UTC instant as Russian date and 24-hour time", () => {
-    expect(formatHandshake("2026-08-16T08:17:23Z")).toBe("16.08.2026, 08:17:23 UTC");
-    expect(formatHandshake("2026-08-16T00:00:00Z")).toBe("16.08.2026, 00:00:00 UTC");
+    expect(formatHandshake("2026-08-16T08:17:23Z")).toBe("16.08.2026, 08:17:23");
+    expect(formatHandshake("2026-08-16T00:00:00Z")).toBe("16.08.2026, 00:00:00");
   });
 
   it("returns an em dash for null or invalid timestamps", () => {
