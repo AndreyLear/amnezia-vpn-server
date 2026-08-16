@@ -30,7 +30,10 @@ export function TotpDialog({
 }: TotpDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>Код подтверждения</DialogTitle>
         </DialogHeader>
