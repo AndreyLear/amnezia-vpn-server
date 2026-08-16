@@ -107,16 +107,17 @@ export default function HomePage() {
   }
 
   async function saveClientInfo(payload: { name: string; description: string }) {
-    if (!infoClient) return;
+    if (!infoClient) return false;
     setPendingId(infoClient.id);
     try {
       const data = await api<MutationResponse>(`/api/clients/${infoClient.id}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
       });
-      if (!mutationSucceeded(data)) return;
-      toast.success("Клиент обновлён");
+      if (!mutationSucceeded(data)) return false;
+      toast.success("Информация о пользователе была изменена.");
       await load();
+      return true;
     } finally {
       setPendingId(null);
     }
