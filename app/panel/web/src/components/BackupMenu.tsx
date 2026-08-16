@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChevronDownIcon } from "lucide-react";
 
 import { BackupUploadDialog } from "@/components/BackupUploadDialog";
 import { Button } from "@/components/ui/button";
@@ -51,7 +52,14 @@ export function BackupMenu({ restorePending = false }: { restorePending?: boolea
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline">Бэкап</Button>
+          <Button variant="outline">
+            Бэкап
+            <ChevronDownIcon
+              data-icon="inline-end"
+              aria-hidden
+              className="transition-transform group-aria-expanded/button:rotate-180"
+            />
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={() => void download()}>

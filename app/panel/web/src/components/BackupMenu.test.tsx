@@ -5,6 +5,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackupMenu } from "@/components/BackupMenu";
 import { setCsrf } from "@/lib/api";
 
+describe("BackupMenu chevron", () => {
+  it("keeps the backup trigger name and points the chevron down when closed", () => {
+    render(<BackupMenu />);
+
+    const button = screen.getByRole("button", { name: "Бэкап" });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+
+    const chevron = button.querySelector("svg");
+    expect(chevron).not.toBeNull();
+    expect(chevron).not.toHaveClass("rotate-180");
+  });
+
+  it("rotates the chevron when the backup menu is open", async () => {
+    const user = userEvent.setup();
+    render(<BackupMenu />);
+
+    const button = screen.getByRole("button", { name: "Бэкап" });
+    await user.click(button);
+
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    const chevron = button.querySelector("svg");
+    expect(chevron?.getAttribute("class") ?? "").toContain("rotate-180");
+  });
+});
+
 describe("BackupMenu restore pending", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
