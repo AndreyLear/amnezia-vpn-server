@@ -29,6 +29,7 @@ describe("ClientCard", () => {
 
     expect(screen.getByText("Alice")).toBeInTheDocument();
     expect(screen.getByText("1 мин")).toBeInTheDocument();
+    expect(screen.queryByText("16.08.2026, 00:00:00 UTC")).not.toBeInTheDocument();
     expect(screen.queryByText("2026-08-16 00:00:00 UTC")).not.toBeInTheDocument();
     expect(screen.getByText("0,1 Гб")).toBeInTheDocument();
     expect(screen.getByText("0 Б")).toBeInTheDocument();

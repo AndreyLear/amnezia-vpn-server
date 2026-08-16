@@ -35,7 +35,7 @@ describe("ClientInfoDialog", () => {
     expect(document.querySelector('[data-slot="badge"]')).toBeNull();
   });
 
-  it("keeps handshake as a UTC timestamp", () => {
+  it("keeps handshake as a UTC timestamp in Russian writing", () => {
     render(
       <ClientInfoDialog
         client={{ ...client, last_handshake_utc: "2026-08-16T00:00:00Z" }}
@@ -43,7 +43,7 @@ describe("ClientInfoDialog", () => {
       />,
     );
 
-    expect(screen.getByText("2026-08-16 00:00:00 UTC")).toBeInTheDocument();
+    expect(screen.getByText("16.08.2026, 00:00:00 UTC")).toBeInTheDocument();
   });
 
   it("shows paused status and enable button when the client is disabled", () => {
