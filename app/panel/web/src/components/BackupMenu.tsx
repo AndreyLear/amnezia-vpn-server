@@ -61,7 +61,10 @@ export function BackupMenu({ restorePending = false }: { restorePending?: boolea
             />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent
+          align="end"
+          onCloseAutoFocus={(event) => event.preventDefault()}
+        >
           <DropdownMenuItem onSelect={() => void download()}>
             Скачать
           </DropdownMenuItem>

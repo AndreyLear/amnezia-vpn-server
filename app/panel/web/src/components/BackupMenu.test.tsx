@@ -5,6 +5,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackupMenu } from "@/components/BackupMenu";
 import { setCsrf } from "@/lib/api";
 
+describe("BackupMenu close focus", () => {
+  it("does not restore focus to the trigger after Escape closes the menu", async () => {
+    const user = userEvent.setup();
+    render(<BackupMenu />);
+
+    const button = screen.getByRole("button", { name: "Бэкап" });
+    await user.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+
+    await user.keyboard("{Escape}");
+
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(button).not.toHaveFocus();
+  });
+});
+
 describe("BackupMenu chevron", () => {
   it("keeps the backup trigger name and points the chevron down when closed", () => {
     render(<BackupMenu />);
