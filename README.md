@@ -3,13 +3,15 @@
 Self-hosted VPN server based on AmneziaWG 2.0+. Released under the MIT
 License (see `LICENSE`).
 
+Русская версия: [README.ru.md](README.ru.md).
+
 ## Architecture
 
 - Go web panel
 - SQLite as the single source of truth
 - AmneziaWG runtime in a separate container
 - Docker Compose
-- Server-side HTML
+- Embedded React SPA (`go:embed` `dist`)
 - Database backups as tar.zst (download / upload in the panel)
 
 ## Backup and restore (M8)
@@ -92,18 +94,33 @@ gets HTTPS (nginx + Let's Encrypt). HTTP-01 stays on TCP 80. TLS
 listens on 443 unless `--panel-port` is set (`https://PANEL_DOMAIN:PORT`).
 `--vpn-domain` / `--client-domain` binds client configs to
 `<fqdn>:<awg-port>` instead of the public IP: clients resolve the domain
-at connect time, so **moving the server to another host is an A-record
-change** — clients reconnect themselves, configs are never re-issued.
-The installer pre-flights the DNS record before proceeding. Migration
-flow: on the new host restore the database from a tar.zst backup
-(Backup and restore above), then point the A-record at the new host; on
-the old host `install.sh` refuses to run when the record no longer
-matches (until the domain is re-pointed back or the new host finishes
-installing).
+at connect time. The installer pre-flights the DNS record before
+proceeding. On the old host `install.sh` refuses to run when the record
+no longer matches (until the domain is re-pointed back or the new host
+finishes installing).
 
 To restore an existing database after install, upload the archive in the
 panel (Backups). That restore does not change the panel user. The CLI
 `panel restore <archive>` path remains for operators without the web UI.
+Moving the whole deployment to a new VPS is **Move to another VPS**.
+
+## Move to another VPS
+
+Checklist (test this on a spare host before you need it):
+
+1. While the **old** panel is still reachable, download a backup
+   `tar.zst` from Backups.
+2. From a laptop, run `./bootstrap.sh` (wizard) or the same flags onto
+   the **new** IP. Set `--panel-domain` / `--vpn-domain` as they are
+   today.
+3. Log into the **new** panel with the temporary password printed by
+   bootstrap.
+4. Upload the archive in Backups. The panel user, password, and TOTP
+   do **not** change (T-155).
+5. If clients use `--vpn-domain`, point that A-record at the new IP.
+   Clients reconnect; configs are not re-issued.
+6. If clients used the old IP, they must edit the endpoint in each
+   config.
 
 ## Development
 
