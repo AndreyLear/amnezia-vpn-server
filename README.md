@@ -5,6 +5,8 @@ License (see `LICENSE`).
 
 Русская версия: [README.ru.md](README.ru.md).
 
+Operator security notes: [SECURITY.md](SECURITY.md).
+
 ## Architecture
 
 - Go web panel
@@ -149,7 +151,9 @@ Install).
 ## Status
 
 **1.0** — install via `./bootstrap.sh` (wizard) or flags, then
-`install.sh` on the VPS. License: MIT (`LICENSE`).
+`install.sh` on the VPS. License: MIT (`LICENSE`). Compose image tags
+and backup `application_version` stay **2.0.0** (stack generation);
+the public product label is 1.0.
 
 In 1.0:
 

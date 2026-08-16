@@ -4,6 +4,8 @@
 
 English: [README.md](README.md).
 
+Заметки по безопасности для оператора: [SECURITY.md](SECURITY.md).
+
 ## Архитектура
 
 - Веб-панель на Go
@@ -125,7 +127,9 @@ HTTPS (nginx + Let's Encrypt). HTTP-01 остаётся на TCP 80. TLS слу�
 ## Статус
 
 **1.0** — установка через `./bootstrap.sh` (мастер) или флаги, затем
-`install.sh` на VPS. Лицензия: MIT (`LICENSE`).
+`install.sh` на VPS. Лицензия: MIT (`LICENSE`). Теги образов Compose и
+`application_version` в бэкапе остаются **2.0.0** (поколение стека);
+публичная метка продукта — 1.0.
 
 В 1.0:
 
