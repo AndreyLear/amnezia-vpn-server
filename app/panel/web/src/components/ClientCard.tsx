@@ -84,8 +84,13 @@ export function ClientCard({
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
-    <Card className={cn("flex-row items-center py-2", !client.enabled && "opacity-60")}>
-      <CardContent className="flex min-w-0 flex-1 items-center gap-3 max-sm:flex-wrap max-sm:gap-y-1">
+    <Card
+      className={cn(
+        "flex-row items-center py-2 sm:col-span-full sm:grid sm:grid-cols-subgrid",
+        !client.enabled && "opacity-60",
+      )}
+    >
+      <CardContent className="flex min-w-0 flex-1 items-center gap-3 max-sm:flex-wrap max-sm:gap-y-1 sm:col-span-full sm:grid sm:grid-cols-subgrid">
         <div className="flex min-w-0 flex-1 items-center gap-2 max-sm:basis-full">
           <button
             type="button"
@@ -99,12 +104,12 @@ export function ClientCard({
           ) : null}
         </div>
         <TooltipProvider>
-          <div className="flex shrink-0 items-center gap-3 text-muted-foreground max-sm:w-full max-sm:justify-between">
+          <div className="flex shrink-0 items-center gap-3 text-muted-foreground max-sm:w-full max-sm:justify-between sm:contents">
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-1">
                   <HandshakeIcon className="size-4" aria-hidden />
-                  {formatHandshakeAge(client.last_handshake_utc)}
+                  <span className="tabular-nums">{formatHandshakeAge(client.last_handshake_utc)}</span>
                 </span>
               </TooltipTrigger>
               <TooltipContent>Последний handshake</TooltipContent>
@@ -113,7 +118,7 @@ export function ClientCard({
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-1">
                   <ArrowDownIcon className="size-4" aria-hidden />
-                  {formatBytes(client.rx_bytes)}
+                  <span className="tabular-nums">{formatBytes(client.rx_bytes)}</span>
                 </span>
               </TooltipTrigger>
               <TooltipContent>Входящий трафик</TooltipContent>
@@ -122,7 +127,7 @@ export function ClientCard({
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-1">
                   <ArrowUpIcon className="size-4" aria-hidden />
-                  {formatBytes(client.tx_bytes)}
+                  <span className="tabular-nums">{formatBytes(client.tx_bytes)}</span>
                 </span>
               </TooltipTrigger>
               <TooltipContent>Исходящий трафик</TooltipContent>

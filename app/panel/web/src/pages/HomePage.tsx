@@ -137,7 +137,10 @@ export default function HomePage() {
       onTotpChange={setTotpEnabled}
       onAddClient={() => setAddOpen(true)}
     >
-      <div data-testid="client-grid" className="mt-6 flex flex-col gap-2 pb-8">
+      <div
+        data-testid="client-grid"
+        className="mt-6 gap-2 pb-8 max-sm:flex max-sm:flex-col sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]"
+      >
         {clients.map((client) => (
           <ClientCard
             key={client.id}

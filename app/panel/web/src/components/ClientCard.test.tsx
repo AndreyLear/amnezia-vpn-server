@@ -50,6 +50,20 @@ describe("ClientCard", () => {
     expect(name.parentElement).toHaveClass("max-sm:basis-full");
   });
 
+  it("uses sm:contents on the metrics wrapper so handshake rx tx and menu are grid cells", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
+    render(<ClientCard client={base} />);
+
+    const handshake = screen.getByText("1 мин");
+    const menu = screen.getByRole("button", { name: "Действия для Alice" });
+    let wrapper: HTMLElement | null = handshake;
+    while (wrapper && !wrapper.contains(menu)) {
+      wrapper = wrapper.parentElement;
+    }
+    expect(wrapper).toHaveClass("sm:contents");
+  });
+
   it("opens info from the name without nesting the menu in that control", async () => {
     const user = userEvent.setup();
     const onInfo = vi.fn();
