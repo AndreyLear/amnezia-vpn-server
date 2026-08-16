@@ -52,4 +52,21 @@ describe("ClientCard", () => {
     await user.click(nameButton);
     expect(onInfo).toHaveBeenCalledTimes(1);
   });
+
+  it("shows Пауза and Включить when the client is disabled", async () => {
+    const user = userEvent.setup();
+    render(<ClientCard client={{ ...base, enabled: false }} />);
+
+    const name = screen.getByText("Alice");
+    const pause = screen.getByText("Пауза");
+    expect(pause).toHaveClass("text-muted-foreground");
+    expect(name.compareDocumentPosition(pause) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const card = name.closest("[data-slot=card]");
+    expect(card).toHaveClass("opacity-60");
+
+    await user.click(screen.getByRole("button", { name: "Действия для Alice" }));
+    expect(screen.getByRole("menuitem", { name: "Включить" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Отключить" })).not.toBeInTheDocument();
+  });
 });

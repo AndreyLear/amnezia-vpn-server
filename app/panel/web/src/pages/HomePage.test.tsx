@@ -1,4 +1,5 @@
 import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrf, type Client } from "@/lib/api";
@@ -92,5 +93,40 @@ describe("HomePage load", () => {
     expect(grid.className).not.toMatch(/min-\[752px\]:grid-cols-2/);
     expect(within(grid).queryByRole("button", { name: /добавить клиента/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();
+  });
+
+  it("flips enabled locally after a successful toggle even if GET stays stale", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (path.includes("/api/me")) {
+          return jsonResponse({
+            username: "admin",
+            csrf: "token",
+            totp: { enabled: false },
+          });
+        }
+        if (path.includes("/api/clients/1") && method === "PATCH") {
+          return jsonResponse({ ok: true });
+        }
+        if (path.includes("/api/clients")) {
+          return jsonResponse([alice]);
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<HomePage />);
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Действия для Alice" }));
+    await user.click(screen.getByRole("menuitem", { name: "Отключить" }));
+
+    expect(await screen.findByText("Пауза")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Действия для Alice" }));
+    expect(screen.getByRole("menuitem", { name: "Включить" })).toBeInTheDocument();
   });
 });

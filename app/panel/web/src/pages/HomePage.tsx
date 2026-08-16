@@ -84,8 +84,15 @@ export default function HomePage() {
         body: JSON.stringify({ enabled: !client.enabled }),
       });
       if (!mutationSucceeded(data)) return;
+      const enabled = !client.enabled;
+      setClients((list) =>
+        list.map((c) => (c.id === client.id ? { ...c, enabled } : c)),
+      );
       toast.success(client.enabled ? "Клиент отключён" : "Клиент включён");
       await load();
+      setClients((list) =>
+        list.map((c) => (c.id === client.id ? { ...c, enabled } : c)),
+      );
     } finally {
       setPendingId(null);
     }

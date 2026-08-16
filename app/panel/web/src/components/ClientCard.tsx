@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshakeAge } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export type ClientActions = {
   onInfo?: () => void;
@@ -82,15 +83,20 @@ export function ClientCard({
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
-    <Card className="flex-row items-center">
+    <Card className={cn("flex-row items-center", !client.enabled && "opacity-60")}>
       <CardContent className="flex min-w-0 flex-1 items-center gap-3">
-        <button
-          type="button"
-          className="min-w-0 flex-1 truncate text-left font-heading text-base font-medium"
-          onClick={onInfo}
-        >
-          {client.name}
-        </button>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <button
+            type="button"
+            className="min-w-0 truncate text-left font-heading text-base font-medium"
+            onClick={onInfo}
+          >
+            {client.name}
+          </button>
+          {!client.enabled ? (
+            <span className="shrink-0 text-muted-foreground">Пауза</span>
+          ) : null}
+        </div>
         <div className="flex shrink-0 items-center gap-3 text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <HandshakeIcon className="size-4" aria-hidden />
