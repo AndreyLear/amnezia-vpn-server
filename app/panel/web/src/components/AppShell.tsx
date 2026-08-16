@@ -1,23 +1,10 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
-import { EllipsisVerticalIcon, PlusIcon } from "lucide-react";
+import { Moon, PlusIcon, Sun } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
-import { BackupMenu, BackupOverflowSub, BackupProvider } from "@/components/BackupMenu";
+import { BackupMenu, BackupProvider } from "@/components/BackupMenu";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { api } from "@/lib/api";
 import { applyTheme, getTheme, type Theme } from "@/lib/theme";
 
 export function AppShell({
@@ -30,17 +17,13 @@ export function AppShell({
   onAddClient: () => void;
 }) {
   const [theme, setThemeState] = useState<Theme>(() =>
-    typeof window === "undefined" ? "system" : getTheme(),
+    typeof window === "undefined" ? "dark" : getTheme(),
   );
 
-  function chooseTheme(next: Theme) {
+  function toggleTheme() {
+    const next: Theme = theme === "dark" ? "light" : "dark";
     setThemeState(next);
     applyTheme(next);
-  }
-
-  async function logout() {
-    await api("/api/logout", { method: "POST" });
-    window.location.assign("/login");
   }
 
   return (
@@ -61,31 +44,15 @@ export function AppShell({
             </Button>
             <BackupProvider restorePending={restorePending}>
               <BackupMenu restorePending={restorePending} />
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon" aria-label="Меню">
-                    <EllipsisVerticalIcon />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-56 w-auto">
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>Тема</DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      <DropdownMenuRadioGroup
-                        value={theme}
-                        onValueChange={(value) => chooseTheme(value as Theme)}
-                      >
-                        <DropdownMenuRadioItem value="light">Светлая</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="dark">Тёмная</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="system">Системная</DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                  <BackupOverflowSub />
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={() => void logout()}>Выйти</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label={theme === "dark" ? "Тёмная тема" : "Светлая тема"}
+                onClick={toggleTheme}
+              >
+                {theme === "dark" ? <Moon /> : <Sun />}
+              </Button>
             </BackupProvider>
           </div>
         </header>

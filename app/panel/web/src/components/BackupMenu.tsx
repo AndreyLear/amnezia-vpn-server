@@ -8,9 +8,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { apiRequest } from "@/lib/api";
@@ -103,7 +100,7 @@ export function BackupProvider({
 function useBackupMenuApi(): BackupMenuApi {
   const ctx = useContext(BackupMenuContext);
   if (!ctx) {
-    throw new Error("BackupOverflowSub must be used within BackupProvider");
+    throw new Error("BackupMenu must be used within BackupProvider");
   }
   return ctx;
 }
@@ -114,7 +111,7 @@ function BackupHeaderTrigger() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" className="hidden sm:inline-flex">
+        <Button variant="outline">
           Бэкап
           <ChevronDownIcon
             data-icon="inline-end"
@@ -142,18 +139,5 @@ export function BackupMenu({ restorePending = false }: { restorePending?: boolea
     <BackupProvider restorePending={restorePending}>
       <BackupHeaderTrigger />
     </BackupProvider>
-  );
-}
-
-export function BackupOverflowSub() {
-  const api = useBackupMenuApi();
-
-  return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger className="sm:hidden">Бэкап</DropdownMenuSubTrigger>
-      <DropdownMenuSubContent>
-        <BackupItems api={api} />
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
   );
 }

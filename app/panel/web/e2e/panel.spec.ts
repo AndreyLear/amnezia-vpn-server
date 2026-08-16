@@ -36,8 +36,7 @@ test("opens the backup upload dialog", async ({ page }) => {
 test("opens backup upload from the overflow menu at 375px", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 720 });
   await login(page);
-  await page.getByRole("button", { name: "Меню" }).click();
-  await page.getByRole("menuitem", { name: "Бэкап" }).click();
+  await page.getByRole("button", { name: "Бэкап" }).click();
   await page.getByRole("menuitem", { name: "Загрузить" }).click();
   await expect(page.getByRole("heading", { name: "Загрузить бэкап" })).toBeVisible();
 });
@@ -74,7 +73,8 @@ test("overflow menu has no account item at 375px", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 720 });
   await login(page);
 
-  await page.getByRole("button", { name: "Меню" }).click();
-  await expect(page.getByRole("menuitem", { name: "Аккаунт" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Аккаунт" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Меню" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Выйти" })).toHaveCount(0);
+  await expect(page.getByText("Выйти")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Тёмная тема" })).toBeVisible();
 });

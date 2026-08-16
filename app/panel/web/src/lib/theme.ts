@@ -1,21 +1,17 @@
 const STORAGE_KEY = "amnezia-theme";
 
-export type Theme = "light" | "dark" | "system";
+export type Theme = "light" | "dark";
 
 export function getTheme(): Theme {
   try {
     const value = localStorage.getItem(STORAGE_KEY);
-    if (value === "light" || value === "dark" || value === "system") {
+    if (value === "light" || value === "dark") {
       return value;
     }
   } catch {
     // ignore
   }
-  return "system";
-}
-
-function prefersDark(): boolean {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  return "dark";
 }
 
 export function applyTheme(theme: Theme) {
@@ -24,8 +20,7 @@ export function applyTheme(theme: Theme) {
   } catch {
     // ignore
   }
-  const dark = theme === "dark" || (theme === "system" && prefersDark());
-  document.documentElement.classList.toggle("dark", dark);
+  document.documentElement.classList.toggle("dark", theme === "dark");
 }
 
 export function initTheme() {

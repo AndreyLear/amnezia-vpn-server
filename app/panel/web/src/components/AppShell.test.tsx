@@ -10,9 +10,11 @@ describe("AppShell header", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     setCsrf("");
+    localStorage.clear();
+    document.documentElement.classList.remove("dark");
   });
 
-  it("shows backup actions, theme choices, and logout without account", async () => {
+  it("has no overflow menu, logout, system theme, or account", async () => {
     const user = userEvent.setup();
     render(
       <AppShell onAddClient={() => {}}>
@@ -20,28 +22,54 @@ describe("AppShell header", () => {
       </AppShell>,
     );
 
+    expect(screen.queryByRole("button", { name: "Меню" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Выйти")).not.toBeInTheDocument();
+    expect(screen.queryByText("Системная")).not.toBeInTheDocument();
+    expect(screen.queryByText("Аккаунт")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Аккаунт" })).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "Бэкап" }));
     expect(await screen.findByText("Скачать")).toBeInTheDocument();
     expect(screen.getByText("Загрузить")).toBeInTheDocument();
-    await user.keyboard("{Escape}");
-
-    await user.click(screen.getByRole("button", { name: "Меню" }));
-    expect(await screen.findByText("Тема")).toBeInTheDocument();
-    expect(screen.queryByText("Светлая")).not.toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: "Аккаунт" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: "Изменить пароль" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Изменить пароль")).not.toBeInTheDocument();
-    expect(screen.getByText("Выйти")).toBeInTheDocument();
-
-    await user.click(screen.getByText("Тема"));
-    expect(await screen.findByText("Светлая")).toBeInTheDocument();
-    expect(screen.getByText("Тёмная")).toBeInTheDocument();
-    expect(screen.getByText("Системная")).toBeInTheDocument();
     expect(screen.getByText("AWG Panel")).toBeInTheDocument();
     expect(screen.queryByText("AmneziaVPN")).not.toBeInTheDocument();
   });
 
-  it("shows Добавить клиента before backup", async () => {
+  it("defaults to a dark theme toggle with a moon icon", () => {
+    render(
+      <AppShell onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Тёмная тема" });
+    expect(toggle).toHaveAttribute("data-variant", "outline");
+    expect(toggle.querySelector("svg.lucide-moon")).toBeTruthy();
+    expect(toggle.querySelector("svg.lucide-sun")).toBeNull();
+  });
+
+  it("toggles dark and light on click", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Тёмная тема" });
+    await user.click(toggle);
+
+    const light = screen.getByRole("button", { name: "Светлая тема" });
+    expect(light.querySelector("svg.lucide-sun")).toBeTruthy();
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+
+    await user.click(light);
+    const dark = screen.getByRole("button", { name: "Тёмная тема" });
+    expect(dark.querySelector("svg.lucide-moon")).toBeTruthy();
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+  });
+
+  it("shows Добавить клиента, then backup, then theme toggle", async () => {
     const user = userEvent.setup();
     const onAddClient = vi.fn();
     render(
@@ -53,42 +81,16 @@ describe("AppShell header", () => {
     const header = screen.getByRole("banner");
     const add = within(header).getByRole("button", { name: "Добавить клиента" });
     const backup = screen.getByRole("button", { name: "Бэкап" });
-    const menu = screen.getByRole("button", { name: "Меню" });
-    const headerButtons = [add, backup, menu];
+    const theme = screen.getByRole("button", { name: "Тёмная тема" });
+    const headerButtons = [add, backup, theme];
     const all = within(header)
       .getAllByRole("button")
       .filter((el) => headerButtons.includes(el));
-    expect(all).toEqual([add, backup, menu]);
+    expect(all).toEqual([add, backup, theme]);
+    expect(screen.queryByRole("button", { name: "Меню" })).not.toBeInTheDocument();
 
     await user.click(add);
     expect(onAddClient).toHaveBeenCalledTimes(1);
-  });
-
-  it("hides the header Backup button below sm and shows it from sm up", () => {
-    render(
-      <AppShell onAddClient={() => {}}>
-        <p>body</p>
-      </AppShell>,
-    );
-
-    expect(screen.getByRole("button", { name: "Бэкап" })).toHaveClass("hidden", "sm:inline-flex");
-  });
-
-  it("puts backup download and upload in the overflow menu", async () => {
-    const user = userEvent.setup();
-    render(
-      <AppShell onAddClient={() => {}}>
-        <p>body</p>
-      </AppShell>,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Меню" }));
-    const overflowBackup = await screen.findByRole("menuitem", { name: "Бэкап" });
-    expect(overflowBackup).toHaveClass("sm:hidden");
-
-    await user.click(overflowBackup);
-    expect(await screen.findByRole("menuitem", { name: "Скачать" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Загрузить" })).toBeInTheDocument();
   });
 
   it("uses text-base on the AWG Panel title, not text-sm", () => {
@@ -165,17 +167,5 @@ describe("AppShell header", () => {
     const header = screen.getByRole("banner");
     expect(header).toHaveClass("pt-4");
     expect(header).not.toHaveClass("py-4");
-  });
-
-  it("uses outline variant on the overflow Меню button", () => {
-    render(
-      <AppShell onAddClient={() => {}}>
-        <p>body</p>
-      </AppShell>,
-    );
-
-    const menu = screen.getByRole("button", { name: "Меню" });
-    expect(menu).toHaveAttribute("data-variant", "outline");
-    expect(menu).not.toHaveAttribute("data-variant", "ghost");
   });
 });
