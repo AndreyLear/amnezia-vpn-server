@@ -51,9 +51,10 @@ describe("ClientCard", () => {
     expect(content).toHaveClass(
       "max-sm:grid",
       "max-sm:grid-cols-[minmax(0,1fr)_auto]",
-      "gap-x-2",
+      "gap-x-3",
       "gap-y-1",
     );
+    expect(content).not.toHaveClass("gap-x-2");
     expect(content).not.toHaveClass("max-sm:flex-wrap");
     expect(name.parentElement).not.toHaveClass("max-sm:basis-full");
 
