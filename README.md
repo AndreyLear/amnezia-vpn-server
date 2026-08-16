@@ -117,8 +117,8 @@ Checklist (test this on a spare host before you need it):
    today.
 3. Log into the **new** panel with the temporary password printed by
    bootstrap.
-4. Upload the archive in Backups. The panel user, password, and TOTP
-   do **not** change (T-155).
+4. Upload the archive in Backups. The panel user and password do
+   **not** change (T-155).
 5. If clients use `--vpn-domain`, point that A-record at the new IP.
    Clients reconnect; configs are not re-issued.
 6. If clients used the old IP, they must edit the endpoint in each
@@ -161,11 +161,12 @@ In 1.0:
   set; without a domain, HTTPS on `--panel-port` (CI default 8443,
   self-signed). Loopback `8787` stays the compose panel port.
 - Login rate limiting (T-105).
-- TOTP for panel login.
+- Password-only panel login (username + password). TOTP is not a 1.0
+  panel feature.
 - CLI `panel auth set-password` (password reset). Restore (panel
   upload / `panel restore`) does not replace the panel user.
 - Independent panel vs VPN hostnames (`--panel-domain` /
   `--vpn-domain`).
 
 Out of 1.0: T-104 in-process panel TLS (TLS in the Go process instead
-of nginx) and T-106 RBAC.
+of nginx) and T-106 RBAC only.

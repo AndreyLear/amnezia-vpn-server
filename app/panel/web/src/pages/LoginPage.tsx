@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
-import { TotpDialog } from "@/components/TotpDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,10 +9,7 @@ import { api, type LoginResponse } from "@/lib/api";
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
   const [error, setError] = useState("");
-  const [totpError, setTotpError] = useState("");
-  const [needCode, setNeedCode] = useState(false);
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
@@ -29,25 +25,15 @@ export default function LoginPage() {
     };
   }, []);
 
-  async function submit(nextCode = "") {
+  async function submit() {
     setPending(true);
     try {
       const res = await api<LoginResponse>("/api/login", {
         method: "POST",
-        body: JSON.stringify({ username, password, code: nextCode }),
+        body: JSON.stringify({ username, password }),
       });
-      if (res.need_code) {
-        setNeedCode(true);
-        setError("");
-        setTotpError("");
-        return;
-      }
       if (!res.ok) {
-        if (nextCode) {
-          setTotpError(res.message ?? "");
-        } else {
-          setError(res.message ?? "");
-        }
+        setError(res.message ?? "");
         return;
       }
       window.location.assign("/");
@@ -97,15 +83,6 @@ export default function LoginPage() {
           Войти
         </Button>
       </form>
-      <TotpDialog
-        open={needCode}
-        code={code}
-        error={totpError}
-        pending={pending}
-        onCodeChange={setCode}
-        onSubmit={() => void submit(code)}
-        onOpenChange={setNeedCode}
-      />
       </main>
     </div>
   );

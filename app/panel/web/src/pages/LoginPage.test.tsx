@@ -24,5 +24,6 @@ describe("LoginPage", () => {
       "data-size",
       "lg",
     );
+    expect(screen.queryByLabelText("Код")).not.toBeInTheDocument();
   });
 });

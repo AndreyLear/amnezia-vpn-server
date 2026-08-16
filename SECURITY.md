@@ -27,9 +27,8 @@ and still proxies to loopback 8787. Loopback-only mode (no domain, no
 
 ## Panel login
 
-Fresh `bootstrap.sh` creates a **password-only** admin. TOTP is optional
-until the operator enrolls it in the panel. After enrollment, login
-requires the password plus a TOTP code.
+Fresh `bootstrap.sh` creates a **password-only** admin. TOTP is not a
+1.0 panel feature: login is username + password only.
 
 Failed POSTs to login are rate-limited (**T-105**): **5 failures / 15
 minutes per client IP**, then **HTTP 429**. The limiter is in-memory; a
@@ -39,8 +38,8 @@ is a single valid IP.
 ## Restore and panel auth (T-155)
 
 Restore from the panel (**Загрузить**) or `panel restore` applies the
-SQLite backup. It does **not** replace the live panel username, password,
-or TOTP. After a move to a new VPS, keep the credentials printed by
+SQLite backup. It does **not** replace the live panel username or password.
+After a move to a new VPS, keep the credentials printed by
 `bootstrap.sh` (or set later with CLI) — not the user from the archive.
 
 Password reset in 1.0 is CLI only: `panel auth set-password`. There is
@@ -84,8 +83,7 @@ The compose panel port 8787 is never opened in nftables.
 Not in this release:
 
 - **T-104** — TLS inside the Go panel process (instead of nginx).
-- **T-106** — RBAC and web UI password reset (`panel auth set-password`
-  already exists).
+- **T-106** — RBAC only (`panel auth set-password` already exists).
 
 ## Product vs stack version
 

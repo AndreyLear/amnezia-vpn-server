@@ -3,30 +3,13 @@ package web
 import (
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
-	"github.com/skip2/go-qrcode"
 )
 
 const accountError = "Операция не выполнена."
 const accountPasswordUnchanged = "Новый пароль должен отличаться от старого."
-
-func (s *Server) totpQR(w http.ResponseWriter, r *http.Request) {
-	sess, _ := auth.CurrentUser(r.Context())
-	s.mutex.Lock()
-	secret := s.pendingTOTP[sess.Username]
-	s.mutex.Unlock()
-	payload := otpAuthURL(sess.Username, secret)
-	png, err := qrcode.Encode(payload, qrcode.Medium, 256)
-	if err != nil {
-		s.errorPage(w, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Write(png)
-}
 
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	sess, _ := auth.CurrentUser(r.Context())
@@ -38,10 +21,6 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if old == newp {
 		http.Error(w, accountPasswordUnchanged, http.StatusBadRequest)
-		return
-	}
-	if totpLoginRequired(u) && !auth.VerifyTOTP(u.TOTPSecret, r.PostForm.Get("code"), time.Now()) {
-		s.redirectAccountError(w)
 		return
 	}
 	hash, err := auth.HashPassword(newp)
@@ -63,94 +42,6 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	redirect303(w, r, "/account?msg="+url.QueryEscape("Пароль изменён."))
 }
 
-func (s *Server) totpEnroll(w http.ResponseWriter, r *http.Request) {
-	sess, _ := auth.CurrentUser(r.Context())
-	u, err := db.AuthUserByUsername(s.db(), sess.Username)
-	if err != nil || !auth.VerifyPassword(r.PostForm.Get("password"), u.PasswordHash) || u.TOTPSecret != "" {
-		s.redirectAccountError(w)
-		return
-	}
-	secret, err := auth.NewTOTPSecret()
-	if err != nil {
-		s.errorPage(w, 500)
-		return
-	}
-	s.mutex.Lock()
-	s.pendingTOTP[sess.Username] = secret
-	s.mutex.Unlock()
-	redirect303(w, r, "/account")
-}
-
-func (s *Server) totpConfirm(w http.ResponseWriter, r *http.Request) {
-	sess, _ := auth.CurrentUser(r.Context())
-	u, err := db.AuthUserByUsername(s.db(), sess.Username)
-	if err != nil || !auth.VerifyPassword(r.PostForm.Get("password"), u.PasswordHash) || u.TOTPSecret != "" {
-		s.redirectAccountError(w)
-		return
-	}
-	s.mutex.Lock()
-	secret := s.pendingTOTP[sess.Username]
-	s.mutex.Unlock()
-	if secret == "" || !auth.VerifyTOTP(secret, r.PostForm.Get("code"), time.Now()) {
-		s.redirectAccountError(w)
-		return
-	}
-	if err := db.SetTotpSecret(s.db(), sess.Username, secret); err != nil {
-		s.redirectAccountError(w)
-		return
-	}
-	if err := db.SetTotpMode(s.db(), sess.Username, "2fa"); err != nil {
-		s.redirectAccountError(w)
-		return
-	}
-	s.mutex.Lock()
-	delete(s.pendingTOTP, sess.Username)
-	s.mutex.Unlock()
-	s.rotateAccount(w, r, "2FA включена.")
-}
-
-func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
-	sess, _ := auth.CurrentUser(r.Context())
-	u, err := db.AuthUserByUsername(s.db(), sess.Username)
-	if err != nil || !auth.VerifyPassword(r.PostForm.Get("password"), u.PasswordHash) || !auth.VerifyTOTP(u.TOTPSecret, r.PostForm.Get("code"), time.Now()) {
-		s.redirectAccountError(w)
-		return
-	}
-	if err := db.ClearTotpSecret(s.db(), sess.Username); err != nil {
-		s.redirectAccountError(w)
-		return
-	}
-	_ = db.SetTotpMode(s.db(), sess.Username, "")
-	s.rotateAccount(w, r, "2FA отключена.")
-}
-
-func (s *Server) totpMode(w http.ResponseWriter, r *http.Request) {
-	sess, _ := auth.CurrentUser(r.Context())
-	u, err := db.AuthUserByUsername(s.db(), sess.Username)
-	mode := r.PostForm.Get("mode")
-	if mode == "passwordless" {
-		mode = "2fa"
-	}
-	needTOTP := u.TOTPSecret != "" && (u.TOTPMode != "" || mode == "2fa")
-	if err != nil || u.TOTPSecret == "" || !auth.VerifyPassword(r.PostForm.Get("password"), u.PasswordHash) || (needTOTP && !auth.VerifyTOTP(u.TOTPSecret, r.PostForm.Get("code"), time.Now())) {
-		s.redirectAccountError(w)
-		return
-	}
-	if err := db.SetTotpMode(s.db(), sess.Username, mode); err != nil {
-		s.redirectAccountError(w)
-		return
-	}
-	s.rotateAccount(w, r, "Способ входа изменён.")
-}
-
-func (s *Server) rotateAccount(w http.ResponseWriter, r *http.Request, msg string) {
-	if err := s.rotateCurrentSession(w, r); err != nil {
-		s.errorPage(w, 500)
-		return
-	}
-	redirect303(w, r, "/account?msg="+url.QueryEscape(msg))
-}
-
 func (s *Server) rotateCurrentSession(w http.ResponseWriter, r *http.Request) error {
 	sess, _ := auth.CurrentUser(r.Context())
 	next, err := s.cfg.Sessions.Rotate(sess.ID, sess.Username)
@@ -161,12 +52,7 @@ func (s *Server) rotateCurrentSession(w http.ResponseWriter, r *http.Request) er
 	auth.WriteSessionCookie(w, next.ID, next.ExpiresAt)
 	return nil
 }
+
 func (s *Server) redirectAccountError(w http.ResponseWriter) {
 	http.Error(w, accountError, http.StatusBadRequest)
-}
-func otpAuthURL(user, secret string) string {
-	if secret == "" {
-		return ""
-	}
-	return "otpauth://totp/AmneziaVPN:" + url.PathEscape(user) + "?secret=" + secret + "&issuer=AmneziaVPN"
 }

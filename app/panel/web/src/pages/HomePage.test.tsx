@@ -43,7 +43,6 @@ describe("HomePage load", () => {
           return jsonResponse({
             username: "admin",
             csrf: "token",
-            totp: { enabled: false },
           });
         }
         if (path.includes("/api/clients")) {
@@ -75,7 +74,6 @@ describe("HomePage load", () => {
           return jsonResponse({
             username: "admin",
             csrf: "token",
-            totp: { enabled: false },
           });
         }
         if (path.includes("/api/clients")) {
@@ -111,7 +109,6 @@ describe("HomePage load", () => {
           return jsonResponse({
             username: "admin",
             csrf: "token",
-            totp: { enabled: false },
           });
         }
         if (path.includes("/api/clients/1") && method === "PATCH") {

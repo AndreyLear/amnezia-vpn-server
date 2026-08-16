@@ -9,6 +9,7 @@ async function login(page: Page) {
   await page.getByLabel("Пароль").fill(password);
   await page.getByRole("button", { name: "Войти" }).click();
   await expect(page.getByRole("button", { name: "Добавить клиента" })).toBeVisible();
+  await expect(page.getByLabel("Код")).toHaveCount(0);
 }
 
 test("login has no AWG Panel brand", async ({ page }) => {

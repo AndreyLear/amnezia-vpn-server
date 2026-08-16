@@ -74,14 +74,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export type LoginResponse = {
   ok: boolean;
-  need_code?: boolean;
   message?: string;
 };
 
 export type MeResponse = {
   username: string;
   csrf: string;
-  totp: { enabled: boolean };
   restore_pending?: boolean;
 };
 

@@ -61,7 +61,7 @@ describe("api CSRF", () => {
         return jsonResponse({ ok: false, message: "Forbidden." }, 403);
       }
       if (path.includes("/api/me")) {
-        return jsonResponse({ csrf: "fresh-token", totp: { enabled: false } });
+        return jsonResponse({ csrf: "fresh-token" });
       }
       throw new Error(path);
     });

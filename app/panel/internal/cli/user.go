@@ -44,20 +44,6 @@ func (a *app) cmdAuth(args []string) int {
 		return a.cmdAuthChangePassword(args[1:])
 	case "set-password":
 		return a.cmdAuthSetPassword(args[1:])
-	case "2fa":
-		if len(args) < 2 {
-			a.usage()
-			return 2
-		}
-		switch args[1] {
-		case "status":
-			return a.cmdAuth2FAStatus(args[2:])
-		case "disable":
-			return a.cmdAuth2FADisable(args[2:])
-		default:
-			a.usage()
-			return 2
-		}
 	default:
 		a.usage()
 		return 2
@@ -165,41 +151,6 @@ func (a *app) cmdAuthSetPassword(args []string) int {
 		return a.fatal("auth set-password", err)
 	}
 	return a.ok("auth set-password", "password changed")
-}
-
-func (a *app) cmdAuth2FAStatus(args []string) int {
-	if len(args) != 1 {
-		return a.usageError("auth 2fa status", "want <username>")
-	}
-	h, err := a.openDB()
-	if err != nil {
-		return a.fatal("auth 2fa status", err)
-	}
-	defer h.Close()
-	u, err := db.AuthUserByUsername(h, args[0])
-	if err != nil {
-		return a.fatal("auth 2fa status", err)
-	}
-	fmt.Fprintf(a.stdout, "enabled: %t\nmode: %s\n", u.TOTPSecret != "", u.TOTPMode)
-	return 0
-}
-
-func (a *app) cmdAuth2FADisable(args []string) int {
-	if len(args) != 1 {
-		return a.usageError("auth 2fa disable", "want <username>")
-	}
-	h, err := a.openDB()
-	if err != nil {
-		return a.fatal("auth 2fa disable", err)
-	}
-	defer h.Close()
-	if err := db.ClearTotpSecret(h, args[0]); err != nil {
-		return a.fatal("auth 2fa disable", err)
-	}
-	if err := db.SetTotpMode(h, args[0], ""); err != nil {
-		return a.fatal("auth 2fa disable", err)
-	}
-	return a.ok("auth 2fa disable", "2FA disabled")
 }
 
 // cmdAuthAddUser creates the first admin user. Exit semantics:

@@ -52,22 +52,11 @@ var dummyPasswordHash = func() string {
 	return h
 }()
 
-// loginData is the login form payload. Error is a flash string (empty
-// when the form is prompting for the next factor). Username is echoed
-// back into the field. NeedCode shows the TOTP field after a correct
-// password. No session id, password, hash or key can reach the
-// template through this type.
+// loginData is the login form payload. Error is a flash string.
+// Username is echoed back into the field. Login is password-only.
 type loginData struct {
 	Error    string
 	Username string
-	NeedCode bool
-}
-
-// totpLoginRequired is true when the user must supply a TOTP code after
-// a correct password. Legacy totp_mode=passwordless is treated as 2fa
-// (secret is kept; password is still required).
-func totpLoginRequired(u *db.AuthUser) bool {
-	return u != nil && u.TOTPSecret != "" && u.TOTPMode != ""
 }
 
 // renderLogin answers HTML POST /login failures with the generic error
@@ -82,9 +71,6 @@ func (s *Server) renderLogin(w http.ResponseWriter, data loginData) {
 	fmt.Fprintf(w, `<input name="password" type="password">`)
 	if data.Username != "" {
 		fmt.Fprintf(w, `<input name="username" value="%s">`, html.EscapeString(data.Username))
-	}
-	if data.NeedCode {
-		fmt.Fprintf(w, `<input name="code">`)
 	}
 	fmt.Fprintf(w, "</body></html>\n")
 }
@@ -103,19 +89,14 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	username := r.PostForm.Get("username")
 	password := r.PostForm.Get("password")
-	code := r.PostForm.Get("code")
 
-	outcome, err := s.evaluateLogin(r, username, password, code)
+	outcome, err := s.evaluateLogin(r, username, password)
 	if err != nil {
 		internalFailure(w, r, s, "login: read user", err)
 		return
 	}
 	if outcome.message != "" {
-		s.renderLogin(w, loginData{Error: outcome.message, Username: username, NeedCode: outcome.needCode})
-		return
-	}
-	if outcome.needCode {
-		s.renderLogin(w, loginData{Username: username, NeedCode: true})
+		s.renderLogin(w, loginData{Error: outcome.message, Username: username})
 		return
 	}
 	if err := s.issueLoginSession(w, r, username); err != nil {
@@ -126,14 +107,12 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 type loginOutcome struct {
-	needCode bool
-	message  string
+	message string
 }
 
-// evaluateLogin runs the dummy-hash password check and optional TOTP.
-// A non-empty message is a client-visible failure; needCode with an
-// empty message means the password was accepted and a code is required.
-func (s *Server) evaluateLogin(r *http.Request, username, password, code string) (loginOutcome, error) {
+// evaluateLogin runs the dummy-hash password check. totp_secret and
+// totp_mode are ignored: a correct password always issues a session.
+func (s *Server) evaluateLogin(r *http.Request, username, password string) (loginOutcome, error) {
 	user, err := db.AuthUserByUsername(s.db(), username)
 	switch {
 	case err == nil:
@@ -149,15 +128,6 @@ func (s *Server) evaluateLogin(r *http.Request, username, password, code string)
 	if !auth.VerifyPassword(password, hash) {
 		s.loginLimit.fail(clientIP(r), time.Now())
 		return loginOutcome{message: loginErrorText}, nil
-	}
-	if totpLoginRequired(user) {
-		if code == "" {
-			return loginOutcome{needCode: true}, nil
-		}
-		if !auth.VerifyTOTP(user.TOTPSecret, code, time.Now()) {
-			s.loginLimit.fail(clientIP(r), time.Now())
-			return loginOutcome{needCode: true, message: "Неверный код."}, nil
-		}
 	}
 	return loginOutcome{}, nil
 }
