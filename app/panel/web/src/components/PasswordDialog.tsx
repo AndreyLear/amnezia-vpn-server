@@ -182,146 +182,151 @@ export function PasswordDialog({
           <DialogTitle>Аккаунт</DialogTitle>
         </DialogHeader>
         <form
-          className="grid gap-3"
           onSubmit={(e) => {
             e.preventDefault();
             void changePassword();
           }}
         >
-          <h3 className="font-heading text-sm font-medium">Пароль</h3>
-          <div className="grid gap-2">
-            <Label htmlFor="old-password">Текущий пароль</Label>
-            <Input
-              id="old-password"
-              type="password"
-              autoComplete="current-password"
-              value={oldPassword}
-              onChange={(e) => setOldPassword(e.target.value)}
-              disabled={pending}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="new-password">Новый пароль</Label>
-            <Input
-              id="new-password"
-              type="password"
-              autoComplete="new-password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              disabled={pending}
-            />
-          </div>
-          {totpEnabled ? (
-            <div className="grid gap-2">
-              <Label htmlFor="password-totp">Код 2FA</Label>
-              <Input
-                id="password-totp"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={passwordTotpCode}
-                onChange={(e) => setPasswordTotpCode(e.target.value)}
-                disabled={pending}
-              />
+          <div className="grid gap-5">
+            <h3 className="font-heading text-sm font-medium">Пароль</h3>
+            <div className="grid gap-3">
+              <div className="grid gap-2">
+                <Label htmlFor="old-password">Текущий пароль</Label>
+                <Input
+                  id="old-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={oldPassword}
+                  onChange={(e) => setOldPassword(e.target.value)}
+                  disabled={pending}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="new-password">Новый пароль</Label>
+                <Input
+                  id="new-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  disabled={pending}
+                />
+              </div>
+              {totpEnabled ? (
+                <div className="grid gap-2">
+                  <Label htmlFor="password-totp">Код 2FA</Label>
+                  <Input
+                    id="password-totp"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={passwordTotpCode}
+                    onChange={(e) => setPasswordTotpCode(e.target.value)}
+                    disabled={pending}
+                  />
+                </div>
+              ) : null}
+              {passwordError ? <p className="text-sm text-destructive">{passwordError}</p> : null}
+              <div>
+                <Button type="submit" disabled={pending}>
+                  Сохранить пароль
+                </Button>
+              </div>
             </div>
-          ) : null}
-          {passwordError ? <p className="text-sm text-destructive">{passwordError}</p> : null}
-          <div>
-            <Button type="submit" disabled={pending}>
-              Сохранить пароль
-            </Button>
           </div>
         </form>
-        <div className="grid gap-3 border-t pt-4">
+        <div className="grid gap-5 border-t pt-4">
           <div className="flex items-baseline justify-between gap-3">
             <h3 className="font-heading text-sm font-medium">Двухфакторная аутентификация</h3>
             <p className="text-muted-foreground text-sm">{totpEnabled ? "вкл" : "выкл"}</p>
           </div>
-          {!totpEnabled ? (
-            <>
-              <div className="grid gap-2">
-                <Label htmlFor="totp-enroll-password">
-                  Текущий пароль{" "}
-                  <span className="text-muted-foreground font-normal">для включения 2FA</span>
-                </Label>
-                <Input
-                  id="totp-enroll-password"
-                  type="password"
-                  autoComplete="current-password"
-                  value={enrollPassword}
-                  onChange={(e) => setEnrollPassword(e.target.value)}
-                  disabled={pending}
-                />
-                {!qr ? (
-                  <p className="text-muted-foreground text-sm">
-                    QR появится после подтверждения паролем
-                  </p>
-                ) : null}
-              </div>
-              {!qr ? (
-                <div>
-                  <Button type="button" disabled={pending} onClick={() => void enroll()}>
-                    Включить
-                  </Button>
-                </div>
-              ) : (
-                <div className="grid justify-items-center gap-2">
-                  <img src={qr} alt="QR-код 2FA" className="size-40" />
-                  {secret ? (
-                    <p className="font-mono text-sm break-all">
-                      <span className="text-muted-foreground">Секрет: </span>
-                      {secret}
-                    </p>
-                  ) : null}
-                  <Label htmlFor="confirm-totp">Код подтверждения</Label>
+          <div className="grid gap-3">
+            {!totpEnabled ? (
+              <>
+                <div className="grid gap-2">
+                  <Label htmlFor="totp-enroll-password">
+                    Текущий пароль{" "}
+                    <span className="text-muted-foreground font-normal">для включения 2FA</span>
+                  </Label>
                   <Input
-                    id="confirm-totp"
-                    inputMode="numeric"
-                    value={confirmCode}
-                    onChange={(e) => setConfirmCode(e.target.value)}
+                    id="totp-enroll-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={enrollPassword}
+                    onChange={(e) => setEnrollPassword(e.target.value)}
                     disabled={pending}
                   />
-                  <Button type="button" disabled={pending} onClick={() => void confirmTotp()}>
-                    Подтвердить 2FA
+                  {!qr ? (
+                    <p className="text-muted-foreground text-sm">
+                      QR появится после подтверждения паролем
+                    </p>
+                  ) : null}
+                </div>
+                {!qr ? (
+                  <div>
+                    <Button type="button" disabled={pending} onClick={() => void enroll()}>
+                      Включить
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="grid justify-items-center gap-2">
+                    <img src={qr} alt="QR-код 2FA" className="size-40" />
+                    {secret ? (
+                      <p className="font-mono text-sm break-all">
+                        <span className="text-muted-foreground">Секрет: </span>
+                        {secret}
+                      </p>
+                    ) : null}
+                    <Label htmlFor="confirm-totp">Код подтверждения</Label>
+                    <Input
+                      id="confirm-totp"
+                      inputMode="numeric"
+                      value={confirmCode}
+                      onChange={(e) => setConfirmCode(e.target.value)}
+                      disabled={pending}
+                    />
+                    <Button type="button" disabled={pending} onClick={() => void confirmTotp()}>
+                      Подтвердить 2FA
+                    </Button>
+                  </div>
+                )}
+              </>
+            ) : null}
+            {totpEnabled ? (
+              <>
+                <div className="grid gap-2">
+                  <Label htmlFor="totp-disable-password">
+                    Текущий пароль{" "}
+                    <span className="text-muted-foreground font-normal">для отключения 2FA</span>
+                  </Label>
+                  <Input
+                    id="totp-disable-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={disablePassword}
+                    onChange={(e) => setDisablePassword(e.target.value)}
+                    disabled={pending}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="totp-disable-code">Код из приложения</Label>
+                  <Input
+                    id="totp-disable-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={disableCode}
+                    onChange={(e) => setDisableCode(e.target.value)}
+                    disabled={pending}
+                  />
+                </div>
+                <div>
+                  <Button type="button" disabled={pending} onClick={() => void disableTotp()}>
+                    Выключить
                   </Button>
                 </div>
-              )}
-            </>
-          ) : null}
-          {totpEnabled ? (
-            <>
-              <div className="grid gap-2">
-                <Label htmlFor="totp-disable-password">
-                  Текущий пароль{" "}
-                  <span className="text-muted-foreground font-normal">для отключения 2FA</span>
-                </Label>
-                <Input
-                  id="totp-disable-password"
-                  type="password"
-                  autoComplete="current-password"
-                  value={disablePassword}
-                  onChange={(e) => setDisablePassword(e.target.value)}
-                  disabled={pending}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="totp-disable-code">Код из приложения</Label>
-                <Input
-                  id="totp-disable-code"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  value={disableCode}
-                  onChange={(e) => setDisableCode(e.target.value)}
-                  disabled={pending}
-                />
-              </div>
-              <div>
-                <Button type="button" disabled={pending} onClick={() => void disableTotp()}>
-                  Выключить
-                </Button>
-              </div>
-            </>
-          ) : null}
-          {totpError ? <p className="text-sm text-destructive">{totpError}</p> : null}
+              </>
+            ) : null}
+            {totpError ? <p className="text-sm text-destructive">{totpError}</p> : null}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

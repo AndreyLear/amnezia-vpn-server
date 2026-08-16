@@ -36,8 +36,35 @@ describe("PasswordDialog", () => {
     expect(screen.queryByRole("heading", { name: "Изменить пароль" })).not.toBeInTheDocument();
     expect(screen.queryByText("Изменить пароль")).not.toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Пароль" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Двухфакторная аутентификация" })).toBeInTheDocument();
+    const passwordHeading = screen.getByRole("heading", { name: "Пароль" });
+    expect(passwordHeading).toBeInTheDocument();
+    const passwordSection = passwordHeading.closest("div.grid");
+    expect(passwordSection?.className.split(/\s+/)).toContain("gap-5");
+    const oldPassword = screen.getByLabelText("Текущий пароль");
+    expect(passwordSection?.contains(oldPassword)).toBe(true);
+    expect(
+      passwordHeading.compareDocumentPosition(oldPassword) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const oldPasswordFieldGroup = oldPassword.closest("div.grid");
+    const passwordFieldStack = oldPasswordFieldGroup?.parentElement;
+    expect(passwordFieldStack?.className.split(/\s+/)).toContain("gap-3");
+    expect(passwordFieldStack?.contains(passwordHeading)).toBe(false);
+    const passwordForm = oldPassword.closest("form");
+    expect(passwordForm).toBeTruthy();
+    const formIsFlatGap3 =
+      passwordForm?.classList.contains("grid") && passwordForm.classList.contains("gap-3");
+    const headingIsDirectFormChild = [...(passwordForm?.children ?? [])].includes(passwordHeading);
+    expect(formIsFlatGap3 && headingIsDirectFormChild).toBe(false);
+
+    const totpHeading = screen.getByRole("heading", { name: "Двухфакторная аутентификация" });
+    expect(totpHeading).toBeInTheDocument();
+    const totpSection = totpHeading.closest("div.grid");
+    expect(totpSection?.className.split(/\s+/)).toContain("gap-5");
+    const totpEnrollPassword = screen.getByLabelText(/для включения 2FA/);
+    expect(totpSection?.contains(totpEnrollPassword)).toBe(true);
+    expect(
+      totpHeading.compareDocumentPosition(totpEnrollPassword) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(screen.getByText("выкл")).toBeInTheDocument();
     expect(
       screen.getByText("QR появится после подтверждения паролем"),
