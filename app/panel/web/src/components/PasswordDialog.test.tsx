@@ -25,6 +25,7 @@ describe("PasswordDialog", () => {
 
     expect(screen.getByLabelText("Текущий пароль")).toBeInTheDocument();
     expect(screen.getByLabelText("Новый пароль")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Повтор нового пароля")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Двухфакторная аутентификация")).toBeInTheDocument();
     expect(screen.queryByLabelText("Пароль для 2FA")).not.toBeInTheDocument();
     expect(
@@ -113,6 +114,56 @@ describe("PasswordDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.queryByText("Операция не выполнена.")).not.toBeInTheDocument();
+  });
+
+  it("posts confirm_password equal to the new password", async () => {
+    const user = userEvent.setup();
+    setCsrf("csrf");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/account/password")) {
+        return new Response(JSON.stringify({ ok: true, message: "Пароль изменён." }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (path.includes("/api/me")) {
+        return new Response(
+          JSON.stringify({ username: "admin", csrf: "csrf", totp: { enabled: false } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(path);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <PasswordDialog
+        open
+        totpEnabled={false}
+        onOpenChange={() => {}}
+        onTotpChange={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Текущий пароль"), "old-pass");
+    await user.type(screen.getByLabelText("Новый пароль"), "new-pass");
+    await user.click(screen.getByRole("button", { name: "Сохранить пароль" }));
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+
+    const passwordCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes("/api/account/password"),
+    );
+    expect(passwordCall).toBeDefined();
+    const body = JSON.parse(String(passwordCall?.[1]?.body));
+    expect(body).toMatchObject({
+      old_password: "old-pass",
+      new_password: "new-pass",
+      confirm_password: "new-pass",
+    });
   });
 
   it("closes without API call when only 2FA code is filled", async () => {

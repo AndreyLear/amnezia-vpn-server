@@ -35,7 +35,6 @@ export function PasswordDialog({
 }: PasswordDialogProps) {
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [code, setCode] = useState("");
   const [qr, setQr] = useState("");
   const [secret, setSecret] = useState("");
@@ -46,7 +45,6 @@ export function PasswordDialog({
     if (!open) {
       setOldPassword("");
       setNewPassword("");
-      setConfirmPassword("");
       setCode("");
       setQr("");
       setSecret("");
@@ -61,11 +59,7 @@ export function PasswordDialog({
   }
 
   async function changePassword() {
-    if (
-      oldPassword.trim() === "" &&
-      newPassword.trim() === "" &&
-      confirmPassword.trim() === ""
-    ) {
+    if (oldPassword.trim() === "" && newPassword.trim() === "") {
       onOpenChange(false);
       return;
     }
@@ -78,7 +72,7 @@ export function PasswordDialog({
         body: JSON.stringify({
           old_password: oldPassword,
           new_password: newPassword,
-          confirm_password: confirmPassword,
+          confirm_password: newPassword,
           code,
         }),
       });
@@ -205,17 +199,6 @@ export function PasswordDialog({
               autoComplete="new-password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              disabled={pending}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="confirm-password">Повтор нового пароля</Label>
-            <Input
-              id="confirm-password"
-              type="password"
-              autoComplete="new-password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
               disabled={pending}
             />
           </div>
