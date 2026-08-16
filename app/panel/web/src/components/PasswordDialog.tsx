@@ -37,7 +37,6 @@ export function PasswordDialog({
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [code, setCode] = useState("");
-  const [enrollPassword, setEnrollPassword] = useState("");
   const [qr, setQr] = useState("");
   const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
@@ -49,7 +48,6 @@ export function PasswordDialog({
       setNewPassword("");
       setConfirmPassword("");
       setCode("");
-      setEnrollPassword("");
       setQr("");
       setSecret("");
       setError("");
@@ -97,12 +95,17 @@ export function PasswordDialog({
   }
 
   async function enroll() {
+    if (oldPassword.trim() === "") {
+      setError("Чтобы включить 2FA, введите текущий пароль.");
+      return;
+    }
+
     setPending(true);
     setError("");
     try {
       const data = await api<EnrollResponse>("/api/account/totp/enroll", {
         method: "POST",
-        body: JSON.stringify({ password: enrollPassword || oldPassword }),
+        body: JSON.stringify({ password: oldPassword }),
       });
       if (!mutationSucceeded(data) || !data.qr) {
         setError(data?.message ?? "");
@@ -122,7 +125,7 @@ export function PasswordDialog({
       const data = await api<MutationResponse>("/api/account/totp/confirm", {
         method: "POST",
         body: JSON.stringify({
-          password: enrollPassword || oldPassword,
+          password: oldPassword,
           code,
         }),
       });
@@ -141,7 +144,7 @@ export function PasswordDialog({
   }
 
   async function disableTotp() {
-    const password = (enrollPassword || oldPassword).trim();
+    const password = oldPassword.trim();
     const totpCode = code.trim();
     if (password === "" || totpCode === "") {
       setError("Чтобы выключить 2FA, введите текущий пароль и код из приложения.");
@@ -154,7 +157,7 @@ export function PasswordDialog({
       const data = await api<MutationResponse>("/api/account/totp/disable", {
         method: "POST",
         body: JSON.stringify({
-          password: enrollPassword || oldPassword,
+          password: oldPassword,
           code,
         }),
       });
@@ -229,30 +232,25 @@ export function PasswordDialog({
               />
             </div>
           ) : null}
-          <div className="flex items-center justify-between gap-3">
-            <Label htmlFor="totp-enabled">Двухфакторная аутентификация</Label>
-            <Switch
-              id="totp-enabled"
-              checked={totpEnabled || Boolean(qr)}
-              disabled={pending}
-              onCheckedChange={(next) => {
-                if (next) void enroll();
-                else void disableTotp();
-              }}
-            />
-          </div>
-          {!totpEnabled ? (
-            <div className="grid gap-2">
-              <Label htmlFor="enroll-password">Пароль для 2FA</Label>
-              <Input
-                id="enroll-password"
-                type="password"
-                value={enrollPassword}
-                onChange={(e) => setEnrollPassword(e.target.value)}
+          <div className="grid gap-1">
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="totp-enabled">Двухфакторная аутентификация</Label>
+              <Switch
+                id="totp-enabled"
+                checked={totpEnabled || Boolean(qr)}
                 disabled={pending}
+                onCheckedChange={(next) => {
+                  if (next) void enroll();
+                  else void disableTotp();
+                }}
               />
             </div>
-          ) : null}
+            {!totpEnabled && !qr ? (
+              <p className="text-muted-foreground text-sm">
+                При включении появится QR для приложения-аутентификатора.
+              </p>
+            ) : null}
+          </div>
           {qr ? (
             <div className="grid justify-items-center gap-2">
               <img src={qr} alt="QR-код 2FA" className="size-40" />

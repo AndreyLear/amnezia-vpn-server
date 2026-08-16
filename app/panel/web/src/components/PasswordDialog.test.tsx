@@ -26,6 +26,10 @@ describe("PasswordDialog", () => {
     expect(screen.getByLabelText("Текущий пароль")).toBeInTheDocument();
     expect(screen.getByLabelText("Новый пароль")).toBeInTheDocument();
     expect(screen.getByLabelText("Двухфакторная аутентификация")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Пароль для 2FA")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("При включении появится QR для приложения-аутентификатора."),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/passwordless/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Только код")).not.toBeInTheDocument();
 
@@ -43,6 +47,48 @@ describe("PasswordDialog", () => {
       />,
     );
     expect(screen.getByLabelText("Код 2FA")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Пароль для 2FA")).not.toBeInTheDocument();
+  });
+
+  it("does not show an enroll-password field when 2FA is off", () => {
+    render(
+      <PasswordDialog
+        open
+        totpEnabled={false}
+        onOpenChange={() => {}}
+        onTotpChange={() => {}}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Пароль для 2FA")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Текущий пароль")).toBeInTheDocument();
+  });
+
+  it("does not enroll when the switch is turned on without the current password", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => {
+      throw new Error("fetch should not be called");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <PasswordDialog
+        open
+        totpEnabled={false}
+        onOpenChange={() => {}}
+        onTotpChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    await user.click(screen.getByRole("switch"));
+
+    expect(
+      screen.getByText("Чтобы включить 2FA, введите текущий пароль."),
+    ).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    expect(screen.queryByAltText("QR-код 2FA")).not.toBeInTheDocument();
   });
 
   it("closes without API call when password fields are empty", async () => {
@@ -190,7 +236,7 @@ describe("PasswordDialog", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Пароль для 2FA"), "secret-pass");
+    await user.type(screen.getByLabelText("Текущий пароль"), "secret-pass");
     await user.click(screen.getByLabelText("Двухфакторная аутентификация"));
 
     const img = await screen.findByAltText("QR-код 2FA");
