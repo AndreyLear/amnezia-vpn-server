@@ -13,6 +13,9 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
@@ -58,15 +61,20 @@ export function AppShell({
                   <EllipsisVerticalIcon />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuRadioGroup
-                  value={theme}
-                  onValueChange={(value) => chooseTheme(value as Theme)}
-                >
-                  <DropdownMenuRadioItem value="light">Светлая</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="dark">Тёмная</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="system">Системная</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
+              <DropdownMenuContent align="end" className="min-w-56 w-auto">
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Тема</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuRadioGroup
+                      value={theme}
+                      onValueChange={(value) => chooseTheme(value as Theme)}
+                    >
+                      <DropdownMenuRadioItem value="light">Светлая</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="dark">Тёмная</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="system">Системная</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => setPasswordOpen(true)}>
                   Изменить пароль
