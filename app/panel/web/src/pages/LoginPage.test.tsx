@@ -20,5 +20,9 @@ describe("LoginPage", () => {
     expect(container.querySelector(".ambient-bg")).toBeInTheDocument();
     expect(screen.getByLabelText("Имя пользователя")).toBeRequired();
     expect(screen.getByLabelText("Пароль")).toBeRequired();
+    expect(screen.getByRole("button", { name: "Войти" })).toHaveAttribute(
+      "data-size",
+      "lg",
+    );
   });
 });
