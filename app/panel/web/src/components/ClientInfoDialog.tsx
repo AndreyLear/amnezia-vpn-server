@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
 
@@ -99,9 +100,13 @@ export function ClientInfoDialog({
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="info-description">Описание</Label>
-                  <Input
+                  <Label htmlFor="info-description">
+                    Описание{" "}
+                    <span className="font-normal text-muted-foreground">(опционально)</span>
+                  </Label>
+                  <Textarea
                     id="info-description"
+                    rows={1}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     disabled={pending}

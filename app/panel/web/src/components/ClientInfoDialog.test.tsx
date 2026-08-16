@@ -120,6 +120,17 @@ describe("ClientInfoDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("uses a growing textarea for the optional description", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    expect(screen.getByText("(опционально)")).toHaveClass("text-muted-foreground");
+
+    const description = screen.getByLabelText(/Описание/);
+    expect(description.tagName).toBe("TEXTAREA");
+    expect(description).toHaveClass("field-sizing-content", "min-h-8", "resize-none");
+    expect(description).not.toHaveClass("h-8");
+  });
+
   it("saves and closes when name changes", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(true);
