@@ -253,7 +253,7 @@ export function PasswordDialog({
                 />
                 {!qr ? (
                   <p className="text-muted-foreground text-sm">
-                    QR появится после подтверждения паролем.
+                    QR появится после подтверждения паролем
                   </p>
                 ) : null}
               </div>
