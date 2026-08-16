@@ -65,7 +65,8 @@ describe("ClientCard", () => {
     while (metrics && !metrics.classList.contains("sm:contents")) {
       metrics = metrics.parentElement;
     }
-    expect(metrics).toHaveClass("flex", "shrink-0", "items-center", "gap-2", "max-sm:col-span-2", "sm:contents");
+    expect(metrics).toHaveClass("flex", "shrink-0", "items-center", "gap-3", "max-sm:col-span-2", "sm:contents");
+    expect(metrics).not.toHaveClass("gap-2");
     expect(metrics).not.toHaveClass("max-sm:justify-between", "max-sm:w-full");
     expect(metrics).not.toContainElement(menu);
 
@@ -133,19 +134,41 @@ describe("ClientCard", () => {
     expect(screen.queryByRole("menuitem", { name: "Отключить" })).not.toBeInTheDocument();
   });
 
-  it("uses 0.4rem gap between metric icons and values, not gap-1", () => {
+  it("keeps 0.4rem gap between handshake icon and value, not 0.25rem", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
     render(<ClientCard client={base} />);
 
     const handshakeTrigger = screen.getByText("1 мин").parentElement;
+    expect(handshakeTrigger).toHaveClass("gap-[0.4rem]");
+    expect(handshakeTrigger).not.toHaveClass("gap-[0.25rem]");
+  });
+
+  it("uses 0.25rem gap between rx and tx icons and values, not 0.4rem", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
+    render(<ClientCard client={base} />);
+
     const rxTrigger = screen.getByText("0,1 Гб").parentElement;
     const txTrigger = screen.getByText("0 Б").parentElement;
-
-    for (const trigger of [handshakeTrigger, rxTrigger, txTrigger]) {
-      expect(trigger).toHaveClass("gap-[0.4rem]");
-      expect(trigger).not.toHaveClass("gap-1");
+    for (const trigger of [rxTrigger, txTrigger]) {
+      expect(trigger).toHaveClass("gap-[0.25rem]");
+      expect(trigger).not.toHaveClass("gap-[0.4rem]");
     }
+  });
+
+  it("spaces metric groups with gap-3 on the sm:contents wrapper, not gap-2", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
+    render(<ClientCard client={base} />);
+
+    const handshake = screen.getByText("1 мин");
+    let wrapper: HTMLElement | null = handshake.parentElement;
+    while (wrapper && !wrapper.classList.contains("sm:contents")) {
+      wrapper = wrapper.parentElement;
+    }
+    expect(wrapper).toHaveClass("gap-3", "sm:contents");
+    expect(wrapper).not.toHaveClass("gap-2");
   });
 
   it("shows Последний handshake on handshake metric hover", async () => {

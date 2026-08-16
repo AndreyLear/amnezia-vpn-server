@@ -139,7 +139,7 @@ export default function HomePage() {
     >
       <div
         data-testid="client-grid"
-        className="mt-6 gap-2 pb-8 max-sm:flex max-sm:flex-col max-sm:pb-28 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]"
+        className="mt-6 gap-2 sm:gap-x-3 pb-8 max-sm:flex max-sm:flex-col max-sm:pb-28 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]"
       >
         {clients.map((client) => (
           <ClientCard

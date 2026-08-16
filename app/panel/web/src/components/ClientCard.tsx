@@ -104,7 +104,7 @@ export function ClientCard({
           ) : null}
         </div>
         <TooltipProvider>
-          <div className="flex shrink-0 items-center gap-2 text-muted-foreground max-sm:col-span-2 sm:contents">
+          <div className="flex shrink-0 items-center gap-3 text-muted-foreground max-sm:col-span-2 sm:contents">
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-[0.4rem]">
@@ -116,7 +116,7 @@ export function ClientCard({
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="inline-flex items-center gap-[0.4rem]">
+                <span className="inline-flex items-center gap-[0.25rem]">
                   <ArrowDownIcon className="size-4" aria-hidden />
                   <span className="tabular-nums">{formatBytes(client.rx_bytes)}</span>
                 </span>
@@ -125,7 +125,7 @@ export function ClientCard({
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="inline-flex items-center gap-[0.4rem]">
+                <span className="inline-flex items-center gap-[0.25rem]">
                   <ArrowUpIcon className="size-4" aria-hidden />
                   <span className="tabular-nums">{formatBytes(client.tx_bytes)}</span>
                 </span>

@@ -89,7 +89,7 @@ describe("HomePage load", () => {
     expect(await screen.findByText("Alice")).toBeInTheDocument();
 
     const grid = screen.getByTestId("client-grid");
-    expect(grid).toHaveClass("mt-6", "gap-2", "pb-8", "max-sm:pb-28");
+    expect(grid).toHaveClass("mt-6", "gap-2", "sm:gap-x-3", "pb-8", "max-sm:pb-28");
     expect(grid).toHaveClass("sm:grid");
     expect(grid.className).toContain(
       "sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]",
