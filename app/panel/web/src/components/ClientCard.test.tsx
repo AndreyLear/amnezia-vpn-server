@@ -45,6 +45,10 @@ describe("ClientCard", () => {
     expect(card).toHaveClass("py-2");
     expect(card).toHaveClass("sm:py-1");
     expect(card).not.toHaveClass("h-full", "min-h-36");
+
+    const content = screen.getByText("Alice").closest("[data-slot=card-content]");
+    expect(content).toHaveClass("px-2");
+    expect(content).toHaveClass("sm:px-4");
   });
 
   it("keeps the handshake icon muted when the client is offline", () => {

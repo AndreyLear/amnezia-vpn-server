@@ -90,7 +90,7 @@ export function ClientCard({
         !client.enabled && "opacity-60",
       )}
     >
-      <CardContent className="flex min-w-0 flex-1 items-center max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 sm:col-span-full sm:grid sm:grid-cols-subgrid">
+      <CardContent className="flex min-w-0 flex-1 items-center max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 sm:col-span-full sm:grid sm:grid-cols-subgrid px-2 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <button
             type="button"
