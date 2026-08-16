@@ -115,7 +115,6 @@ type Server struct {
 	// directly.
 	dbMu        sync.RWMutex
 	dbh         *sql.DB
-	pendingTOTP map[string]string
 	loginLimit  *loginLimiter
 }
 
@@ -188,7 +187,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = DefaultShutdownTimeout
 	}
-	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, pendingTOTP: make(map[string]string), loginLimit: newLoginLimiter()}
+	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, loginLimit: newLoginLimiter()}
 	// Document GETs serve the embedded SPA with no RequireAuth so React
 	// can boot and send the user to /login after GET /api/me 401.
 	// /api/* stays RequireAPI (401 JSON, never 303). HTML POSTs remain
@@ -201,11 +200,6 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /clients/{id}/rename", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientRename))))
 	s.mux.Handle("POST /logout", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.logout))))
 	s.mux.Handle("POST /account/password", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.changePassword))))
-	s.mux.Handle("POST /account/totp/enroll", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpEnroll))))
-	s.mux.Handle("GET /account/totp/qr", s.auth.RequireAuth(http.HandlerFunc(s.totpQR)))
-	s.mux.Handle("POST /account/totp/confirm", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpConfirm))))
-	s.mux.Handle("POST /account/totp/disable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpDisable))))
-	s.mux.Handle("POST /account/totp/mode", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpMode))))
 	// T-125: one-click download (fresh archive, not stored).
 	s.mux.Handle("POST /backups/download", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupDownloadNow))))
 	// The restore POST is the one multipart route of the panel: it
@@ -224,9 +218,6 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("GET /api/me", s.auth.RequireAPI(http.HandlerFunc(s.apiMe)))
 	s.mux.Handle("POST /api/logout", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiLogout))))
 	s.mux.Handle("POST /api/account/password", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiChangePassword))))
-	s.mux.Handle("POST /api/account/totp/enroll", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiTOTPEnroll))))
-	s.mux.Handle("POST /api/account/totp/confirm", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiTOTPConfirm))))
-	s.mux.Handle("POST /api/account/totp/disable", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiTOTPDisable))))
 	s.mux.Handle("POST /api/backups/download", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiBackupDownload))))
 	s.mux.Handle("POST /api/backups/restore", s.auth.RequireAPI(http.HandlerFunc(s.apiBackupRestore)))
 	s.mux.Handle("GET /api/clients", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsList)))

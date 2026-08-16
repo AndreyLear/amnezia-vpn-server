@@ -303,7 +303,6 @@ func (s *Server) applyRestoreNow(keepUsername string) (int, error) {
 	if _, err := db.AuthUserByUsername(next, keepUsername); err != nil {
 		s.cfg.Sessions.DeleteAll()
 	}
-	s.pendingTOTP = make(map[string]string)
 	clients, err := db.ClientsAll(next)
 	if err != nil {
 		s.cfg.Logger.Printf("restore apply: client count: %v", err)

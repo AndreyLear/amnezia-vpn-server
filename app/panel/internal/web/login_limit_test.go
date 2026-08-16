@@ -116,56 +116,20 @@ func TestLoginRateLimitKeysOnXRealIP(t *testing.T) {
 	}
 }
 
-func TestLoginEmptyTOTPPromptDoesNotCount(t *testing.T) {
+func TestLoginStoredTOTPPasswordSuccessDoesNotCount(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
 	f := newFixture(t)
 	addUser(t, f, "alice", testPassword)
 	configureTOTPUser(t, f, "alice", "2fa")
 	ip := "203.0.113.10:12345"
 	passwordOnly := url.Values{"username": {"alice"}, "password": {testPassword}}
 
-	for i := 1; i <= 5; i++ {
-		rec := postLogin(t, f, loginRequest(t, ip, passwordOnly))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("empty code %d: code = %d, want 200", i, rec.Code)
-		}
-		body := rec.Body.String()
-		if !strings.Contains(body, `name="code"`) {
-			t.Fatalf("empty code %d must still be NeedCode", i)
-		}
-		if strings.Contains(body, loginErrorText) || strings.Contains(body, "Неверный код.") {
-			t.Fatalf("empty code %d must not flash an error", i)
-		}
-	}
-
 	rec := postLogin(t, f, loginRequest(t, ip, passwordOnly))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("6th empty code: code = %d, want 200 (not 429)", rec.Code)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("password-only with stored TOTP: code = %d, want 303", rec.Code)
 	}
-	if strings.Contains(rec.Body.String(), loginLimitMessage) {
-		t.Fatal("NeedCode prompt must not trip the limiter")
-	}
-}
-
-func TestLoginWrongTOTPCountsTowardLimit(t *testing.T) {
-	f := newFixture(t)
-	addUser(t, f, "alice", testPassword)
-	configureTOTPUser(t, f, "alice", "2fa")
-	ip := "203.0.113.10:12345"
-	bad := url.Values{"username": {"alice"}, "password": {testPassword}, "code": {"000000"}}
-
-	for i := 1; i <= 5; i++ {
-		rec := postLogin(t, f, loginRequest(t, ip, bad))
-		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Неверный код.") {
-			t.Fatalf("wrong TOTP %d: code = %d body = %q", i, rec.Code, rec.Body.String())
-		}
-	}
-
-	rec := postLogin(t, f, loginRequest(t, ip, bad))
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("6th wrong TOTP: code = %d, want 429", rec.Code)
-	}
-	if sessionCookie(t, rec) != nil {
-		t.Fatal("429 after TOTP fails must not issue a session")
+	if sessionCookie(t, rec) == nil {
+		t.Fatal("must issue a session")
 	}
 }
 

@@ -161,52 +161,48 @@ func TestLoginSuccess(t *testing.T) {
 	assertCookieAttributes(t, c)
 }
 
-func TestLoginPasswordPlusCodeMatrix(t *testing.T) {
+func TestLoginIgnoresStoredTOTP(t *testing.T) {
 	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
-	f := newFixture(t)
-	addUser(t, f, "alice", testPassword)
-	secret := configureTOTPUser(t, f, "alice", "2fa")
-	wrong := httptest.NewRecorder()
-	f.server.ServeHTTP(wrong, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {"000000"}}))
-	if wrong.Code != http.StatusOK || !strings.Contains(wrong.Body.String(), "Неверный код.") {
-		t.Fatalf("wrong code response = %d %q", wrong.Code, wrong.Body.String())
-	}
-	if !strings.Contains(wrong.Body.String(), `name="code"`) {
-		t.Fatal("wrong nonempty code must keep the code field")
-	}
-	code, err := auth.TOTPCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {code}}))
-	if rec.Code != http.StatusSeeOther || sessionCookie(t, rec) == nil {
-		t.Fatalf("valid code login = %d, cookie=%v", rec.Code, sessionCookie(t, rec))
-	}
-}
-
-func TestLogin2FAEmptyCodePromptsWithoutError(t *testing.T) {
 	f := newFixture(t)
 	addUser(t, f, "alice", testPassword)
 	configureTOTPUser(t, f, "alice", "2fa")
 
 	rec := httptest.NewRecorder()
 	f.server.ServeHTTP(rec, loginForm(t, "alice", testPassword))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("empty-code 2fa: code = %d, want 200", rec.Code)
+	if rec.Code != http.StatusSeeOther || sessionCookie(t, rec) == nil {
+		t.Fatalf("password-only login with totp_secret set = %d cookie=%v body=%q", rec.Code, sessionCookie(t, rec), rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `name="code"`) {
+		t.Fatal("login must not prompt for a TOTP code")
+	}
+
+	leftover := httptest.NewRecorder()
+	f.server.ServeHTTP(leftover, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {"000000"}}))
+	if leftover.Code != http.StatusSeeOther || sessionCookie(t, leftover) == nil {
+		t.Fatalf("leftover code field must be ignored: %d %q", leftover.Code, leftover.Body.String())
+	}
+}
+
+func TestLogin2FAEmptyCodePromptsWithoutError(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+	configureTOTPUser(t, f, "alice", "2fa")
+
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, loginForm(t, "alice", testPassword))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("password-only with stored TOTP: code = %d, want 303", rec.Code)
 	}
 	body := rec.Body.String()
 	if strings.Contains(body, "Неверный код.") || strings.Contains(body, loginErrorText) {
-		t.Fatalf("empty-code 2fa must not flash an error, got %q", body)
+		t.Fatalf("password-only login must not flash an error, got %q", body)
 	}
-	if !strings.Contains(body, `name="code"`) {
-		t.Fatal("empty-code 2fa must show the code field")
+	if strings.Contains(body, `name="code"`) {
+		t.Fatal("password-only login must not show a code field")
 	}
-	if !strings.Contains(body, `value="alice"`) {
-		t.Fatal("empty-code 2fa must keep the username filled")
-	}
-	if sessionCookie(t, rec) != nil || activeSessionCount(f, "alice") != 0 {
-		t.Fatal("empty-code 2fa must not create a session")
+	if sessionCookie(t, rec) == nil || activeSessionCount(f, "alice") != 1 {
+		t.Fatal("correct password must issue a session even when totp_secret is set")
 	}
 }
 
@@ -229,54 +225,16 @@ func TestLogin2FAWrongPasswordHidesCodeField(t *testing.T) {
 	}
 }
 
-func TestLoginLegacyPasswordlessBehavesAs2FA(t *testing.T) {
+func TestLoginLegacyPasswordlessIsPasswordOnly(t *testing.T) {
 	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
 	f := newFixture(t)
 	addUser(t, f, "alice", testPassword)
 	secret := seedLegacyPasswordless(t, f, "alice")
 
-	codeOnly := httptest.NewRecorder()
-	f.server.ServeHTTP(codeOnly, loginFields(t, url.Values{"username": {"alice"}, "code": {"000000"}}))
-	if codeOnly.Code != http.StatusOK || !strings.Contains(codeOnly.Body.String(), loginErrorText) {
-		t.Fatalf("legacy passwordless without password = %d %q", codeOnly.Code, codeOnly.Body.String())
-	}
-	if strings.Contains(codeOnly.Body.String(), `name="code"`) {
-		t.Fatal("legacy passwordless without a valid password must not show the code field")
-	}
-
-	prompt := httptest.NewRecorder()
-	f.server.ServeHTTP(prompt, loginForm(t, "alice", testPassword))
-	body := prompt.Body.String()
-	if prompt.Code != http.StatusOK {
-		t.Fatalf("legacy passwordless empty code: code = %d, want 200", prompt.Code)
-	}
-	if strings.Contains(body, "Неверный код.") || strings.Contains(body, loginErrorText) {
-		t.Fatalf("legacy passwordless empty code must not flash an error, got %q", body)
-	}
-	if !strings.Contains(body, `name="code"`) {
-		t.Fatal("legacy passwordless empty code must show the code field")
-	}
-	if !strings.Contains(body, `name="password"`) {
-		t.Fatal("legacy passwordless step 2 must keep the password field")
-	}
-	if sessionCookie(t, prompt) != nil {
-		t.Fatal("legacy passwordless empty code must not issue a session")
-	}
-
-	wrong := httptest.NewRecorder()
-	f.server.ServeHTTP(wrong, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {"000000"}}))
-	if wrong.Code != http.StatusOK || !strings.Contains(wrong.Body.String(), "Неверный код.") {
-		t.Fatalf("legacy passwordless wrong code = %d %q", wrong.Code, wrong.Body.String())
-	}
-
-	code, err := auth.TOTPCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {code}}))
+	f.server.ServeHTTP(rec, loginForm(t, "alice", testPassword))
 	if rec.Code != http.StatusSeeOther || sessionCookie(t, rec) == nil {
-		t.Fatalf("legacy passwordless login = %d, cookie=%v", rec.Code, sessionCookie(t, rec))
+		t.Fatalf("legacy passwordless row must log in with password only: %d", rec.Code)
 	}
 	u, err := db.AuthUserByUsername(f.h, "alice")
 	if err != nil {
@@ -300,21 +258,15 @@ func TestLoginPasswordlessUnknownUserGeneric(t *testing.T) {
 	}
 }
 
-func TestLoginExpiredTOTPCodeHTTP(t *testing.T) {
+func TestLoginExpiredTOTPCodeIsIgnored(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
 	f := newFixture(t)
 	addUser(t, f, "alice", testPassword)
-	secret := configureTOTPUser(t, f, "alice", "2fa")
-	expired, err := auth.TOTPCode(secret, time.Now().Add(-3*time.Duration(auth.TOTPPeriod)*time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
+	configureTOTPUser(t, f, "alice", "2fa")
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {expired}}))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Неверный код.") {
-		t.Fatalf("expired code response = %d %q", rec.Code, rec.Body.String())
-	}
-	if sessionCookie(t, rec) != nil || activeSessionCount(f, "alice") != 0 {
-		t.Fatal("expired code must not create a session")
+	f.server.ServeHTTP(rec, loginFields(t, url.Values{"username": {"alice"}, "password": {testPassword}, "code": {"000000"}}))
+	if rec.Code != http.StatusSeeOther || sessionCookie(t, rec) == nil {
+		t.Fatalf("expired/wrong leftover code must not block password login: %d %q", rec.Code, rec.Body.String())
 	}
 }
 

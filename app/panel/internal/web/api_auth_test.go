@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 )
@@ -69,7 +68,8 @@ func TestAPILoginWrongPassword(t *testing.T) {
 	}
 }
 
-func TestAPILoginNeedCode(t *testing.T) {
+func TestAPILoginWithStoredTOTPIssuesSession(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
 	f := newFixture(t)
 	addUser(t, f, "alice", testPassword)
 	configureTOTPUser(t, f, "alice", "2fa")
@@ -83,32 +83,27 @@ func TestAPILoginNeedCode(t *testing.T) {
 		t.Fatalf("code = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	got := decodeAPI(t, rec)
-	if got["ok"] != false {
-		t.Fatalf("ok = %v, want false", got["ok"])
+	if got["ok"] != true {
+		t.Fatalf("ok = %v, want true", got["ok"])
 	}
-	if got["need_code"] != true {
-		t.Fatalf("need_code = %v, want true", got["need_code"])
+	if _, ok := got["need_code"]; ok {
+		t.Fatalf("need_code must not be present: %v", got)
 	}
-	if sessionCookie(t, rec) != nil || activeSessionCount(f, "alice") != 0 {
-		t.Fatal("need_code must not issue a session cookie")
+	if sessionCookie(t, rec) == nil || activeSessionCount(f, "alice") != 1 {
+		t.Fatal("correct password must issue a session even when totp_secret is set")
 	}
 }
 
-func TestAPILoginTOTPThenMe(t *testing.T) {
+func TestAPILoginThenMeHasNoTOTP(t *testing.T) {
 	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
 	f := newFixture(t)
 	addUser(t, f, "alice", testPassword)
-	secret := configureTOTPUser(t, f, "alice", "2fa")
-	code, err := auth.TOTPCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
+	configureTOTPUser(t, f, "alice", "2fa")
 
 	rec := httptest.NewRecorder()
 	f.server.ServeHTTP(rec, apiJSON(t, http.MethodPost, "/api/login", map[string]string{
 		"username": "alice",
 		"password": testPassword,
-		"code":     code,
 	}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login code = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -119,7 +114,7 @@ func TestAPILoginTOTPThenMe(t *testing.T) {
 	}
 	c := sessionCookie(t, rec)
 	if c == nil {
-		t.Fatal("TOTP success must Set-Cookie")
+		t.Fatal("password success must Set-Cookie")
 	}
 
 	me := httptest.NewRecorder()
@@ -137,9 +132,8 @@ func TestAPILoginTOTPThenMe(t *testing.T) {
 	if csrf == "" {
 		t.Fatal("csrf missing")
 	}
-	totp, _ := body["totp"].(map[string]any)
-	if totp == nil || totp["enabled"] != true {
-		t.Fatalf("totp = %v, want enabled true", body["totp"])
+	if _, ok := body["totp"]; ok {
+		t.Fatalf("totp must be removed from /api/me: %v", body["totp"])
 	}
 }
 
@@ -160,7 +154,8 @@ func TestAPIMeUnauthorized(t *testing.T) {
 	}
 }
 
-func TestAPILoginWrongCode(t *testing.T) {
+func TestAPILoginIgnoresCodeField(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
 	f := newFixture(t)
 	addUser(t, f, "alice", testPassword)
 	configureTOTPUser(t, f, "alice", "2fa")
@@ -171,15 +166,15 @@ func TestAPILoginWrongCode(t *testing.T) {
 		"password": testPassword,
 		"code":     "000000",
 	}))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("code = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	got := decodeAPI(t, rec)
-	if got["message"] != "Неверный код." {
-		t.Fatalf("message = %q", got["message"])
+	if got["ok"] != true {
+		t.Fatalf("ok = %v, want true", got["ok"])
 	}
-	if sessionCookie(t, rec) != nil {
-		t.Fatal("wrong code must not Set-Cookie")
+	if sessionCookie(t, rec) == nil {
+		t.Fatal("leftover code must not block password login")
 	}
 }
 

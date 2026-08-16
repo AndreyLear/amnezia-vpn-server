@@ -108,11 +108,23 @@ Install).
 
 ## Status
 
-**v2.0.0** (tag `v2.0.0`) — production-ready. Milestones M1–M10.2
-completed; full regression green (`go test -race`, all scripted and live
-harnesses) and verified on a clean VPS: fresh install, external full-tunnel
-client, backup/restore DR cycle, reboot survival.
+**1.0** — install via `./bootstrap.sh` (wizard) or flags, then
+`install.sh` on the VPS. License: MIT (`LICENSE`). Compose image tags
+and backup `application_version` stay **2.0.0** (stack generation);
+the public product label is 1.0.
 
-Known accepted risks (future milestones, out of scope for v2.0.0): no TLS
-for the panel (loopback + SSH tunnel), no login rate limiting,
-TOTP/RBAC/password reset not implemented.
+In 1.0:
+
+- Panel TLS for users: nginx + Let's Encrypt when `--panel-domain` is
+  set; without a domain, HTTPS on `--panel-port` (CI default 8443,
+  self-signed). Loopback `8787` stays the compose panel port.
+- Login rate limiting (T-105).
+- Password-only panel login (username + password). TOTP is not a 1.0
+  panel feature.
+- CLI `panel auth set-password` (password reset). Restore (panel
+  upload / `panel restore`) does not replace the panel user.
+- Independent panel vs VPN hostnames (`--panel-domain` /
+  `--vpn-domain`).
+
+Out of 1.0: T-104 in-process panel TLS (TLS in the Go process instead
+of nginx) and T-106 RBAC only.

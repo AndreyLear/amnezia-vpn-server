@@ -140,39 +140,6 @@ func TestAuthSetPasswordCLIUnknownUser(t *testing.T) {
 	}
 }
 
-func TestAuth2FAStatusAndDisableCLI(t *testing.T) {
-	newCtx(t)
-	if code, _, _ := runInput(strings.NewReader("password\n"), "auth", "add-user", "alice", "--password-stdin"); code != 0 {
-		t.Fatal("add user failed")
-	}
-	h, err := db.Open(db.DefaultPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Migrate(h); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SetTotpSecret(h, "alice", "JBSWY3DPEHPK3PXP"); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SetTotpMode(h, "alice", "2fa"); err != nil {
-		t.Fatal(err)
-	}
-	h.Close()
-	code, out, errb := runInput(nil, "auth", "2fa", "status", "alice")
-	if code != 0 || !strings.Contains(out, "enabled: true") || !strings.Contains(out, "mode: 2fa") || errb != "" {
-		t.Fatalf("status: code=%d out=%q err=%q", code, out, errb)
-	}
-	code, out, errb = runInput(nil, "auth", "2fa", "disable", "alice")
-	if code != 0 || !strings.Contains(out, "2FA disabled") || errb != "" {
-		t.Fatalf("disable: code=%d out=%q err=%q", code, out, errb)
-	}
-	u := authUser(t, "alice")
-	if u.TOTPSecret != "" || u.TOTPMode != "" {
-		t.Fatalf("2FA remains enabled: %+v", u)
-	}
-}
-
 func TestAuthAddUserEnv(t *testing.T) {
 	newCtx(t)
 	t.Setenv("ADMIN_PASSWORD", "env-secret-99")
