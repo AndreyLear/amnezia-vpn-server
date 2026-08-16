@@ -26,11 +26,15 @@ describe("AppShell header", () => {
     await user.keyboard("{Escape}");
 
     await user.click(screen.getByRole("button", { name: "Меню" }));
+    expect(await screen.findByText("Тема")).toBeInTheDocument();
+    expect(screen.queryByText("Светлая")).not.toBeInTheDocument();
+    expect(screen.getByText("Изменить пароль")).toBeInTheDocument();
+    expect(screen.getByText("Выйти")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Тема"));
     expect(await screen.findByText("Светлая")).toBeInTheDocument();
     expect(screen.getByText("Тёмная")).toBeInTheDocument();
     expect(screen.getByText("Системная")).toBeInTheDocument();
-    expect(screen.getByText("Изменить пароль")).toBeInTheDocument();
-    expect(screen.getByText("Выйти")).toBeInTheDocument();
     expect(screen.getByText("AWG Panel")).toBeInTheDocument();
     expect(screen.queryByText("AmneziaVPN")).not.toBeInTheDocument();
   });
