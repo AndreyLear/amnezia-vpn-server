@@ -1,7 +1,0 @@
-{
-  "plugins": {
-    "superpowers": { "enabled": true },
-    "playwright": { "enabled": true },
-    "cli-for-agent": { "enabled": true }
-  }
-}

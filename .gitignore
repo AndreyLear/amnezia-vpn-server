@@ -52,12 +52,24 @@ docs/
 # The changelog is maintained locally and not committed.
 CHANGELOG.md
 
-# Beads / Dolt files (added by bd init)
+# Beads / Dolt files (added by bd init). The whole .beads/ tree is
+# local agent state (Dolt + JSONL export) and must stay untracked.
 .dolt/
 *.db
 .beads-credential-key
+.beads/
 .beads/proxieddb/
 *.gate.lock*
+
+# Local agent / IDE / GitHub metadata: keep on disk for this machine,
+# never commit. After untracking, GitHub Actions CI will not run — intended.
+.agents/
+.claude/
+.codex/
+.cursor/
+.github/
+AGENTS.md
+CLAUDE.md
 
 # Git worktrees (local checkouts; never commit contents)
 .worktrees/

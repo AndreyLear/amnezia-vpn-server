@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "amnezia_vpn_server",
-  "project_id": "10951940-61de-41f6-b9af-13f2265ef36d"
-}

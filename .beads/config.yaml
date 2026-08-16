@@ -1,6 +1,0 @@
-repos:
-    primary: "."
-    additional:
-        - "/Users/andreylear/.beads-planning"
-export:
-    auto: true
