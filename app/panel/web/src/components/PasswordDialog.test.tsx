@@ -64,15 +64,11 @@ describe("PasswordDialog", () => {
     expect(screen.getByRole("button", { name: "Включить" })).toBeInTheDocument();
     expect(screen.getByText("выкл")).toBeInTheDocument();
     expect(
-      screen.getByText("QR появится после подтверждения паролем"),
-    ).toBeInTheDocument();
+      screen.queryByText("QR появится после подтверждения паролем"),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText("QR появится после подтверждения паролем."),
     ).not.toBeInTheDocument();
-    const input = screen.getByLabelText(/для включения 2FA/);
-    const hint = screen.getByText("QR появится после подтверждения паролем");
-    expect(input.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(hint.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeFalsy();
 
     await openPasswordTab(user);
 

@@ -259,11 +259,6 @@ export function PasswordDialog({
                       onChange={(e) => setEnrollPassword(e.target.value)}
                       disabled={pending}
                     />
-                    {!qr ? (
-                      <p className="text-muted-foreground text-sm">
-                        QR появится после подтверждения паролем
-                      </p>
-                    ) : null}
                   </div>
                   {!qr ? (
                     <div>
