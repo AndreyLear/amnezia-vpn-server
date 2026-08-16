@@ -59,6 +59,18 @@ describe("AppShell header", () => {
     expect(onAddClient).toHaveBeenCalledTimes(1);
   });
 
+  it("uses text-base on the AWG Panel title, not text-sm", () => {
+    render(
+      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const title = screen.getByText("AWG Panel");
+    expect(title).toHaveClass("text-base");
+    expect(title).not.toHaveClass("text-sm");
+  });
+
   it("uses pt-4 on the header without py-4 bottom padding", () => {
     render(
       <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>

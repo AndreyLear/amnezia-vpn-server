@@ -54,7 +54,7 @@ export function AppShell({
       <AmbientBackground />
       <div className="relative mx-auto w-full max-w-[752px] px-4">
         <header className="flex items-center gap-2 pt-4">
-          <p className="font-mono text-sm font-medium">AWG Panel</p>
+          <p className="font-mono text-base font-medium">AWG Panel</p>
           <div className="ml-auto flex items-center gap-2">
             <Button type="button" onClick={onAddClient}>
               <PlusIcon />
