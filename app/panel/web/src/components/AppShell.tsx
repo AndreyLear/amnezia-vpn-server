@@ -83,7 +83,7 @@ export function AppShell({
                 </DropdownMenuSub>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => setPasswordOpen(true)}>
-                  Изменить пароль
+                  Аккаунт
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => void logout()}>Выйти</DropdownMenuItem>
               </DropdownMenuContent>

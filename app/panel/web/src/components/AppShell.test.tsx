@@ -28,7 +28,9 @@ describe("AppShell header", () => {
     await user.click(screen.getByRole("button", { name: "Меню" }));
     expect(await screen.findByText("Тема")).toBeInTheDocument();
     expect(screen.queryByText("Светлая")).not.toBeInTheDocument();
-    expect(screen.getByText("Изменить пароль")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Аккаунт" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Изменить пароль" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Изменить пароль")).not.toBeInTheDocument();
     expect(screen.getByText("Выйти")).toBeInTheDocument();
 
     await user.click(screen.getByText("Тема"));

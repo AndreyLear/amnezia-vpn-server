@@ -5,6 +5,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PasswordDialog } from "@/components/PasswordDialog";
 import { setCsrf } from "@/lib/api";
 
+function renderDialog(
+  props: Partial<{
+    totpEnabled: boolean;
+    onOpenChange: (open: boolean) => void;
+    onTotpChange: (enabled: boolean) => void;
+  }> = {},
+) {
+  return render(
+    <PasswordDialog
+      open
+      totpEnabled={props.totpEnabled ?? false}
+      onOpenChange={props.onOpenChange ?? (() => {})}
+      onTotpChange={props.onTotpChange ?? (() => {})}
+    />,
+  );
+}
+
 describe("PasswordDialog", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -12,84 +29,20 @@ describe("PasswordDialog", () => {
     setCsrf("");
   });
 
-  it("asks for old and new password and has no passwordless control", async () => {
-    const user = userEvent.setup();
-    render(
-      <PasswordDialog
-        open
-        totpEnabled={false}
-        onOpenChange={() => {}}
-        onTotpChange={() => {}}
-      />,
-    );
+  it("titles the dialog Аккаунт and has no password heading or switch", () => {
+    renderDialog();
 
-    expect(screen.getByLabelText("Текущий пароль")).toBeInTheDocument();
-    expect(screen.getByLabelText("Новый пароль")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Повтор нового пароля")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Двухфакторная аутентификация")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Пароль для 2FA")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Аккаунт" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Изменить пароль" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Изменить пароль")).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Пароль" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Двухфакторная аутентификация" })).toBeInTheDocument();
+    expect(screen.getByText("выкл")).toBeInTheDocument();
     expect(
-      screen.getByText("При включении появится QR для приложения-аутентификатора."),
+      screen.getByText("QR появится после подтверждения паролем."),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/passwordless/i)).not.toBeInTheDocument();
-    expect(screen.queryByText("Только код")).not.toBeInTheDocument();
-
-    await user.type(screen.getByLabelText("Текущий пароль"), "old");
-    await user.type(screen.getByLabelText("Новый пароль"), "new");
-  });
-
-  it("requires a TOTP code when 2FA is enabled", () => {
-    render(
-      <PasswordDialog
-        open
-        totpEnabled
-        onOpenChange={() => {}}
-        onTotpChange={() => {}}
-      />,
-    );
-    expect(screen.getByLabelText("Код 2FA")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Пароль для 2FA")).not.toBeInTheDocument();
-  });
-
-  it("does not show an enroll-password field when 2FA is off", () => {
-    render(
-      <PasswordDialog
-        open
-        totpEnabled={false}
-        onOpenChange={() => {}}
-        onTotpChange={() => {}}
-      />,
-    );
-
-    expect(screen.queryByLabelText("Пароль для 2FA")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Текущий пароль")).toBeInTheDocument();
-  });
-
-  it("does not enroll when the switch is turned on without the current password", async () => {
-    const user = userEvent.setup();
-    const fetchMock = vi.fn(async () => {
-      throw new Error("fetch should not be called");
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <PasswordDialog
-        open
-        totpEnabled={false}
-        onOpenChange={() => {}}
-        onTotpChange={() => {}}
-      />,
-    );
-
-    expect(screen.getByRole("switch")).not.toBeChecked();
-    await user.click(screen.getByRole("switch"));
-
-    expect(
-      screen.getByText("Чтобы включить 2FA, введите текущий пароль."),
-    ).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("switch")).not.toBeChecked();
-    expect(screen.queryByAltText("QR-код 2FA")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Включить" })).toBeInTheDocument();
   });
 
   it("closes without API call when password fields are empty", async () => {
@@ -100,20 +53,13 @@ describe("PasswordDialog", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(
-      <PasswordDialog
-        open
-        totpEnabled={false}
-        onOpenChange={onOpenChange}
-        onTotpChange={() => {}}
-      />,
-    );
+    renderDialog({ onOpenChange });
 
+    await user.type(screen.getByLabelText(/для включения 2FA/), "2fa-only");
     await user.click(screen.getByRole("button", { name: "Сохранить пароль" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.queryByText("Операция не выполнена.")).not.toBeInTheDocument();
   });
 
   it("posts confirm_password equal to the new password", async () => {
@@ -137,14 +83,7 @@ describe("PasswordDialog", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(
-      <PasswordDialog
-        open
-        totpEnabled={false}
-        onOpenChange={() => {}}
-        onTotpChange={() => {}}
-      />,
-    );
+    renderDialog();
 
     await user.type(screen.getByLabelText("Текущий пароль"), "old-pass");
     await user.type(screen.getByLabelText("Новый пароль"), "new-pass");
@@ -166,32 +105,104 @@ describe("PasswordDialog", () => {
     });
   });
 
-  it("closes without API call when only 2FA code is filled", async () => {
+  it("does not call enroll when saving the password", async () => {
     const user = userEvent.setup();
-    const onOpenChange = vi.fn();
+    setCsrf("csrf");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/account/totp/enroll")) {
+        throw new Error("enroll must not be called");
+      }
+      if (path.includes("/api/account/password")) {
+        return new Response(JSON.stringify({ ok: true, message: "Пароль изменён." }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (path.includes("/api/me")) {
+        return new Response(
+          JSON.stringify({ username: "admin", csrf: "csrf", totp: { enabled: false } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(path);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDialog();
+
+    await user.type(screen.getByLabelText("Текущий пароль"), "old-pass");
+    await user.type(screen.getByLabelText("Новый пароль"), "new-pass");
+    await user.click(screen.getByRole("button", { name: "Сохранить пароль" }));
+
+    await vi.waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) => String(input).includes("/api/account/password")),
+      ).toBe(true);
+    });
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("/api/account/totp/enroll")),
+    ).toBe(false);
+  });
+
+  it("does not enroll when Включить is clicked without the 2FA password", async () => {
+    const user = userEvent.setup();
     const fetchMock = vi.fn(async () => {
       throw new Error("fetch should not be called");
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(
-      <PasswordDialog
-        open
-        totpEnabled
-        onOpenChange={onOpenChange}
-        onTotpChange={() => {}}
-      />,
-    );
+    renderDialog();
 
-    await user.type(screen.getByLabelText("Код 2FA"), "123456");
-    await user.click(screen.getByRole("button", { name: "Сохранить пароль" }));
+    await user.click(screen.getByRole("button", { name: "Включить" }));
 
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(
+      screen.getByText(
+        "Чтобы включить 2FA, подтвердите текущим паролем. Это не смена пароля аккаунта.",
+      ),
+    ).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.queryByText("Операция не выполнена.")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("QR-код 2FA")).not.toBeInTheDocument();
   });
 
-  it("shows validation error when disabling 2FA without password and code", async () => {
+  it("shows a same-origin QR URL and the TOTP secret after Включить", async () => {
+    const user = userEvent.setup();
+    setCsrf("csrf");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path.includes("/api/account/totp/enroll")) {
+          expect(JSON.parse(String(init?.body))).toMatchObject({ password: "secret-pass" });
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              qr: "/account/totp/qr",
+              secret: "JBSWY3DPEHPK3PXP",
+              otpauth: "otpauth://totp/test",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        throw new Error(path);
+      }),
+    );
+
+    renderDialog();
+
+    await user.type(screen.getByLabelText(/для включения 2FA/), "secret-pass");
+    await user.click(screen.getByRole("button", { name: "Включить" }));
+
+    const img = await screen.findByAltText("QR-код 2FA");
+    expect(img).toHaveAttribute("src", "/account/totp/qr");
+    expect(img.getAttribute("src")?.startsWith("data:")).toBe(false);
+    expect(screen.getByText("JBSWY3DPEHPK3PXP")).toBeInTheDocument();
+    expect(screen.getByLabelText("Код подтверждения")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Подтвердить 2FA" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Включить" })).not.toBeInTheDocument();
+  });
+
+  it("shows Код 2FA when enabled and validates disable without 2FA fields", async () => {
     const user = userEvent.setup();
     const onTotpChange = vi.fn();
     const fetchMock = vi.fn(async () => {
@@ -199,24 +210,20 @@ describe("PasswordDialog", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(
-      <PasswordDialog
-        open
-        totpEnabled
-        onOpenChange={() => {}}
-        onTotpChange={onTotpChange}
-      />,
-    );
+    renderDialog({ totpEnabled: true, onTotpChange });
 
-    expect(screen.getByRole("switch")).toBeChecked();
-    await user.click(screen.getByRole("switch"));
+    expect(screen.getByLabelText("Код 2FA")).toBeInTheDocument();
+    expect(screen.getByText("вкл")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Выключить" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Выключить" }));
 
     expect(
       screen.getByText("Чтобы выключить 2FA, введите текущий пароль и код из приложения."),
     ).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onTotpChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("switch")).toBeChecked();
   });
 
   it("shows friendly error when disabling 2FA with wrong credentials", async () => {
@@ -237,62 +244,31 @@ describe("PasswordDialog", () => {
       }),
     );
 
-    render(
-      <PasswordDialog
-        open
-        totpEnabled
-        onOpenChange={() => {}}
-        onTotpChange={onTotpChange}
-      />,
-    );
+    renderDialog({ totpEnabled: true, onTotpChange });
 
-    await user.type(screen.getByLabelText("Текущий пароль"), "wrong-pass");
-    await user.type(screen.getByLabelText("Код 2FA"), "000000");
-    await user.click(screen.getByRole("switch"));
+    await user.type(screen.getByLabelText(/для отключения 2FA/), "wrong-pass");
+    await user.type(screen.getByLabelText("Код из приложения"), "000000");
+    await user.click(screen.getByRole("button", { name: "Выключить" }));
 
     expect(await screen.findByText("Неверный пароль или код.")).toBeInTheDocument();
     expect(screen.queryByText("Операция не выполнена.")).not.toBeInTheDocument();
     expect(onTotpChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("switch")).toBeChecked();
   });
 
-  it("shows a same-origin QR URL and the TOTP secret", async () => {
+  it("closes without API call when only 2FA code is filled", async () => {
     const user = userEvent.setup();
-    setCsrf("csrf");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const path = String(input);
-        if (path.includes("/api/account/totp/enroll")) {
-          return new Response(
-            JSON.stringify({
-              ok: true,
-              qr: "/account/totp/qr",
-              secret: "JBSWY3DPEHPK3PXP",
-              otpauth: "otpauth://totp/test",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        throw new Error(path);
-      }),
-    );
+    const onOpenChange = vi.fn();
+    const fetchMock = vi.fn(async () => {
+      throw new Error("fetch should not be called");
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
-    render(
-      <PasswordDialog
-        open
-        totpEnabled={false}
-        onOpenChange={() => {}}
-        onTotpChange={() => {}}
-      />,
-    );
+    renderDialog({ totpEnabled: true, onOpenChange });
 
-    await user.type(screen.getByLabelText("Текущий пароль"), "secret-pass");
-    await user.click(screen.getByLabelText("Двухфакторная аутентификация"));
+    await user.type(screen.getByLabelText("Код 2FA"), "123456");
+    await user.click(screen.getByRole("button", { name: "Сохранить пароль" }));
 
-    const img = await screen.findByAltText("QR-код 2FA");
-    expect(img).toHaveAttribute("src", "/account/totp/qr");
-    expect(img.getAttribute("src")?.startsWith("data:")).toBe(false);
-    expect(screen.getByText("JBSWY3DPEHPK3PXP")).toBeInTheDocument();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

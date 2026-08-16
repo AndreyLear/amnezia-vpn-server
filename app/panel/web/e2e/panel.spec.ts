@@ -69,10 +69,10 @@ test("enroll QR renders in the 2FA dialog at 375px", async ({ page }) => {
   await page.keyboard.press("Escape");
 
   await page.getByRole("button", { name: "Меню" }).click();
-  await page.getByRole("menuitem", { name: "Изменить пароль" }).click();
-  await expect(page.getByRole("heading", { name: "Изменить пароль" })).toBeVisible();
-  await page.getByLabel("Текущий пароль").fill(password);
-  await page.getByLabel("Двухфакторная аутентификация").click();
+  await page.getByRole("menuitem", { name: "Аккаунт" }).click();
+  await expect(page.getByRole("heading", { name: "Аккаунт" })).toBeVisible();
+  await page.getByLabel(/для включения 2FA/).fill(password);
+  await page.getByRole("button", { name: "Включить" }).click();
   const qr = page.getByAltText("QR-код 2FA");
   await expect(qr).toBeVisible();
   await expect.poll(async () => qr.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
