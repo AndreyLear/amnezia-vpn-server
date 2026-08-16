@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,35 @@ export function BackupUploadDialog({
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function onDragOver(e: DragEvent) {
+      e.preventDefault();
+      setDragOver(true);
+    }
+
+    function onDrop(e: DragEvent) {
+      e.preventDefault();
+      setDragOver(false);
+      const dropped = e.dataTransfer?.files[0];
+      if (dropped) setFile(dropped);
+    }
+
+    function clearDragOver() {
+      setDragOver(false);
+    }
+
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("drop", onDrop);
+    document.addEventListener("dragend", clearDragOver);
+    return () => {
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("drop", onDrop);
+      document.removeEventListener("dragend", clearDragOver);
+    };
+  }, [open]);
 
   async function upload(next: File) {
     setPending(true);
