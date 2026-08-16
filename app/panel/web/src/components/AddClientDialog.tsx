@@ -67,7 +67,10 @@ export function AddClientDialog({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="client-description">Описание</Label>
+            <Label htmlFor="client-description">
+              Описание{" "}
+              <span className="font-normal text-muted-foreground">(опционально)</span>
+            </Label>
             <Input
               id="client-description"
               name="description"
