@@ -287,7 +287,7 @@ describe("ClientInfoDialog", () => {
     expect(nameStack).not.toHaveClass("gap-0.5");
   });
 
-  it("uses 8px horizontal padding on inline name edit buttons", async () => {
+  it("uses 4px horizontal padding on inline name edit buttons", async () => {
     const user = userEvent.setup();
 
     render(
@@ -299,16 +299,16 @@ describe("ClientInfoDialog", () => {
     );
 
     const edit = screen.getByRole("button", { name: "Изменить имя" });
-    expect(edit).toHaveClass("px-2");
-    expect(edit).not.toHaveClass("px-2.5");
+    expect(edit).toHaveClass("px-1");
+    expect(edit).not.toHaveClass("px-2");
 
     await user.click(edit);
 
     const save = screen.getByRole("button", { name: "Сохранить имя" });
     const cancel = screen.getByRole("button", { name: "Отменить имя" });
-    expect(save).toHaveClass("px-2");
-    expect(save).not.toHaveClass("px-2.5");
-    expect(cancel).toHaveClass("px-2");
-    expect(cancel).not.toHaveClass("px-2.5");
+    expect(save).toHaveClass("px-1");
+    expect(save).not.toHaveClass("px-2");
+    expect(cancel).toHaveClass("px-1");
+    expect(cancel).not.toHaveClass("px-2");
   });
 });

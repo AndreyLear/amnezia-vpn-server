@@ -62,7 +62,7 @@ function PropertyEditButtons({
           type="button"
           variant="ghost"
           size="sm"
-          className="px-2"
+          className="px-1"
           aria-label={saveLabel}
           disabled={pending}
           onClick={onSave}
@@ -73,7 +73,7 @@ function PropertyEditButtons({
           type="button"
           variant="ghost"
           size="sm"
-          className="px-2"
+          className="px-1"
           aria-label={cancelLabel}
           disabled={pending}
           onClick={onCancel}
@@ -89,7 +89,7 @@ function PropertyEditButtons({
       type="button"
       variant="ghost"
       size="sm"
-      className="px-2"
+      className="px-1"
       aria-label={editLabel}
       disabled={pending}
       onClick={onEdit}
