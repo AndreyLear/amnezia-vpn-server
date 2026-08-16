@@ -69,4 +69,32 @@ describe("ClientCard", () => {
     expect(screen.getByRole("menuitem", { name: "Включить" })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Отключить" })).not.toBeInTheDocument();
   });
+
+  it("shows Последний handshake on handshake metric hover", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
+    render(<ClientCard client={base} />);
+    const handshakeAge = screen.getByText("1 мин");
+    vi.useRealTimers();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.hover(handshakeAge);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Последний handshake");
+  });
+
+  it("shows Входящий трафик on rx metric hover", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<ClientCard client={base} />);
+
+    await user.hover(screen.getByText("0,1 Гб"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Входящий трафик");
+  });
+
+  it("shows Исходящий трафик on tx metric hover", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<ClientCard client={base} />);
+
+    await user.hover(screen.getByText("0 Б"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Исходящий трафик");
+  });
 });

@@ -20,6 +20,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshakeAge } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -97,29 +98,46 @@ export function ClientCard({
             <span className="shrink-0 text-muted-foreground">Пауза</span>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-3 text-muted-foreground">
-          <span className="inline-flex items-center gap-1">
-            <HandshakeIcon className="size-4" aria-hidden />
-            {formatHandshakeAge(client.last_handshake_utc)}
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <ArrowDownIcon className="size-4" aria-hidden />
-            {formatBytes(client.rx_bytes)}
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <ArrowUpIcon className="size-4" aria-hidden />
-            {formatBytes(client.tx_bytes)}
-          </span>
-          <ClientMenu
-            client={client}
-            pending={pending}
-            onInfo={onInfo}
-            onQr={onQr}
-            onDownload={onDownload}
-            onToggle={onToggle}
-            onDelete={() => setConfirmOpen(true)}
-          />
-        </div>
+        <TooltipProvider>
+          <div className="flex shrink-0 items-center gap-3 text-muted-foreground">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-1">
+                  <HandshakeIcon className="size-4" aria-hidden />
+                  {formatHandshakeAge(client.last_handshake_utc)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Последний handshake</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-1">
+                  <ArrowDownIcon className="size-4" aria-hidden />
+                  {formatBytes(client.rx_bytes)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Входящий трафик</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-1">
+                  <ArrowUpIcon className="size-4" aria-hidden />
+                  {formatBytes(client.tx_bytes)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Исходящий трафик</TooltipContent>
+            </Tooltip>
+            <ClientMenu
+              client={client}
+              pending={pending}
+              onInfo={onInfo}
+              onQr={onQr}
+              onDownload={onDownload}
+              onToggle={onToggle}
+              onDelete={() => setConfirmOpen(true)}
+            />
+          </div>
+        </TooltipProvider>
       </CardContent>
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
