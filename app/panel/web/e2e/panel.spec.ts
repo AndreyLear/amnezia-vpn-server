@@ -8,7 +8,7 @@ async function login(page: Page) {
   await page.getByLabel("Имя пользователя").fill(user);
   await page.getByLabel("Пароль").fill(password);
   await page.getByRole("button", { name: "Войти" }).click();
-  await expect(page.getByText("Добавить клиента")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Добавить клиента" })).toBeVisible();
 }
 
 test("login has no AWG Panel brand", async ({ page }) => {
@@ -22,7 +22,7 @@ test("login shows the client grid", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await login(page);
   await expect(page.getByTestId("client-grid")).toBeVisible();
-  await expect(page.getByText("Добавить клиента")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Добавить клиента" })).toBeVisible();
 });
 
 test("opens the backup upload dialog", async ({ page }) => {
@@ -43,6 +43,7 @@ test("opens backup upload from the overflow menu at 375px", async ({ page }) => 
 });
 
 test("752px and 375px keep the client list in one column", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
   await login(page);
   await page.getByRole("button", { name: "Добавить клиента" }).click();
   await page.getByLabel("Имя").fill("e2e-client");

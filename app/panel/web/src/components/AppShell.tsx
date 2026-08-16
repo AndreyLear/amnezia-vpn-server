@@ -56,9 +56,14 @@ export function AppShell({
         <header className="flex min-w-0 items-center gap-2 pt-4">
           <p className="min-w-0 truncate font-mono text-base font-medium">AWG Panel</p>
           <div className="ml-auto flex shrink-0 items-center gap-2">
-            <Button type="button" aria-label="Добавить клиента" onClick={onAddClient}>
+            <Button
+              type="button"
+              aria-label="Добавить клиента"
+              className="hidden sm:inline-flex"
+              onClick={onAddClient}
+            >
               <PlusIcon />
-              <span className="hidden sm:inline">Добавить клиента</span>
+              <span className="sm:inline">Добавить клиента</span>
             </Button>
             <BackupProvider restorePending={restorePending}>
               <BackupMenu restorePending={restorePending} />
@@ -94,6 +99,20 @@ export function AppShell({
           </div>
         </header>
         {children}
+      </div>
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 sm:hidden">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-background to-transparent" />
+        <div className="pointer-events-auto relative mx-auto w-full max-w-[752px] px-4 pb-6">
+          <Button
+            type="button"
+            aria-label="Добавить клиента"
+            className="h-12 w-full"
+            onClick={onAddClient}
+          >
+            <PlusIcon />
+            Добавить клиента
+          </Button>
+        </div>
       </div>
       <PasswordDialog
         open={passwordOpen}

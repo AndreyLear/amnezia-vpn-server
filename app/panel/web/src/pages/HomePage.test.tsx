@@ -89,7 +89,7 @@ describe("HomePage load", () => {
     expect(await screen.findByText("Alice")).toBeInTheDocument();
 
     const grid = screen.getByTestId("client-grid");
-    expect(grid).toHaveClass("mt-6", "gap-2", "pb-8");
+    expect(grid).toHaveClass("mt-6", "gap-2", "pb-8", "max-sm:pb-28");
     expect(grid).toHaveClass("sm:grid");
     expect(grid.className).toContain(
       "sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]",
@@ -97,7 +97,7 @@ describe("HomePage load", () => {
     expect(grid).not.toHaveClass("flex", "flex-col");
     expect(grid.className).not.toMatch(/min-\[752px\]:grid-cols-2/);
     expect(within(grid).queryByRole("button", { name: /добавить клиента/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Добавить клиента" })).toHaveLength(2);
   });
 
   it("flips enabled locally after a successful toggle even if GET stays stale", async () => {

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -50,11 +50,14 @@ describe("AppShell header", () => {
       </AppShell>,
     );
 
-    const add = screen.getByRole("button", { name: "Добавить клиента" });
+    const header = screen.getByRole("banner");
+    const add = within(header).getByRole("button", { name: "Добавить клиента" });
     const backup = screen.getByRole("button", { name: "Бэкап" });
     const menu = screen.getByRole("button", { name: "Меню" });
     const headerButtons = [add, backup, menu];
-    const all = screen.getAllByRole("button").filter((el) => headerButtons.includes(el));
+    const all = within(header)
+      .getAllByRole("button")
+      .filter((el) => headerButtons.includes(el));
     expect(all).toEqual([add, backup, menu]);
 
     await user.click(add);
@@ -100,17 +103,56 @@ describe("AppShell header", () => {
     expect(title).not.toHaveClass("text-sm");
   });
 
-  it("keeps Добавить клиента as the accessible name and hides the label span below sm", () => {
+  it("hides the header add on max-sm and keeps icon plus label from sm up", () => {
     render(
       <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
 
-    const add = screen.getByRole("button", { name: "Добавить клиента" });
-    const label = add.querySelector("span");
-    expect(label).toHaveClass("hidden", "sm:inline");
+    const headerAdd = within(screen.getByRole("banner")).getByRole("button", {
+      name: "Добавить клиента",
+    });
+    expect(headerAdd).toHaveClass("hidden", "sm:inline-flex");
+    expect(headerAdd.querySelector("svg")).toBeTruthy();
+    const label = headerAdd.querySelector("span");
     expect(label).toHaveTextContent("Добавить клиента");
+    expect(label).toHaveClass("sm:inline");
+    expect(label).not.toHaveClass("hidden");
+  });
+
+  it("renders a max-sm FAB with gradient, 48px height, and icon plus text", async () => {
+    const user = userEvent.setup();
+    const onAddClient = vi.fn();
+    render(
+      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={onAddClient}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const headerAdd = within(screen.getByRole("banner")).getByRole("button", {
+      name: "Добавить клиента",
+    });
+    const [first, second] = screen.getAllByRole("button", { name: "Добавить клиента" });
+    const fabAdd = first === headerAdd ? second : first;
+    expect(fabAdd).toBeDefined();
+    expect(fabAdd).toHaveClass("h-12", "w-full");
+    expect(fabAdd.querySelector("svg")).toBeTruthy();
+    expect(fabAdd).toHaveTextContent("Добавить клиента");
+
+    const fabBar = fabAdd.parentElement;
+    expect(fabBar).toHaveClass("pb-6");
+    expect(fabBar).toHaveClass("pointer-events-auto");
+
+    const fabShell = fabAdd.closest(".fixed");
+    expect(fabShell).toHaveClass("fixed", "inset-x-0", "bottom-0", "sm:hidden", "z-20");
+
+    const gradient = fabShell?.querySelector(".bg-gradient-to-t");
+    expect(gradient).toHaveClass("bg-gradient-to-t", "from-background", "to-transparent");
+    expect(gradient).toHaveClass("pointer-events-none");
+
+    await user.click(fabAdd);
+    expect(onAddClient).toHaveBeenCalledTimes(1);
   });
 
   it("uses pt-4 on the header without py-4 bottom padding", () => {
