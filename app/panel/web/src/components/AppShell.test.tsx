@@ -58,4 +58,16 @@ describe("AppShell header", () => {
     await user.click(add);
     expect(onAddClient).toHaveBeenCalledTimes(1);
   });
+
+  it("uses pt-4 on the header without py-4 bottom padding", () => {
+    render(
+      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const header = screen.getByRole("banner");
+    expect(header).toHaveClass("pt-4");
+    expect(header).not.toHaveClass("py-4");
+  });
 });
