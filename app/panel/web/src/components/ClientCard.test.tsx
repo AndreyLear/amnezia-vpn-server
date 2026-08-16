@@ -37,6 +37,7 @@ describe("ClientCard", () => {
 
     const card = screen.getByText("Alice").closest("[data-slot=card]");
     expect(card).toHaveClass("flex-row");
+    expect(card).toHaveClass("py-2");
     expect(card).not.toHaveClass("h-full", "min-h-36");
   });
 

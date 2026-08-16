@@ -84,7 +84,7 @@ export function ClientCard({
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
-    <Card className={cn("flex-row items-center", !client.enabled && "opacity-60")}>
+    <Card className={cn("flex-row items-center py-2", !client.enabled && "opacity-60")}>
       <CardContent className="flex min-w-0 flex-1 items-center gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <button
