@@ -94,6 +94,21 @@ describe("ClientCard", () => {
     expect(screen.queryByRole("menuitem", { name: "Отключить" })).not.toBeInTheDocument();
   });
 
+  it("uses 0.4rem gap between metric icons and values, not gap-1", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
+    render(<ClientCard client={base} />);
+
+    const handshakeTrigger = screen.getByText("1 мин").parentElement;
+    const rxTrigger = screen.getByText("0,1 Гб").parentElement;
+    const txTrigger = screen.getByText("0 Б").parentElement;
+
+    for (const trigger of [handshakeTrigger, rxTrigger, txTrigger]) {
+      expect(trigger).toHaveClass("gap-[0.4rem]");
+      expect(trigger).not.toHaveClass("gap-1");
+    }
+  });
+
   it("shows Последний handshake on handshake metric hover", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));

@@ -107,7 +107,7 @@ export function ClientCard({
           <div className="flex shrink-0 items-center gap-3 text-muted-foreground max-sm:w-full max-sm:justify-between sm:contents">
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-[0.4rem]">
                   <HandshakeIcon className="size-4" aria-hidden />
                   <span className="tabular-nums">{formatHandshakeAge(client.last_handshake_utc)}</span>
                 </span>
@@ -116,7 +116,7 @@ export function ClientCard({
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-[0.4rem]">
                   <ArrowDownIcon className="size-4" aria-hidden />
                   <span className="tabular-nums">{formatBytes(client.rx_bytes)}</span>
                 </span>
@@ -125,7 +125,7 @@ export function ClientCard({
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-[0.4rem]">
                   <ArrowUpIcon className="size-4" aria-hidden />
                   <span className="tabular-nums">{formatBytes(client.tx_bytes)}</span>
                 </span>
