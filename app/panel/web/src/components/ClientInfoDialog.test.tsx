@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,6 +18,18 @@ const client: Client = {
 };
 
 describe("ClientInfoDialog", () => {
+  it("does not autofocus the name field when opened", async () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    const name = await screen.findByLabelText("Имя");
+    await waitFor(() => {
+      expect(name).toBeInTheDocument();
+    });
+
+    expect(name).not.toHaveFocus();
+    expect(document.activeElement).not.toBe(name);
+  });
+
   it("uses a fixed dialog title", () => {
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 
