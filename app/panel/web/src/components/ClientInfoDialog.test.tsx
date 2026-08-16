@@ -109,6 +109,26 @@ describe("ClientInfoDialog", () => {
     ).toBeNull();
   });
 
+  it("adds 4px more space between the properties list and the action buttons", () => {
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={() => {}}
+        onQr={() => {}}
+        onDownload={() => {}}
+        onToggle={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    const qr = screen.getByRole("button", { name: "QR-код" });
+    const buttonRow = qr.parentElement;
+    expect(buttonRow).toHaveClass("flex", "flex-wrap", "gap-2");
+
+    const spaced = buttonRow?.classList.contains("mt-1") || buttonRow?.parentElement?.classList.contains("gap-4");
+    expect(spaced).toBe(true);
+  });
+
   it("shows name and description as read-only text with Изменить buttons", () => {
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 

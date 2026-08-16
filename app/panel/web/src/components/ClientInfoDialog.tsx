@@ -197,7 +197,7 @@ export function ClientInfoDialog({
               <DialogHeader>
                 <DialogTitle>Клиент</DialogTitle>
               </DialogHeader>
-              <div className="grid gap-3">
+              <div className="grid gap-4">
                 <dl className="grid gap-2 text-sm">
                   <div>
                     <div className="flex items-center justify-between gap-2">
