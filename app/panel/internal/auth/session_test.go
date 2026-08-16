@@ -93,12 +93,11 @@ func TestSessionTTL(t *testing.T) {
 	}
 }
 
-// TestSessionTTLPinned24h pins the M7.7 cookie/session audit item: the
-// production lifetime is exactly 24 hours and the login cookie carries
-// the same absolute expiry the store enforces.
-func TestSessionTTLPinned24h(t *testing.T) {
-	if SessionTTL != 24*time.Hour {
-		t.Fatalf("SessionTTL = %v, want 24h", SessionTTL)
+// TestSessionTTLPinned20m pins the idle lifetime: production sessions
+// last 20 minutes from login (Create) or a mutating Touch, not 24 hours.
+func TestSessionTTLPinned20m(t *testing.T) {
+	if SessionTTL != 20*time.Minute {
+		t.Fatalf("SessionTTL = %v, want 20m", SessionTTL)
 	}
 	sess, err := NewSessionStore(SessionTTL).Create("alice")
 	if err != nil {
@@ -107,8 +106,62 @@ func TestSessionTTLPinned24h(t *testing.T) {
 	if got := sess.ExpiresAt.Sub(sess.CreatedAt); got != SessionTTL {
 		t.Fatalf("session lifetime = %v, want SessionTTL %v", got, SessionTTL)
 	}
-	if got := time.Until(sess.ExpiresAt); got <= 23*time.Hour || got > SessionTTL {
-		t.Fatalf("session expiry %v is not ~24h from now", sess.ExpiresAt)
+	until := time.Until(sess.ExpiresAt)
+	if until <= 19*time.Minute || until > SessionTTL {
+		t.Fatalf("session expiry %v is not ~20m from now", sess.ExpiresAt)
+	}
+	if until > 23*time.Hour {
+		t.Fatalf("session expiry %v looks like the old 24h TTL", sess.ExpiresAt)
+	}
+}
+
+func TestSessionTouchSlidesExpiry(t *testing.T) {
+	ttl := 80 * time.Millisecond
+	live := NewSessionStore(ttl)
+	dead := NewSessionStore(ttl)
+	a, err := live.Create("alice")
+	if err != nil {
+		t.Fatalf("Create alice: %v", err)
+	}
+	b, err := dead.Create("bob")
+	if err != nil {
+		t.Fatalf("Create bob: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	touched, ok := live.Touch(a.ID)
+	if !ok {
+		t.Fatal("Touch of a live session must succeed")
+	}
+	if !touched.ExpiresAt.After(a.ExpiresAt) {
+		t.Fatalf("Touch must extend ExpiresAt: was %v, now %v", a.ExpiresAt, touched.ExpiresAt)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if _, ok := live.Get(a.ID); !ok {
+		t.Fatal("touched session must still be live past the original expiry")
+	}
+	if _, ok := dead.Get(b.ID); ok {
+		t.Fatal("untouched session must expire after TTL")
+	}
+}
+
+func TestSessionTouchMissingOrExpired(t *testing.T) {
+	s := NewSessionStore(40 * time.Millisecond)
+	if _, ok := s.Touch("missing"); ok {
+		t.Fatal("Touch of a missing id must fail")
+	}
+	sess, err := s.Create("alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	time.Sleep(70 * time.Millisecond)
+	if _, ok := s.Touch(sess.ID); ok {
+		t.Fatal("Touch of an expired session must fail")
+	}
+	s.mu.RLock()
+	_, still := s.byID[sess.ID]
+	s.mu.RUnlock()
+	if still {
+		t.Fatal("expired session must be deleted by Touch")
 	}
 }
 

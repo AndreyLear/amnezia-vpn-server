@@ -1,7 +1,10 @@
 import { toast } from "sonner";
 
 let csrf = "";
+let lastUsername = "";
 let csrfWaiters: Array<() => void> = [];
+let sessionExpiredWaiters: Array<() => void> = [];
+let sessionExpiredListeners: Array<(open: boolean) => void> = [];
 
 export function setCsrf(token: string) {
   csrf = token;
@@ -9,6 +12,28 @@ export function setCsrf(token: string) {
   const waiters = csrfWaiters;
   csrfWaiters = [];
   for (const wait of waiters) wait();
+}
+
+export function setLastUsername(username: string) {
+  lastUsername = username;
+}
+
+export function getLastUsername(): string {
+  return lastUsername;
+}
+
+export function subscribeSessionExpired(listener: (open: boolean) => void): () => void {
+  sessionExpiredListeners.push(listener);
+  return () => {
+    sessionExpiredListeners = sessionExpiredListeners.filter((item) => item !== listener);
+  };
+}
+
+export function completeSessionRelogin() {
+  const waiters = sessionExpiredWaiters;
+  sessionExpiredWaiters = [];
+  for (const wait of waiters) wait();
+  for (const listener of sessionExpiredListeners) listener(false);
 }
 
 function waitForCsrf(): Promise<void> {
@@ -23,6 +48,13 @@ function waitForCsrf(): Promise<void> {
       resolve();
     };
     csrfWaiters.push(done);
+  });
+}
+
+function waitForSessionRelogin(): Promise<void> {
+  return new Promise((resolve) => {
+    sessionExpiredWaiters.push(resolve);
+    for (const listener of sessionExpiredListeners) listener(true);
   });
 }
 
@@ -43,8 +75,12 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
   }
   const res = await fetch(path, { ...init, headers, credentials: "same-origin" });
   if (res.status === 401 && path !== "/api/login") {
-    window.location.assign("/login");
-    throw new Error("Unauthorized.");
+    if (!csrf) {
+      window.location.assign("/login");
+      throw new Error("Unauthorized.");
+    }
+    await waitForSessionRelogin();
+    return apiRequest(path, init);
   }
   return res;
 }

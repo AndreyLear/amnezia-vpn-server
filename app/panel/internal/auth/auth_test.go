@@ -188,6 +188,96 @@ func TestRequireAuthValidSession(t *testing.T) {
 	}
 }
 
+func TestRequireAPIGetDoesNotSlideSession(t *testing.T) {
+	store := NewSessionStore(20 * time.Minute)
+	sess, err := store.Create("alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	origExpiry := sess.ExpiresAt
+	time.Sleep(20 * time.Millisecond)
+	var ctxSess Session
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ok bool
+		ctxSess, ok = CurrentUser(r.Context())
+		if !ok {
+			t.Error("CurrentUser must report the session")
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "/api/me", nil)
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sess.ID})
+		NewAuth(store).RequireAPI(next).ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: code = %d, want 200", method, rec.Code)
+		}
+		if rec.Header().Get("Set-Cookie") != "" {
+			t.Fatalf("%s must not refresh Set-Cookie: %q", method, rec.Header().Get("Set-Cookie"))
+		}
+	}
+	if ctxSess.ExpiresAt != origExpiry {
+		t.Fatalf("GET context ExpiresAt %v must stay %v", ctxSess.ExpiresAt, origExpiry)
+	}
+	stored, ok := store.Get(sess.ID)
+	if !ok {
+		t.Fatal("session must still be live")
+	}
+	if !stored.ExpiresAt.Equal(origExpiry) {
+		t.Fatalf("GET must not extend ExpiresAt: was %v, now %v", origExpiry, stored.ExpiresAt)
+	}
+}
+
+func TestRequireAPIPostSlidesSession(t *testing.T) {
+	store := NewSessionStore(20 * time.Minute)
+	sess, err := store.Create("alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	origExpiry := sess.ExpiresAt
+	time.Sleep(20 * time.Millisecond)
+	var ctxSess Session
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ok bool
+		ctxSess, ok = CurrentUser(r.Context())
+		if !ok {
+			t.Error("CurrentUser must report the touched session")
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/clients", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sess.ID})
+	NewAuth(store).RequireAPI(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", rec.Code)
+	}
+	if !ctxSess.ExpiresAt.After(origExpiry) {
+		t.Fatalf("POST context ExpiresAt %v must be later than original %v", ctxSess.ExpiresAt, origExpiry)
+	}
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == SessionCookieName {
+			cookie = c
+			break
+		}
+	}
+	if cookie == nil {
+		t.Fatal("POST RequireAPI must refresh Set-Cookie")
+	}
+	if cookie.Value != sess.ID {
+		t.Fatalf("cookie value = %q, want %q", cookie.Value, sess.ID)
+	}
+	if cookie.MaxAge < 19*60 {
+		t.Fatalf("cookie MaxAge = %d, want ~20 minutes", cookie.MaxAge)
+	}
+	stored, ok := store.Get(sess.ID)
+	if !ok || !stored.ExpiresAt.After(origExpiry) {
+		t.Fatal("store must slide ExpiresAt after POST")
+	}
+}
+
 func TestRequireAuthChallengeSemantics(t *testing.T) {
 	store := NewSessionStore(SessionTTL)
 	sid := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefddx"

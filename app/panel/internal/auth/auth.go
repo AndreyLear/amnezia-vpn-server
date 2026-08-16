@@ -171,6 +171,10 @@ func (a *Auth) RequireAuth(next http.Handler) http.Handler {
 			a.challenge(w, r)
 			return
 		}
+		if sess, ok = a.slideIfMutating(w, r, sess); !ok {
+			a.challenge(w, r)
+			return
+		}
 		ctx := context.WithValue(r.Context(), sessionCtxKey{}, sess)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -191,8 +195,28 @@ func (a *Auth) RequireAPI(next http.Handler) http.Handler {
 			writeAPIUnauthorized(w)
 			return
 		}
+		if sess, ok = a.slideIfMutating(w, r, sess); !ok {
+			writeAPIUnauthorized(w)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionCtxKey{}, sess)))
 	})
+}
+
+// slideIfMutating extends a live session on POST/PATCH/DELETE (and any
+// other non-safe method) and refreshes the browser cookie. GET/HEAD/
+// OPTIONS leave ExpiresAt unchanged so polls cannot idle-extend.
+func (a *Auth) slideIfMutating(w http.ResponseWriter, r *http.Request, sess Session) (Session, bool) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return sess, true
+	}
+	touched, ok := a.store.Touch(sess.ID)
+	if !ok {
+		return Session{}, false
+	}
+	WriteSessionCookie(w, touched.ID, touched.ExpiresAt)
+	return touched, true
 }
 
 func writeAPIUnauthorized(w http.ResponseWriter) {

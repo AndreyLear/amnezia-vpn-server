@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
+import { SessionExpiredHost } from "@/components/SessionExpiredHost";
 import { Toaster } from "@/components/ui/sonner";
 import HomePage from "@/pages/HomePage";
 import LoginPage from "@/pages/LoginPage";
@@ -16,6 +17,7 @@ function App() {
         </Routes>
       </BrowserRouter>
       <Toaster />
+      <SessionExpiredHost />
     </>
   );
 }
