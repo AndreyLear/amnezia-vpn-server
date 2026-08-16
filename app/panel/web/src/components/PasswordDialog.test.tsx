@@ -22,6 +22,14 @@ function renderDialog(
   );
 }
 
+async function openTotpTab(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("tab", { name: "2FA" }));
+}
+
+async function openPasswordTab(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("tab", { name: "Пароль" }));
+}
+
 describe("PasswordDialog", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -29,42 +37,31 @@ describe("PasswordDialog", () => {
     setCsrf("");
   });
 
-  it("titles the dialog Аккаунт and has no password heading or switch", () => {
+  it("titles the dialog Аккаунт and splits password and 2FA into tabs", async () => {
+    const user = userEvent.setup();
     renderDialog();
 
     expect(screen.getByRole("heading", { name: "Аккаунт" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Пароль" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "2FA" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Изменить пароль" })).not.toBeInTheDocument();
     expect(screen.queryByText("Изменить пароль")).not.toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    const passwordHeading = screen.getByRole("heading", { name: "Пароль" });
-    expect(passwordHeading).toBeInTheDocument();
-    const passwordSection = passwordHeading.closest("div.grid");
-    expect(passwordSection?.className.split(/\s+/)).toContain("gap-5");
-    const oldPassword = screen.getByLabelText("Текущий пароль");
-    expect(passwordSection?.contains(oldPassword)).toBe(true);
+    expect(screen.queryByRole("heading", { name: "Пароль" })).not.toBeInTheDocument();
     expect(
-      passwordHeading.compareDocumentPosition(oldPassword) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    const oldPasswordFieldGroup = oldPassword.closest("div.grid");
-    const passwordFieldStack = oldPasswordFieldGroup?.parentElement;
-    expect(passwordFieldStack?.className.split(/\s+/)).toContain("gap-3");
-    expect(passwordFieldStack?.contains(passwordHeading)).toBe(false);
-    const passwordForm = oldPassword.closest("form");
-    expect(passwordForm).toBeTruthy();
-    const formIsFlatGap3 =
-      passwordForm?.classList.contains("grid") && passwordForm.classList.contains("gap-3");
-    const headingIsDirectFormChild = [...(passwordForm?.children ?? [])].includes(passwordHeading);
-    expect(formIsFlatGap3 && headingIsDirectFormChild).toBe(false);
+      screen.queryByRole("heading", { name: "Двухфакторная аутентификация" }),
+    ).not.toBeInTheDocument();
 
-    const totpHeading = screen.getByRole("heading", { name: "Двухфакторная аутентификация" });
-    expect(totpHeading).toBeInTheDocument();
-    const totpSection = totpHeading.closest("div.grid");
-    expect(totpSection?.className.split(/\s+/)).toContain("gap-5");
-    const totpEnrollPassword = screen.getByLabelText(/для включения 2FA/);
-    expect(totpSection?.contains(totpEnrollPassword)).toBe(true);
-    expect(
-      totpHeading.compareDocumentPosition(totpEnrollPassword) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(screen.getByLabelText("Текущий пароль")).toBeInTheDocument();
+    expect(screen.getByLabelText("Новый пароль")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Сохранить пароль" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/для включения 2FA/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Включить" })).not.toBeInTheDocument();
+
+    await openTotpTab(user);
+
+    expect(screen.getByLabelText(/для включения 2FA/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Включить" })).toBeInTheDocument();
     expect(screen.getByText("выкл")).toBeInTheDocument();
     expect(
       screen.getByText("QR появится после подтверждения паролем"),
@@ -75,10 +72,12 @@ describe("PasswordDialog", () => {
     const input = screen.getByLabelText(/для включения 2FA/);
     const hint = screen.getByText("QR появится после подтверждения паролем");
     expect(input.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const heading = screen.getByRole("heading", { name: "Двухфакторная аутентификация" });
-    expect(heading.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(hint.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeFalsy();
-    expect(screen.getByRole("button", { name: "Включить" })).toBeInTheDocument();
+
+    await openPasswordTab(user);
+
+    expect(screen.getByLabelText("Текущий пароль")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/для включения 2FA/)).not.toBeInTheDocument();
   });
 
   it("closes without API call when password fields are empty", async () => {
@@ -91,7 +90,9 @@ describe("PasswordDialog", () => {
 
     renderDialog({ onOpenChange });
 
+    await openTotpTab(user);
     await user.type(screen.getByLabelText(/для включения 2FA/), "2fa-only");
+    await openPasswordTab(user);
     await user.click(screen.getByRole("button", { name: "Сохранить пароль" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -190,6 +191,7 @@ describe("PasswordDialog", () => {
 
     renderDialog();
 
+    await openTotpTab(user);
     await user.click(screen.getByRole("button", { name: "Включить" }));
 
     expect(
@@ -226,6 +228,7 @@ describe("PasswordDialog", () => {
 
     renderDialog();
 
+    await openTotpTab(user);
     await user.type(screen.getByLabelText(/для включения 2FA/), "secret-pass");
     await user.click(screen.getByRole("button", { name: "Включить" }));
 
@@ -249,9 +252,13 @@ describe("PasswordDialog", () => {
     renderDialog({ totpEnabled: true, onTotpChange });
 
     expect(screen.getByLabelText("Код 2FA")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Выключить" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+
+    await openTotpTab(user);
+
     expect(screen.getByText("вкл")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Выключить" })).toBeInTheDocument();
-    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Выключить" }));
 
@@ -282,6 +289,7 @@ describe("PasswordDialog", () => {
 
     renderDialog({ totpEnabled: true, onTotpChange });
 
+    await openTotpTab(user);
     await user.type(screen.getByLabelText(/для отключения 2FA/), "wrong-pass");
     await user.type(screen.getByLabelText("Код из приложения"), "000000");
     await user.click(screen.getByRole("button", { name: "Выключить" }));
