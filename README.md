@@ -45,11 +45,10 @@ then panel port `[8443]`), panel port `[443]` when a domain is set
 copied from the panel hostname). AmneziaWG stays on UDP 443 and the
 deploy root is `/opt/amnezia-vpn`.
 
-After the repository is on GitHub, the same wizard can be fetched with
-(replace `OWNER`):
+The same wizard can be fetched with:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/OWNER/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh && bash bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh && bash bootstrap.sh
 ```
 
 CI / flags: `bootstrap.sh` SSHes to the VPS, runs `install.sh`, creates

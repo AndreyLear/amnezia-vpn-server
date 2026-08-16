@@ -45,11 +45,10 @@ English: [README.md](README.md).
 копируют с hostname панели). AmneziaWG остаётся на UDP 443, корень
 деплоя — `/opt/amnezia-vpn`.
 
-Когда репозиторий будет на GitHub, тот же мастер можно скачать так
-(подставьте `OWNER`):
+Тот же мастер можно скачать так:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/OWNER/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh && bash bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh && bash bootstrap.sh
 ```
 
 CI / флаги: `bootstrap.sh` ходит по SSH на VPS, запускает `install.sh`,
