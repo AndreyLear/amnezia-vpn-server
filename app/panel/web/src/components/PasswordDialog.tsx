@@ -63,6 +63,15 @@ export function PasswordDialog({
   }
 
   async function changePassword() {
+    if (
+      oldPassword.trim() === "" &&
+      newPassword.trim() === "" &&
+      confirmPassword.trim() === ""
+    ) {
+      onOpenChange(false);
+      return;
+    }
+
     setPending(true);
     setError("");
     try {
@@ -132,6 +141,13 @@ export function PasswordDialog({
   }
 
   async function disableTotp() {
+    const password = (enrollPassword || oldPassword).trim();
+    const totpCode = code.trim();
+    if (password === "" || totpCode === "") {
+      setError("Чтобы выключить 2FA, введите текущий пароль и код из приложения.");
+      return;
+    }
+
     setPending(true);
     setError("");
     try {
@@ -143,7 +159,7 @@ export function PasswordDialog({
         }),
       });
       if (!mutationSucceeded(data)) {
-        setError(data?.message ?? "");
+        setError("Неверный пароль или код.");
         return;
       }
       toast.success(data.message ?? "2FA отключена.");
