@@ -11,8 +11,9 @@
 # Usage:
 #   ./bootstrap.sh
 #   ./bootstrap.sh --ip HOST [--user USER] [--key FILE|--password-env VAR]
-#                  [--domain FQDN] [--panel-port PORT] [--client-domain FQDN]
-#                  [--awg-port PORT] [--root DIR] [--source URL]
+#                  [--panel-domain FQDN|--domain FQDN]
+#                  [--vpn-domain FQDN|--client-domain FQDN]
+#                  [--panel-port PORT] [--awg-port PORT] [--root DIR] [--source URL]
 #
 # Testability: prepend a fake PATH (ssh/scp/tar/sshpass/curl/openssl)
 # as in app/panel/test_m91_install.sh. Nothing here mutates the operator
@@ -67,8 +68,9 @@ bootstrap.sh — one-shot AmneziaWG VPN Server install from the operator machine
 Usage:
   ./bootstrap.sh
   ./bootstrap.sh --ip HOST [--user USER] [--key FILE|--password-env VAR]
-                 [--domain FQDN] [--panel-port PORT] [--client-domain FQDN]
-                 [--awg-port PORT] [--root DIR] [--source URL]
+                 [--panel-domain FQDN | --domain FQDN]
+                 [--vpn-domain FQDN | --client-domain FQDN]
+                 [--panel-port PORT] [--awg-port PORT] [--root DIR] [--source URL]
 
 Options:
   --ip HOST            VPS address (hostname or IPv4). With this flag,
@@ -78,20 +80,26 @@ Options:
                        ~/.ssh/id_rsa)
   --password-env VAR   read the SSH password from the environment variable
                        VAR (never from argv). Requires sshpass or expect.
-  --domain FQDN        panel HTTPS with Let's Encrypt (passed to install.sh)
-  --panel-port PORT    panel IP:port mode with a self-signed certificate
-                       (default in CI without --domain: 8443). Mutually
-                       exclusive with --domain.
-  --client-domain FQDN bind client configs to FQDN:awg-port (T-129).
-                       Flag mode: --domain without this flag binds
-                       clients to the panel domain (install.sh default);
-                       this flag overrides. IP endpoint only when there
-                       is no panel domain and no --client-domain.
+  --panel-domain FQDN  panel HTTPS with Let's Encrypt (passed to
+                       install.sh). Alias: --domain.
+  --domain FQDN        alias of --panel-domain
+  --panel-port PORT    nginx TLS listen port. With --panel-domain:
+                       https://PANEL_DOMAIN:PORT. Without a panel domain
+                       (default in CI: 8443): self-signed https://IP:PORT.
+  --vpn-domain FQDN    bind client configs to FQDN:awg-port. Alias:
+                       --client-domain. Omitted: public IP. The panel
+                       hostname is never copied onto clients.
+  --client-domain FQDN alias of --vpn-domain
   --awg-port PORT      AmneziaWG UDP port (default: 443; avoid 51820)
   --root DIR           deployment root on the server (default: /opt/amnezia-vpn)
   --source URL         download a release tarball instead of packing the
                        local repository
   --help               print this message
+
+Examples:
+  ./bootstrap.sh --ip 203.0.113.10 --panel-domain panel.example.com --vpn-domain example.com
+  ./bootstrap.sh --ip 203.0.113.10 --panel-domain panel.example.com --panel-port 8443 --vpn-domain example.com
+  ./bootstrap.sh --ip 203.0.113.10 --panel-port 8443
 
 Interactive mode (no --ip) asks for host, SSH user, authentication,
 panel domain or IP:port, and whether to bind clients to a domain.
@@ -193,8 +201,8 @@ while [ "$#" -gt 0 ]; do
             NONINTERACTIVE=1
             shift 2
             ;;
-        --domain)
-            [ "$#" -ge 2 ] || die_usage "--domain requires a FQDN argument"
+        --domain | --panel-domain)
+            [ "$#" -ge 2 ] || die_usage "$1 requires a FQDN argument"
             DOMAIN="$2"
             DOMAIN_SET=1
             NONINTERACTIVE=1
@@ -207,8 +215,8 @@ while [ "$#" -gt 0 ]; do
             NONINTERACTIVE=1
             shift 2
             ;;
-        --client-domain)
-            [ "$#" -ge 2 ] || die_usage "--client-domain requires a FQDN argument"
+        --client-domain | --vpn-domain)
+            [ "$#" -ge 2 ] || die_usage "$1 requires a FQDN argument"
             CLIENT_DOMAIN="$2"
             CLIENT_DOMAIN_SET=1
             BIND_CLIENTS=1
@@ -309,25 +317,20 @@ AWG_PORT="${AWG_PORT:-$DEFAULT_AWG_PORT}"
 validate_port "$AWG_PORT" || die_usage "--awg-port must be an integer in 1..65535 (got: $AWG_PORT)"
 
 if [ "$DOMAIN_SET" = "1" ] && [ -n "$DOMAIN" ]; then
-    validate_fqdn "$DOMAIN" || die_usage "--domain must be a valid FQDN (got: $DOMAIN)"
-    validate_safe "$DOMAIN" || die_usage "invalid --domain (unsupported characters)"
+    validate_fqdn "$DOMAIN" || die_usage "--panel-domain/--domain must be a valid FQDN (got: $DOMAIN)"
+    validate_safe "$DOMAIN" || die_usage "invalid --panel-domain/--domain (unsupported characters)"
 fi
 if [ "$CLIENT_DOMAIN_SET" = "1" ]; then
-    [ -n "$CLIENT_DOMAIN" ] || die_usage "empty --client-domain"
-    validate_fqdn "$CLIENT_DOMAIN" || die_usage "--client-domain must be a valid FQDN (got: $CLIENT_DOMAIN)"
-    validate_safe "$CLIENT_DOMAIN" || die_usage "invalid --client-domain (unsupported characters)"
+    [ -n "$CLIENT_DOMAIN" ] || die_usage "empty --vpn-domain/--client-domain"
+    validate_fqdn "$CLIENT_DOMAIN" || die_usage "--vpn-domain/--client-domain must be a valid FQDN (got: $CLIENT_DOMAIN)"
+    validate_safe "$CLIENT_DOMAIN" || die_usage "invalid --vpn-domain/--client-domain (unsupported characters)"
     BIND_CLIENTS=1
 fi
-# T-129: flag mode --domain without --client-domain binds clients to the
-# panel domain (same default as install.sh). IP endpoint only when there
-# is no panel domain and no --client-domain (--panel-port / empty domain).
-# Interactive "no" leaves BIND_CLIENTS=0 so server init uses PUBLIC_IP.
+# T-156: flag mode binds clients only when --vpn-domain/--client-domain
+# is set. --panel-domain/--domain never copies onto the VPN endpoint.
 if [ "$NONINTERACTIVE" = "1" ]; then
     if [ "$CLIENT_DOMAIN_SET" = "1" ]; then
         BIND_CLIENTS=1
-    elif [ "$DOMAIN_SET" = "1" ] && [ -n "$DOMAIN" ]; then
-        BIND_CLIENTS=1
-        CLIENT_DOMAIN="$DOMAIN"
     else
         BIND_CLIENTS=0
     fi
@@ -335,8 +338,8 @@ fi
 if [ "$PANEL_PORT_SET" = "1" ]; then
     validate_port "$PANEL_PORT" || die_usage "--panel-port must be an integer in 1..65535 (got: $PANEL_PORT)"
 fi
-if [ "$DOMAIN_SET" = "1" ] && [ -n "$DOMAIN" ] && [ "$PANEL_PORT_SET" = "1" ]; then
-    die_usage "--domain and --panel-port are mutually exclusive"
+if [ -n "$DOMAIN" ] && [ "$PANEL_PORT_SET" = "1" ] && [ "$PANEL_PORT" = "80" ]; then
+    die_usage "--panel-port 80 conflicts with ACME HTTP-01 (TCP 80). Use 443 (default) or another port such as 8443"
 fi
 # One-shot install always exposes the panel: IP:port when no domain.
 if [ "$DOMAIN_SET" = "0" ] || [ -z "$DOMAIN" ]; then
@@ -528,10 +531,6 @@ INSTALL_FLAGS="--root '$ROOT_DIR' --awg-port '$AWG_PORT'"
 if [ "$DOMAIN_SET" = "1" ] && [ -n "$DOMAIN" ]; then
     INSTALL_FLAGS="$INSTALL_FLAGS --domain '$DOMAIN'"
 fi
-# Residual (do not change install.sh): it has no --no-client-domain, so
-# --domain still sets CLIENT_DOMAIN=$DOMAIN in .env/hints even when the
-# operator answered "no" here. server init below uses PUBLIC_IP in that
-# case; the live endpoint is what clients get.
 if [ "$BIND_CLIENTS" = "1" ] && [ -n "$CLIENT_DOMAIN" ]; then
     INSTALL_FLAGS="$INSTALL_FLAGS --client-domain '$CLIENT_DOMAIN'"
 fi
@@ -598,6 +597,9 @@ fi
 
 if [ "$DOMAIN_SET" = "1" ] && [ -n "$DOMAIN" ]; then
     PANEL_URL="https://${DOMAIN}"
+    if [ "$PANEL_PORT_SET" = "1" ] && [ -n "$PANEL_PORT" ] && [ "$PANEL_PORT" != "443" ]; then
+        PANEL_URL="https://${DOMAIN}:${PANEL_PORT}"
+    fi
 else
     PANEL_URL="https://${PUBLIC_IP}:${PANEL_PORT}"
 fi
@@ -663,7 +665,7 @@ esac
     fi
     printf '\n'
     printf 'Change the password at /account.\n'
-    printf 'Upload a backup on Backups to restore clients.\n'
+    printf 'Upload a backup on Backups to restore clients (does not change the panel user).\n'
 } 
 
 exit 0

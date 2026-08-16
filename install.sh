@@ -40,31 +40,25 @@
 #                   database: when the deployed config/awg0.conf exists,
 #                   its Address CIDR wins over this parameter/.env
 #                   (no second source of truth in steady state).
-#   --domain FQDN    panel domain (T-121): binds the panel to a hostname
-#                   with a public DNS record pointing at this server and
-#                   provisions a Let's Encrypt certificate (nginx reverse
-#                   proxy + certbot, ports 80/443 opened in the managed
-#                   nftables table only in this mode). Without it the
-#                   panel stays loopback-only with an SSH tunnel hint.
-#   --client-domain FQDN  client endpoint domain (T-129): client configs
-#                   carry <fqdn>:<awg-port> as their endpoint, so clients
-#                   resolve the domain at connect time and moving the
-#                   server to another host is a plain A-record change
-#                   (configs are never re-issued). Defaults to the
-#                   --domain value; the DNS record is pre-flighted like
-#                   the panel domain, before any certificate attempt.
-#   --panel-port PORT  panel IP:port mode without a domain (T-124):
-#                   serves the panel on https://<server-ip>:PORT behind
-#                   nginx with a self-signed TLS certificate generated
-#                   once into the deployment root (openssl, CN=<public
-#                   ip>, ~825 days, key 0600); the managed nftables
-#                   table opens tcp PORT only in this mode and the
-#                   summary prints the certificate fingerprint (sha256)
-#                   for verification. Not persisted: a rerun without
-#                   the flag returns the panel to loopback-only.
-#                   Mutually exclusive with --domain.
-#   --panel-tls-regen  with --panel-port: force a fresh self-signed
-#                   certificate instead of keeping an existing one.
+#   --domain FQDN / --panel-domain FQDN  panel hostname (T-121, T-156):
+#                   public DNS A/AAAA to this server, Let's Encrypt
+#                   (nginx + certbot). HTTP-01 stays on TCP 80. TLS
+#                   listen is 443 unless --panel-port is also set.
+#                   Without a panel domain the panel stays loopback-only
+#                   (SSH tunnel hint) unless --panel-port is used.
+#   --client-domain FQDN / --vpn-domain FQDN  client endpoint domain
+#                   (T-129, T-156): client configs carry <fqdn>:<awg-port>.
+#                   Omitted: endpoint is the public IP. The panel hostname
+#                   is never copied onto clients. DNS is pre-flighted
+#                   before any certificate attempt.
+#   --panel-port PORT  nginx TLS listen port. With a panel domain:
+#                   https://PANEL_DOMAIN:PORT (Let's Encrypt; nftables
+#                   opens tcp 80 + tcp PORT). Without a panel domain
+#                   (T-124): self-signed https://<server-ip>:PORT.
+#                   Omitted with a panel domain: TCP 443 as today
+#                   (UDP AWG 443 can coexist).
+#   --panel-tls-regen  with --panel-port and no panel domain: force a
+#                   fresh self-signed certificate.
 #   --help          usage
 #
 # Testability hooks (environment, not arguments):
@@ -128,8 +122,10 @@ usage() {
 install.sh — M9 deployment of the AmneziaWG VPN Server stack.
 
 Usage:
-  ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR] [--domain FQDN]
-               [--client-domain FQDN] [--panel-port PORT] [--panel-tls-regen]
+  ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
+               [--panel-domain FQDN | --domain FQDN]
+               [--vpn-domain FQDN | --client-domain FQDN]
+               [--panel-port PORT] [--panel-tls-regen]
 
 Options:
   --root DIR        deployment root (default: /opt/amnezia-vpn)
@@ -137,34 +133,35 @@ Options:
                     1..65535 (default: 443; avoid 51820)
   --vpn-subnet CIDR VPN subnet the server assigns clients from;
                     IPv4 CIDR with prefix 1..32 (default: 10.8.0.0/24)
-  --domain FQDN     panel domain with a public DNS record to this server:
-                    provisions HTTPS (nginx + Let's Encrypt) and opens
-                    tcp 80/443 in the managed ruleset; without it the
-                    panel stays loopback-only (SSH tunnel hint)
-  --client-domain FQDN  client endpoint domain: client configs carry
-                    <fqdn>:<awg-port> as their endpoint, clients resolve
-                    the domain at connect time, so a server move is an
-                    A-record change without re-issuing configs. Defaults
-                    to --domain when given; the DNS record is verified
-                    before the install proceeds.
-  --panel-port PORT panel without a domain: https://<server-ip>:PORT
-                    with a self-signed TLS certificate (nginx reverse
-                    proxy; opens tcp PORT in the managed ruleset only
-                    in this mode; the sha256 fingerprint is printed in
-                    the summary). Not persisted — rerun without the
-                    flag returns the panel to loopback-only.
-                    Mutually exclusive with --domain.
-  --panel-tls-regen with --panel-port: force a fresh self-signed
-                    certificate (by default an existing one is kept)
+  --panel-domain FQDN  panel hostname (Let's Encrypt). Alias: --domain.
+                    HTTP-01 on TCP 80. TLS on 443 unless --panel-port
+                    is set. Without it the panel stays loopback-only
+                    (SSH tunnel hint) unless --panel-port is used.
+  --domain FQDN     alias of --panel-domain
+  --vpn-domain FQDN client endpoint host (<fqdn>:<awg-port>). Alias:
+                    --client-domain. Omitted: public IP. The panel
+                    hostname is never copied onto clients. DNS is
+                    verified before the install proceeds.
+  --client-domain FQDN  alias of --vpn-domain
+  --panel-port PORT nginx TLS listen port. With --panel-domain:
+                    https://PANEL_DOMAIN:PORT (nftables: tcp 80 + tcp
+                    PORT). Without a panel domain: self-signed
+                    https://<server-ip>:PORT (T-124).
+  --panel-tls-regen with --panel-port and no panel domain: force a
+                    fresh self-signed certificate
   --help            print this message
+
+Examples:
+  ./install.sh --panel-domain panel.example.com --vpn-domain example.com
+  ./install.sh --panel-domain panel.example.com --panel-port 8443 --vpn-domain example.com
+  ./install.sh --panel-port 8443
+  ./install.sh --domain panel.example.com --client-domain vpn.example.com
 
 Installs only supported OSes (Debian 12, Ubuntu 22.04, Ubuntu 24.04),
 Docker Engine + Compose plugin (>= 2.24.2) from the official Docker Inc.
 repository, persists net.ipv4.ip_forward, installs a managed nftables
 ruleset (NAT/forward for the VPN subnet, UDP AWG_PORT acceptance),
-then builds and starts the stack under the deployment root. The panel
-always stays loopback-only; an SSH tunnel directive is printed after
-a successful install.
+then builds and starts the stack under the deployment root.
 EOF
 }
 
@@ -178,8 +175,9 @@ die() {
 die_usage() { die "$FAIL_STYLE_USAGE" "$1"; }
 die_op() { die "$FAIL_STYLE_OP" "$1"; }
 
-# --- argument parsing (only --root, --awg-port, --vpn-subnet, --domain,
-# --- --client-domain, --panel-port, --panel-tls-regen, --help) ----------
+# --- argument parsing (only --root, --awg-port, --vpn-subnet,
+# --- --panel-domain/--domain, --vpn-domain/--client-domain,
+# --- --panel-port, --panel-tls-regen, --help) ----------
 
 validate_port() {
     [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null
@@ -244,14 +242,14 @@ while [ "$#" -gt 0 ]; do
             VPN_SUBNET_SET=1
             shift 2
             ;;
-        --domain)
-            [ "$#" -ge 2 ] || die_usage "--domain requires a FQDN argument"
+        --domain | --panel-domain)
+            [ "$#" -ge 2 ] || die_usage "$1 requires a FQDN argument"
             DOMAIN="$2"
             DOMAIN_SET=1
             shift 2
             ;;
-        --client-domain)
-            [ "$#" -ge 2 ] || die_usage "--client-domain requires a FQDN argument"
+        --client-domain | --vpn-domain)
+            [ "$#" -ge 2 ] || die_usage "$1 requires a FQDN argument"
             CLIENT_DOMAIN="$2"
             CLIENT_DOMAIN_SET=1
             shift 2
@@ -303,25 +301,24 @@ validate_fqdn() {
 }
 
 if [ "$DOMAIN_SET" = "1" ]; then
-    validate_fqdn "$DOMAIN" || die_usage "--domain must be a valid FQDN (labels of letters/digits/hyphens; got: $DOMAIN)"
+    validate_fqdn "$DOMAIN" || die_usage "--panel-domain/--domain must be a valid FQDN (labels of letters/digits/hyphens; got: $DOMAIN)"
 fi
 
 if [ "$CLIENT_DOMAIN_SET" = "1" ]; then
-    validate_fqdn "$CLIENT_DOMAIN" || die_usage "--client-domain must be a valid FQDN (labels of letters/digits/hyphens; got: $CLIENT_DOMAIN)"
-elif [ -n "$DOMAIN" ]; then
-    # T-129: one domain by default — the panel domain doubles as the
-    # client endpoint domain unless --client-domain overrides it.
-    CLIENT_DOMAIN="$DOMAIN"
+    validate_fqdn "$CLIENT_DOMAIN" || die_usage "--vpn-domain/--client-domain must be a valid FQDN (labels of letters/digits/hyphens; got: $CLIENT_DOMAIN)"
 fi
 
 if [ "$PANEL_PORT_SET" = "1" ]; then
     validate_port "$PANEL_PORT" || die_usage "--panel-port must be an integer in 1..65535 (got: $PANEL_PORT)"
 fi
-if [ "$DOMAIN_SET" = "1" ] && [ "$PANEL_PORT_SET" = "1" ]; then
-    die_usage "--domain and --panel-port are mutually exclusive: --domain uses Let's Encrypt on 80/443, --panel-port serves a self-signed certificate on the given port"
-fi
 if [ "$PANEL_TLS_REGEN" = "1" ] && [ "$PANEL_PORT_SET" = "0" ]; then
     die_usage "--panel-tls-regen requires --panel-port"
+fi
+if [ "$PANEL_TLS_REGEN" = "1" ] && [ -n "$DOMAIN" ]; then
+    die_usage "--panel-tls-regen cannot be used with --panel-domain/--domain (Let's Encrypt, not a self-signed certificate)"
+fi
+if [ -n "$DOMAIN" ] && [ "$PANEL_PORT_SET" = "1" ] && [ "$PANEL_PORT" = "80" ]; then
+    die_usage "--panel-port 80 conflicts with ACME HTTP-01 (TCP 80). Use 443 (default) or another port such as 8443"
 fi
 
 # --- root requirement (skipped in test mode only) ---------------------
@@ -576,13 +573,10 @@ elif grep -q '^AMNEZIA_SECURE_COOKIES=' "$ROOT_DIR/$ENV_FILE"; then
     log "AMNEZIA_SECURE_COOKIES removed from $ENV_FILE (loopback panel mode)"
 fi
 
-# --- 10b. client endpoint domain (T-129): DNS pre-flight --------------
-# Optional --client-domain (defaulting to --domain): the endpoint baked
-# into client configs becomes <client-domain>:<AWG_PORT>, so clients
-# resolve the domain at connect time and a server move is a plain
-# A-record change without re-issuing configs. The record is verified
-# like the panel domain — early, before any certificate attempt, so a
-# mismatch never burns the Let's Encrypt rate limit.
+# --- 10b. client endpoint domain (T-129 / T-156): DNS pre-flight ------
+# Optional --vpn-domain / --client-domain: the endpoint baked into
+# client configs becomes <client-domain>:<AWG_PORT>. Omitted: public
+# IP. The panel hostname is never copied onto clients.
 
 # dns_preflight FQDN: the A/AAAA records of FQDN must resolve to the
 # public IP of this server; dies with an actionable message otherwise.
@@ -646,9 +640,9 @@ vpn_subnet_effective() {
 # UDP AWG_PORT acceptance. No policies, no drops: SSH and all foreign
 # traffic are untouched by construction. $3 carries pre-rendered extra
 # input-chain accepts, additively and only for a panel TLS mode: with
-# a panel domain (T-121) tcp 80/443 for the HTTPS reverse proxy, with
-# --panel-port (T-124) only that tcp port. Loopback-only installs
-# never open any of them.
+# a panel domain (T-121) tcp 80 for ACME plus tcp 443 (or --panel-port);
+# with --panel-port and no domain (T-124) only that tcp port. Loopback-only
+# installs never open any of them.
 render_nftables() {
     local input_rules="${3:-}"
     cat <<EOF
@@ -764,14 +758,15 @@ net_setup() {
     validate_port "$port" || die_op "effective AWG port is invalid: $port"
 
     # Panel TLS modes open their tcp ports additively and ONLY in that
-    # mode (T-121: 80/443 for the domain proxy; T-124: the chosen port
-    # for the self-signed IP mode). Loopback-only installs add nothing.
+    # mode (T-121/T-156: 80 + 443 or --panel-port; T-124: the chosen
+    # port for the self-signed IP mode). Loopback-only installs add nothing.
     input_rules=""
     if [ -n "$DOMAIN" ]; then
+        local tls_tcp="${PANEL_PORT:-443}"
         input_rules=$(
-            cat <<'RULES'
+            cat <<RULES
         tcp dport 80 accept
-        tcp dport 443 accept
+        tcp dport ${tls_tcp} accept
 RULES
         )
     elif [ -n "$PANEL_PORT" ]; then
@@ -919,10 +914,14 @@ NGINX_CONF_DIR="$ROOT_DIR/nginx"
 NGINX_SITE="amnezia-panel"
 ACME_ROOT="${AMNEZIA_INSTALL_ACME_ROOT:-/var/www/certbot}"
 
-render_nginx_conf() { # render_nginx_conf DOMAIN PHASE (phase1: acme on 80; phase2: + TLS site)
-    local domain="$1" phase="$2"
+render_nginx_conf() { # render_nginx_conf DOMAIN PHASE [TLS_PORT]
+    local domain="$1" phase="$2" tls_port="${3:-443}"
     local cert="/etc/letsencrypt/live/${domain}/fullchain.pem"
     local key="/etc/letsencrypt/live/${domain}/privkey.pem"
+    local https_redirect="https://\$host\$request_uri"
+    if [ "$tls_port" != "443" ]; then
+        https_redirect="https://\$host:${tls_port}\$request_uri"
+    fi
     cat <<EOF
 # Amnezia VPN panel reverse proxy (T-121) — managed by install.sh.
 # The panel stays loopback-only (127.0.0.1:8787); TLS terminates here.
@@ -934,7 +933,7 @@ server {
         root ${ACME_ROOT};
     }
     location / {
-        return 301 https://\$host\$request_uri;
+        return 301 ${https_redirect};
     }
 }
 EOF
@@ -942,8 +941,8 @@ EOF
         cat <<EOF
 
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
+    listen ${tls_port} ssl;
+    listen [::]:${tls_port} ssl;
     server_name ${domain};
     ssl_certificate ${cert};
     ssl_certificate_key ${key};
@@ -963,6 +962,12 @@ EOF
 domain_setup() {
     [ -n "$DOMAIN" ] || return 0
 
+    local tls_port="${PANEL_PORT:-443}"
+    local panel_url="https://${DOMAIN}"
+    if [ "$tls_port" != "443" ]; then
+        panel_url="https://${DOMAIN}:${tls_port}"
+    fi
+
     log "panel domain $DOMAIN: DNS pre-flight before any certificate attempt"
     dns_preflight "$DOMAIN"
 
@@ -971,7 +976,7 @@ domain_setup() {
     fi
     mkdir -p "$NGINX_CONF_DIR" "$ACME_ROOT" || die_op "cannot create nginx/acme dirs"
     chmod 0750 "$NGINX_CONF_DIR"
-    render_nginx_conf "$DOMAIN" "phase1" > "$NGINX_CONF_DIR/panel.conf"
+    render_nginx_conf "$DOMAIN" "phase1" "$tls_port" > "$NGINX_CONF_DIR/panel.conf"
     chmod 0644 "$NGINX_CONF_DIR/panel.conf"
     ln -sf "$NGINX_CONF_DIR/panel.conf" "/etc/nginx/sites-enabled/$NGINX_SITE"
     rm -f /etc/nginx/sites-enabled/default
@@ -994,11 +999,11 @@ domain_setup() {
     cmd systemctl enable certbot.timer >/dev/null 2>&1 || true
     cmd systemctl start certbot.timer >/dev/null 2>&1 || true
 
-    render_nginx_conf "$DOMAIN" "phase2" > "$NGINX_CONF_DIR/panel.conf"
+    render_nginx_conf "$DOMAIN" "phase2" "$tls_port" > "$NGINX_CONF_DIR/panel.conf"
     chmod 0644 "$NGINX_CONF_DIR/panel.conf"
     cmd nginx -t >/dev/null 2>&1 || die_op "nginx TLS configuration test failed"
     cmd nginx -s reload >/dev/null 2>&1 || true
-    log "panel domain: https://$DOMAIN ready (certbot.timer renews automatically)"
+    log "panel domain: $panel_url ready (certbot.timer renews automatically)"
 }
 
 domain_setup
@@ -1007,11 +1012,8 @@ domain_setup
 # No domain, but --panel-port given: the panel stays loopback-only in
 # compose; nginx terminates TLS in front of it with a self-signed
 # certificate (Let's Encrypt does not issue for bare IPs) and proxies
-# to 127.0.0.1:8787. The managed nftables table opens tcp PANEL_PORT
-# only in this mode (net_setup). The certificate (RSA 2048, CN=<public
-# ip>, ~825 days, key 0600) lives in the deployment root and is
-# generated once: a rerun keeps it, --panel-tls-regen forces a fresh
-# one. Without --panel-port this whole section is a no-op.
+# to 127.0.0.1:8787. With a panel domain, TLS is Let's Encrypt
+# (domain_setup) even when --panel-port is set — this section is skipped.
 #
 # The summary prints the sha256 fingerprint: browsers reject the
 # untrusted certificate once and the operator verifies the fingerprint
@@ -1047,6 +1049,7 @@ EOF
 
 panel_port_setup() {
     [ -n "$PANEL_PORT" ] || return 0
+    [ -z "$DOMAIN" ] || return 0
 
     log "panel IP:port mode: nginx TLS on port $PANEL_PORT (self-signed)"
     if ! command -v openssl >/dev/null 2>&1; then
@@ -1162,8 +1165,12 @@ install:     docker compose --env-file versions.lock run --rm panel-init \\
 install:       /app/panel restore <archive>
 EOF
 if [ -n "$DOMAIN" ]; then
+    panel_url="https://${DOMAIN}"
+    if [ -n "$PANEL_PORT" ] && [ "$PANEL_PORT" != "443" ]; then
+        panel_url="https://${DOMAIN}:${PANEL_PORT}"
+    fi
     cat <<EOF
-install: Panel: https://${DOMAIN} (Let's Encrypt, auto-renewed by certbot.timer)
+install: Panel: ${panel_url} (Let's Encrypt, auto-renewed by certbot.timer)
 EOF
 elif [ -n "$PANEL_PORT" ]; then
     cat <<EOF

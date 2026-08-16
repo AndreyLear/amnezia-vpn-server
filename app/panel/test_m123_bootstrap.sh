@@ -225,6 +225,12 @@ test_help() {
     [ "$rc" = "0" ] || fail "help: exit $rc"
     grep -q -- "--ip HOST" "$TMP_TEST/out" && pass "help: usage printed" \
         || fail "help: usage missing"
+    grep -q "Examples:" "$TMP_TEST/out" && pass "help: Examples section" \
+        || fail "help: Examples section missing"
+    grep -q -- "--panel-domain" "$TMP_TEST/out" && pass "help: --panel-domain" \
+        || fail "help: --panel-domain missing"
+    grep -q -- "--vpn-domain" "$TMP_TEST/out" && pass "help: --vpn-domain" \
+        || fail "help: --vpn-domain missing"
 }
 
 test_unknown_argument() {
@@ -234,11 +240,23 @@ test_unknown_argument() {
     pass "unknown arguments rejected (exit 2)"
 }
 
-test_domain_and_panel_port_conflict() {
+test_domain_and_panel_port_combined() {
     fakes_reset
-    rc="$(run_bootstrap --ip 2.26.93.192 --domain panel.example.com --panel-port 8443)"
-    [ "$rc" = "2" ] || fail "domain+panel-port: exit $rc, want 2"
-    pass "--domain + --panel-port conflict rejected"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
+        --panel-domain panel.example.com --panel-port 8443 --vpn-domain vpn.example.com)"
+    [ "$rc" = "0" ] || { fail "domain+panel-port: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q -- "--domain 'panel.example.com'" "$FAKE_CALLS" && pass "domain+panel-port: panel domain passed" \
+        || fail "domain+panel-port: --domain not passed to install.sh"
+    grep -q -- "--panel-port '8443'" "$FAKE_CALLS" && pass "domain+panel-port: --panel-port passed" \
+        || fail "domain+panel-port: --panel-port not passed"
+    grep -q -- "--client-domain 'vpn.example.com'" "$FAKE_CALLS" && pass "domain+panel-port: vpn domain passed" \
+        || fail "domain+panel-port: --client-domain not passed"
+    grep -q "https://panel.example.com:8443" "$TMP_TEST/out" \
+        && pass "domain+panel-port: panel URL includes the port" \
+        || fail "domain+panel-port: panel URL missing host:port"
+    grep -q "Endpoint:  vpn.example.com:443" "$TMP_TEST/out" \
+        && pass "domain+panel-port: endpoint is --vpn-domain" \
+        || fail "domain+panel-port: endpoint missing/wrong"
 }
 
 test_key_flags_domain_client_domain() {
@@ -310,21 +328,26 @@ test_password_env_panel_port() {
         || pass "password-env: BatchMode=yes not used"
 }
 
-test_flags_domain_without_client_domain_binds_panel_domain() {
-    # T-129 default: --domain without --client-domain binds clients to
-    # the panel domain (same as install.sh).
+test_flags_domain_without_vpn_domain_uses_ip_endpoint() {
+    # T-156: --domain / --panel-domain without --vpn-domain must NOT copy
+    # the panel hostname onto client endpoints.
     fakes_reset
     rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
         --domain panel.example.com)"
-    [ "$rc" = "0" ] || { fail "domain-default-bind: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    [ "$rc" = "0" ] || { fail "domain-no-vpn-bind: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
+        && pass "domain-no-vpn-bind: server init endpoint is the public IP" \
+        || fail "domain-no-vpn-bind: server init endpoint missing/wrong"
     grep -q -- "--endpoint 'panel.example.com:443'" "$FAKE_CALLS" \
-        && pass "domain-default-bind: server init endpoint is the panel domain" \
-        || fail "domain-default-bind: server init endpoint missing/wrong"
-    grep -q "Endpoint:  panel.example.com:443" "$TMP_TEST/out" \
-        && pass "domain-default-bind: summary endpoint is the panel domain" \
-        || fail "domain-default-bind: summary endpoint missing/wrong"
-    grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "domain-default-bind: panel URL is the domain" \
-        || fail "domain-default-bind: panel URL missing"
+        && fail "domain-no-vpn-bind: panel hostname leaked into server init" \
+        || pass "domain-no-vpn-bind: panel hostname not used as endpoint"
+    grep -q "Endpoint:  2.26.93.192:443" "$TMP_TEST/out" \
+        && pass "domain-no-vpn-bind: summary endpoint is the public IP" \
+        || fail "domain-no-vpn-bind: summary endpoint missing/wrong"
+    grep -q -- "--client-domain" "$FAKE_CALLS" && fail "domain-no-vpn-bind: --client-domain passed without --vpn-domain" \
+        || pass "domain-no-vpn-bind: --client-domain not passed"
+    grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "domain-no-vpn-bind: panel URL is the domain" \
+        || fail "domain-no-vpn-bind: panel URL missing"
 }
 
 test_flags_panel_port_uses_ip_endpoint() {
@@ -515,10 +538,10 @@ test_default_panel_port_without_domain() {
 test_bash_syntax
 test_help
 test_unknown_argument
-test_domain_and_panel_port_conflict
+test_domain_and_panel_port_combined
 test_key_flags_domain_client_domain
 test_password_env_panel_port
-test_flags_domain_without_client_domain_binds_panel_domain
+test_flags_domain_without_vpn_domain_uses_ip_endpoint
 test_flags_panel_port_uses_ip_endpoint
 test_interactive_key_bind_yes
 test_interactive_bind_no_uses_ip_endpoint

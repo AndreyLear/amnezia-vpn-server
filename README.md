@@ -26,13 +26,22 @@ Self-hosted VPN server based on AmneziaWG 2.0+.
 
 From the operator machine, one-shot install is `bootstrap.sh` (T-123):
 SSH to the VPS, run `install.sh`, create admin, print panel URL +
-temporary password. CI flags: `--ip` `--domain` / `--panel-port`
-(`--panel-port` defaults to 8443; do not use 8787 — that port is the
-loopback panel). `--domain` binds VPN clients to that hostname unless
-`--client-domain` overrides.
+temporary password. Panel and VPN endpoints are independent. CI flags:
+`--ip`, `--panel-domain` (alias `--domain`), `--vpn-domain` (alias
+`--client-domain`), optional `--panel-port` (without a panel domain,
+CI defaults to 8443; do not use 8787 — that port is the loopback
+panel). `--panel-domain` does **not** bind VPN clients; only
+`--vpn-domain` / `--client-domain` does. Restore is an upload in the
+panel (Backups) and does not change the panel user (T-155).
 
 ```sh
-./bootstrap.sh --ip <server-ip> --domain panel.example.com
+./bootstrap.sh --ip HOST --panel-domain panel.example.com --vpn-domain example.com
+```
+
+Optional panel TLS port (Let's Encrypt still uses TCP 80 for HTTP-01):
+
+```sh
+./bootstrap.sh --ip HOST --panel-domain panel.example.com --vpn-domain example.com --panel-port 8443
 ```
 
 `install.sh` remains the on-server installer (Ubuntu/Debian
@@ -40,12 +49,13 @@ loopback panel). `--domain` binds VPN clients to that hostname unless
 
 ```sh
 ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
-             [--domain FQDN] [--client-domain FQDN]
+             [--panel-domain FQDN] [--vpn-domain FQDN] [--panel-port PORT]
 ```
 
 The installer creates the deployment layout (data/config/status/backups),
 installs the host nftables ruleset and the forward-accept unit, builds and
-starts the stack, and keeps the panel loopback-only. Without `bootstrap.sh`,
+starts the stack, and keeps the panel loopback-only behind nginx when a
+domain or `--panel-port` is set. Without `bootstrap.sh`,
 application init is still:
 
 ```sh
@@ -54,20 +64,23 @@ docker compose --env-file versions.lock run --rm panel-init \
 ssh -L 8787:127.0.0.1:8787 root@<server-ip>
 ```
 
-With a domain (`--domain`, T-121) the panel also gets HTTPS (nginx +
-Let's Encrypt, ports 80/443). `--client-domain FQDN` (defaults to
-`--domain`) binds client configs to `<fqdn>:<awg-port>` instead of the
-public IP: clients resolve the domain at connect time, so **moving the
-server to another host is an A-record change** — clients reconnect
-themselves, configs are never re-issued. The installer pre-flights the
-DNS record before proceeding. Migration flow: on the new host restore
-the database from a tar.zst backup (Backup and restore above), then point
-the A-record at the new host; on the old host `install.sh` refuses to
-run when the record no longer matches (until the domain is re-pointed
-back or the new host finishes installing).
+With a panel domain (`--panel-domain` / `--domain`, T-121) the panel
+gets HTTPS (nginx + Let's Encrypt). HTTP-01 stays on TCP 80. TLS
+listens on 443 unless `--panel-port` is set (`https://PANEL_DOMAIN:PORT`).
+`--vpn-domain` / `--client-domain` binds client configs to
+`<fqdn>:<awg-port>` instead of the public IP: clients resolve the domain
+at connect time, so **moving the server to another host is an A-record
+change** — clients reconnect themselves, configs are never re-issued.
+The installer pre-flights the DNS record before proceeding. Migration
+flow: on the new host restore the database from a tar.zst backup
+(Backup and restore above), then point the A-record at the new host; on
+the old host `install.sh` refuses to run when the record no longer
+matches (until the domain is re-pointed back or the new host finishes
+installing).
 
-To restore an existing database on a fresh install, copy the archive into
-`backups/` and run `panel restore <archive>` (see Backup and restore).
+To restore an existing database after install, upload the archive in the
+panel (Backups). That restore does not change the panel user. The CLI
+`panel restore <archive>` path remains for operators without the web UI.
 
 ## Development
 
