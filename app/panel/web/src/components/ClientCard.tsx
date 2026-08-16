@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowDownIcon, ArrowUpIcon, HandshakeIcon, MoreHorizontalIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, HandshakeIcon, MoreVerticalIcon } from "lucide-react";
 
 import {
   AlertDialog,
@@ -53,7 +53,7 @@ export function ClientMenu({
           aria-label={`Действия для ${client.name}`}
           onClick={(event) => event.stopPropagation()}
         >
-          <MoreHorizontalIcon />
+          <MoreVerticalIcon />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
@@ -90,8 +90,8 @@ export function ClientCard({
         !client.enabled && "opacity-60",
       )}
     >
-      <CardContent className="flex min-w-0 flex-1 items-center gap-3 max-sm:flex-wrap max-sm:gap-y-1 sm:col-span-full sm:grid sm:grid-cols-subgrid">
-        <div className="flex min-w-0 flex-1 items-center gap-2 max-sm:basis-full">
+      <CardContent className="flex min-w-0 flex-1 items-center max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] gap-x-2 gap-y-1 sm:col-span-full sm:grid sm:grid-cols-subgrid">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <button
             type="button"
             className="min-w-0 truncate text-left font-heading text-base font-medium"
@@ -104,7 +104,7 @@ export function ClientCard({
           ) : null}
         </div>
         <TooltipProvider>
-          <div className="flex shrink-0 items-center gap-3 text-muted-foreground max-sm:w-full max-sm:justify-between sm:contents">
+          <div className="flex shrink-0 items-center gap-2 text-muted-foreground max-sm:col-span-2 sm:contents">
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-[0.4rem]">
@@ -132,6 +132,8 @@ export function ClientCard({
               </TooltipTrigger>
               <TooltipContent>Исходящий трафик</TooltipContent>
             </Tooltip>
+          </div>
+          <div className="max-sm:col-start-2 max-sm:row-start-1">
             <ClientMenu
               client={client}
               pending={pending}

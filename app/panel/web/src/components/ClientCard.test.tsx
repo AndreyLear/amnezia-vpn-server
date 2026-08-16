@@ -41,24 +41,63 @@ describe("ClientCard", () => {
     expect(card).not.toHaveClass("h-full", "min-h-36");
   });
 
-  it("wraps the name onto a full-width row on max-sm", () => {
+  it("packs metrics and places the menu opposite the name on max-sm", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
     render(<ClientCard client={base} />);
 
     const name = screen.getByText("Alice");
     const content = name.closest("[data-slot=card-content]");
-    expect(content).toHaveClass("max-sm:flex-wrap");
-    expect(name.parentElement).toHaveClass("max-sm:basis-full");
+    expect(content).toHaveClass(
+      "max-sm:grid",
+      "max-sm:grid-cols-[minmax(0,1fr)_auto]",
+      "gap-x-2",
+      "gap-y-1",
+    );
+    expect(content).not.toHaveClass("max-sm:flex-wrap");
+    expect(name.parentElement).not.toHaveClass("max-sm:basis-full");
+
+    const handshake = screen.getByText("1 мин");
+    const menu = screen.getByRole("button", { name: "Действия для Alice" });
+    expect(content).toContainElement(menu);
+
+    let metrics: HTMLElement | null = handshake.parentElement;
+    while (metrics && !metrics.classList.contains("sm:contents")) {
+      metrics = metrics.parentElement;
+    }
+    expect(metrics).toHaveClass("flex", "shrink-0", "items-center", "gap-2", "max-sm:col-span-2", "sm:contents");
+    expect(metrics).not.toHaveClass("max-sm:justify-between", "max-sm:w-full");
+    expect(metrics).not.toContainElement(menu);
+
+    let menuCell: HTMLElement | null = menu;
+    while (
+      menuCell &&
+      !(
+        menuCell.classList.contains("max-sm:col-start-2") &&
+        menuCell.classList.contains("max-sm:row-start-1")
+      )
+    ) {
+      if (menuCell === content) {
+        menuCell = null;
+        break;
+      }
+      menuCell = menuCell.parentElement;
+    }
+    expect(menuCell).toHaveClass("max-sm:col-start-2", "max-sm:row-start-1");
+
+    const icon = menu.querySelector("svg");
+    expect(icon).toHaveClass("lucide-ellipsis-vertical");
+    expect(icon).not.toHaveClass("lucide-ellipsis");
   });
 
-  it("uses sm:contents on the metrics wrapper so handshake rx tx and menu are grid cells", () => {
+  it("uses sm:contents on the metrics wrapper so handshake rx tx are grid cells", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
     render(<ClientCard client={base} />);
 
     const handshake = screen.getByText("1 мин");
-    const menu = screen.getByRole("button", { name: "Действия для Alice" });
-    let wrapper: HTMLElement | null = handshake;
-    while (wrapper && !wrapper.contains(menu)) {
+    let wrapper: HTMLElement | null = handshake.parentElement;
+    while (wrapper && !wrapper.classList.contains("sm:contents")) {
       wrapper = wrapper.parentElement;
     }
     expect(wrapper).toHaveClass("sm:contents");
