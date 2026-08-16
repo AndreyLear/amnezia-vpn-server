@@ -1,9 +1,16 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BackupUploadDialog } from "@/components/BackupUploadDialog";
 import { setCsrf } from "@/lib/api";
+
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+
+const rejectCopy = "Нужен файл бэкапа (.tar.zst).";
 
 describe("BackupUploadDialog", () => {
   afterEach(() => {
@@ -12,17 +19,34 @@ describe("BackupUploadDialog", () => {
     setCsrf("");
   });
 
-  it("accepts a file from the picker with .tar.zst,.zst", async () => {
+  it("accepts a file from the picker with .tar.zst only", async () => {
     const user = userEvent.setup();
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    expect(input).toHaveAttribute("accept", ".tar.zst,.zst");
+    expect(input).toHaveAttribute("accept", ".tar.zst");
 
-    const file = new File(["archive"], "backup.tar.zst", { type: "application/octet-stream" });
+    const file = new File(["archive"], "backup-2026-08-16.tar.zst", {
+      type: "application/octet-stream",
+    });
     await user.upload(input, file);
-    expect(screen.getByText("backup.tar.zst")).toBeInTheDocument();
+    expect(screen.getByText("backup-2026-08-16.tar.zst")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
+  });
+
+  it("rejects notes.txt and photo.png from the picker", () => {
+    render(<BackupUploadDialog open onOpenChange={() => {}} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+
+    for (const name of ["notes.txt", "photo.png"]) {
+      vi.mocked(toast.error).mockClear();
+      fireEvent.change(input, {
+        target: { files: [new File(["x"], name, { type: "application/octet-stream" })] },
+      });
+      expect(screen.queryByText(name)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+      expect(toast.error).toHaveBeenCalledWith(rejectCopy);
+    }
   });
 
   it("disables upload and shows restart copy when restore is pending", () => {
@@ -47,7 +71,9 @@ describe("BackupUploadDialog", () => {
 
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    const file = new File(["archive"], "backup.tar.zst", { type: "application/octet-stream" });
+    const file = new File(["archive"], "backup-2026-08-16.tar.zst", {
+      type: "application/octet-stream",
+    });
     await user.upload(input, file);
     await user.click(screen.getByRole("button", { name: "Загрузить" }));
 
