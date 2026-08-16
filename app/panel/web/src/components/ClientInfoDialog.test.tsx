@@ -46,6 +46,37 @@ describe("ClientInfoDialog", () => {
     expect(screen.getByText("2026-08-16 00:00:00 UTC")).toBeInTheDocument();
   });
 
+  it("shows paused status and enable button when the client is disabled", () => {
+    render(
+      <ClientInfoDialog
+        client={{ ...client, enabled: false, online: true }}
+        onOpenChange={() => {}}
+        onToggle={() => {}}
+      />,
+    );
+
+    const status = screen.getByText("Статус").closest("div");
+    expect(status).toHaveTextContent("пауза");
+    expect(status).not.toHaveTextContent("онлайн");
+    expect(status).not.toHaveTextContent("офлайн");
+    expect(screen.getByRole("button", { name: "Включить" })).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="badge"]')).toBeNull();
+  });
+
+  it("shows online status and disable button when the client is enabled and online", () => {
+    render(
+      <ClientInfoDialog
+        client={{ ...client, enabled: true, online: true }}
+        onOpenChange={() => {}}
+        onToggle={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("онлайн")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Отключить" })).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="badge"]')).toBeNull();
+  });
+
   it("shows action buttons without the client menu", () => {
     render(
       <ClientInfoDialog

@@ -110,7 +110,13 @@ export function ClientInfoDialog({
                 <dl className="grid gap-2 text-sm">
                   <div>
                     <dt className="text-muted-foreground">Статус</dt>
-                    <dd>{client.online ? "онлайн" : "офлайн"}</dd>
+                    <dd>
+                      {!client.enabled
+                        ? "пауза"
+                        : client.online
+                          ? "онлайн"
+                          : "офлайн"}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-muted-foreground">IP</dt>
