@@ -90,12 +90,13 @@ func seedLegacyPasswordless(t *testing.T, f *fixture, username string) string {
 // lastCookie returns the most recent Set-Cookie for the session cookie.
 func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 	t.Helper()
+	var found *http.Cookie
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == auth.SessionCookieName {
-			return c
+			found = c
 		}
 	}
-	return nil
+	return found
 }
 
 // activeSessionCount counts live sessions for a username in the store.

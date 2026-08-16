@@ -29,6 +29,29 @@ func sessionRequest(t *testing.T, method, path, sid string) *http.Request {
 	return req
 }
 
+func TestAPIMeDoesNotRefreshSessionCookie(t *testing.T) {
+	f := newFixture(t)
+	before, ok := f.sessions.Get(f.sid)
+	if !ok {
+		t.Fatal("fixture session must be live")
+	}
+	time.Sleep(20 * time.Millisecond)
+	rec := f.get("/api/me")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/me: code = %d, want 200", rec.Code)
+	}
+	if rec.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("GET /api/me must not refresh Set-Cookie: %q", rec.Header().Get("Set-Cookie"))
+	}
+	after, ok := f.sessions.Get(f.sid)
+	if !ok {
+		t.Fatal("session must still be live")
+	}
+	if !after.ExpiresAt.Equal(before.ExpiresAt) {
+		t.Fatalf("GET /api/me must not extend ExpiresAt: was %v, now %v", before.ExpiresAt, after.ExpiresAt)
+	}
+}
+
 func TestAuthValidSessionServesDashboard(t *testing.T) {
 	f := newFixture(t)
 	sess, err := f.sessions.Create(f.username)

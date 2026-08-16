@@ -10,6 +10,7 @@ import {
   api,
   mutationSucceeded,
   setCsrf,
+  setLastUsername,
   type Client,
   type MeResponse,
   type MutationResponse,
@@ -34,6 +35,7 @@ export default function HomePage() {
     async function boot() {
       const me = await api<MeResponse>("/api/me");
       setCsrf(me.csrf);
+      if (me.username) setLastUsername(me.username);
       if (!stopped) {
         setRestorePending(Boolean(me.restore_pending));
         await load();

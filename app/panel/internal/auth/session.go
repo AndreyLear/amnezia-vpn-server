@@ -24,10 +24,12 @@ import (
 	"time"
 )
 
-// SessionTTL is the absolute lifetime of a session (no sliding
-// expiration). Default lifetime chosen for an admin panel; only the
-// panel process itself can extend a session via Rotate.
-const SessionTTL = 24 * time.Hour
+// SessionTTL is the idle lifetime after login or a mutating request.
+// Create and Rotate set ExpiresAt to now+ttl. Get never slides.
+// HTTP GET/HEAD/OPTIONS authenticate via Get only, so dashboard polls
+// do not keep a session alive. POST/PATCH/DELETE call Touch and
+// refresh the session cookie.
+const SessionTTL = 20 * time.Minute
 
 // ErrSessionNotFound reports a missing or already-expired session.
 var ErrSessionNotFound = errors.New("auth: session not found")
@@ -95,9 +97,9 @@ type SessionStore struct {
 	ttl  time.Duration
 }
 
-// NewSessionStore returns an empty store. ttl is the absolute session
-// lifetime for sessions created by this store; tests pass short ttl
-// values, production code uses SessionTTL.
+// NewSessionStore returns an empty store. ttl is the idle session
+// lifetime for sessions created or touched by this store; tests pass
+// short ttl values, production code uses SessionTTL.
 func NewSessionStore(ttl time.Duration) *SessionStore {
 	if ttl <= 0 {
 		ttl = SessionTTL
@@ -161,6 +163,26 @@ func (s *SessionStore) Get(id string) (Session, bool) {
 	if !live {
 		return Session{}, false
 	}
+	return sess, true
+}
+
+// Touch returns the live session for id after sliding ExpiresAt to
+// now+ttl. Missing and expired ids report false, matching Get (expired
+// entries are deleted).
+func (s *SessionStore) Touch(id string) (Session, bool) {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.byID[id]
+	if !ok {
+		return Session{}, false
+	}
+	if !sess.ExpiresAt.After(now) {
+		delete(s.byID, id)
+		return Session{}, false
+	}
+	sess.ExpiresAt = now.Add(s.ttl)
+	s.byID[id] = sess
 	return sess, true
 }
 

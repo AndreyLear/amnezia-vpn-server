@@ -324,8 +324,7 @@ func TestCSRFNotInGenericError(t *testing.T) {
 	}
 }
 
-// TestCSRFTokenNotInCookie: the CSRF token never travels as a cookie —
-// no Set-Cookie header appears in any protected response.
+// TestCSRFTokenNotInCookie: the CSRF token never travels as a cookie.
 func TestCSRFTokenNotInCookie(t *testing.T) {
 	f := newFixture(t)
 	rec := csrfPOST(f, "/clients/new", f.csrf)
@@ -334,10 +333,13 @@ func TestCSRFTokenNotInCookie(t *testing.T) {
 			t.Fatalf("protected response set a CSRF-token cookie: %+v", c)
 		}
 	}
-	// Successful PRG sets no cookie at all (the session cookie is
-	// managed by login/logout only).
-	if sc := rec.Header().Get("Set-Cookie"); sc != "" {
-		t.Errorf("protected POST unexpectedly set cookies: %q", sc)
+	// Sliding idle TTL refreshes the session cookie; CSRF must never
+	// travel as a cookie.
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.SessionCookieName {
+			continue
+		}
+		t.Errorf("protected POST set a non-session cookie: %+v", c)
 	}
 }
 

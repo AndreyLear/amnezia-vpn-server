@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
+import { SessionExpiredHost } from "@/components/SessionExpiredHost";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import HomePage from "@/pages/HomePage";
@@ -17,6 +18,7 @@ function App() {
         </Routes>
       </BrowserRouter>
       <Toaster />
+      <SessionExpiredHost />
     </TooltipProvider>
   );
 }
