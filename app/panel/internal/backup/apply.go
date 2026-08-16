@@ -177,6 +177,13 @@ func finishApply(dbPath, marker, applying string) (bool, error) {
 		return false, fmt.Errorf("backup: apply: inconsistent state: restored image absent and no database at %s", live)
 	}
 
+	// T-155: overlay destination panel auth from the retired live copy
+	// when that copy had auth rows. Crash resume after install still
+	// has .pre-restore, so this is idempotent.
+	if err := KeepLiveAuth(live); err != nil {
+		return false, err
+	}
+
 	// Commit (step 4): the applying directory is empty after the image
 	// rename; removing it unblocks web mutations (Q10).
 	if err := syncDir(filepath.Dir(live)); err != nil {

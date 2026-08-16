@@ -206,7 +206,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 	var appliedN int
 	var applyErr error
 	if err == nil {
-		appliedN, applyErr = s.applyRestoreNow()
+		appliedN, applyErr = s.applyRestoreNow(sess.Username)
 	}
 	s.mutex.Unlock()
 	if errors.Is(err, backup.ErrRestorePending) {
@@ -227,7 +227,9 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 		s.restoreAnswer(w, r, jsonAPI, http.StatusBadRequest, false, flashRestoreApplyFailed)
 		return
 	}
-	auth.ClearSessionCookie(w)
+	if _, err := db.AuthUserByUsername(s.db(), sess.Username); err != nil {
+		auth.ClearSessionCookie(w)
+	}
 	s.restoreAnswer(w, r, jsonAPI, http.StatusOK, true, fmt.Sprintf(flashRestoreApplied, appliedN))
 }
 
@@ -251,9 +253,10 @@ func fault(step string) error {
 // Open, Migrate and Generate must all succeed before the apply is
 // considered done (T-141). On any of those failures the file swap is
 // reverted and the pending marker is restored so disk matches the
-// still-live handle and a restart can retry. Sessions are wiped only
-// after a successful apply (T-138).
-func (s *Server) applyRestoreNow() (int, error) {
+// still-live handle and a restart can retry. Sessions are wiped after
+// a successful apply (T-138) unless keepUsername still exists in the
+// preserved live auth (T-155).
+func (s *Server) applyRestoreNow(keepUsername string) (int, error) {
 	applied, err := backup.ApplyPending(s.cfg.DBPath)
 	if err != nil {
 		return 0, err
@@ -283,6 +286,10 @@ func (s *Server) applyRestoreNow() (int, error) {
 		next.Close()
 		return fail(fmt.Errorf("migrate restored database: %w", err))
 	}
+	if err := backup.KeepLiveAuth(s.cfg.DBPath); err != nil {
+		next.Close()
+		return fail(fmt.Errorf("keep live auth: %w", err))
+	}
 	if err := fault("restore.apply.generate"); err != nil {
 		next.Close()
 		return fail(fmt.Errorf("regenerate config: %w", err))
@@ -293,7 +300,9 @@ func (s *Server) applyRestoreNow() (int, error) {
 	}
 	old := s.swapDB(next)
 	retireDB(old)
-	s.cfg.Sessions.DeleteAll()
+	if _, err := db.AuthUserByUsername(next, keepUsername); err != nil {
+		s.cfg.Sessions.DeleteAll()
+	}
 	s.pendingTOTP = make(map[string]string)
 	clients, err := db.ClientsAll(next)
 	if err != nil {

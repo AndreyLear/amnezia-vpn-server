@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
 
@@ -42,6 +43,59 @@ func sqliteFileWithClient(t *testing.T, name, key string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func sqliteFileWithClientAndAuth(t *testing.T, clientName, clientKey, username, passwordHash, totpSecret, totpMode string) []byte {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "src.sqlite")
+	handle, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	if err := db.Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle.Exec(
+		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at)
+		 VALUES (?, ?, 'x-archive-client-public-key-0000000000000001',
+		         'x-archive-preshared-key-0000000000000001', '10.66.66.10/32',
+		         1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
+		clientName, clientKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle.Exec(
+		`INSERT INTO auth (username, password_hash, totp_secret, totp_mode) VALUES (?, ?, ?, ?)`,
+		username, passwordHash, totpSecret, totpMode,
+	); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func archiveWithAliceAndAuth(t *testing.T, username, passwordHash, totpSecret, totpMode string) string {
+	t.Helper()
+	return buildArchive(t, []archiveEntry{
+		{name: manifestFilename, typ: tar.TypeReg, data: []byte(validManifestJSON())},
+		{name: snapshotFilename, typ: tar.TypeReg, data: sqliteFileWithClientAndAuth(t, "alice", "x-archive-client-private-key-alice", username, passwordHash, totpSecret, totpMode)},
+	})
+}
+
+func (c *restoreCtx) seedAuth(username, passwordHash, totpSecret, totpMode string) {
+	c.t.Helper()
+	h := c.reopen()
+	if _, err := h.Exec(
+		`INSERT INTO auth (username, password_hash, totp_secret, totp_mode) VALUES (?, ?, ?, ?)`,
+		username, passwordHash, totpSecret, totpMode,
+	); err != nil {
+		c.t.Fatal(err)
+	}
 }
 
 // archiveWithAlice is the crafted restore source: manifest + a
@@ -548,5 +602,91 @@ func TestRevertApplyRestoresPendingAndLive(t *testing.T) {
 	}
 	if _, err := os.Lstat(c.dbPath + preRestoreSuffix); !os.IsNotExist(err) {
 		t.Fatalf("retired copy survived revert: %v", err)
+	}
+}
+
+// TestApplyPendingKeepsLiveAuth (T-155): restoring an archive whose
+// auth row is a different user must not replace the destination login.
+func TestApplyPendingKeepsLiveAuth(t *testing.T) {
+	const livePass = "live-admin-password-A"
+	const archivePass = "archive-admin-password-B"
+	liveHash, err := auth.HashPassword(livePass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveHash, err := auth.HashPassword(archivePass)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := newRestoreCtx(t)
+	c.seedAuth("admin-a", liveHash, "JBSWY3DPEHPK3PXP", "2fa")
+	c.seedClient("bob", "x-test-client-private-key-bob")
+	if _, err := c.doRestore(archiveWithAliceAndAuth(t, "admin-b", archiveHash, "KRSXG5CTMVRXEZLU", "")); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, err := ApplyPending(c.dbPath)
+	if err != nil {
+		t.Fatalf("ApplyPending: %v", err)
+	}
+	if !applied {
+		t.Fatal("not applied")
+	}
+
+	h := c.reopen()
+	live, err := db.AuthUserByUsername(h, "admin-a")
+	if err != nil {
+		t.Fatalf("live admin A missing after restore: %v", err)
+	}
+	if !auth.VerifyPassword(livePass, live.PasswordHash) {
+		t.Fatal("live admin A password no longer verifies")
+	}
+	if live.TOTPSecret != "JBSWY3DPEHPK3PXP" || live.TOTPMode != "2fa" {
+		t.Fatalf("live TOTP not kept: secret=%q mode=%q", live.TOTPSecret, live.TOTPMode)
+	}
+	if _, err := db.AuthUserByUsername(h, "admin-b"); err == nil {
+		t.Fatal("archive admin B became the live login")
+	}
+	var alice, bob int
+	if err := h.QueryRow(`SELECT COUNT(*) FROM clients WHERE name = 'alice'`).Scan(&alice); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.QueryRow(`SELECT COUNT(*) FROM clients WHERE name = 'bob'`).Scan(&bob); err != nil {
+		t.Fatal(err)
+	}
+	if alice != 1 || bob != 0 {
+		t.Fatalf("restored clients wrong: alice=%d bob=%d", alice, bob)
+	}
+}
+
+// TestApplyPendingNoLiveAuthKeepsArchiveAuth (T-155): restore before
+// the first panel user keeps the archive login.
+func TestApplyPendingNoLiveAuthKeepsArchiveAuth(t *testing.T) {
+	const archivePass = "archive-admin-password-B"
+	archiveHash, err := auth.HashPassword(archivePass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newRestoreCtx(t)
+	if _, err := c.doRestore(archiveWithAliceAndAuth(t, "admin-b", archiveHash, "", "")); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, err := ApplyPending(c.dbPath)
+	if err != nil {
+		t.Fatalf("ApplyPending: %v", err)
+	}
+	if !applied {
+		t.Fatal("not applied")
+	}
+
+	h := c.reopen()
+	u, err := db.AuthUserByUsername(h, "admin-b")
+	if err != nil {
+		t.Fatalf("archive admin missing: %v", err)
+	}
+	if !auth.VerifyPassword(archivePass, u.PasswordHash) {
+		t.Fatal("archive admin password does not verify")
 	}
 }

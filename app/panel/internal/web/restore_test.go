@@ -451,6 +451,66 @@ func TestRestoreUploadAppliesInProcess(t *testing.T) {
 
 }
 
+// TestRestoreUploadKeepsLiveAuth (T-155): in-process web restore must
+// keep the destination panel login and the current session when that
+// username still exists after apply.
+func TestRestoreUploadKeepsLiveAuth(t *testing.T) {
+	const livePass = "live-admin-password-A"
+	const archivePass = "archive-admin-password-B"
+
+	src := newFixture(t)
+	addUser(t, src, "oldadmin", archivePass)
+	src.addClient("from-archive")
+	dir := setBackupsPath(t)
+	name := makeBackup(t, src, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
+	archive, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f := newFixture(t)
+	addUser(t, f, "admin", livePass)
+	secret := configureTOTPUser(t, f, "admin", "2fa")
+
+	rec := postRestoreUpload(t, f, restoreFields(f), map[string][]byte{name: archive})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("upload: code = %d, want 303", rec.Code)
+	}
+	if got := restoreFlashOf(t, rec); got != fmt.Sprintf(flashRestoreApplied, 1) {
+		t.Fatalf("upload: flash = %q, want %q", got, fmt.Sprintf(flashRestoreApplied, 1))
+	}
+
+	live := f.server.db()
+	u, err := db.AuthUserByUsername(live, "admin")
+	if err != nil {
+		t.Fatalf("live admin missing after restore: %v", err)
+	}
+	if !auth.VerifyPassword(livePass, u.PasswordHash) {
+		t.Fatal("live admin password no longer verifies")
+	}
+	if u.TOTPSecret != secret || u.TOTPMode != "2fa" {
+		t.Fatalf("live TOTP not kept: secret=%q mode=%q", u.TOTPSecret, u.TOTPMode)
+	}
+	if _, err := db.AuthUserByUsername(live, "oldadmin"); err == nil {
+		t.Fatal("archive admin became the live login")
+	}
+	var n int
+	if err := live.QueryRow(`SELECT COUNT(*) FROM clients WHERE name = 'from-archive'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("archive client missing: count=%d", n)
+	}
+	if _, ok := f.server.cfg.Sessions.Get(f.sid); !ok {
+		t.Fatal("session was dropped even though live username still exists")
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.SessionCookieName && c.MaxAge < 0 {
+			t.Fatal("restore cleared the session cookie while live auth was kept")
+		}
+	}
+}
+
 // withRestoreFault injects an error at the named in-process apply step
 // for the duration of fn (T-141).
 func withRestoreFault(t *testing.T, step string, fn func()) {
