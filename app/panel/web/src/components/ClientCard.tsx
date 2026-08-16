@@ -86,7 +86,7 @@ export function ClientCard({
   return (
     <Card
       className={cn(
-        "flex-row items-center py-2 sm:col-span-full sm:grid sm:grid-cols-subgrid",
+        "flex-row items-center sm:col-span-full sm:grid sm:grid-cols-subgrid py-1",
         !client.enabled && "opacity-60",
       )}
     >
