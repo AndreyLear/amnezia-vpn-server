@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { ClientMenu, ClientPills } from "@/components/ClientCard";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +27,9 @@ type ClientInfoDialogProps = {
   client: Client | null;
   pending?: boolean;
   onOpenChange: (open: boolean) => void;
-  onSave?: (payload: { name: string; description: string }) => void | Promise<void>;
+  onSave?: (
+    payload: { name: string; description: string },
+  ) => boolean | void | Promise<boolean | void>;
   onQr?: () => void;
   onDownload?: () => void;
   onToggle?: () => void;
@@ -60,23 +61,30 @@ export function ClientInfoDialog({
         <DialogContent className="sm:max-w-md">
           {client ? (
             <>
-              <DialogHeader className="flex-row items-start justify-between gap-2">
-                <DialogTitle>{client.name}</DialogTitle>
-                <ClientMenu
-                  client={client}
-                  pending={pending}
-                  onInfo={() => {}}
-                  onQr={onQr}
-                  onDownload={onDownload}
-                  onToggle={onToggle}
-                  onDelete={() => setConfirmOpen(true)}
-                />
+              <DialogHeader>
+                <DialogTitle>Клиент</DialogTitle>
               </DialogHeader>
               <form
                 className="grid gap-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void onSave?.({ name, description });
+                  if (!client) return;
+
+                  const unchanged =
+                    name === client.name &&
+                    description === (client.description ?? "");
+
+                  if (unchanged) {
+                    onOpenChange(false);
+                    return;
+                  }
+
+                  void (async () => {
+                    const saved = await onSave?.({ name, description });
+                    if (saved) {
+                      onOpenChange(false);
+                    }
+                  })();
                 }}
               >
                 <div className="grid gap-2">
@@ -101,6 +109,10 @@ export function ClientInfoDialog({
                 </div>
                 <dl className="grid gap-2 text-sm">
                   <div>
+                    <dt className="text-muted-foreground">Статус</dt>
+                    <dd>{client.online ? "онлайн" : "офлайн"}</dd>
+                  </div>
+                  <div>
                     <dt className="text-muted-foreground">IP</dt>
                     <dd className="font-mono">{client.address}</dd>
                   </div>
@@ -115,7 +127,25 @@ export function ClientInfoDialog({
                     </dd>
                   </div>
                 </dl>
-                <ClientPills client={client} />
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" disabled={pending} onClick={onQr}>
+                    QR-код
+                  </Button>
+                  <Button type="button" variant="outline" disabled={pending} onClick={onDownload}>
+                    Скачать конфиг
+                  </Button>
+                  <Button type="button" variant="outline" disabled={pending} onClick={onToggle}>
+                    {client.enabled ? "Отключить" : "Включить"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={pending}
+                    onClick={() => setConfirmOpen(true)}
+                  >
+                    Удалить
+                  </Button>
+                </div>
                 <DialogFooter>
                   <Button type="submit" disabled={pending}>
                     Сохранить
@@ -129,9 +159,7 @@ export function ClientInfoDialog({
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              Удалить клиента «{client?.name}»?
-            </AlertDialogTitle>
+            <AlertDialogTitle>Удалить клиента «{client?.name}»?</AlertDialogTitle>
             <AlertDialogDescription>
               Конфигурация клиента будет убрана из awg0.conf
             </AlertDialogDescription>

@@ -18,26 +18,85 @@ const client: Client = {
 };
 
 describe("ClientInfoDialog", () => {
-  it("edits name and description", async () => {
-    const user = userEvent.setup();
-    const onSave = vi.fn().mockResolvedValue(undefined);
+  it("uses a fixed dialog title", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 
+    expect(screen.getByRole("heading", { name: "Клиент" })).toBeInTheDocument();
+  });
+
+  it("shows client parameters as a plain definition list", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    expect(screen.getByText("Статус")).toBeInTheDocument();
+    expect(screen.getByText("офлайн")).toBeInTheDocument();
+    expect(screen.getByText("IP")).toBeInTheDocument();
+    expect(screen.getByText("Handshake")).toBeInTheDocument();
+    expect(screen.getByText("Трафик")).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="badge"]')).toBeNull();
+  });
+
+  it("shows action buttons without the client menu", () => {
     render(
       <ClientInfoDialog
         client={client}
         onOpenChange={() => {}}
+        onQr={() => {}}
+        onDownload={() => {}}
+        onToggle={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "QR-код" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Скачать конфиг" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Отключить" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Удалить" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: `Действия для ${client.name}` }),
+    ).not.toBeInTheDocument();
+    expect(
+      document.querySelector('[data-slot="dropdown-menu-trigger"]'),
+    ).toBeNull();
+  });
+
+  it("closes without saving when name and description are unchanged", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const onOpenChange = vi.fn();
+
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={onOpenChange}
+        onSave={onSave}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("saves and closes when name changes", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(true);
+    const onOpenChange = vi.fn();
+
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={onOpenChange}
         onSave={onSave}
       />,
     );
 
     const name = screen.getByLabelText("Имя");
-    const description = screen.getByLabelText("Описание");
     await user.clear(name);
     await user.type(name, "Bob");
-    await user.clear(description);
-    await user.type(description, "laptop");
     await user.click(screen.getByRole("button", { name: "Сохранить" }));
 
-    expect(onSave).toHaveBeenCalledWith({ name: "Bob", description: "laptop" });
+    expect(onSave).toHaveBeenCalledWith({ name: "Bob", description: "phone" });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });
