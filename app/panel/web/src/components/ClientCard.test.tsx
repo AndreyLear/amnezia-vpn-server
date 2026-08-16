@@ -17,9 +17,25 @@ const base: Client = {
   tx_bytes: 0,
 };
 
+const originalMatchMedia = window.matchMedia;
+
+function stubMinWidthSm(matches: boolean) {
+  window.matchMedia = vi.fn((query: string) => ({
+    matches: query === "(min-width: 640px)" ? matches : false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
+
 describe("ClientCard", () => {
   afterEach(() => {
     vi.useRealTimers();
+    window.matchMedia = originalMatchMedia;
   });
 
   it("shows a horizontal row with name, handshake, rx and tx and no online badge", () => {
@@ -247,5 +263,31 @@ describe("ClientCard", () => {
 
     await user.hover(screen.getByText("0 Б"));
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Исходящий трафик");
+  });
+
+  it("opens client info from the overflow button below sm, not a dropdown", async () => {
+    stubMinWidthSm(false);
+    const user = userEvent.setup();
+    const onInfo = vi.fn();
+    render(<ClientCard client={base} onInfo={onInfo} />);
+
+    const menu = screen.getByRole("button", { name: "Действия для Alice" });
+    expect(menu).not.toHaveAttribute("data-slot", "dropdown-menu-trigger");
+
+    await user.click(menu);
+    expect(onInfo).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+  });
+
+  it("opens the actions dropdown from the overflow button on sm and up", async () => {
+    stubMinWidthSm(true);
+    const user = userEvent.setup();
+    render(<ClientCard client={base} />);
+
+    const menu = screen.getByRole("button", { name: "Действия для Alice" });
+    expect(menu).toHaveAttribute("data-slot", "dropdown-menu-trigger");
+
+    await user.click(menu);
+    expect(screen.getByRole("menuitem", { name: "Сведения" })).toBeInTheDocument();
   });
 });

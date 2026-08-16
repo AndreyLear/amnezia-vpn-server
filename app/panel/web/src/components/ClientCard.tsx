@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowDownIcon, ArrowUpIcon, HandshakeIcon, MoreVerticalIcon } from "lucide-react";
 
 import {
@@ -33,6 +33,32 @@ export type ClientActions = {
   onDelete?: () => void;
   pending?: boolean;
 };
+
+const SM_MIN_WIDTH = "(min-width: 640px)";
+
+function isMinWidthSm(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
+  }
+  return window.matchMedia(SM_MIN_WIDTH).matches;
+}
+
+function useMinWidthSm() {
+  const [matches, setMatches] = useState(isMinWidthSm);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mq = window.matchMedia(SM_MIN_WIDTH);
+    const onChange = () => setMatches(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  return matches;
+}
 
 export function ClientMenu({
   client,
@@ -82,6 +108,7 @@ export function ClientCard({
   pending,
 }: { client: Client } & ClientActions) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const isSmUp = useMinWidthSm();
 
   return (
     <Card
@@ -137,15 +164,30 @@ export function ClientCard({
             </Tooltip>
           </div>
           <div className="max-sm:col-start-2 max-sm:row-start-1">
-            <ClientMenu
-              client={client}
-              pending={pending}
-              onInfo={onInfo}
-              onQr={onQr}
-              onDownload={onDownload}
-              onToggle={onToggle}
-              onDelete={() => setConfirmOpen(true)}
-            />
+            {isSmUp ? (
+              <ClientMenu
+                client={client}
+                pending={pending}
+                onInfo={onInfo}
+                onQr={onQr}
+                onDownload={onDownload}
+                onToggle={onToggle}
+                onDelete={() => setConfirmOpen(true)}
+              />
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={pending}
+                aria-label={`Действия для ${client.name}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onInfo?.();
+                }}
+              >
+                <MoreVerticalIcon />
+              </Button>
+            )}
           </div>
         </TooltipProvider>
       </CardContent>

@@ -5,7 +5,7 @@ import { afterEach } from "vitest";
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: (query: string) => ({
-    matches: false,
+    matches: query === "(min-width: 640px)",
     media: query,
     onchange: null,
     addListener: () => {},
