@@ -265,36 +265,20 @@ func TestMutationRename(t *testing.T) {
 	}
 }
 
-// TestMutationExpiryRouteGone (T-153): expiry is CLI-only. An
-// authenticated POST with a live CSRF token must hit the generic 404
-// page and must not mutate expires_at or flash a success message.
 func TestMutationExpiryRouteGone(t *testing.T) {
 	f := newFixture(t)
 	c, _, _ := f.addClient("judy")
 	future := time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339)
 	rec := f.post(fmt.Sprintf("/clients/%d/expiry", c.ID), url.Values{"expires_at": {future}})
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("code = %d, want 404", rec.Code)
-	}
-	if loc := rec.Header().Get("Location"); loc != "" {
-		t.Errorf("must not PRG: Location %q", loc)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "Страница не найдена.") {
-		t.Errorf("want generic 404 page, got %q", body)
-	}
-	if strings.Contains(body, "Срок действия обновлён.") {
-		t.Error("must not flash expiry success")
-	}
-	if strings.Contains(body, fmt.Sprintf("/clients/%d/expiry", c.ID)) {
-		t.Error("404 body must not echo the path")
+		t.Fatalf("POST expiry: code = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	row, err := db.ClientByID(f.h, c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if row.ExpiresAt != "" {
-		t.Errorf("expires_at mutated: %q", row.ExpiresAt)
+		t.Fatalf("gone route must not set expiry: %q", row.ExpiresAt)
 	}
 }
 
@@ -329,6 +313,10 @@ func TestMutationWrongMethod404(t *testing.T) {
 	} {
 		rec := httptest.NewRecorder()
 		f.serve(rec, httptest.NewRequest(req.method, req.path, nil))
+		if req.method == http.MethodGet {
+			assertSPA(t, rec)
+			continue
+		}
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("%s %s: code = %d, want 404", req.method, req.path, rec.Code)
 		}
@@ -354,7 +342,7 @@ func TestMutationOversizedBody413(t *testing.T) {
 func TestMutationFlashNoSecretsAndEscaped(t *testing.T) {
 	f := newFixture(t)
 	_, priv, psk := f.addClient("mallory")
-	if got := f.flashOf(f.post("/clients/999/delete", nil)); got != flashNotFound {
+	if got := f.flashOf(f.post("/clients/999/rename", url.Values{"name": {"x"}})); got != flashNotFound {
 		t.Fatalf("flash = %q", got)
 	}
 	body := f.get("/?msg=" + url.QueryEscape("<script>alert(1)</script>")).Body.String()

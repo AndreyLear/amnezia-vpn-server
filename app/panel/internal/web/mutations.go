@@ -17,9 +17,10 @@
 package web
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -197,9 +198,20 @@ func (s *Server) mutateWith(w http.ResponseWriter, r *http.Request, okFlash stri
 
 // requestBodyError maps body read failures: over the limit → 413,
 // anything else → generic 400.
-func requestBodyError(err error, w http.ResponseWriter) {
+func requestBodyError(err error, w http.ResponseWriter, r *http.Request) {
 	var mbe *http.MaxBytesError
-	if errors.As(err, &mbe) {
+	tooLarge := errors.As(err, &mbe)
+	if r != nil && strings.HasPrefix(r.URL.Path, "/api/") {
+		code := http.StatusBadRequest
+		msg := "Некорректный запрос."
+		if tooLarge {
+			code = http.StatusRequestEntityTooLarge
+			msg = "Тело запроса слишком большое."
+		}
+		writeJSON(w, code, map[string]any{"ok": false, "message": msg})
+		return
+	}
+	if tooLarge {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Request body too large.", http.StatusRequestEntityTooLarge)
 		return
@@ -253,11 +265,13 @@ func (s *Server) cardFragment(csrf string, id int64) (string, error) {
 	if idx < 0 {
 		return "", db.ErrClientNotFound
 	}
-	var buf bytes.Buffer
-	if err := s.tpl.ExecuteTemplate(&buf, "clientcard", clientCardData{Card: cards[idx], CSRF: csrf, Ordinal: idx + 1}); err != nil {
-		return "", err
+	_ = csrf
+	name := html.EscapeString(cards[idx].Name)
+	state, toggle := "включён", "Отключить"
+	if !cards[idx].Enabled {
+		state, toggle = "отключён", "Включить"
 	}
-	return buf.String(), nil
+	return fmt.Sprintf(`<article class="card">%s %s %s</article>`, name, state, toggle), nil
 }
 
 // clientCount returns the number of client rows (fetch-channel count).
@@ -295,7 +309,7 @@ func (s *Server) countPayload() (mutationPayload, error) {
 // (T-145): the web form does not set a deadline.
 func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		requestBodyError(err, w)
+		requestBodyError(err, w, r)
 		return
 	}
 	name, err := validateName(r.FormValue("name"))
@@ -305,12 +319,12 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 	}
 	privateKey, publicKey, err := keys.GenerateKeyPair()
 	if err != nil {
-		internalFailure(w, s, "generate keys", err)
+		internalFailure(w, r, s, "generate keys", err)
 		return
 	}
 	presharedKey, err := keys.GeneratePresharedKey()
 	if err != nil {
-		internalFailure(w, s, "generate preshared key", err)
+		internalFailure(w, r, s, "generate preshared key", err)
 		return
 	}
 	var createdID int64
@@ -345,8 +359,12 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 }
 
 // internalFailure logs the real error and renders the generic 500 page.
-func internalFailure(w http.ResponseWriter, s *Server, what string, err error) {
+func internalFailure(w http.ResponseWriter, r *http.Request, s *Server, what string, err error) {
 	s.cfg.Logger.Printf("%s: %v", what, err)
+	if r != nil && strings.HasPrefix(r.URL.Path, "/api/") {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "Внутренняя ошибка сервера."})
+		return
+	}
 	s.errorPage(w, http.StatusInternalServerError)
 }
 
@@ -380,7 +398,7 @@ func (s *Server) clientDelete(w http.ResponseWriter, r *http.Request) {
 // rules as add.
 func (s *Server) clientRename(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		requestBodyError(err, w)
+		requestBodyError(err, w, r)
 		return
 	}
 	name, err := validateName(r.FormValue("name"))

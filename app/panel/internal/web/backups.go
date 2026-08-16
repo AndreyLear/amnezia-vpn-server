@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 )
 
@@ -63,71 +62,55 @@ func (s *Server) flashBackups(w http.ResponseWriter, r *http.Request, msg string
 	redirect303(w, r, "/backups?msg="+url.QueryEscape(msg))
 }
 
-// backupsPage handles GET /backups: the upload form. A missing backups
-// directory is fine — the page never lists archives.
-func (s *Server) backupsPage(w http.ResponseWriter, r *http.Request) {
-	pending, ok := s.pendingExists(w)
-	if !ok {
-		return
-	}
-	sess, _ := auth.CurrentUser(r.Context())
-	s.renderBackups(w, backupsData{
-		Flash:    r.URL.Query().Get("msg"),
-		Username: sess.Username,
-		CSRF:     sess.CSRFToken,
-		Pending:  pending,
-	})
-}
-
-// renderBackups executes the standalone "backups" template (like
-// "login"/"error": it must not define the layout blocks or it would
-// hijack the dashboard's title/body).
-func (s *Server) renderBackups(w http.ResponseWriter, data backupsData) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	if err := s.tpl.ExecuteTemplate(w, "backups", data); err != nil {
-		s.cfg.Logger.Printf("render backups: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
-}
-
 // backupDownloadNow handles POST /backups/download (T-125/T-143): a
 // fresh tar.zst of the live database is created in a private temp
 // directory, streamed as an attachment and removed — nothing is stored
 // in backups/. CSRF-protected; paused while a restore is pending.
 func (s *Server) backupDownloadNow(w http.ResponseWriter, r *http.Request) {
-	if pending, ok := s.pendingExists(w); !ok {
+	s.handleBackupDownload(w, r, false)
+}
+
+func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request, jsonAPI bool) {
+	if pending, ok := s.pendingExistsReply(w, jsonAPI); !ok {
 		return
 	} else if pending {
+		if jsonAPI {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "message": flashRestoreBlockedByPending})
+			return
+		}
 		s.flashBackups(w, r, flashRestoreBlockedByPending)
 		return
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	fail := func(what string, err error) {
+		s.cfg.Logger.Printf("%s: %v", what, err)
+		if jsonAPI {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": flashBackupDownloadFailed})
+			return
+		}
+		s.flashBackups(w, r, flashBackupDownloadFailed)
+	}
 	tmp, err := os.MkdirTemp("", "panel-download-*")
 	if err != nil {
-		s.cfg.Logger.Printf("backup download: temp dir: %v", err)
-		s.flashBackups(w, r, flashBackupDownloadFailed)
+		fail("backup download: temp dir", err)
 		return
 	}
 	defer os.RemoveAll(tmp)
 	archive, err := backup.Create(s.db(), tmp, time.Now)
 	if err != nil {
-		s.cfg.Logger.Printf("backup download: create: %v", err)
-		s.flashBackups(w, r, flashBackupDownloadFailed)
+		fail("backup download: create", err)
 		return
 	}
 	f, err := os.Open(archive)
 	if err != nil {
-		s.cfg.Logger.Printf("backup download: open: %v", err)
-		s.flashBackups(w, r, flashBackupDownloadFailed)
+		fail("backup download: open", err)
 		return
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil || !fi.Mode().IsRegular() {
-		s.cfg.Logger.Printf("backup download: stat: %v", err)
-		s.flashBackups(w, r, flashBackupDownloadFailed)
+		fail("backup download: stat", err)
 		return
 	}
 	// backup.Create returns a bare archive name (backup-YYYY-MM-DD.tar.zst).

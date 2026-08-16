@@ -96,7 +96,7 @@ in Russian with the task ID. Does not add CHANGELOG to git.
 - Only the orchestrator closes beads after acceptance criteria pass.
 - New defect → new bead; do not fix without a task. Rework notes are binding.
 - CHANGELOG.md is gitignored: [Unreleased], Russian, Keep a Changelog, task ID.
-- Never commit `app/panel/internal/web/static/input.css` or secrets.
+- Never commit secrets.
 - No git push / VPS deploy unless the owner explicitly asks.
 
 ## Required skills and MCP
@@ -109,8 +109,8 @@ Canonical list: `AGENTS.md` (same heading). Always-on: `.cursor/rules/skills-and
 `test-driven-development`. Orchestrator: `subagent-driven-development`,
 `dispatching-parallel-agents`, `writing-plans`.
 
-**When it matches:** project `.agents/skills/tailwindcss` (panel CSS;
-`input.css` frozen until UI bead), project `.agents/skills/cli-for-agents`
+**When it matches:** project `.agents/skills/tailwindcss` (panel SPA CSS),
+project `.agents/skills/cli-for-agents`
 (install/bootstrap/panel CLI), `review-security` / `review-bugbot` before
 merge.
 

@@ -208,11 +208,11 @@ func TestServeHTTPSecretFreeAnd404(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Errorf("GET / unauthenticated: status %d, want 303 /login", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET / unauthenticated: status %d, want 200 SPA", resp.StatusCode)
 	}
-	if loc := resp.Header.Get("Location"); loc != "/login" {
-		t.Errorf("GET / unauthenticated: Location %q, want /login", loc)
+	if !strings.Contains(string(body), `id="root"`) {
+		t.Errorf("GET / unauthenticated: missing SPA root: %s", body)
 	}
 	if strings.Contains(string(body), sampleKeyMaterial) {
 		t.Errorf("GET / echoed query key material: %s", body)
@@ -223,8 +223,8 @@ func TestServeHTTPSecretFreeAnd404(t *testing.T) {
 		t.Fatalf("GET unknown: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("unknown route: status %d, want 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("unknown document GET: status %d, want 200 SPA", resp.StatusCode)
 	}
 }
 

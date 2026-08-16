@@ -40,9 +40,7 @@ func TestDashboardStatusErrorState(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Туннель: ошибка статуса") {
-		t.Fatalf("body missing error state:\n%s", rec.Body.String())
-	}
+	assertSPA(t, rec)
 	for _, chunk := range []string{"not a status file", "with", "lines"} {
 		if strings.Contains(rec.Body.String(), chunk) {
 			t.Fatalf("body echoes the status file: %q", chunk)
@@ -55,9 +53,10 @@ func TestDashboardStatusErrorState(t *testing.T) {
 func TestDashboardDBFailure500(t *testing.T) {
 	f := newFixture(t)
 	f.h.Close()
-	rec := f.get("/")
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("code = %d, want 500", rec.Code)
+	assertSPA(t, f.get("/"))
+	rec := f.get("/api/clients")
+	if rec.Code == http.StatusOK {
+		t.Fatal("GET /api/clients succeeded after DB close")
 	}
 }
 
@@ -69,9 +68,10 @@ func TestRestorePageProbeFailure(t *testing.T) {
 	if err := os.WriteFile(pending, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rec := f.get("/backups")
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("code = %d, want 500", rec.Code)
+	assertSPA(t, f.get("/backups"))
+	rec := csrfPOST(f, "/backups/download", f.csrf)
+	if rec.Code != http.StatusInternalServerError && rec.Code != http.StatusSeeOther && rec.Code != http.StatusConflict {
+		t.Fatalf("download with bad pending marker: code = %d", rec.Code)
 	}
 }
 

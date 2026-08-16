@@ -1,20 +1,13 @@
-// Package web implements the M6 panel HTTP layer
-// (M6_AUDIT.md §2): server-side html/template pages, PRG redirects,
-// generic error pages and base security/timeout hardening. M6.2 adds
-// the client-card dashboard fed by the SQLite ↔ status.json
-// reconciliation (reconcile.go); M6.3 adds the client mutation
-// handlers (mutations.go) with the mutation→awg0.conf regenerate
-// mutex; M6.5 adds the config download and QR endpoints
-// (ondemand.go).
+// Package web implements the panel HTTP layer: embedded Vite SPA
+// (dist/index.html + /assets), JSON /api/*, authenticated config/QR
+// downloads, and leftover HTML POST mutation routes used by tests.
 //
 // Security invariants (M6_AUDIT.md §5):
 //   - errors are always generic — never echo request input, file
 //     contents or error text to the client;
-//   - templates are html/template with autoscape; raw (template.HTML)
-//     output is never used;
-//   - secrets never enter template data: the template data types in
-//     this package (indexData, ClientCard, error pages) have no
-//     key/credential fields.
+//   - the SPA shell is static HTML from go:embed dist; API JSON uses
+//     encoding/json with HTML escaping;
+//   - secrets never enter client JSON list payloads (no key fields).
 package web
 
 import (
@@ -23,13 +16,15 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"html/template"
+	"html"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,11 +94,8 @@ func DefaultConfig() Config {
 	}
 }
 
-//go:embed templates/*.html
-var templateFS embed.FS
-
-//go:embed static/tailwind.css static/app.js
-var staticFS embed.FS
+//go:embed dist
+var distFS embed.FS
 
 // Server is one panel HTTP server. It is safe to call Handler after
 // construction; Handler wraps the mux (plus middlewares) and allows
@@ -111,7 +103,6 @@ var staticFS embed.FS
 type Server struct {
 	cfg  Config
 	mux  *http.ServeMux
-	tpl  *template.Template
 	auth *auth.Auth
 	// mutex serializes the mutation → regenerate chains (M6_AUDIT.md
 	// §4.10): the SQLite write is serialized by the database itself,
@@ -197,34 +188,24 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = DefaultShutdownTimeout
 	}
-	tpl, err := template.New("").ParseFS(templateFS, "templates/*.html")
-	if err != nil {
-		return nil, fmt.Errorf("web: parse templates: %w", err)
-	}
-	s := &Server{cfg: cfg, mux: http.NewServeMux(), tpl: tpl, auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, pendingTOTP: make(map[string]string), loginLimit: newLoginLimiter()}
-	// Route protection (M7.4/M7.6): every panel route runs behind
-	// RequireAuth; every state-changing POST additionally runs behind
-	// RequireCSRF (auth → csrf → handler). /login is the single public
-	// pair (GET form, POST submit — login.go) and is deliberately NOT
-	// CSRF-protected (M7.5 contract: login stays the CSRF exception,
-	// SameSite=Lax is the extra layer). "GET /{$}" is the exact-match
-	// root: unknown paths fall through to the public 404 catch-all
-	// instead of being swallowed by the "/" subtree.
-	s.mux.Handle("GET /{$}", s.auth.RequireAuth(http.HandlerFunc(s.dashboard)))
+	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, pendingTOTP: make(map[string]string), loginLimit: newLoginLimiter()}
+	// Document GETs serve the embedded SPA with no RequireAuth so React
+	// can boot and send the user to /login after GET /api/me 401.
+	// /api/* stays RequireAPI (401 JSON, never 303). HTML POSTs remain
+	// for existing form tests. "GET /{$}" is the exact-match root.
+	s.mux.HandleFunc("GET /{$}", s.spaIndex)
 	s.mux.Handle("POST /clients/new", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientNew))))
 	s.mux.Handle("POST /clients/{id}/enable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientSetEnabled(true)))))
 	s.mux.Handle("POST /clients/{id}/disable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientSetEnabled(false)))))
 	s.mux.Handle("POST /clients/{id}/delete", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientDelete))))
 	s.mux.Handle("POST /clients/{id}/rename", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientRename))))
 	s.mux.Handle("POST /logout", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.logout))))
-	s.mux.Handle("GET /account", s.auth.RequireAuth(http.HandlerFunc(s.accountPage)))
 	s.mux.Handle("POST /account/password", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.changePassword))))
 	s.mux.Handle("POST /account/totp/enroll", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpEnroll))))
 	s.mux.Handle("GET /account/totp/qr", s.auth.RequireAuth(http.HandlerFunc(s.totpQR)))
 	s.mux.Handle("POST /account/totp/confirm", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpConfirm))))
 	s.mux.Handle("POST /account/totp/disable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpDisable))))
 	s.mux.Handle("POST /account/totp/mode", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.totpMode))))
-	s.mux.Handle("GET /backups", s.auth.RequireAuth(http.HandlerFunc(s.backupsPage)))
 	// T-125: one-click download (fresh archive, not stored).
 	s.mux.Handle("POST /backups/download", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupDownloadNow))))
 	// The restore POST is the one multipart route of the panel: it
@@ -237,43 +218,30 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /backups/restore", s.auth.RequireAuth(http.HandlerFunc(s.restoreSubmit)))
 	s.mux.Handle("GET /clients/{id}/config", s.auth.RequireAuth(http.HandlerFunc(s.clientConfigDownload)))
 	s.mux.Handle("GET /clients/{id}/qr", s.auth.RequireAuth(http.HandlerFunc(s.clientQR)))
-	s.mux.HandleFunc("GET /login", s.loginPage)
+	s.mux.HandleFunc("GET /login", s.spaIndex)
 	s.mux.HandleFunc("POST /login", s.loginSubmit)
-	// Public static assets (T-120 design system): the compiled Tailwind
-	// stylesheet (committed artifact, see internal/web/static/input.css)
-	// and the progressive-enhancement JS served from the embedded FS;
-	// CSP default-src 'self' admits them (external files only — inline
-	// scripts/styles stay forbidden). No auth: the login page needs
-	// them before any session exists.
-	s.mux.HandleFunc("GET /static/tailwind.css", s.staticCSS)
-	s.mux.HandleFunc("GET /static/app.js", s.staticJS)
+	s.mux.HandleFunc("POST /api/login", s.apiLogin)
+	s.mux.Handle("GET /api/me", s.auth.RequireAPI(http.HandlerFunc(s.apiMe)))
+	s.mux.Handle("POST /api/logout", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiLogout))))
+	s.mux.Handle("POST /api/account/password", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiChangePassword))))
+	s.mux.Handle("POST /api/account/totp/enroll", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiTOTPEnroll))))
+	s.mux.Handle("POST /api/account/totp/confirm", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiTOTPConfirm))))
+	s.mux.Handle("POST /api/account/totp/disable", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiTOTPDisable))))
+	s.mux.Handle("POST /api/backups/download", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiBackupDownload))))
+	s.mux.Handle("POST /api/backups/restore", s.auth.RequireAPI(http.HandlerFunc(s.apiBackupRestore)))
+	s.mux.Handle("GET /api/clients", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsList)))
+	s.mux.Handle("POST /api/clients", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsCreate))))
+	s.mux.Handle("GET /api/clients/{id}", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsGet)))
+	s.mux.Handle("PATCH /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsPatch))))
+	s.mux.Handle("DELETE /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsDelete))))
+	distRoot, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		return nil, fmt.Errorf("web: dist embed: %w", err)
+	}
+	// Vite emits dist/assets/<hash>.*; document GETs use spaIndex, not this tree.
+	s.mux.Handle("GET /assets/", http.FileServer(http.FS(distRoot)))
 	s.mux.HandleFunc("/", s.notFound)
 	return s, nil
-}
-
-// staticCSS serves the embedded compiled Tailwind stylesheet. The
-// response passes through securityHeaders like every other route
-// (nosniff, CSP, no-store).
-func (s *Server) staticCSS(w http.ResponseWriter, r *http.Request) {
-	data, err := staticFS.ReadFile("static/tailwind.css")
-	if err != nil {
-		s.notFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	w.Write(data)
-}
-
-// staticJS serves the embedded progressive-enhancement script
-// (toasts, native <dialog> modals, fetch-based mutations).
-func (s *Server) staticJS(w http.ResponseWriter, r *http.Request) {
-	data, err := staticFS.ReadFile("static/app.js")
-	if err != nil {
-		s.notFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	w.Write(data)
 }
 
 // Handle registers an extra route on the mux. The middlewares (recover,
@@ -340,6 +308,10 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 		defer func() {
 			if rv := recover(); rv != nil {
 				s.cfg.Logger.Printf("recovered panic: %v", rv)
+				if strings.HasPrefix(r.URL.Path, "/api/") {
+					writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "Внутренняя ошибка сервера."})
+					return
+				}
 				s.errorPage(w, http.StatusInternalServerError)
 			}
 		}()
@@ -371,7 +343,7 @@ func (s *Server) bodyLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch:
-			if r.Body != nil && r.URL.Path != restoreUploadPath {
+			if r.Body != nil && !restoreBodyExempt(r.URL.Path) {
 				r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 			}
 		}
@@ -381,87 +353,25 @@ func (s *Server) bodyLimit(next http.Handler) http.Handler {
 
 // ---- handlers and rendering ----
 
-// dashboardData is the GET / payload. No key or credential field
-// exists in this type or in ClientCard (M6_AUDIT.md §2.1.8):
-// rendering can never emit secrets. Username is the authenticated
-// principal from the session context (M7.5); CSRF is the session's
-// CSRF token rendered only into hidden form inputs (M7.6).
-// CardViews wraps each card with the CSRF token its forms need.
-type dashboardData struct {
-	Reconciliation
-	Flash    string
-	Username string
-	CSRF     string
-	// RxTotalText/TxTotalText are the traffic totals summed over all
-	// clients (T-120 round 2 §9), rendered as compact chips.
-	RxTotalText string
-	TxTotalText string
-	CardViews   []clientCardData
-}
-
-// clientCardData is one dashboard card plus the CSRF token its inline
-// forms embed (also used by the fetch-channel card fragments).
+// clientCardData is one dashboard card plus the CSRF token (kept for
+// the leftover HTML fetch-channel fragment used by mutation JSON tests).
 type clientCardData struct {
 	Card    ClientCard
 	CSRF    string
 	Ordinal int
 }
 
-// Interface-state predicates keep magic numbers out of the templates.
-func (d dashboardData) Up() bool   { return d.Interface == IfaceUp }
-func (d dashboardData) NA() bool   { return d.Interface == IfaceNA }
-func (d dashboardData) Down() bool { return d.Interface == IfaceDown }
-func (d dashboardData) Err() bool  { return d.Interface == IfaceError }
-
-// GeneratedText renders the snapshot time; only meaningful when Up.
-func (d dashboardData) GeneratedText() string {
-	if !d.Up() {
-		return ""
-	}
-	return d.GeneratedAtUTC.UTC().Format("2006-01-02 15:04:05 UTC")
-}
-
-// dashboard renders the client-card stack (M6.2): clients from SQLite
-// reconciled with the runtime status. The mutation forms point at the
-// M6.3 routes but their handlers land in M6.3.
-func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	rec, err := Load(s.db(), s.cfg.StatusPath, time.Now())
+// spaIndex serves dist/index.html for document GETs. It is public: the
+// React app boots without a session and redirects after GET /api/me 401.
+func (s *Server) spaIndex(w http.ResponseWriter, r *http.Request) {
+	data, err := distFS.ReadFile("dist/index.html")
 	if err != nil {
-		s.cfg.Logger.Printf("dashboard: %v", err)
+		s.cfg.Logger.Printf("spa index: %v", err)
 		s.errorPage(w, http.StatusInternalServerError)
 		return
 	}
-	sess, _ := auth.CurrentUser(r.Context())
-	var rxTotal, txTotal uint64
-	views := make([]clientCardData, len(rec.Cards))
-	for i, c := range rec.Cards {
-		rxTotal += c.RxBytes
-		txTotal += c.TxBytes
-		views[i] = clientCardData{Card: c, CSRF: sess.CSRFToken, Ordinal: i + 1}
-	}
-	s.renderPage(w, http.StatusOK, dashboardData{
-		Reconciliation: rec,
-		Flash:          r.URL.Query().Get("msg"),
-		Username:       sess.Username,
-		CSRF:           sess.CSRFToken,
-		RxTotalText:    bytesText(rxTotal),
-		TxTotalText:    bytesText(txTotal),
-		CardViews:      views,
-	})
-}
-
-// renderPage executes the layout with the body data. A template
-// failure is logged and answered with a generic 500 fallback. Any
-// secret-looking content never reaches this path: the data types have
-// no secret fields and autoscape always escapes.
-func (s *Server) renderPage(w http.ResponseWriter, code int, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(code)
-	if err := s.tpl.ExecuteTemplate(w, "layout", data); err != nil {
-		s.cfg.Logger.Printf("render layout: %v", err)
-		// A partial generic fallback keeps the response secret-free
-		// even on a template failure.
-	}
+	w.Write(data)
 }
 
 // errorPage renders a generic error page. The message is a fixed
@@ -483,19 +393,22 @@ func (s *Server) errorPage(w http.ResponseWriter, code int) {
 		code = http.StatusInternalServerError
 		message = "Внутренняя ошибка сервера."
 	}
-	type errorData struct {
-		Code    int
-		Message string
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	if err := s.tpl.ExecuteTemplate(w, "error", errorData{Code: code, Message: message}); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	fmt.Fprintf(w, "<!doctype html><html lang=\"ru\"><body><p>%s</p></body></html>\n", html.EscapeString(message))
 }
 
-// notFound answers every unmatched route with the generic 404 page.
+// notFound: API paths stay JSON 404; other GETs serve the SPA; other
+// methods keep a generic HTML 404. Never serve index.html for /api/*.
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": "Страница не найдена."})
+		return
+	}
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		s.spaIndex(w, r)
+		return
+	}
 	s.errorPage(w, http.StatusNotFound)
 }
 

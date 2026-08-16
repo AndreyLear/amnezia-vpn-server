@@ -98,10 +98,7 @@ func TestBackupsRequireAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/backups", nil)
 	rec := httptest.NewRecorder()
 	f.server.ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Errorf("GET /backups: code %d location %q, want 303 /login",
-			rec.Code, rec.Header().Get("Location"))
-	}
+	assertSPA(t, rec)
 	for _, path := range []string{"/backups/download", "/backups/restore"} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
 		rec := httptest.NewRecorder()
@@ -122,8 +119,9 @@ func TestBackupsPageEmptyDir(t *testing.T) {
 		t.Fatalf("code = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `enctype="multipart/form-data"`) || !strings.Contains(body, `name="backup"`) {
-		t.Fatalf("upload form missing: %s", body)
+	assertSPA(t, rec)
+	if strings.Contains(body, `enctype="multipart/form-data"`) {
+		t.Fatal("HTML upload form must not be server-rendered")
 	}
 	if strings.Contains(body, `name="identity"`) {
 		t.Fatal("upload form still asks for an identity")
@@ -139,9 +137,7 @@ func TestBackupsPageDoesNotListArchives(t *testing.T) {
 	makeBackup(t, f, dir, time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC))
 
 	body := f.get("/backups").Body.String()
-	if !strings.Contains(body, `name="backup"`) {
-		t.Fatal("upload form missing on /backups")
-	}
+	assertSPA(t, f.get("/backups"))
 	for _, stored := range []string{"backup-2026-08-10.tar.zst", "backup-2026-08-12.tar.zst"} {
 		if strings.Contains(body, ">"+stored+"<") {
 			t.Errorf("upload page lists stored archive %s", stored)
@@ -211,10 +207,7 @@ func TestBackupsConcurrent(t *testing.T) {
 // link (M8.5 UI requirement).
 func TestBackupsPageLinkFromDashboard(t *testing.T) {
 	f := newFixture(t)
-	body := f.get("/").Body.String()
-	if !strings.Contains(body, `href="/backups"`) {
-		t.Fatalf("dashboard missing Backups link: %s", body)
-	}
+	assertSPA(t, f.get("/"))
 }
 
 // TestBackupDownloadNowFlow (T-125): POST /backups/download streams a

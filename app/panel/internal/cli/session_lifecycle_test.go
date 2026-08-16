@@ -8,6 +8,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"context"
 	"io"
 	"net/http"
@@ -25,7 +26,6 @@ import (
 const (
 	lifeAdmin     = "life-admin"
 	lifePassword  = "life-password-for-m77"
-	csrfHiddenTag = `<input type="hidden" name="_csrf" value="`
 )
 
 // jarClient returns an HTTP client with a cookie jar (a real browser:
@@ -51,24 +51,22 @@ func sessionIDFromJar(t *testing.T, cl *http.Client, base *url.URL) string {
 	return ""
 }
 
-// extractCSRF reads the session CSRF token out of a dashboard HTML
-// body (the same way the browser would submit it).
-func extractCSRF(t *testing.T, body string) string {
+func extractCSRF(t *testing.T, cl *http.Client, base *url.URL) string {
 	t.Helper()
-	i := strings.Index(body, csrfHiddenTag)
-	if i < 0 {
-		t.Fatalf("dashboard body carries no _csrf hidden input")
+	resp, err := cl.Get(base.String() + "/api/me")
+	if err != nil {
+		t.Fatalf("GET /api/me: %v", err)
 	}
-	rest := body[i+len(csrfHiddenTag):]
-	j := strings.IndexByte(rest, '"')
-	if j < 0 {
-		t.Fatalf("unterminated _csrf value")
+	defer resp.Body.Close()
+	var me map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatalf("decode /api/me: %v", err)
 	}
-	if got := rest[:j]; len(got) == 43 {
-		return got
+	got, _ := me["csrf"].(string)
+	if len(got) != 43 {
+		t.Fatalf("csrf value %q is not 43 chars", got)
 	}
-	t.Fatalf("csrf value %q is not 43 chars", rest[:j])
-	return ""
+	return got
 }
 
 // loginOverHTTP performs the real login round trip and returns the
@@ -88,8 +86,8 @@ func loginOverHTTP(t *testing.T, cl *http.Client, base *url.URL) (dashBody, sid 
 	// The client follows the 303 / to the dashboard; a failure would
 	// land on the login form with the generic error. The dashboard does
 	// not expose the username in its navigation chrome.
-	if !strings.Contains(string(body), "Клиенты") {
-		t.Fatalf("login did not reach the dashboard: %q", body)
+	if !strings.Contains(string(body), `id="root"`) {
+		t.Fatalf("login did not reach the SPA: %q", body)
 	}
 	return string(body), sessionIDFromJar(t, cl, base)
 }
@@ -134,19 +132,18 @@ func TestServeRestartInvalidatesSessions(t *testing.T) {
 	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	req, err := http.NewRequest(http.MethodGet, base.String()+"/", nil)
+	req, err := http.NewRequest(http.MethodGet, base.String()+"/api/me", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
 	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: sid1})
 	resp, err := noFollow.Do(req)
 	if err != nil {
-		t.Fatalf("GET / with pre-restart cookie: %v", err)
+		t.Fatalf("GET /api/me with pre-restart cookie: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
-		t.Fatalf("pre-restart cookie after restart: %d Location %q; want 303 /login",
-			resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("pre-restart cookie after restart: %d; want 401", resp.StatusCode)
 	}
 
 	// A fresh login after the restart works again.
@@ -182,7 +179,7 @@ func TestCLIChangePasswordInvalidatesLiveServeSessions(t *testing.T) {
 	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	req, err := http.NewRequest(http.MethodGet, base.String()+"/", nil)
+	req, err := http.NewRequest(http.MethodGet, base.String()+"/api/me", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -192,9 +189,8 @@ func TestCLIChangePasswordInvalidatesLiveServeSessions(t *testing.T) {
 		t.Fatalf("GET / after CLI password change: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
-		t.Fatalf("stolen session after CLI change-password: %d Location %q; want 303 /login",
-			resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("stolen session after CLI change-password: %d; want 401", resp.StatusCode)
 	}
 
 	cl2 := jarClient(t)
@@ -208,8 +204,8 @@ func TestCLIChangePasswordInvalidatesLiveServeSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-login body: %v", err)
 	}
-	if !strings.Contains(string(body), "Клиенты") {
-		t.Fatalf("re-login with new password did not reach the dashboard: %q", body)
+	if !strings.Contains(string(body), `id="root"`) {
+		t.Fatalf("re-login with new password did not reach the SPA: %q", body)
 	}
 }
 
@@ -239,7 +235,7 @@ func TestCLISetPasswordInvalidatesLiveServeSessions(t *testing.T) {
 	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	req, err := http.NewRequest(http.MethodGet, base.String()+"/", nil)
+	req, err := http.NewRequest(http.MethodGet, base.String()+"/api/me", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -249,9 +245,8 @@ func TestCLISetPasswordInvalidatesLiveServeSessions(t *testing.T) {
 		t.Fatalf("GET / after CLI set-password: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
-		t.Fatalf("stolen session after CLI set-password: %d Location %q; want 303 /login",
-			resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("stolen session after CLI set-password: %d; want 401", resp.StatusCode)
 	}
 
 	cl2 := jarClient(t)
@@ -265,8 +260,8 @@ func TestCLISetPasswordInvalidatesLiveServeSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-login body: %v", err)
 	}
-	if !strings.Contains(string(body), "Клиенты") {
-		t.Fatalf("re-login with new password did not reach the dashboard: %q", body)
+	if !strings.Contains(string(body), `id="root"`) {
+		t.Fatalf("re-login with new password did not reach the SPA: %q", body)
 	}
 }
 
@@ -283,8 +278,8 @@ func TestServeLifecycleLogsSecretFree(t *testing.T) {
 
 	// The whole M7 lifecycle over real HTTP.
 	cl := jarClient(t)
-	dash, sid := loginOverHTTP(t, cl, base)
-	csrf := extractCSRF(t, dash)
+	_, sid := loginOverHTTP(t, cl, base)
+	csrf := extractCSRF(t, cl, base)
 	if resp, err := cl.PostForm(base.String()+"/clients/new",
 		url.Values{"name": {"life-client"}, auth.CSRFFieldName: {csrf}}); err != nil {
 		t.Fatalf("add client: %v", err)

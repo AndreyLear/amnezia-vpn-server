@@ -153,14 +153,14 @@ in Russian with the task ID. Does not add CHANGELOG to git.
 - **Accepted changes are recorded in CHANGELOG.md** (local file,
   intentionally gitignored — do not add it to git). Keep a Changelog,
   [Unreleased], Russian, one line per change with the task ID.
-- Never commit `app/panel/internal/web/static/input.css` or secrets.
+- Never commit secrets.
 - No git push / VPS deploy unless the owner explicitly asks.
 
 ## Required skills and MCP
 
-This stack is a Go panel + SQLite + Docker Compose + AmneziaWG, with
-server-rendered HTML and Tailwind v4 assets. Do not load Figma/React/Next
-skills for ordinary panel work.
+This stack is a Go panel + SQLite + Docker Compose + AmneziaWG, with a
+Vite React + official shadcn/ui SPA and Tailwind v4 assets. Do not load
+Figma/Next skills for ordinary panel work.
 
 Cursor always-on pointer: `.cursor/rules/skills-and-mcp.mdc`.
 
@@ -194,7 +194,8 @@ matching skill before acting.
 
 | Skill | When | Where |
 |---|---|---|
-| `tailwindcss` | Panel HTML/CSS. Do not edit `input.css` until the UI redesign bead is active. | `.agents/skills/tailwindcss/` (project) |
+| `tailwindcss` | Panel SPA CSS (Vite + Tailwind v4). | `.agents/skills/tailwindcss/` (project) |
+| shadcn/ui | Panel React UI (`.tsx`). Load before editing components. | official shadcn skill / existing `web/components.json` |
 | `cli-for-agents` | `install.sh`, `bootstrap.sh`, `panel` CLI flags/help. | `.agents/skills/cli-for-agents/` (project) |
 | `review-security` | Auth, TOTP, backups, nftables, exposed ports. | Cursor plugin |
 | `review-bugbot` | Before merge, if the owner asks for a Bugbot-style pass. | Cursor plugin |

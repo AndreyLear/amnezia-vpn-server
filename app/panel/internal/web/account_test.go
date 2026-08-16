@@ -36,12 +36,11 @@ func TestAccountTOTPEnrollmentAndPasswordRotation(t *testing.T) {
 		t.Fatal("secret saved before confirmation")
 	}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/account", nil)
+	req := httptest.NewRequest(http.MethodGet, "/account/totp/qr", nil)
 	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
 	f.server.ServeHTTP(rec, req)
-	body := rec.Body.String()
-	if !strings.Contains(body, "otpauth://totp/") {
-		t.Fatal("account must show otpauth payload")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "image/png") {
+		t.Fatalf("totp qr: code=%d ct=%q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 	secret := f.server.pendingTOTP[f.username]
 	code, err := auth.TOTPCode(secret, time.Now())
@@ -397,16 +396,10 @@ func TestAccountPasswordChangeLegacyPasswordlessRequiresCode(t *testing.T) {
 	f := newFixture(t)
 	addUser(t, f, f.username, testPassword)
 	secret := seedLegacyPasswordless(t, f, f.username)
-	page := httptest.NewRecorder()
-	preq := httptest.NewRequest(http.MethodGet, "/account", nil)
-	preq.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: f.sid})
-	f.server.ServeHTTP(page, preq)
-	body := page.Body.String()
-	if !strings.Contains(body, `action="/account/password"`) || !strings.Contains(body, `name="code"`) {
-		t.Fatal("password-change form must include a TOTP code field for legacy passwordless")
-	}
+	assertSPA(t, f.get("/account"))
+	body := f.get("/").Body.String()
 	if strings.Contains(body, "Только код") || strings.Contains(body, `value="passwordless"`) {
-		t.Fatal("account UI must not offer passwordless as a selectable mode")
+		t.Fatal("SPA must not offer passwordless as a selectable mode")
 	}
 	post := func(values url.Values) *httptest.ResponseRecorder {
 		values.Set(auth.CSRFFieldName, f.csrf)

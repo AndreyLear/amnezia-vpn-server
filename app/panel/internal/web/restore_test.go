@@ -103,9 +103,7 @@ func TestRestoreRequireAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/backups", nil)
 	rec := httptest.NewRecorder()
 	f.server.ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("GET /backups: code %d location %q, want 303 /login", rec.Code, rec.Header().Get("Location"))
-	}
+	assertSPA(t, rec)
 	req = httptest.NewRequest(http.MethodPost, "/backups/restore", nil)
 	rec = httptest.NewRecorder()
 	f.server.ServeHTTP(rec, req)
@@ -120,21 +118,10 @@ func TestRestorePageRendersForm(t *testing.T) {
 	f := newFixture(t)
 	dir := setBackupsPath(t)
 	makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
-	body := f.get("/backups").Body.String()
-	for _, want := range []string{
-		`enctype="multipart/form-data"`,
-		`name="backup"`,
-		`/backups/restore`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("restore page missing %q", want)
-		}
-	}
-	if !strings.Contains(body, `name="_csrf" value="`+f.csrf+`"`) {
-		t.Error("restore page missing CSRF token")
-	}
-	if strings.Contains(body, `name="identity"`) {
-		t.Error("restore page still asks for an identity")
+	assertSPA(t, f.get("/backups"))
+	me := f.get("/api/me")
+	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), f.csrf) {
+		t.Fatalf("CSRF via /api/me missing: %s", me.Body.String())
 	}
 }
 
@@ -283,10 +270,7 @@ func TestRestoreFullFlow(t *testing.T) {
 		t.Fatalf("clients = %d, want %d", got, clientsBefore)
 	}
 
-	body := f.get("/backups").Body.String()
-	if !strings.Contains(body, "Восстановление подготовлено и ожидает перезапуска") {
-		t.Fatal("pending banner missing on /backups")
-	}
+	assertSPA(t, f.get("/backups"))
 
 	// download/restore are blocked while pending
 	rec := csrfPOST(f, "/backups/download", f.csrf)
@@ -322,7 +306,6 @@ func TestRestorePreparedStateSurvivesRestart(t *testing.T) {
 		t.Fatalf("download after marker removal: code = %d, want 200", rec.Code)
 	}
 }
-
 
 // clientCount queries the fixture DB directly.
 func clientCount(f *fixture) int {
@@ -407,10 +390,7 @@ func countTempRestoreDirs() int {
 // restore page (M8.6 UI requirement).
 func TestRestorePageReachableFromBackups(t *testing.T) {
 	f := newFixture(t)
-	body := f.get("/backups").Body.String()
-	if !strings.Contains(body, `action="/backups/restore"`) {
-		t.Fatalf("backups page missing restore form: %s", body)
-	}
+	assertSPA(t, f.get("/backups"))
 }
 
 // TestRestoreUploadAppliesInProcess (T-125): uploading an archive
@@ -464,10 +444,11 @@ func TestRestoreUploadAppliesInProcess(t *testing.T) {
 	if _, ok := f.server.cfg.Sessions.Get(f.sid); ok {
 		t.Fatal("pre-restore session must be invalid after apply")
 	}
-	dash := f.get("/")
-	if dash.Code != http.StatusSeeOther || dash.Header().Get("Location") != "/login" {
-		t.Fatalf("GET / after restore: code=%d loc=%q, want 303 /login", dash.Code, dash.Header().Get("Location"))
-	}
+	assertSPA(t, f.get("/"))
+	me := httptest.NewRecorder()
+	f.server.ServeHTTP(me, sessionRequest(t, http.MethodGet, "/api/me", f.sid))
+	assertAPIUnauthorized(t, me)
+
 }
 
 // withRestoreFault injects an error at the named in-process apply step

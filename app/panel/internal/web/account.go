@@ -13,29 +13,6 @@ import (
 const accountError = "Операция не выполнена."
 const accountPasswordUnchanged = "Новый пароль должен отличаться от старого."
 
-type accountData struct {
-	CSRF, Username, Mode, Secret, OTPAuth, QR, Error, Flash string
-	HasTOTP                                                 bool
-}
-
-func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
-	sess, _ := auth.CurrentUser(r.Context())
-	u, err := db.AuthUserByUsername(s.db(), sess.Username)
-	if err != nil {
-		s.errorPage(w, http.StatusInternalServerError)
-		return
-	}
-	s.mutex.Lock()
-	secret := s.pendingTOTP[sess.Username]
-	s.mutex.Unlock()
-	payload := otpAuthURL(sess.Username, secret)
-	qr := ""
-	if payload != "" {
-		qr = "/account/totp/qr"
-	}
-	s.renderAccount(w, accountData{CSRF: sess.CSRFToken, Username: sess.Username, Mode: u.TOTPMode, HasTOTP: u.TOTPSecret != "", Secret: secret, OTPAuth: payload, QR: qr, Flash: r.URL.Query().Get("msg")})
-}
-
 func (s *Server) totpQR(w http.ResponseWriter, r *http.Request) {
 	sess, _ := auth.CurrentUser(r.Context())
 	s.mutex.Lock()
@@ -49,13 +26,6 @@ func (s *Server) totpQR(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(png)
-}
-
-func (s *Server) renderAccount(w http.ResponseWriter, d accountData) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tpl.ExecuteTemplate(w, "account", d); err != nil {
-		s.cfg.Logger.Printf("render account: %v", err)
-	}
 }
 
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
@@ -174,15 +144,22 @@ func (s *Server) totpMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rotateAccount(w http.ResponseWriter, r *http.Request, msg string) {
-	sess, _ := auth.CurrentUser(r.Context())
-	next, err := s.cfg.Sessions.Rotate(sess.ID, sess.Username)
-	if err != nil {
+	if err := s.rotateCurrentSession(w, r); err != nil {
 		s.errorPage(w, 500)
 		return
 	}
+	redirect303(w, r, "/account?msg="+url.QueryEscape(msg))
+}
+
+func (s *Server) rotateCurrentSession(w http.ResponseWriter, r *http.Request) error {
+	sess, _ := auth.CurrentUser(r.Context())
+	next, err := s.cfg.Sessions.Rotate(sess.ID, sess.Username)
+	if err != nil {
+		return err
+	}
 	s.cfg.Sessions.DeleteByUsername(sess.Username, next.ID)
 	auth.WriteSessionCookie(w, next.ID, next.ExpiresAt)
-	redirect303(w, r, "/account?msg="+url.QueryEscape(msg))
+	return nil
 }
 func (s *Server) redirectAccountError(w http.ResponseWriter) {
 	http.Error(w, accountError, http.StatusBadRequest)

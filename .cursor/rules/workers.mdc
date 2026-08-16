@@ -17,7 +17,7 @@ alwaysApply: true
   output, files touched, leftover risks. The orchestrator accepts or
   returns «на доработку»; review notes are binding.
 - New defect: stop and report; do not expand scope without a bead.
-- Do not commit `app/panel/internal/web/static/input.css` or secrets.
+- Do not commit secrets.
 
 ## Weak model (commits / changelog)
 

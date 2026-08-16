@@ -260,16 +260,18 @@ func TestCSRFTokenInCookieForbidden(t *testing.T) {
 	}
 }
 
-// TestCSRFTokenInHeaderForbidden: a token in a custom header is
-// rejected (the panel is a non-JS HTML UI; no header channel exists).
+// TestCSRFTokenInHeaderForbidden used to reject X-CSRF-Token. The SPA
+// needs the header channel; HTML forms still send _csrf. A correct
+// header plus valid fields must reach the handler (303 PRG).
 func TestCSRFTokenInHeaderForbidden(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest(http.MethodPost, "/clients/new", strings.NewReader(""))
-	req.Header.Set("X-CSRF-Token", f.csrf)
+	req := httptest.NewRequest(http.MethodPost, "/clients/new", strings.NewReader("name=header-ok"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set(auth.CSRFHeaderName, f.csrf)
 	rec := httptest.NewRecorder()
 	f.serve(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("token in header: code = %d, want 403", rec.Code)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("token in header: code = %d, want 303", rec.Code)
 	}
 }
 
@@ -285,11 +287,10 @@ func TestCSRFTokenInRedirectURL(t *testing.T) {
 	if strings.Contains(loc, f.csrf) {
 		t.Fatalf("PRG Location leaks the CSRF token: %q", loc)
 	}
-	// Follow the redirect: the dashboard renders the token only inside
-	// hidden inputs.
-	dash := f.get("/").Body.String()
-	if n := strings.Count(dash, f.csrf); n < 3 {
-		t.Fatalf("dashboard must embed the token in every form, got %d occurrences", n)
+	assertSPA(t, f.get("/"))
+	me := f.get("/api/me")
+	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), f.csrf) {
+		t.Fatalf("GET /api/me must return CSRF: %d %s", me.Code, me.Body.String())
 	}
 }
 
@@ -347,33 +348,13 @@ func TestCSRFDashboardHiddenFields(t *testing.T) {
 	f := newFixture(t)
 	c, _, _ := f.addClient("alice")
 	body := f.get("/").Body.String()
-	for _, action := range []string{
-		`action="/logout"`,
-		`action="/clients/new"`,
-		`action="/clients/` + fmt.Sprint(c.ID) + `/delete"`,
-		`action="/clients/` + fmt.Sprint(c.ID) + `/rename"`,
-	} {
-		if !strings.Contains(body, action) {
-			t.Errorf("dashboard misses form %s", action)
-		}
-	}
+	assertSPA(t, f.get("/"))
 	if strings.Contains(body, `action="/clients/`+fmt.Sprint(c.ID)+`/expiry"`) {
-		t.Errorf("dashboard must not link the expiry form")
+		t.Errorf("SPA must not link the expiry form")
 	}
-	// T-120 round 2 §7: the enable/disable pair collapsed into a single
-	// toggle form — an enabled client renders the disable action.
-	if !strings.Contains(body, `action="/clients/`+fmt.Sprint(c.ID)+`/disable"`) {
-		t.Errorf("dashboard misses the toggle form (enabled client → disable action)")
-	}
-	if strings.Contains(body, `action="/clients/`+fmt.Sprint(c.ID)+`/enable"`) {
-		t.Errorf("enabled client must not render an enable action")
-	}
-	// Every form on the page contains exactly one hidden _csrf input
-	// carrying the session token.
-	forms := strings.Count(body, "<form ")
-	inputs := strings.Count(body, `<input type="hidden" name="_csrf" value="`+f.csrf+`">`)
-	if forms == 0 || inputs != forms {
-		t.Fatalf("hidden inputs = %d, forms = %d; every form must carry exactly one token", inputs, forms)
+	me := f.get("/api/me")
+	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), f.csrf) {
+		t.Fatalf("CSRF is issued via /api/me, not HTML forms: %s", me.Body.String())
 	}
 }
 

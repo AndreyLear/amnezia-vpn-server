@@ -23,7 +23,6 @@ auto-generated beads.mdc close/commit steps.
   criteria. Workers must not `bd close`.
 - After you accept: dispatch the weak model to (1) one commit on the feature
   branch, (2) update gitignored `CHANGELOG.md` `[Unreleased]` in Russian with
-  the task ID. Do not add CHANGELOG to git. Never commit
-  `app/panel/internal/web/static/input.css` or secrets.
+  the task ID. Do not add CHANGELOG to git. Never commit secrets.
 - New defect → new bead; do not fix without a task. Rework notes are binding.
 - Deploy to VPS only when the owner explicitly asks (e.g. «заливай»).

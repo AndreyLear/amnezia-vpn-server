@@ -92,7 +92,7 @@ func TestMigrateCreatesFullSchema(t *testing.T) {
 			"listen_port", "dns", "awg_params", "created_at", "updated_at"}},
 		{"clients", []string{"id", "name", "private_key", "public_key",
 			"preshared_key", "address", "enabled", "created_at",
-			"updated_at", "expires_at"}},
+			"updated_at", "expires_at", "description"}},
 		{"settings", []string{"key", "value"}},
 		{"auth", []string{"id", "username", "password_hash", "totp_secret"}},
 		{"schema_meta", []string{"key", "value"}},
@@ -175,6 +175,95 @@ func TestMigrateLegacyV4AddsTOTPMode(t *testing.T) {
 	}
 	if err := Migrate(handle); err != nil {
 		t.Fatalf("second Migrate legacy v4: %v", err)
+	}
+}
+
+func TestMigrateAddsClientDescription(t *testing.T) {
+	handle, _ := openTest(t, "legacy-v5.sqlite")
+	for _, stmt := range []string{
+		`CREATE TABLE clients (
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			private_key TEXT NOT NULL,
+			public_key TEXT NOT NULL UNIQUE,
+			preshared_key TEXT,
+			address TEXT NOT NULL UNIQUE,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			expires_at TEXT
+		)`,
+		`CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`INSERT INTO schema_meta (key, value) VALUES ('schema_version', '5')`,
+		`INSERT INTO clients (name, private_key, public_key, address, enabled, created_at, updated_at)
+		 VALUES ('old', 'k', 'p', '10.8.0.2/32', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+	} {
+		if _, err := handle.Exec(stmt); err != nil {
+			t.Fatalf("seed legacy v5: %v", err)
+		}
+	}
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate legacy v5: %v", err)
+	}
+	found := false
+	for _, col := range tableColumns(t, handle, "clients") {
+		if col == "description" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("legacy clients columns missing description")
+	}
+	var desc string
+	if err := handle.QueryRow(`SELECT description FROM clients WHERE name = 'old'`).Scan(&desc); err != nil {
+		t.Fatal(err)
+	}
+	if desc != "" {
+		t.Fatalf("legacy default description = %q, want empty", desc)
+	}
+	if got, err := SchemaVersionStored(handle); err != nil || got != SchemaVersion {
+		t.Fatalf("schema version = %q (err %v), want %q", got, err, SchemaVersion)
+	}
+	if SchemaVersion != "6" {
+		t.Fatalf("SchemaVersion = %q, want 6", SchemaVersion)
+	}
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("second Migrate legacy v5: %v", err)
+	}
+}
+
+func TestCreateClientStoresDescription(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := seedServerM4(t, handle, "10.8.0.1/24"); err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+	c, err := CreateClient(handle, "10.8.0.1/24", NewClient{
+		Name: "note-client", PrivateKey: testPriv, PublicKey: testPub, Description: "note",
+	})
+	if err != nil {
+		t.Fatalf("CreateClient: %v", err)
+	}
+	if c.Description != "note" {
+		t.Fatalf("returned Description = %q, want note", c.Description)
+	}
+	got, err := ClientByID(handle, c.ID)
+	if err != nil {
+		t.Fatalf("ClientByID: %v", err)
+	}
+	if got.Description != "note" {
+		t.Fatalf("stored Description = %q, want note", got.Description)
+	}
+	empty, err := CreateClient(handle, "10.8.0.1/24", NewClient{
+		Name: "empty-desc", PrivateKey: testPriv, PublicKey: testPub2, Description: "",
+	})
+	if err != nil {
+		t.Fatalf("CreateClient empty description: %v", err)
+	}
+	if empty.Description != "" {
+		t.Fatalf("empty Description = %q", empty.Description)
 	}
 }
 

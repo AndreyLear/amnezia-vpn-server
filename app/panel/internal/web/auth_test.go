@@ -51,7 +51,7 @@ var protectedRoutes = []struct {
 	method string
 	path   func(f *fixture) string
 }{
-	{http.MethodGet, func(*fixture) string { return "/" }},
+	{http.MethodGet, func(*fixture) string { return "/api/me" }},
 	{http.MethodPost, func(*fixture) string { return "/clients/new" }},
 	{http.MethodPost, func(*fixture) string { return "/logout" }},
 	{http.MethodPost, func(f *fixture) string { c, _, _ := f.addClient("c1"); return fmt.Sprintf("/clients/%d/enable", c.ID) }},
@@ -69,9 +69,13 @@ func TestAuthProtectsEveryRoute(t *testing.T) {
 		t.Run(rt.method+" "+path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			f.server.ServeHTTP(rec, sessionRequest(t, rt.method, path, ""))
-			if rt.method == http.MethodGet {
+			if rt.method == http.MethodGet && !strings.HasPrefix(path, "/api/") {
 				if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
 					t.Fatalf("no session: code = %d, Location = %q; want 303 /login", rec.Code, rec.Header().Get("Location"))
+				}
+			} else if rt.method == http.MethodGet && strings.HasPrefix(path, "/api/") {
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("no session GET %s: code = %d, want 401", path, rec.Code)
 				}
 			} else {
 				if rec.Code != http.StatusUnauthorized {
@@ -161,24 +165,19 @@ func TestAuthLoginIsPublic(t *testing.T) {
 	if rec.Header().Get("Set-Cookie") != "" {
 		t.Fatal("public /login must not set cookies")
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `autocomplete="username"`) || !strings.Contains(body, `autocomplete="current-password"`) {
-		t.Error("login form must carry the autocomplete attributes")
-	}
-	if strings.Contains(body, "amnezia_session") {
+	assertSPA(t, rec)
+	if strings.Contains(rec.Body.String(), "amnezia_session") {
 		t.Fatal("public page must not mention the session cookie")
 	}
 
-	// An authenticated visitor is sent straight to the dashboard.
+	// Authenticated GET /login still serves the SPA; React redirects to /.
 	sess, err := f.sessions.Create(f.username)
 	if err != nil {
 		t.Fatalf("session create: %v", err)
 	}
 	rec = httptest.NewRecorder()
 	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/login", sess.ID))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
-		t.Fatalf("authenticated GET /login: code = %d, Location = %q; want 303 /", rec.Code, rec.Header().Get("Location"))
-	}
+	assertSPA(t, rec)
 }
 
 func TestAuthLoginPageSecretFree(t *testing.T) {
@@ -207,10 +206,8 @@ func TestAuthUnknownAndMalformedSIDRedirect(t *testing.T) {
 	for _, sid := range bad {
 		t.Run(sid[:min(len(sid), 12)], func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/", sid))
-			if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-				t.Fatalf("code = %d, Location = %q; want 303 /login", rec.Code, rec.Header().Get("Location"))
-			}
+			f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/api/me", sid))
+			assertAPIUnauthorized(t, rec)
 		})
 	}
 }
@@ -226,10 +223,8 @@ func TestAuthExpiredSIDRedirect(t *testing.T) {
 	}
 	time.Sleep(60 * time.Millisecond)
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/", sess.ID))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("expired session: code = %d, Location = %q; want 303 /login", rec.Code, rec.Header().Get("Location"))
-	}
+	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/api/me", sess.ID))
+	assertAPIUnauthorized(t, rec)
 	if _, ok := f.sessions.Get(sess.ID); ok {
 		t.Fatal("expired session must be removed from the store")
 	}
@@ -243,10 +238,8 @@ func TestAuthDeletedSessionRedirect(t *testing.T) {
 	}
 	f.sessions.Delete(sess.ID)
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/", sess.ID))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("deleted session: code = %d, Location = %q; want 303 /login", rec.Code, rec.Header().Get("Location"))
-	}
+	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/api/me", sess.ID))
+	assertAPIUnauthorized(t, rec)
 }
 
 // TestAuthSIDNeverLeaks proves the session id appears neither in the
@@ -256,7 +249,7 @@ func TestAuthSIDNeverLeaks(t *testing.T) {
 	f := newFixture(t)
 	sid := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab" // unknown, well-shaped
 	rec := httptest.NewRecorder()
-	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/", sid))
+	f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/api/me", sid))
 	joined := rec.Body.String() + rec.Header().Get("Location") + rec.Header().Get("Set-Cookie")
 	if strings.Contains(joined, sid) {
 		t.Fatalf("SID leaked into an unauthorized response: %q", joined)
@@ -330,10 +323,10 @@ func TestAuthConcurrentRequests(t *testing.T) {
 			want := http.StatusOK
 			if i%2 == 1 {
 				sid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
-				want = http.StatusSeeOther
+				want = http.StatusUnauthorized
 			}
 			rec := httptest.NewRecorder()
-			f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/", sid))
+			f.server.ServeHTTP(rec, sessionRequest(t, http.MethodGet, "/api/me", sid))
 			if rec.Code != want {
 				t.Errorf("request %d: code = %d, want %d", i, rec.Code, want)
 			}
