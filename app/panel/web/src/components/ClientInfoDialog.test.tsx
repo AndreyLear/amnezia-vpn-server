@@ -35,6 +35,17 @@ describe("ClientInfoDialog", () => {
     expect(document.querySelector('[data-slot="badge"]')).toBeNull();
   });
 
+  it("keeps handshake as a UTC timestamp", () => {
+    render(
+      <ClientInfoDialog
+        client={{ ...client, last_handshake_utc: "2026-08-16T00:00:00Z" }}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("2026-08-16 00:00:00 UTC")).toBeInTheDocument();
+  });
+
   it("shows action buttons without the client menu", () => {
     render(
       <ClientInfoDialog

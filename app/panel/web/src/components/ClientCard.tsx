@@ -21,7 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Client } from "@/lib/api";
-import { formatBytes, formatHandshake } from "@/lib/format";
+import { formatBytes, formatHandshakeAge } from "@/lib/format";
 
 export type ClientActions = {
   onInfo?: () => void;
@@ -94,7 +94,7 @@ export function ClientCard({
         <div className="flex shrink-0 items-center gap-3 text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <HandshakeIcon className="size-4" aria-hidden />
-            {formatHandshake(client.last_handshake_utc)}
+            {formatHandshakeAge(client.last_handshake_utc)}
           </span>
           <span className="inline-flex items-center gap-1">
             <ArrowDownIcon className="size-4" aria-hidden />

@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ClientCard } from "@/components/ClientCard";
 import type { Client } from "@/lib/api";
@@ -18,11 +18,18 @@ const base: Client = {
 };
 
 describe("ClientCard", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("shows a horizontal row with name, handshake, rx and tx and no online badge", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
     render(<ClientCard client={base} />);
 
     expect(screen.getByText("Alice")).toBeInTheDocument();
-    expect(screen.getByText("2026-08-16 00:00:00 UTC")).toBeInTheDocument();
+    expect(screen.getByText("1 мин")).toBeInTheDocument();
+    expect(screen.queryByText("2026-08-16 00:00:00 UTC")).not.toBeInTheDocument();
     expect(screen.getByText("0,1 Гб")).toBeInTheDocument();
     expect(screen.getByText("0 Б")).toBeInTheDocument();
     expect(screen.queryByText("онлайн")).not.toBeInTheDocument();
