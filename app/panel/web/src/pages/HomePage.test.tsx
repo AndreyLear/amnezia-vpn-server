@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrf, type Client } from "@/lib/api";
@@ -63,5 +63,34 @@ describe("HomePage load", () => {
 
     expect(clientCalls).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("Alice")).toBeInTheDocument();
+  });
+
+  it("lists clients in one column with mt-8 gap-2 and no add tile", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/me")) {
+          return jsonResponse({
+            username: "admin",
+            csrf: "token",
+            totp: { enabled: false },
+          });
+        }
+        if (path.includes("/api/clients")) {
+          return jsonResponse([alice]);
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<HomePage />);
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+
+    const grid = screen.getByTestId("client-grid");
+    expect(grid).toHaveClass("mt-8", "flex", "flex-col", "gap-2", "pb-8");
+    expect(grid.className).not.toMatch(/min-\[752px\]:grid-cols-2/);
+    expect(within(grid).queryByRole("button", { name: /добавить клиента/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();
   });
 });

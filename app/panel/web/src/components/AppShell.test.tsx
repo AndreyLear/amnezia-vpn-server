@@ -15,7 +15,7 @@ describe("AppShell header", () => {
   it("shows backup actions, theme choices, password and logout", async () => {
     const user = userEvent.setup();
     render(
-      <AppShell totpEnabled={false} onTotpChange={() => {}}>
+      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
@@ -37,5 +37,25 @@ describe("AppShell header", () => {
     expect(screen.getByText("Системная")).toBeInTheDocument();
     expect(screen.getByText("AWG Panel")).toBeInTheDocument();
     expect(screen.queryByText("AmneziaVPN")).not.toBeInTheDocument();
+  });
+
+  it("shows Добавить клиента before backup", async () => {
+    const user = userEvent.setup();
+    const onAddClient = vi.fn();
+    render(
+      <AppShell totpEnabled={false} onTotpChange={() => {}} onAddClient={onAddClient}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const add = screen.getByRole("button", { name: "Добавить клиента" });
+    const backup = screen.getByRole("button", { name: "Бэкап" });
+    const menu = screen.getByRole("button", { name: "Меню" });
+    const headerButtons = [add, backup, menu];
+    const all = screen.getAllByRole("button").filter((el) => headerButtons.includes(el));
+    expect(all).toEqual([add, backup, menu]);
+
+    await user.click(add);
+    expect(onAddClient).toHaveBeenCalledTimes(1);
   });
 });

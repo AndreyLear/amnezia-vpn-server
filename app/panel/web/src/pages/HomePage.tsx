@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { AddClientDialog } from "@/components/AddClientDialog";
 import { AppShell } from "@/components/AppShell";
-import { AddClientCard, ClientCard } from "@/components/ClientCard";
+import { ClientCard } from "@/components/ClientCard";
 import { ClientInfoDialog } from "@/components/ClientInfoDialog";
 import { QrDialog } from "@/components/QrDialog";
 import {
@@ -124,9 +124,13 @@ export default function HomePage() {
   }
 
   return (
-    <AppShell totpEnabled={totpEnabled} restorePending={restorePending} onTotpChange={setTotpEnabled}>
-      <div data-testid="client-grid" className="grid grid-cols-1 items-stretch gap-4 pb-8 min-[752px]:grid-cols-2">
-        <AddClientCard onClick={() => setAddOpen(true)} />
+    <AppShell
+      totpEnabled={totpEnabled}
+      restorePending={restorePending}
+      onTotpChange={setTotpEnabled}
+      onAddClient={() => setAddOpen(true)}
+    >
+      <div data-testid="client-grid" className="mt-8 flex flex-col gap-2 pb-8">
         {clients.map((client) => (
           <ClientCard
             key={client.id}

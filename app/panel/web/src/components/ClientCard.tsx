@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, HandshakeIcon, MoreHorizontalIcon } from "lucide-react";
 
 import {
   AlertDialog,
@@ -11,9 +11,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,7 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Client } from "@/lib/api";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatHandshake } from "@/lib/format";
 
 export type ClientActions = {
   onInfo?: () => void;
@@ -32,19 +31,6 @@ export type ClientActions = {
   onDelete?: () => void;
   pending?: boolean;
 };
-
-export function AddClientCard({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-full w-full min-h-36 flex-col items-center justify-center gap-2 rounded-xl bg-card text-sm text-muted-foreground ring-1 ring-foreground/10 transition-colors hover:bg-muted/40"
-    >
-      <PlusIcon className="size-6" />
-      Добавить клиента
-    </button>
-  );
-}
 
 export function ClientMenu({
   client,
@@ -63,6 +49,7 @@ export function ClientMenu({
           size="icon-sm"
           disabled={pending}
           aria-label={`Действия для ${client.name}`}
+          onClick={(event) => event.stopPropagation()}
         >
           <MoreHorizontalIcon />
         </Button>
@@ -83,25 +70,6 @@ export function ClientMenu({
   );
 }
 
-export function ClientPills({ client }: { client: Client }) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      <Badge
-        variant={client.online ? "secondary" : "destructive"}
-        className={
-          client.online
-            ? "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400"
-            : undefined
-        }
-      >
-        {client.online ? "онлайн" : "офлайн"}
-      </Badge>
-      <Badge variant="outline">{formatBytes(client.rx_bytes)}</Badge>
-      <Badge variant="outline">{formatBytes(client.tx_bytes)}</Badge>
-    </div>
-  );
-}
-
 export function ClientCard({
   client,
   onInfo,
@@ -114,10 +82,28 @@ export function ClientCard({
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
-    <Card className="h-full min-h-36">
-      <CardHeader className="border-b">
-        <CardTitle>{client.name}</CardTitle>
-        <CardAction>
+    <Card className="flex-row items-center">
+      <CardContent className="flex min-w-0 flex-1 items-center gap-3">
+        <button
+          type="button"
+          className="min-w-0 flex-1 truncate text-left font-heading text-base font-medium"
+          onClick={onInfo}
+        >
+          {client.name}
+        </button>
+        <div className="flex shrink-0 items-center gap-3 text-muted-foreground">
+          <span className="inline-flex items-center gap-1">
+            <HandshakeIcon className="size-4" aria-hidden />
+            {formatHandshake(client.last_handshake_utc)}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <ArrowDownIcon className="size-4" aria-hidden />
+            {formatBytes(client.rx_bytes)}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <ArrowUpIcon className="size-4" aria-hidden />
+            {formatBytes(client.tx_bytes)}
+          </span>
           <ClientMenu
             client={client}
             pending={pending}
@@ -127,10 +113,7 @@ export function ClientCard({
             onToggle={onToggle}
             onDelete={() => setConfirmOpen(true)}
           />
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        <ClientPills client={client} />
+        </div>
       </CardContent>
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>

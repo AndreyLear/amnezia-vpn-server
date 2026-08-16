@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
-import { EllipsisVerticalIcon } from "lucide-react";
+import { EllipsisVerticalIcon, PlusIcon } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { BackupMenu } from "@/components/BackupMenu";
@@ -26,11 +26,13 @@ export function AppShell({
   totpEnabled,
   restorePending = false,
   onTotpChange,
+  onAddClient,
 }: {
   children: ReactNode;
   totpEnabled: boolean;
   restorePending?: boolean;
   onTotpChange: (enabled: boolean) => void;
+  onAddClient: () => void;
 }) {
   const [theme, setThemeState] = useState<Theme>(() =>
     typeof window === "undefined" ? "system" : getTheme(),
@@ -54,6 +56,10 @@ export function AppShell({
         <header className="flex items-center gap-2 py-4">
           <p className="font-mono text-sm font-medium">AWG Panel</p>
           <div className="ml-auto flex items-center gap-2">
+            <Button type="button" onClick={onAddClient}>
+              <PlusIcon />
+              Добавить клиента
+            </Button>
             <BackupMenu restorePending={restorePending} />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

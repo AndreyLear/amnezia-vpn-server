@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
-import { AddClientCard, ClientCard } from "@/components/ClientCard";
+import { ClientCard } from "@/components/ClientCard";
 import type { Client } from "@/lib/api";
 
 const base: Client = {
@@ -17,38 +18,31 @@ const base: Client = {
 };
 
 describe("ClientCard", () => {
-  it("shows the client name and three pills for handshake, rx, and tx", () => {
+  it("shows a horizontal row with name, handshake, rx and tx and no online badge", () => {
     render(<ClientCard client={base} />);
 
     expect(screen.getByText("Alice")).toBeInTheDocument();
-    expect(screen.getByText("онлайн")).toBeInTheDocument();
+    expect(screen.getByText("2026-08-16 00:00:00 UTC")).toBeInTheDocument();
     expect(screen.getByText("0,1 Гб")).toBeInTheDocument();
     expect(screen.getByText("0 Б")).toBeInTheDocument();
-  });
-
-  it("uses a muted handshake pill when the client is offline", () => {
-    render(<ClientCard client={{ ...base, online: false }} />);
-
-    expect(screen.getByText("офлайн")).toBeInTheDocument();
     expect(screen.queryByText("онлайн")).not.toBeInTheDocument();
-  });
-
-  it("stretches to fill the grid cell", () => {
-    render(<ClientCard client={base} />);
+    expect(screen.queryByText("офлайн")).not.toBeInTheDocument();
 
     const card = screen.getByText("Alice").closest("[data-slot=card]");
-    expect(card).toHaveClass("h-full", "min-h-36");
+    expect(card).toHaveClass("flex-row");
+    expect(card).not.toHaveClass("h-full", "min-h-36");
   });
-});
 
-describe("AddClientCard", () => {
-  it("stretches to fill the grid cell", () => {
-    render(<AddClientCard onClick={() => {}} />);
+  it("opens info from the name without nesting the menu in that control", async () => {
+    const user = userEvent.setup();
+    const onInfo = vi.fn();
+    render(<ClientCard client={base} onInfo={onInfo} />);
 
-    expect(screen.getByRole("button", { name: /добавить клиента/i })).toHaveClass(
-      "h-full",
-      "min-h-36",
-      "w-full",
-    );
+    const menu = screen.getByRole("button", { name: "Действия для Alice" });
+    const nameButton = screen.getByRole("button", { name: "Alice" });
+    expect(nameButton).not.toContainElement(menu);
+
+    await user.click(nameButton);
+    expect(onInfo).toHaveBeenCalledTimes(1);
   });
 });
