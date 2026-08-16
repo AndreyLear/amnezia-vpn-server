@@ -36,11 +36,39 @@ describe("ClientCard", () => {
     expect(screen.queryByText("онлайн")).not.toBeInTheDocument();
     expect(screen.queryByText("офлайн")).not.toBeInTheDocument();
 
+    const age = screen.getByText("1 мин");
+    const icon = age.parentElement?.querySelector("svg");
+    expect(icon).toHaveClass("text-emerald-500");
+
     const card = screen.getByText("Alice").closest("[data-slot=card]");
     expect(card).toHaveClass("flex-row");
     expect(card).toHaveClass("py-1");
     expect(card).not.toHaveClass("py-2");
     expect(card).not.toHaveClass("h-full", "min-h-36");
+  });
+
+  it("keeps the handshake icon muted when the client is offline", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
+    render(<ClientCard client={{ ...base, online: false }} />);
+
+    expect(screen.queryByText("онлайн")).not.toBeInTheDocument();
+    expect(screen.queryByText("офлайн")).not.toBeInTheDocument();
+
+    const age = screen.getByText("1 мин");
+    const icon = age.parentElement?.querySelector("svg");
+    expect(icon).not.toHaveClass("text-emerald-500");
+  });
+
+  it("does not color rx or tx icons emerald when the client is online", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
+    render(<ClientCard client={base} />);
+
+    const rxIcon = screen.getByText("0,1 Гб").parentElement?.querySelector("svg");
+    const txIcon = screen.getByText("0 Б").parentElement?.querySelector("svg");
+    expect(rxIcon).not.toHaveClass("text-emerald-500");
+    expect(txIcon).not.toHaveClass("text-emerald-500");
   });
 
   it("puts a one-shot hover sweep on the card frame", () => {

@@ -108,7 +108,10 @@ export function ClientCard({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-[0.4rem]">
-                  <HandshakeIcon className="size-4" aria-hidden />
+                  <HandshakeIcon
+                    className={cn("size-4", client.online && "text-emerald-500")}
+                    aria-hidden
+                  />
                   <span className="tabular-nums">{formatHandshakeAge(client.last_handshake_utc)}</span>
                 </span>
               </TooltipTrigger>
