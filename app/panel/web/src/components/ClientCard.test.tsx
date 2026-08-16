@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { ClientCard } from "@/components/ClientCard";
+import { AddClientCard, ClientCard } from "@/components/ClientCard";
 import type { Client } from "@/lib/api";
 
 const base: Client = {
@@ -31,5 +31,24 @@ describe("ClientCard", () => {
 
     expect(screen.getByText("офлайн")).toBeInTheDocument();
     expect(screen.queryByText("онлайн")).not.toBeInTheDocument();
+  });
+
+  it("stretches to fill the grid cell", () => {
+    render(<ClientCard client={base} />);
+
+    const card = screen.getByText("Alice").closest("[data-slot=card]");
+    expect(card).toHaveClass("h-full", "min-h-36");
+  });
+});
+
+describe("AddClientCard", () => {
+  it("stretches to fill the grid cell", () => {
+    render(<AddClientCard onClick={() => {}} />);
+
+    expect(screen.getByRole("button", { name: /добавить клиента/i })).toHaveClass(
+      "h-full",
+      "min-h-36",
+      "w-full",
+    );
   });
 });

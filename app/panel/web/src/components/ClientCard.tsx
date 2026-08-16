@@ -38,7 +38,7 @@ export function AddClientCard({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-36 flex-col items-center justify-center gap-2 rounded-xl bg-card text-sm text-muted-foreground ring-1 ring-foreground/10 transition-colors hover:bg-muted/40"
+      className="flex h-full w-full min-h-36 flex-col items-center justify-center gap-2 rounded-xl bg-card text-sm text-muted-foreground ring-1 ring-foreground/10 transition-colors hover:bg-muted/40"
     >
       <PlusIcon className="size-6" />
       Добавить клиента
@@ -114,7 +114,7 @@ export function ClientCard({
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
-    <Card>
+    <Card className="h-full min-h-36">
       <CardHeader className="border-b">
         <CardTitle>{client.name}</CardTitle>
         <CardAction>
