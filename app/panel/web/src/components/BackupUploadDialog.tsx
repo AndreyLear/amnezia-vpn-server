@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
 import { api, mutationSucceeded, type MutationResponse } from "@/lib/api";
 
 const ACCEPT = ".tar.zst,.zst";
@@ -108,6 +109,7 @@ export function BackupUploadDialog({
           </label>
           <DialogFooter>
             <Button type="submit" disabled={pending || restorePending || !file}>
+              {pending ? <Spinner data-icon="inline-start" /> : null}
               Загрузить
             </Button>
           </DialogFooter>

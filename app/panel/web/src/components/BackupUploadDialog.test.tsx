@@ -1,10 +1,17 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BackupUploadDialog } from "@/components/BackupUploadDialog";
+import { setCsrf } from "@/lib/api";
 
 describe("BackupUploadDialog", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    setCsrf("");
+  });
+
   it("accepts a file from the picker with .tar.zst,.zst", async () => {
     const user = userEvent.setup();
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
@@ -24,5 +31,41 @@ describe("BackupUploadDialog", () => {
     expect(screen.getByText("Восстановление уже подготовлено. Требуется перезапуск.")).toBeInTheDocument();
     expect(document.querySelector('input[type="file"]')).toBeDisabled();
     expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+  });
+
+  it("shows a spinner on Загрузить while POST /api/backups/restore is pending", async () => {
+    const user = userEvent.setup();
+    setCsrf("csrf");
+    let resolveFetch!: (value: Response) => void;
+    const deferred = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => deferred),
+    );
+
+    render(<BackupUploadDialog open onOpenChange={() => {}} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["archive"], "backup.tar.zst", { type: "application/octet-stream" });
+    await user.upload(input, file);
+    await user.click(screen.getByRole("button", { name: "Загрузить" }));
+
+    const submit = await screen.findByRole("button", { name: /Загрузить/ });
+    expect(submit).toBeDisabled();
+    expect(submit).toHaveTextContent("Загрузить");
+    expect(submit.querySelector('[data-slot="spinner"]')).toBeTruthy();
+
+    resolveFetch(
+      new Response(JSON.stringify({ ok: true, message: "ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await waitFor(() => {
+      const settled = screen.getByRole("button", { name: "Загрузить" });
+      expect(settled.querySelector('[data-slot="spinner"]')).toBeNull();
+    });
   });
 });
