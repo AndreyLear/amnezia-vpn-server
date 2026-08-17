@@ -169,7 +169,7 @@ describe("AppShell header", () => {
     expect(header).not.toHaveClass("py-4");
   });
 
-  it("renders HeaderStats dashes with desktop and phone copies, not as a button", () => {
+  it("renders one HeaderStats copy in the header row, not as a button", () => {
     render(
       <AppShell onAddClient={() => {}}>
         <p>body</p>
@@ -177,17 +177,26 @@ describe("AppShell header", () => {
     );
 
     const header = screen.getByRole("banner");
-    const cpus = within(header).getAllByLabelText("CPU");
-    expect(cpus).toHaveLength(2);
-    for (const cpu of cpus) {
-      expect(cpu).toHaveTextContent("\u2014");
-      expect(cpu.textContent ?? "").not.toMatch(/cpu|ram|disk|CPU|RAM|Диск/);
-    }
+    expect(header).toHaveClass("flex");
+    expect(header).not.toHaveClass("flex-wrap");
+    expect(header).toHaveClass("pt-4");
+    expect(header).not.toHaveClass("py-4");
 
-    const desktop = cpus[0].parentElement;
-    const phone = cpus[1].parentElement;
-    expect(desktop).toHaveClass("hidden", "sm:flex");
-    expect(phone).toHaveClass("flex", "sm:hidden", "w-full");
+    const title = screen.getByText("AWG Panel");
+    expect(title).toHaveClass("shrink-0");
+    expect(title).not.toHaveClass("truncate");
+
+    const cpus = within(header).getAllByLabelText("CPU");
+    expect(cpus).toHaveLength(1);
+    expect(cpus[0]).toHaveTextContent("\u2014");
+    expect(cpus[0].textContent ?? "").not.toMatch(/cpu|ram|disk|CPU|RAM|Диск/);
+
+    const stats = cpus[0].parentElement;
+    expect(stats).toHaveClass("flex", "min-w-0");
+    expect(stats).not.toHaveClass("hidden");
+    expect(stats).not.toHaveClass("sm:flex");
+    expect(stats).not.toHaveClass("sm:hidden");
+    expect(stats).not.toHaveClass("w-full");
 
     expect(within(header).queryByRole("button", { name: /cpu/i })).not.toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();

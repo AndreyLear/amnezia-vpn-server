@@ -34,9 +34,9 @@ export function AppShell({
     <div className="relative min-h-svh">
       <AmbientBackground />
       <div className="relative mx-auto w-full max-w-[752px] px-4">
-        <header className="flex min-w-0 flex-wrap items-center gap-2 pt-4">
-          <p className="min-w-0 truncate font-mono text-base font-medium">AWG Panel</p>
-          <HeaderStats host={host} className="hidden sm:flex" />
+        <header className="flex min-w-0 items-center gap-2 pt-4">
+          <p className="shrink-0 font-mono text-base font-medium">AWG Panel</p>
+          <HeaderStats host={host} className="flex min-w-0" />
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button
               type="button"
@@ -60,7 +60,6 @@ export function AppShell({
               </Button>
             </BackupProvider>
           </div>
-          <HeaderStats host={host} className="flex w-full sm:hidden" />
         </header>
         {children}
       </div>
