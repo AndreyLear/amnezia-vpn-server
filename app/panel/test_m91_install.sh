@@ -36,6 +36,7 @@ setstate() { # portable in-place update: sed(1) -i differs on BSD/GNU
 }
 
 fakes_reset() {
+    unset AMNEZIA_INSTALL_SKIP_PRUNE
     : > "$FAKE_CALLS"
     mkdir -p "$FAKE_FS"
     rm -rf "$ROOT" "$SYSCTL_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
@@ -53,6 +54,7 @@ MODPROBE_OK=yes
 DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
 UP_RC=0
+BUILDER_PRUNE_RC=0
 PUBLIC_IP=2.26.93.192
 DNS_A=2.26.93.192
 DNS_AAAA=
@@ -107,6 +109,32 @@ if [ "${1:-}" = "compose" ]; then
         build) exit 0 ;;
         up) exit "${UP_RC:-0}" ;;
     esac
+    exit 0
+fi
+# Build-cache prune after compose build (docker-prune.sh). builder
+# prune can be forced to fail via BUILDER_PRUNE_RC; image/rmi stay
+# successful so a prune-script failure is independent of rmi.
+if [ "${1:-}" = "builder" ]; then
+    exit "${BUILDER_PRUNE_RC:-0}"
+fi
+if [ "${1:-}" = "image" ] || [ "${1:-}" = "rmi" ]; then
+    exit 0
+fi
+if [ "${1:-}" = "images" ]; then
+    if [ "${2:-}" = "-q" ] && [ "${3:-}" = "golang" ]; then
+        echo "aaa111golang"
+        exit 0
+    fi
+    if printf '%s' "$*" | grep -q -- '--format'; then
+        # Real `docker images --format '{{.Repository}}:{{.Tag}}'` is
+        # one repo:tag per line, never "tag id" on the same line.
+        echo "golang:1.25.12"
+        echo "golang:1.25.12-alpine"
+        echo "amnezia-vpn-server/panel:latest"
+        echo "amnezia-vpn-server/awg:latest"
+        echo "alpine:3.22.5"
+        exit 0
+    fi
     exit 0
 fi
 exit 0
@@ -613,6 +641,79 @@ test_installed_compose_contract() {
     [ "$(grep -c '^    ports:$' "$ROOT/compose.yaml")" = "1" ] \
         && pass "installed compose: only the panel maps ports" \
         || fail "installed compose: only the panel maps ports"
+    grep -q "builder prune" "$FAKE_CALLS" && pass "install: docker builder prune after build" \
+        || fail "install: docker builder prune after build"
+    [ -x "$ROOT/docker-prune.sh" ] && pass "install: docker-prune.sh copied executable" \
+        || fail "install: docker-prune.sh copied executable"
+    if grep -qE 'rmi aaa111golang' "$FAKE_CALLS" || grep -qE 'rmi golang:' "$FAKE_CALLS"; then
+        pass "install: golang image removal attempted"
+    else
+        fail "install: golang rmi (aaa111golang / golang:) not in FAKE_CALLS"
+    fi
+    grep -qx 'docker rmi golang:1.25.12' "$FAKE_CALLS" \
+        && pass "install: rmi golang:1.25.12 as repo:tag" \
+        || fail "install: rmi golang:1.25.12 must be a whole FAKE_CALLS line (repo:tag, not id suffix)"
+    build_n="$(grep -nE 'docker compose .*[[:space:]]build([[:space:]]|$)' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    prune_n="$(grep -nE 'docker builder prune' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    up_n="$(grep -nE 'docker compose .*[[:space:]]up([[:space:]]|$)' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    if [ -n "$build_n" ] && [ -n "$prune_n" ] && [ -n "$up_n" ] \
+        && [ "$build_n" -lt "$prune_n" ] && [ "$prune_n" -lt "$up_n" ]; then
+        pass "install: compose build, then builder prune, then compose up"
+    else
+        fail "install: prune order (build=$build_n prune=$prune_n up=$up_n)"
+    fi
+    if grep -q "rmi panelid" "$FAKE_CALLS" \
+        || grep -q "rmi awgid" "$FAKE_CALLS" \
+        || grep -q "rmi alpineid" "$FAKE_CALLS" \
+        || grep -q "rmi amnezia-vpn-server/panel" "$FAKE_CALLS" \
+        || grep -q "rmi amnezia-vpn-server/awg" "$FAKE_CALLS" \
+        || grep -q "rmi alpine:3.22.5" "$FAKE_CALLS"; then
+        fail "install: prune removed panel/awg/alpine images"
+    else
+        pass "install: prune leaves panel/awg/alpine images"
+    fi
+}
+
+test_prune_soft_fail() {
+    # docker-prune.sh swallows `docker builder prune` failures (`|| true`)
+    # and always exits 0, so install.sh's WARNING branch is only reached
+    # when the prune script itself exits 1. Stub the repo copy for this
+    # case; restore it even if run_install dies.
+    fakes_reset
+    setstate BUILDER_PRUNE_RC 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    prune_src="$M91_HOME/docker-prune.sh"
+    prune_bak="$FAKE_DIR/docker-prune.sh.bak"
+    cp -f "$prune_src" "$prune_bak"
+    cat > "$prune_src" <<'EOF'
+#!/usr/bin/env bash
+# Test stub: docker builder prune fails, then the script exits 1 so
+# install.sh logs WARNING and continues.
+docker builder prune -af
+exit 1
+EOF
+    chmod +x "$prune_src"
+    restore_prune() { cp -f "$prune_bak" "$prune_src" && chmod +x "$prune_src"; }
+    rc="$(run_install)"
+    restore_prune
+    [ "$rc" = "0" ] || fail "prune soft-fail: exit $rc, want 0"
+    grep -q "WARNING: docker prune failed" "$TMP_TEST/out" \
+        && pass "prune soft-fail: WARNING logged, install continued" \
+        || fail "prune soft-fail: WARNING missing from stdout"
+}
+
+test_skip_prune() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_SKIP_PRUNE=1 run_install)"
+    [ "$rc" = "0" ] || fail "SKIP_PRUNE=1 flow: exit $rc"
+    if grep -q "builder prune" "$FAKE_CALLS"; then
+        fail "SKIP_PRUNE=1: builder prune was invoked"
+    else
+        pass "SKIP_PRUNE=1: builder prune skipped"
+    fi
+    grep -q "AMNEZIA_INSTALL_SKIP_PRUNE" "$TMP_TEST/out" && pass "SKIP_PRUNE=1: skip logged" \
+        || fail "SKIP_PRUNE=1: skip not logged"
 }
 
 test_m31_fresh_install_tolerated() {
@@ -1138,6 +1239,8 @@ test_unknown_argument
 test_help_examples
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
+test_prune_soft_fail
+test_skip_prune
 test_layout_and_permissions
 test_versions_lock_used
 test_ip_forward_disabled

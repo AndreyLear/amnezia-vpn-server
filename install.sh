@@ -26,7 +26,7 @@
 #  10. create deployment .env (deployment-specific values)
 #  11. host networking: managed nftables ruleset (M9.2)
 #  12. docker compose --env-file versions.lock config --quiet
-#  13. build and start the stack (current compose contract)
+#  13. build, prune golang/build cache, start the stack (compose contract)
 #  14. minimal post-install self-check (never mutates application state)
 #  15. final status + SSH tunnel hint for the loopback-only panel
 #
@@ -88,6 +88,9 @@
 #   AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1  run the AmneziaWG client-stack
 #                                      install even when already present
 #                                      (testability)
+#   AMNEZIA_INSTALL_SKIP_PRUNE=1       skip docker-prune.sh after compose
+#                                      build (keep golang toolchain /
+#                                      builder cache; testability)
 #
 # Security contract: no secrets are ever accepted, logged or printed;
 # .env is created only when absent, with 0600; the panel stays
@@ -497,12 +500,14 @@ copy_tree() { # cp -a with per-file error stop
 
 copy_tree "$SCRIPT_DIR/compose.yaml" "$ROOT_DIR/"
 copy_tree "$SCRIPT_DIR/versions.lock" "$ROOT_DIR/"
+copy_tree "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR/"
 # Build context is the repository root (compose.yaml build.context = "."):
 # the app/ tree (panel Dockerfile + Go module incl. embedded templates,
 # awg Dockerfile + entrypoint scripts) must be present under the root.
 copy_tree "$SCRIPT_DIR/app" "$ROOT_DIR/"
 chmod 0644 "$ROOT_DIR/compose.yaml" "$ROOT_DIR/versions.lock"
-log "deployment files installed (compose.yaml, versions.lock, app/)"
+chmod 0755 "$ROOT_DIR/docker-prune.sh"
+log "deployment files installed (compose.yaml, versions.lock, docker-prune.sh, app/)"
 
 # --- 10. deployment .env (never overwrites an existing file) -----------
 
@@ -883,6 +888,14 @@ docker_compose --env-file versions.lock config --quiet \
 log "building the stack images (pinned versions from versions.lock)"
 docker_compose --env-file versions.lock build \
     || die_op "docker compose build failed"
+if [ "${AMNEZIA_INSTALL_SKIP_PRUNE:-}" = "1" ]; then
+    log "skipping docker prune (AMNEZIA_INSTALL_SKIP_PRUNE=1)"
+else
+    log "pruning Docker build cache and golang toolchain images"
+    if ! "$ROOT_DIR/docker-prune.sh"; then
+        log "WARNING: docker prune failed; continuing"
+    fi
+fi
 log "starting the stack"
 if ! docker_compose --env-file versions.lock up -d; then
     # M3.1 contract: on a fresh install there is no server row yet, so
