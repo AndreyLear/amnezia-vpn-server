@@ -168,7 +168,7 @@ export function HeaderStats({
     <TooltipProvider>
       <div
         className={cn(
-          "shrink-0 items-center gap-3 text-sm text-muted-foreground tabular-nums",
+          "shrink-0 items-center gap-1 text-sm text-muted-foreground tabular-nums",
           className,
         )}
       >
@@ -178,12 +178,18 @@ export function HeaderStats({
           colorPercent={host?.cpu_percent}
           tooltip={cpuTooltip(host)}
         />
+        <span aria-hidden className="text-muted-foreground">
+          /
+        </span>
         <Metric
           ariaLabel="RAM"
           value={ramValue(host)}
           colorPercent={host?.ram_percent}
           tooltip={ramTooltip(host)}
         />
+        <span aria-hidden className="text-muted-foreground">
+          /
+        </span>
         <Metric
           ariaLabel="Диск"
           value={diskValue(host)}

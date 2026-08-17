@@ -56,6 +56,50 @@ describe("HeaderStats", () => {
     expect(screen.queryByText(/^ram$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^disk$/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Диск")).not.toBeInTheDocument();
+
+    const slashes = screen.getAllByText("/");
+    expect(slashes).toHaveLength(2);
+    for (const slash of slashes) {
+      expect(slash).toHaveClass("text-muted-foreground");
+      expect(slash).toHaveAttribute("aria-hidden", "true");
+      expect(slash.closest("button")).toBeNull();
+      expect(slash.closest("[role='button']")).toBeNull();
+    }
+  });
+
+  it("uses a 4px gap on the stats row instead of 12px", () => {
+    const { container } = render(
+      <HeaderStats
+        host={{
+          ...emptyHost,
+          cpu_percent: 100,
+          ram_percent: 75,
+          disk_used_bytes: diskUsedTb,
+        }}
+      />,
+    );
+
+    const row = container.querySelector("[class*='gap-']");
+    expect(row).toHaveClass("gap-1");
+    expect(row).not.toHaveClass("gap-3");
+  });
+
+  it("does not roll-animate the slash separators when values change", () => {
+    const { rerender } = render(
+      <HeaderStats host={{ ...emptyHost, cpu_percent: 50, ram_percent: 40 }} />,
+    );
+    rerender(
+      <HeaderStats host={{ ...emptyHost, cpu_percent: 75, ram_percent: 40 }} />,
+    );
+
+    const slashes = screen.getAllByText("/");
+    expect(slashes).toHaveLength(2);
+    for (const slash of slashes) {
+      expect(slash).not.toHaveClass("animate-in");
+      expect(slash).not.toHaveClass("animate-out");
+      expect(slash.querySelector(".animate-in")).toBeNull();
+      expect(slash.querySelector(".animate-out")).toBeNull();
+    }
   });
 
   it("shows em dashes for null cpu, ram, and disk", () => {
