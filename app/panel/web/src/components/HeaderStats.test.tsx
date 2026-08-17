@@ -312,6 +312,83 @@ describe("HeaderStats", () => {
     expect(screen.getByLabelText("CPU")).toHaveTextContent("75%");
   });
 
+  it("remounts the incoming CPU value so a second roll can replay", () => {
+    const { rerender } = render(
+      <HeaderStats host={{ ...emptyHost, cpu_percent: 50 }} />,
+    );
+
+    rerender(<HeaderStats host={{ ...emptyHost, cpu_percent: 75 }} />);
+
+    const outgoing50 = screen.getByText("50%");
+    const incoming75 = screen.getByText("75%");
+    expect(outgoing50).toHaveClass("animate-out", "slide-out-to-bottom");
+    expect(incoming75).toHaveClass("animate-in", "slide-in-from-top");
+    expect(incoming75.closest(".overflow-hidden")).not.toBeNull();
+
+    fireEvent.animationEnd(outgoing50);
+
+    const settled75 = screen.getByText("75%");
+
+    rerender(<HeaderStats host={{ ...emptyHost, cpu_percent: 80 }} />);
+
+    const incoming80 = screen.getByText("80%");
+    expect(incoming80).not.toBe(settled75);
+    expect(incoming80).toHaveClass("animate-in", "slide-in-from-top");
+    expect(screen.getByText("75%")).toHaveClass(
+      "animate-out",
+      "slide-out-to-bottom",
+    );
+    expect(incoming80.closest(".overflow-hidden")).not.toBeNull();
+  });
+
+  it("applies enter classes on the first commit of a remounted CPU value", () => {
+    const { rerender } = render(
+      <HeaderStats host={{ ...emptyHost, cpu_percent: 50 }} />,
+    );
+
+    const firstCommitClasses: string[] = [];
+    const snapshotIfIncoming = (node: Node) => {
+      if (
+        node instanceof HTMLElement &&
+        node.textContent === "75%" &&
+        node.childElementCount === 0
+      ) {
+        firstCommitClasses.push(node.getAttribute("class") ?? "");
+      }
+    };
+    const appendChild = Node.prototype.appendChild;
+    const insertBefore = Node.prototype.insertBefore;
+    Node.prototype.appendChild = function (this: Node, node: Node) {
+      snapshotIfIncoming(node);
+      return appendChild.call(this, node);
+    };
+    Node.prototype.insertBefore = function (
+      this: Node,
+      node: Node,
+      child: Node | null,
+    ) {
+      snapshotIfIncoming(node);
+      return insertBefore.call(this, node, child);
+    };
+
+    try {
+      rerender(<HeaderStats host={{ ...emptyHost, cpu_percent: 75 }} />);
+    } finally {
+      Node.prototype.appendChild = appendChild;
+      Node.prototype.insertBefore = insertBefore;
+    }
+
+    expect(firstCommitClasses.length).toBeGreaterThan(0);
+    expect(
+      firstCommitClasses.some((className) => className.includes("animate-in")),
+    ).toBe(true);
+    expect(
+      firstCommitClasses.some((className) =>
+        className.includes("slide-in-from-top"),
+      ),
+    ).toBe(true);
+  });
+
   it("swaps the CPU value instantly when the user prefers reduced motion", () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query === "(prefers-reduced-motion: reduce)",

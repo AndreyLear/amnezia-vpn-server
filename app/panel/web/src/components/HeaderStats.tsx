@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { HostSnapshot } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
@@ -37,19 +37,23 @@ function RollingValue({
   value: string;
   className?: string;
 }) {
-  const committed = useRef(value);
+  const previous = useRef(value);
   const [outgoing, setOutgoing] = useState<string | null>(null);
   const outgoingNode = useRef<HTMLSpanElement | null>(null);
+  const rolling =
+    !prefersReducedMotion() &&
+    (value !== previous.current || outgoing != null);
 
-  if (value !== committed.current) {
-    const previous = committed.current;
-    committed.current = value;
+  useLayoutEffect(() => {
+    if (value === previous.current) return;
+    const from = previous.current;
+    previous.current = value;
     if (prefersReducedMotion()) {
       setOutgoing(null);
-    } else {
-      setOutgoing(previous);
+      return;
     }
-  }
+    setOutgoing(from);
+  }, [value]);
 
   useEffect(() => {
     const node = outgoingNode.current;
@@ -75,9 +79,10 @@ function RollingValue({
         </span>
       ) : null}
       <span
+        key={value}
         className={cn(
           "col-start-1 row-start-1",
-          outgoing != null &&
+          rolling &&
             "animate-in slide-in-from-top duration-200 ease-out motion-reduce:animate-none",
           className,
         )}
