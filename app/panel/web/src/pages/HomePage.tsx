@@ -16,6 +16,11 @@ import {
   type MeResponse,
   type MutationResponse,
 } from "@/lib/api";
+import { nextDemoHost } from "@/lib/demoHost";
+
+const DEMO_HOST_OVERLAY =
+  import.meta.env.DEV &&
+  !(import.meta.env as ImportMetaEnv & { VITEST?: boolean }).VITEST;
 
 export default function HomePage() {
   const [clients, setClients] = useState<Client[]>([]);
@@ -29,6 +34,10 @@ export default function HomePage() {
   const load = useCallback(async () => {
     const list = await api<unknown>("/api/clients");
     if (Array.isArray(list)) setClients(list);
+    if (DEMO_HOST_OVERLAY) {
+      setHost((prev) => nextDemoHost(prev));
+      return;
+    }
     try {
       const snap = await api<HostSnapshot>("/api/stats/host");
       if (snap && typeof snap === "object") {
