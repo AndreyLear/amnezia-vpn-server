@@ -152,6 +152,51 @@ func TestAPIMeUnauthorized(t *testing.T) {
 	if got["ok"] != false {
 		t.Fatalf("ok = %v", got["ok"])
 	}
+	if got["message"] != "Unauthorized." {
+		t.Fatalf("message = %v, want Unauthorized.", got["message"])
+	}
+	if _, ok := got["reason"]; ok {
+		t.Fatalf("no cookie must omit reason: %v", got)
+	}
+}
+
+func TestAPIMeUnauthorizedIdleReplacedGone(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+
+	first := httptest.NewRecorder()
+	f.server.ServeHTTP(first, apiJSON(t, http.MethodPost, "/api/login", map[string]string{
+		"username": "alice",
+		"password": testPassword,
+	}))
+	old := sessionCookie(t, first)
+	if old == nil {
+		t.Fatal("first login must Set-Cookie")
+	}
+
+	second := httptest.NewRecorder()
+	f.server.ServeHTTP(second, apiJSON(t, http.MethodPost, "/api/login", map[string]string{
+		"username": "alice",
+		"password": testPassword,
+	}))
+	if sessionCookie(t, second) == nil {
+		t.Fatal("second login must Set-Cookie")
+	}
+
+	stale := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: old.Value})
+	f.server.ServeHTTP(stale, req)
+	if stale.Code != http.StatusUnauthorized {
+		t.Fatalf("replaced SID: code = %d, want 401; body=%s", stale.Code, stale.Body.String())
+	}
+	got := decodeAPI(t, stale)
+	if got["message"] != "Unauthorized." {
+		t.Fatalf("message = %v", got["message"])
+	}
+	if got["reason"] != "replaced" {
+		t.Fatalf("second login must tombstone old SID as replaced, got %v", got["reason"])
+	}
 }
 
 func TestAPILoginIgnoresCodeField(t *testing.T) {
