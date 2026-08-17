@@ -146,6 +146,10 @@ describe("ClientInfoDialog", () => {
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(trafficRow!.nextElementSibling).toBe(deleteRow);
 
+    expect(deleteRow).toHaveClass("pt-3");
+    expect(trafficRow).toHaveClass("py-2");
+    expect(trafficRow).not.toHaveClass("pt-3");
+
     expect(remove).not.toHaveClass("max-sm:h-12");
     expect(remove).not.toHaveClass("max-sm:w-full");
   });

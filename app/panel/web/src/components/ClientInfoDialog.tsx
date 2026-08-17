@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 const confirmButtonClass = "max-sm:h-12 max-sm:w-full";
 const saveButtonClass = "max-sm:h-12 max-sm:w-full";
@@ -43,13 +44,15 @@ type ClientInfoDialogProps = {
 
 function PropertyRow({
   actions,
+  className,
   children,
 }: {
   actions?: ReactNode;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-2 py-2">
+    <div className={cn("flex items-center gap-2 py-2", className)}>
       <div className="min-w-0 flex-1">{children}</div>
       {actions}
     </div>
@@ -295,7 +298,7 @@ export function ClientInfoDialog({
                       </dd>
                     </div>
                   </PropertyRow>
-                  <PropertyRow>
+                  <PropertyRow className="pt-3">
                     <Button
                       type="button"
                       variant="destructive"
