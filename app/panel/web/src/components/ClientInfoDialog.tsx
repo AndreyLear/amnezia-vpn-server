@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Download, Power, QrCode, Trash2 } from "lucide-react";
+import { Download, QrCode, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -104,6 +104,21 @@ function PropertyEditButtons({
   );
 }
 
+function PropertyRow({
+  actions,
+  children,
+}: {
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2 py-2">
+      <div className="min-w-0 flex-1">{children}</div>
+      {actions}
+    </div>
+  );
+}
+
 function EditableProperty({
   editing,
   htmlFor,
@@ -129,19 +144,16 @@ function EditableProperty({
   );
 
   return (
-    <div className="flex items-center gap-2 max-sm:py-2">
-      <div className="min-w-0 flex-1">
-        {editing ? (
-          <Label htmlFor={htmlFor} className="text-muted-foreground">
-            {caption}
-          </Label>
-        ) : (
-          <dt className="text-muted-foreground">{caption}</dt>
-        )}
-        {children}
-      </div>
-      {actions}
-    </div>
+    <PropertyRow actions={actions}>
+      {editing ? (
+        <Label htmlFor={htmlFor} className="text-muted-foreground">
+          {caption}
+        </Label>
+      ) : (
+        <dt className="text-muted-foreground">{caption}</dt>
+      )}
+      {children}
+    </PropertyRow>
   );
 }
 
@@ -244,7 +256,7 @@ export function ClientInfoDialog({
                 <DialogTitle>Клиент</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
-                <dl className="grid gap-2 text-sm max-sm:divide-y max-sm:divide-border max-sm:gap-0">
+                <dl className="grid divide-y divide-border gap-0 text-sm">
                   <EditableProperty
                     editing={editingName}
                     htmlFor="info-name"
@@ -310,30 +322,51 @@ export function ClientInfoDialog({
                       <dd>{viewDescription}</dd>
                     )}
                   </EditableProperty>
-                  <div className="grid gap-0.5 max-sm:py-2">
-                    <dt className="text-muted-foreground">Статус</dt>
-                    <dd>
-                      {!client.enabled
-                        ? "пауза"
-                        : client.online
-                          ? "онлайн"
-                          : "офлайн"}
-                    </dd>
-                  </div>
-                  <div className="grid gap-0.5 max-sm:py-2">
-                    <dt className="text-muted-foreground">IP</dt>
-                    <dd className="font-mono">{client.address}</dd>
-                  </div>
-                  <div className="grid gap-0.5 max-sm:py-2">
-                    <dt className="text-muted-foreground">Handshake</dt>
-                    <dd>{formatHandshake(client.last_handshake_utc)}</dd>
-                  </div>
-                  <div className="grid gap-0.5 max-sm:py-2">
-                    <dt className="text-muted-foreground">Трафик</dt>
-                    <dd>
-                      ↓ {formatBytes(client.rx_bytes)} · ↑ {formatBytes(client.tx_bytes)}
-                    </dd>
-                  </div>
+                  <PropertyRow
+                    actions={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={inlineEditButtonClass}
+                        disabled={pending}
+                        onClick={onToggle}
+                      >
+                        {client.enabled ? "Отключить" : "Включить"}
+                      </Button>
+                    }
+                  >
+                    <div className="grid gap-0.5">
+                      <dt className="text-muted-foreground">Статус</dt>
+                      <dd>
+                        {!client.enabled
+                          ? "пауза"
+                          : client.online
+                            ? "онлайн"
+                            : "офлайн"}
+                      </dd>
+                    </div>
+                  </PropertyRow>
+                  <PropertyRow>
+                    <div className="grid gap-0.5">
+                      <dt className="text-muted-foreground">IP</dt>
+                      <dd className="font-mono">{client.address}</dd>
+                    </div>
+                  </PropertyRow>
+                  <PropertyRow>
+                    <div className="grid gap-0.5">
+                      <dt className="text-muted-foreground">Handshake</dt>
+                      <dd>{formatHandshake(client.last_handshake_utc)}</dd>
+                    </div>
+                  </PropertyRow>
+                  <PropertyRow>
+                    <div className="grid gap-0.5">
+                      <dt className="text-muted-foreground">Трафик</dt>
+                      <dd>
+                        ↓ {formatBytes(client.rx_bytes)} · ↑ {formatBytes(client.tx_bytes)}
+                      </dd>
+                    </div>
+                  </PropertyRow>
                 </dl>
                 <div className="flex flex-wrap gap-2 max-sm:flex-col">
                   <Button
@@ -355,16 +388,6 @@ export function ClientInfoDialog({
                   >
                     <Download data-icon="inline-start" />
                     Скачать конфиг
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className={actionButtonClass}
-                    disabled={pending}
-                    onClick={onToggle}
-                  >
-                    <Power data-icon="inline-start" />
-                    {client.enabled ? "Отключить" : "Включить"}
                   </Button>
                   <Button
                     type="button"

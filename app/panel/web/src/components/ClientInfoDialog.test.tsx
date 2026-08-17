@@ -149,7 +149,60 @@ describe("ClientInfoDialog", () => {
     );
 
     const dl = document.querySelector("dl");
-    expect(dl).toHaveClass("max-sm:divide-y", "max-sm:divide-border");
+    expect(dl).toHaveClass("divide-y", "divide-border", "gap-0");
+    expect(dl).not.toHaveClass("max-sm:divide-y", "max-sm:divide-border", "max-sm:gap-0");
+
+    const trafficRow = screen.getByText("Трафик").closest("div.flex");
+    expect(trafficRow).toHaveClass("flex", "items-center", "py-2");
+    expect(trafficRow).not.toHaveClass("max-sm:py-2");
+  });
+
+  it("puts Отключить next to Статус in a centered property row", () => {
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={() => {}}
+        onToggle={() => {}}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Отключить" });
+    const row = toggle.parentElement;
+    expect(row).toHaveClass("flex", "items-center");
+    expect(row).toContainElement(screen.getByText("Статус"));
+    expect(row).toContainElement(screen.getByText("офлайн"));
+    expect(toggle).toHaveTextContent("Отключить");
+    expect(toggle.querySelector("svg")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Отключить" })).toHaveLength(1);
+  });
+
+  it("keeps QR, download, and delete in the action row without enable/disable", () => {
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={() => {}}
+        onQr={() => {}}
+        onDownload={() => {}}
+        onToggle={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    const qr = screen.getByRole("button", { name: "QR-код" });
+    const actionRow = qr.parentElement;
+    expect(actionRow).not.toBeNull();
+    expect(within(actionRow!).getByRole("button", { name: "QR-код" })).toBeInTheDocument();
+    expect(
+      within(actionRow!).getByRole("button", { name: "Скачать конфиг" }),
+    ).toBeInTheDocument();
+    expect(within(actionRow!).getByRole("button", { name: "Удалить" })).toBeInTheDocument();
+    expect(
+      within(actionRow!).queryByRole("button", { name: "Отключить" }),
+    ).not.toBeInTheDocument();
+
+    const toggle = screen.getByRole("button", { name: "Отключить" });
+    expect(actionRow).not.toContainElement(toggle);
+    expect(toggle.parentElement).toContainElement(screen.getByText("Статус"));
   });
 
   it("vertically centers Изменить against the whole name property", () => {
