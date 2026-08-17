@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Download, QrCode, Trash2 } from "lucide-react";
+import { Download, Pause, Pencil, Play, QrCode, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -195,6 +195,7 @@ export function ClientInfoDialog({
                         disabled={pending}
                         onClick={startNameEdit}
                       >
+                        <Pencil data-icon="inline-start" aria-hidden />
                         Изменить
                       </Button>
                     }
@@ -212,6 +213,7 @@ export function ClientInfoDialog({
                         disabled={pending}
                         onClick={startDescriptionEdit}
                       >
+                        <Pencil data-icon="inline-start" aria-hidden />
                         Изменить
                       </Button>
                     }
@@ -226,7 +228,17 @@ export function ClientInfoDialog({
                         disabled={pending}
                         onClick={onToggle}
                       >
-                        {client.enabled ? "Отключить" : "Включить"}
+                        {client.enabled ? (
+                          <>
+                            <Pause data-icon="inline-start" aria-hidden />
+                            Отключить
+                          </>
+                        ) : (
+                          <>
+                            <Play data-icon="inline-start" aria-hidden />
+                            Включить
+                          </>
+                        )}
                       </Button>
                     }
                   >

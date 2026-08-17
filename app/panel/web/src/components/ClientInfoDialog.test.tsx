@@ -68,7 +68,11 @@ describe("ClientInfoDialog", () => {
     expect(status).toHaveTextContent("пауза");
     expect(status).not.toHaveTextContent("онлайн");
     expect(status).not.toHaveTextContent("офлайн");
-    expect(screen.getByRole("button", { name: "Включить" })).toBeInTheDocument();
+    const enable = screen.getByRole("button", { name: "Включить" });
+    expect(enable).toHaveTextContent("Включить");
+    const icon = enable.querySelector("svg");
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveAttribute("data-icon", "inline-start");
     expect(document.querySelector('[data-slot="badge"]')).toBeNull();
   });
 
@@ -173,7 +177,9 @@ describe("ClientInfoDialog", () => {
     expect(row).toContainElement(screen.getByText("Статус"));
     expect(row).toContainElement(screen.getByText("офлайн"));
     expect(toggle).toHaveTextContent("Отключить");
-    expect(toggle.querySelector("svg")).toBeNull();
+    const icon = toggle.querySelector("svg");
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveAttribute("data-icon", "inline-start");
     expect(screen.getAllByRole("button", { name: "Отключить" })).toHaveLength(1);
   });
 
@@ -228,6 +234,11 @@ describe("ClientInfoDialog", () => {
     const editDescription = screen.getByRole("button", { name: "Изменить описание" });
     expect(editName).toHaveTextContent("Изменить");
     expect(editDescription).toHaveTextContent("Изменить");
+    for (const button of [editName, editDescription]) {
+      const icon = button.querySelector("svg");
+      expect(icon).not.toBeNull();
+      expect(icon).toHaveAttribute("data-icon", "inline-start");
+    }
 
     expect(document.querySelector("#info-name")).toBeNull();
     expect(document.querySelector("#info-description")).toBeNull();
