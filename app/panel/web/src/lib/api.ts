@@ -3,8 +3,10 @@ import { toast } from "sonner";
 let csrf = "";
 let lastUsername = "";
 let csrfWaiters: Array<() => void> = [];
+export type SessionLossReason = "idle" | "replaced" | "gone";
+
 let sessionExpiredWaiters: Array<() => void> = [];
-let sessionExpiredListeners: Array<(open: boolean) => void> = [];
+let sessionExpiredListeners: Array<(open: boolean, reason?: SessionLossReason) => void> = [];
 
 export function setCsrf(token: string) {
   csrf = token;
@@ -22,7 +24,9 @@ export function getLastUsername(): string {
   return lastUsername;
 }
 
-export function subscribeSessionExpired(listener: (open: boolean) => void): () => void {
+export function subscribeSessionExpired(
+  listener: (open: boolean, reason?: SessionLossReason) => void,
+): () => void {
   sessionExpiredListeners.push(listener);
   return () => {
     sessionExpiredListeners = sessionExpiredListeners.filter((item) => item !== listener);
@@ -51,11 +55,18 @@ function waitForCsrf(): Promise<void> {
   });
 }
 
-function waitForSessionRelogin(): Promise<void> {
+function waitForSessionRelogin(reason?: SessionLossReason): Promise<void> {
   return new Promise((resolve) => {
     sessionExpiredWaiters.push(resolve);
-    for (const listener of sessionExpiredListeners) listener(true);
+    for (const listener of sessionExpiredListeners) listener(true, reason);
   });
+}
+
+function sessionLossReason(body: unknown): SessionLossReason | undefined {
+  if (!body || typeof body !== "object" || !("reason" in body)) return undefined;
+  const reason = (body as { reason?: unknown }).reason;
+  if (reason === "idle" || reason === "replaced" || reason === "gone") return reason;
+  return undefined;
 }
 
 function mutationNeedsCsrf(path: string, init: RequestInit): boolean {
@@ -79,7 +90,13 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
       window.location.assign("/login");
       throw new Error("Unauthorized.");
     }
-    await waitForSessionRelogin();
+    let reason: SessionLossReason | undefined;
+    try {
+      reason = sessionLossReason(await res.json());
+    } catch {
+      reason = undefined;
+    }
+    await waitForSessionRelogin(reason);
     return apiRequest(path, init);
   }
   return res;
