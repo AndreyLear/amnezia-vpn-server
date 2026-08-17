@@ -47,39 +47,41 @@ export default function LoginPage() {
       <AmbientBackground />
       <main className="relative flex min-h-svh items-center justify-center p-6">
       <form
-        className="grid w-full max-w-sm gap-4"
+        className="grid w-full max-w-sm gap-6"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
         }}
       >
-        <div className="grid gap-2">
-          <Label htmlFor="username">Имя пользователя</Label>
-          <Input
-            id="username"
-            name="username"
-            autoComplete="username"
-            required
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            disabled={pending}
-          />
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="username">Имя пользователя</Label>
+            <Input
+              id="username"
+              name="username"
+              autoComplete="username"
+              required
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              disabled={pending}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="password">Пароль</Label>
+            <Input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={pending}
+            />
+          </div>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </div>
-        <div className="grid gap-2">
-          <Label htmlFor="password">Пароль</Label>
-          <Input
-            id="password"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={pending}
-          />
-        </div>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        <Button type="submit" size="lg" className="mt-4" disabled={pending}>
+        <Button type="submit" size="lg" disabled={pending}>
           Войти
         </Button>
       </form>

@@ -102,23 +102,24 @@ export function BackupUploadDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="sm:max-w-md overflow-hidden">
+      <DialogContent className="gap-6 sm:max-w-md overflow-hidden">
         <DialogHeader>
           <DialogTitle>Загрузить бэкап</DialogTitle>
         </DialogHeader>
-        {restorePending ? (
-          <p className="text-sm text-muted-foreground">
-            Восстановление уже подготовлено. Требуется перезапуск.
-          </p>
-        ) : null}
         <form
-          className="grid gap-3"
+          className="grid gap-6"
           onSubmit={(e) => {
             e.preventDefault();
             if (file) void upload(file);
           }}
         >
-          <label
+          <div className="grid gap-4">
+            {restorePending ? (
+              <p className="text-sm text-muted-foreground">
+                Восстановление уже подготовлено. Требуется перезапуск.
+              </p>
+            ) : null}
+            <label
             className={`grid min-w-0 cursor-pointer gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm ${
               dragOver ? "border-primary bg-muted" : "border-border"
             }`}
@@ -158,6 +159,7 @@ export function BackupUploadDialog({
               }}
             />
           </label>
+          </div>
           <DialogFooter>
             <Button type="submit" disabled={pending || restorePending || !file}>
               {pending ? <Spinner data-icon="inline-start" /> : null}

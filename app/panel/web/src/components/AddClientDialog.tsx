@@ -44,42 +44,44 @@ export function AddClientDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent>
+      <DialogContent className="gap-6">
         <DialogHeader>
           <DialogTitle>Добавить клиента</DialogTitle>
         </DialogHeader>
         <form
-          className="grid gap-3"
+          className="grid gap-6"
           onSubmit={(e) => {
             e.preventDefault();
             void onSubmit({ name, description });
           }}
         >
-          <div className="grid gap-2">
-            <Label htmlFor="client-name">Имя</Label>
-            <Input
-              id="client-name"
-              name="name"
-              required
-              maxLength={64}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={pending}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="client-description">
-              Описание{" "}
-              <span className="font-normal text-muted-foreground">(опционально)</span>
-            </Label>
-            <Textarea
-              id="client-description"
-              name="description"
-              rows={1}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={pending}
-            />
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="client-name">Имя</Label>
+              <Input
+                id="client-name"
+                name="name"
+                required
+                maxLength={64}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={pending}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="client-description">
+                Описание{" "}
+                <span className="font-normal text-muted-foreground">(опционально)</span>
+              </Label>
+              <Textarea
+                id="client-description"
+                name="description"
+                rows={1}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                disabled={pending}
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button type="submit" disabled={pending}>

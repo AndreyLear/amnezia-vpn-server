@@ -24,8 +24,12 @@ describe("LoginPage", () => {
       "data-size",
       "lg",
     );
-    expect(container.querySelector("form")).toHaveClass("gap-4");
-    expect(screen.getByRole("button", { name: "Войти" })).toHaveClass("mt-4");
+    const form = container.querySelector("form");
+    expect(form).toHaveClass("gap-6");
+    expect(form).not.toHaveClass("gap-3");
+    const fieldStack = form?.querySelector(":scope > div");
+    expect(fieldStack).toHaveClass("grid", "gap-4");
+    expect(screen.getByRole("button", { name: "Войти" })).not.toHaveClass("mt-4");
     expect(screen.queryByLabelText("Код")).not.toBeInTheDocument();
   });
 });
