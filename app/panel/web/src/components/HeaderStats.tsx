@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+
 import type { HostSnapshot } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -21,6 +23,71 @@ function loadColor(percent: number | null | undefined): string {
   return "text-red-500";
 }
 
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function RollingValue({
+  value,
+  className,
+}: {
+  value: string;
+  className?: string;
+}) {
+  const committed = useRef(value);
+  const [outgoing, setOutgoing] = useState<string | null>(null);
+  const outgoingNode = useRef<HTMLSpanElement | null>(null);
+
+  if (value !== committed.current) {
+    const previous = committed.current;
+    committed.current = value;
+    if (prefersReducedMotion()) {
+      setOutgoing(null);
+    } else {
+      setOutgoing(previous);
+    }
+  }
+
+  useEffect(() => {
+    const node = outgoingNode.current;
+    if (!node || outgoing == null) return;
+    const clear = () => setOutgoing(null);
+    node.addEventListener("animationend", clear);
+    return () => node.removeEventListener("animationend", clear);
+  }, [outgoing]);
+
+  return (
+    <span className="relative inline-grid overflow-hidden">
+      {outgoing != null ? (
+        <span
+          ref={outgoingNode}
+          aria-hidden
+          className={cn(
+            "col-start-1 row-start-1 animate-out slide-out-to-bottom duration-200 ease-out motion-reduce:hidden",
+            className,
+          )}
+          onAnimationEnd={() => setOutgoing(null)}
+        >
+          {outgoing}
+        </span>
+      ) : null}
+      <span
+        className={cn(
+          "col-start-1 row-start-1",
+          outgoing != null &&
+            "animate-in slide-in-from-top duration-200 ease-out motion-reduce:animate-none",
+          className,
+        )}
+      >
+        {value}
+      </span>
+    </span>
+  );
+}
+
 function Metric({
   ariaLabel,
   value,
@@ -33,12 +100,10 @@ function Metric({
   tooltip: string | null;
 }) {
   const colored = value !== DASH;
+  const colorClass = colored ? loadColor(colorPercent) : "text-muted-foreground";
   const inner = (
-    <span
-      aria-label={ariaLabel}
-      className={colored ? loadColor(colorPercent) : "text-muted-foreground"}
-    >
-      {value}
+    <span aria-label={ariaLabel} className={colorClass}>
+      <RollingValue value={value} className={colorClass} />
     </span>
   );
   if (!tooltip) return inner;

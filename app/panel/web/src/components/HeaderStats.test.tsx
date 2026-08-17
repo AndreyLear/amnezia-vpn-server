@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HeaderStats } from "@/components/HeaderStats";
 import type { HostSnapshot } from "@/lib/api";
@@ -30,6 +30,10 @@ function expectValuesOnly(el: HTMLElement) {
 }
 
 describe("HeaderStats", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("shows values only without cpu / ram / disk labels", () => {
     render(
       <HeaderStats
@@ -239,5 +243,52 @@ describe("HeaderStats", () => {
     expect(cpu.closest("[role='button']")).toBeNull();
     expect(cpu).not.toHaveClass("cursor-pointer");
     expect(cpu.parentElement).not.toHaveClass("cursor-pointer");
+  });
+
+  it("rolls the CPU value from the top and clips overflow while both values are on screen", () => {
+    const { rerender } = render(
+      <HeaderStats host={{ ...emptyHost, cpu_percent: 50 }} />,
+    );
+
+    expect(screen.getByLabelText("CPU")).toHaveTextContent("50%");
+    expect(screen.queryByText("75%")).not.toBeInTheDocument();
+
+    rerender(<HeaderStats host={{ ...emptyHost, cpu_percent: 75 }} />);
+
+    expect(screen.getByText("50%")).toBeInTheDocument();
+    expect(screen.getByText("75%")).toBeInTheDocument();
+    expect(
+      screen.getByText("75%").closest(".overflow-hidden"),
+    ).not.toBeNull();
+
+    fireEvent.animationEnd(screen.getByText("50%"));
+
+    expect(screen.queryByText("50%")).not.toBeInTheDocument();
+    expect(screen.getByText("75%")).toBeInTheDocument();
+    expect(screen.getByLabelText("CPU")).toHaveTextContent("75%");
+  });
+
+  it("swaps the CPU value instantly when the user prefers reduced motion", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return false;
+      },
+    }));
+
+    const { rerender } = render(
+      <HeaderStats host={{ ...emptyHost, cpu_percent: 50 }} />,
+    );
+    rerender(<HeaderStats host={{ ...emptyHost, cpu_percent: 75 }} />);
+
+    expect(screen.getByText("75%")).toBeInTheDocument();
+    expect(screen.queryByText("50%")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("CPU")).toHaveTextContent("75%");
   });
 });
