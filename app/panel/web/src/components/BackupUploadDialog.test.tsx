@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
@@ -86,12 +87,54 @@ describe("BackupUploadDialog", () => {
     }
   });
 
-  it("disables upload and shows restart copy when restore is pending", () => {
+  it("does not show the restart sentence even if restore is pending", () => {
     render(<BackupUploadDialog open restorePending onOpenChange={() => {}} />);
 
-    expect(screen.getByText("Восстановление уже подготовлено. Требуется перезапуск.")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Восстановление уже подготовлено. Требуется перезапуск."),
+    ).not.toBeInTheDocument();
     expect(document.querySelector('input[type="file"]')).toBeDisabled();
     expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+  });
+
+  it("closes the dialog after a successful restore", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    setCsrf("csrf");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ok: true, message: "ok" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <BackupUploadDialog
+          open={open}
+          onOpenChange={(next) => {
+            onOpenChange(next);
+            setOpen(next);
+          }}
+        />
+      );
+    }
+
+    render(<Harness />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["archive"], "backup.tar.zst", { type: "application/octet-stream" });
+    await user.upload(input, file);
+    await user.click(screen.getByRole("button", { name: "Загрузить" }));
+
+    await waitFor(() => {
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(screen.queryByRole("heading", { name: "Загрузить бэкап" })).not.toBeInTheDocument();
   });
 
   it("shows a spinner on Загрузить while POST /api/backups/restore is pending", async () => {

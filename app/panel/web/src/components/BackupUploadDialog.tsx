@@ -112,6 +112,7 @@ export function BackupUploadDialog({
       toast.success(data.message ?? "Бэкап подготовлен. Требуется перезапуск.");
       onPrepared?.();
       setFile(null);
+      onOpenChange(false);
     } finally {
       setPending(false);
     }
@@ -159,11 +160,6 @@ export function BackupUploadDialog({
           }}
         >
           <div className="grid gap-4">
-            {restorePending ? (
-              <p className="text-sm text-muted-foreground">
-                Восстановление уже подготовлено. Требуется перезапуск.
-              </p>
-            ) : null}
             {isSmUp ? (
               <label
                 className={`grid min-w-0 cursor-pointer gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm ${
