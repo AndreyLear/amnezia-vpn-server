@@ -30,6 +30,7 @@ import (
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/hostmetrics"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
@@ -84,6 +85,12 @@ type Config struct {
 	Logger *log.Logger
 	// ShutdownTimeout bounds http.Server.Shutdown.
 	ShutdownTimeout time.Duration
+	// HostProc is the host /proc mount (Docker: /host/proc). Empty
+	// selects "/host/proc". Tests pass a temp directory.
+	HostProc string
+	// DiskPath is the filesystem path whose usage is reported. Empty
+	// selects "/data". Tests pass t.TempDir().
+	DiskPath string
 }
 
 // DefaultConfig returns the serve defaults.
@@ -113,9 +120,11 @@ type Server struct {
 	// swaps the handle in-process after backup.ApplyPending, so every
 	// read/write access goes through db() and never touches cfg.DB
 	// directly.
-	dbMu        sync.RWMutex
-	dbh         *sql.DB
-	loginLimit  *loginLimiter
+	dbMu       sync.RWMutex
+	dbh        *sql.DB
+	loginLimit *loginLimiter
+	hostMu     sync.Mutex
+	hostCPU    hostmetrics.CPUSample
 }
 
 // db returns the live database handle (RLock-protected swap access).
@@ -187,6 +196,12 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = DefaultShutdownTimeout
 	}
+	if cfg.HostProc == "" {
+		cfg.HostProc = "/host/proc"
+	}
+	if cfg.DiskPath == "" {
+		cfg.DiskPath = "/data"
+	}
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, loginLimit: newLoginLimiter()}
 	// Document GETs serve the embedded SPA with no RequireAuth so React
 	// can boot and send the user to /login after GET /api/me 401.
@@ -220,6 +235,7 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /api/account/password", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiChangePassword))))
 	s.mux.Handle("POST /api/backups/download", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiBackupDownload))))
 	s.mux.Handle("POST /api/backups/restore", s.auth.RequireAPI(http.HandlerFunc(s.apiBackupRestore)))
+	s.mux.Handle("GET /api/stats/host", s.auth.RequireAPI(http.HandlerFunc(s.apiStatsHost)))
 	s.mux.Handle("GET /api/clients", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsList)))
 	s.mux.Handle("POST /api/clients", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsCreate))))
 	s.mux.Handle("GET /api/clients/{id}", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsGet)))

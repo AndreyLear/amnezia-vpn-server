@@ -154,6 +154,16 @@ export type MutationResponse = {
   id?: number;
 };
 
+export type HostSnapshot = {
+  cpu_percent: number | null;
+  ram_percent: number | null;
+  disk_percent: number | null;
+};
+
+export function fetchHost(): Promise<HostSnapshot> {
+  return api<HostSnapshot>("/api/stats/host");
+}
+
 /** Toast only after a confirmed success: `{ok:true}` or a created/patched client. */
 export function mutationSucceeded(data: MutationResponse | undefined): boolean {
   if (!data) return false;
