@@ -11,9 +11,24 @@ vi.mock("sonner", () => ({
 }));
 
 const rejectCopy = "Нужен файл бэкапа (.tar.zst).";
+const originalMatchMedia = window.matchMedia;
+
+function stubMinWidthSm(matches: boolean) {
+  window.matchMedia = vi.fn((query: string) => ({
+    matches: query === "(min-width: 640px)" ? matches : false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
 
 describe("BackupUploadDialog", () => {
   afterEach(() => {
+    window.matchMedia = originalMatchMedia;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     setCsrf("");
@@ -115,5 +130,19 @@ describe("BackupUploadDialog", () => {
       const settled = screen.getByRole("button", { name: "Загрузить" });
       expect(settled.querySelector('[data-slot="spinner"]')).toBeNull();
     });
+  });
+
+  it("uses a device picker without dropzone copy on mobile", () => {
+    stubMinWidthSm(false);
+    render(<BackupUploadDialog open onOpenChange={() => {}} />);
+
+    expect(
+      screen.queryByText("Перетащите файл сюда или выберите на диске"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Выберите файл на устройстве")).toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).toHaveAttribute(
+      "accept",
+      ".tar.zst",
+    );
   });
 });

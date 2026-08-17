@@ -1,9 +1,15 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, Download, Upload } from "lucide-react";
 
 import { BackupUploadDialog } from "@/components/BackupUploadDialog";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,6 +18,35 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { apiRequest } from "@/lib/api";
 import { toast } from "sonner";
+
+const SM_MIN_WIDTH = "(min-width: 640px)";
+
+const sheetContentClass =
+  "h-auto max-h-[calc(100dvh-2rem)] overflow-y-auto max-sm:top-auto max-sm:right-0 max-sm:bottom-0 max-sm:left-0 max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none max-sm:[&_[data-size=icon-sm]]:size-12 gap-6";
+
+function isMinWidthSm(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
+  }
+  return window.matchMedia(SM_MIN_WIDTH).matches;
+}
+
+function useMinWidthSm() {
+  const [matches, setMatches] = useState(isMinWidthSm);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mq = window.matchMedia(SM_MIN_WIDTH);
+    const onChange = () => setMatches(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  return matches;
+}
 
 function filenameFromDisposition(header: string | null): string {
   if (!header) return "backup.tar.zst";
@@ -107,26 +142,68 @@ function useBackupMenuApi(): BackupMenuApi {
 
 function BackupHeaderTrigger() {
   const api = useBackupMenuApi();
+  const isSmUp = useMinWidthSm();
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  if (isSmUp) {
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline">
+            Бэкап
+            <ChevronDownIcon
+              data-icon="inline-end"
+              aria-hidden
+              className="transition-transform group-aria-expanded/button:rotate-180"
+            />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          onCloseAutoFocus={(event) => event.preventDefault()}
+        >
+          <BackupItems api={api} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline">
-          Бэкап
-          <ChevronDownIcon
-            data-icon="inline-end"
-            aria-hidden
-            className="transition-transform group-aria-expanded/button:rotate-180"
-          />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        onCloseAutoFocus={(event) => event.preventDefault()}
-      >
-        <BackupItems api={api} />
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <Button variant="outline" onClick={() => setSheetOpen(true)}>
+        Бэкап
+      </Button>
+      <Dialog open={sheetOpen} onOpenChange={setSheetOpen}>
+        <DialogContent className={sheetContentClass}>
+          <DialogHeader className="max-sm:pr-12">
+            <DialogTitle>Бэкап</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-4">
+            <Button
+              type="button"
+              variant="outline"
+              className="max-sm:h-12 max-sm:w-full"
+              onClick={() => void api.download()}
+            >
+              <Download data-icon="inline-start" />
+              Скачать
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="max-sm:h-12 max-sm:w-full"
+              onClick={() => {
+                setSheetOpen(false);
+                api.setUploadOpen(true);
+              }}
+            >
+              <Upload data-icon="inline-start" />
+              Загрузить
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

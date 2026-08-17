@@ -5,6 +5,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackupMenu } from "@/components/BackupMenu";
 import { setCsrf } from "@/lib/api";
 
+const originalMatchMedia = window.matchMedia;
+
+function stubMinWidthSm(matches: boolean) {
+  window.matchMedia = vi.fn((query: string) => ({
+    matches: query === "(min-width: 640px)" ? matches : false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
+
 describe("BackupMenu close focus", () => {
   it("does not restore focus to the trigger after Escape closes the menu", async () => {
     const user = userEvent.setup();
@@ -103,5 +118,44 @@ describe("BackupMenu restore pending", () => {
       await screen.findByText("Восстановление уже подготовлено. Требуется перезапуск."),
     ).toBeInTheDocument();
     expect(document.querySelector('input[type="file"]')).toBeDisabled();
+  });
+});
+
+describe("BackupMenu mobile sheet", () => {
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  it("opens a bottom sheet with download and upload buttons instead of a menu", async () => {
+    stubMinWidthSm(false);
+    const user = userEvent.setup();
+    render(<BackupMenu />);
+
+    const trigger = screen.getByRole("button", { name: "Бэкап" });
+    expect(trigger).not.toHaveAttribute("aria-haspopup", "menu");
+    await user.click(trigger);
+
+    expect(screen.getByRole("heading", { name: "Бэкап" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Скачать" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeInTheDocument();
+
+    const content = document.querySelector('[data-slot="dialog-content"]');
+    expect(content).toHaveClass("max-sm:bottom-0");
+  });
+
+  it("opens the upload dialog from the sheet without dropzone copy", async () => {
+    stubMinWidthSm(false);
+    const user = userEvent.setup();
+    render(<BackupMenu />);
+
+    await user.click(screen.getByRole("button", { name: "Бэкап" }));
+    await user.click(screen.getByRole("button", { name: "Загрузить" }));
+
+    expect(await screen.findByRole("heading", { name: "Загрузить бэкап" })).toBeInTheDocument();
+    expect(
+      screen.queryByText("Перетащите файл сюда или выберите на диске"),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).toBeInTheDocument();
   });
 });
