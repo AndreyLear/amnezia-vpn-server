@@ -106,55 +106,39 @@ describe("ClientCard", () => {
     expect(card).toHaveClass("hover:ring-foreground/25");
   });
 
-  it("packs metrics and places the menu opposite the name on max-sm", () => {
+  it("packs metrics on the same row as the name on max-sm, without a menu", () => {
+    stubMinWidthSm(false);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
     render(<ClientCard client={base} />);
 
     const name = screen.getByText("Alice");
+    expect(name).toHaveClass("truncate", "min-w-0");
+    expect(name.parentElement).toHaveClass("min-w-0");
+    expect(screen.queryByRole("button", { name: "Alice" })).not.toBeInTheDocument();
+
     const content = name.closest("[data-slot=card-content]");
-    expect(content).toHaveClass(
+    expect(content).toHaveClass("flex");
+    expect(content).not.toHaveClass(
       "max-sm:grid",
       "max-sm:grid-cols-[minmax(0,1fr)_auto]",
-      "gap-x-3",
-      "gap-y-1",
     );
     expect(content).not.toHaveClass("gap-x-2");
     expect(content).not.toHaveClass("max-sm:flex-wrap");
     expect(name.parentElement).not.toHaveClass("max-sm:basis-full");
 
     const handshake = screen.getByText("1 мин");
-    const menu = screen.getByRole("button", { name: "Действия для Alice" });
-    expect(content).toContainElement(menu);
+    expect(screen.queryByRole("button", { name: "Действия для Alice" })).not.toBeInTheDocument();
+    expect(content).toContainElement(handshake);
 
     let metrics: HTMLElement | null = handshake.parentElement;
     while (metrics && !metrics.classList.contains("sm:contents")) {
       metrics = metrics.parentElement;
     }
-    expect(metrics).toHaveClass("flex", "shrink-0", "items-center", "gap-3", "max-sm:col-span-2", "sm:contents");
+    expect(metrics).toHaveClass("flex", "shrink-0", "items-center", "gap-3", "sm:contents");
+    expect(metrics).not.toHaveClass("max-sm:col-span-2");
     expect(metrics).not.toHaveClass("gap-2");
     expect(metrics).not.toHaveClass("max-sm:justify-between", "max-sm:w-full");
-    expect(metrics).not.toContainElement(menu);
-
-    let menuCell: HTMLElement | null = menu;
-    while (
-      menuCell &&
-      !(
-        menuCell.classList.contains("max-sm:col-start-2") &&
-        menuCell.classList.contains("max-sm:row-start-1")
-      )
-    ) {
-      if (menuCell === content) {
-        menuCell = null;
-        break;
-      }
-      menuCell = menuCell.parentElement;
-    }
-    expect(menuCell).toHaveClass("max-sm:col-start-2", "max-sm:row-start-1");
-
-    const icon = menu.querySelector("svg");
-    expect(icon).toHaveClass("lucide-ellipsis-vertical");
-    expect(icon).not.toHaveClass("lucide-ellipsis");
   });
 
   it("uses sm:contents on the metrics wrapper so handshake rx tx are grid cells", () => {
@@ -265,18 +249,18 @@ describe("ClientCard", () => {
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Исходящий трафик");
   });
 
-  it("opens client info from the overflow button below sm, not a dropdown", async () => {
+  it("opens client info from the card below sm", async () => {
     stubMinWidthSm(false);
     const user = userEvent.setup();
     const onInfo = vi.fn();
     render(<ClientCard client={base} onInfo={onInfo} />);
 
-    const menu = screen.getByRole("button", { name: "Действия для Alice" });
-    expect(menu).not.toHaveAttribute("data-slot", "dropdown-menu-trigger");
+    expect(screen.queryByRole("button", { name: "Действия для Alice" })).not.toBeInTheDocument();
 
-    await user.click(menu);
+    const card = screen.getByText("Alice").closest("[data-slot=card]");
+    expect(card).toHaveClass("cursor-pointer");
+    await user.click(card!);
     expect(onInfo).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
   });
 
   it("opens the actions dropdown from the overflow button on sm and up", async () => {

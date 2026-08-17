@@ -114,24 +114,32 @@ export function ClientCard({
     <Card
       className={cn(
         "relative client-card-sweep flex-row items-center hover:ring-foreground/25 sm:col-span-full sm:grid sm:grid-cols-subgrid py-2 sm:py-1",
+        !isSmUp && "cursor-pointer",
         !client.enabled && "opacity-60",
       )}
+      onClick={!isSmUp ? onInfo : undefined}
     >
-      <CardContent className="flex min-w-0 flex-1 items-center max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 sm:col-span-full sm:grid sm:grid-cols-subgrid px-2 sm:px-4">
+      <CardContent className="flex min-w-0 flex-1 items-center gap-x-3 gap-y-1 sm:col-span-full sm:grid sm:grid-cols-subgrid px-2 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <button
-            type="button"
-            className="min-w-0 truncate text-left font-heading text-base font-medium"
-            onClick={onInfo}
-          >
-            {client.name}
-          </button>
+          {isSmUp ? (
+            <button
+              type="button"
+              className="min-w-0 truncate text-left font-heading text-base font-medium"
+              onClick={onInfo}
+            >
+              {client.name}
+            </button>
+          ) : (
+            <span className="min-w-0 truncate font-heading text-base font-medium">
+              {client.name}
+            </span>
+          )}
           {!client.enabled ? (
             <span className="shrink-0 text-muted-foreground">Пауза</span>
           ) : null}
         </div>
         <TooltipProvider>
-          <div className="flex shrink-0 items-center gap-3 text-muted-foreground max-sm:col-span-2 sm:contents">
+          <div className="flex shrink-0 items-center gap-3 text-muted-foreground sm:contents">
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-[0.4rem]">
@@ -163,32 +171,17 @@ export function ClientCard({
               <TooltipContent>Исходящий трафик</TooltipContent>
             </Tooltip>
           </div>
-          <div className="max-sm:col-start-2 max-sm:row-start-1">
-            {isSmUp ? (
-              <ClientMenu
-                client={client}
-                pending={pending}
-                onInfo={onInfo}
-                onQr={onQr}
-                onDownload={onDownload}
-                onToggle={onToggle}
-                onDelete={() => setConfirmOpen(true)}
-              />
-            ) : (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                disabled={pending}
-                aria-label={`Действия для ${client.name}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onInfo?.();
-                }}
-              >
-                <MoreVerticalIcon />
-              </Button>
-            )}
-          </div>
+          {isSmUp ? (
+            <ClientMenu
+              client={client}
+              pending={pending}
+              onInfo={onInfo}
+              onQr={onQr}
+              onDownload={onDownload}
+              onToggle={onToggle}
+              onDelete={() => setConfirmOpen(true)}
+            />
+          ) : null}
         </TooltipProvider>
       </CardContent>
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
