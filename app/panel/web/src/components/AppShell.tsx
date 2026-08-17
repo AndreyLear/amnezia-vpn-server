@@ -34,9 +34,9 @@ export function AppShell({
     <div className="relative min-h-svh">
       <AmbientBackground />
       <div className="relative mx-auto w-full max-w-[752px] px-4">
-        <header className="flex min-w-0 items-center gap-2 pt-4">
+        <header className="flex min-w-0 items-center pt-4">
           <p className="shrink-0 font-mono text-base font-medium">AWG Panel</p>
-          <HeaderStats host={host} className="flex min-w-0" />
+          <HeaderStats host={host} className="ms-3 flex min-w-0" />
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button
               type="button"

@@ -181,6 +181,7 @@ describe("AppShell header", () => {
     expect(header).not.toHaveClass("flex-wrap");
     expect(header).toHaveClass("pt-4");
     expect(header).not.toHaveClass("py-4");
+    expect(header).not.toHaveClass("gap-2");
 
     const title = screen.getByText("AWG Panel");
     expect(title).toHaveClass("shrink-0");
@@ -192,7 +193,7 @@ describe("AppShell header", () => {
     expect(cpus[0].textContent ?? "").not.toMatch(/cpu|ram|disk|CPU|RAM|Диск/);
 
     const stats = cpus[0].parentElement;
-    expect(stats).toHaveClass("flex", "min-w-0");
+    expect(stats).toHaveClass("flex", "min-w-0", "ms-3");
     expect(stats).not.toHaveClass("hidden");
     expect(stats).not.toHaveClass("sm:flex");
     expect(stats).not.toHaveClass("sm:hidden");
