@@ -208,5 +208,26 @@ describe("AppShell header", () => {
     expect(within(header).getByRole("button", { name: "Бэкап" })).toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "Тёмная тема" })).toBeInTheDocument();
   });
+
+  it("centers title and stats and omits actions when empty", () => {
+    render(
+      <AppShell empty onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const header = screen.getByRole("banner");
+    expect(header).toHaveClass("justify-center");
+    expect(header).toHaveClass("pt-4");
+    expect(header).toHaveClass("sm:pt-8");
+    expect(screen.getByText("AWG Panel")).toBeInTheDocument();
+    expect(within(header).getAllByLabelText("CPU")).toHaveLength(1);
+
+    expect(screen.queryByRole("button", { name: "Тёмная тема" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Светлая тема" })).not.toBeInTheDocument();
+    expect(within(header).queryByRole("button", { name: "Добавить клиента" })).not.toBeInTheDocument();
+    expect(within(header).queryByRole("button", { name: "Бэкап" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Добавить клиента" })).not.toBeInTheDocument();
+  });
 });
 

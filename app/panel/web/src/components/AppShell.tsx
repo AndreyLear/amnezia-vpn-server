@@ -14,11 +14,13 @@ export function AppShell({
   restorePending = false,
   onAddClient,
   host = null,
+  empty = false,
 }: {
   children: ReactNode;
   restorePending?: boolean;
   onAddClient: () => void;
   host?: HostSnapshot | null;
+  empty?: boolean;
 }) {
   const [theme, setThemeState] = useState<Theme>(() =>
     typeof window === "undefined" ? "dark" : getTheme(),
@@ -33,50 +35,60 @@ export function AppShell({
   return (
     <div className="relative min-h-svh">
       <AmbientBackground />
-      <div className="relative mx-auto w-full max-w-[752px] px-4">
-        <header className="flex min-w-0 items-center pt-4 sm:pt-8">
-          <p className="shrink-0 font-mono text-base font-medium">AWG Panel</p>
-          <HeaderStats host={host} className="ms-3 flex min-w-0" />
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            <Button
-              type="button"
-              aria-label="Добавить клиента"
-              className="hidden sm:inline-flex"
-              onClick={onAddClient}
-            >
-              <PlusIcon />
-              <span className="sm:inline">Добавить клиента</span>
-            </Button>
-            <BackupProvider restorePending={restorePending}>
-              <BackupMenu restorePending={restorePending} />
+      <BackupProvider restorePending={restorePending}>
+        <div className="relative mx-auto w-full max-w-[752px] px-4">
+          <header
+            className={
+              empty
+                ? "flex min-w-0 items-center justify-center pt-4 sm:pt-8"
+                : "flex min-w-0 items-center pt-4 sm:pt-8"
+            }
+          >
+            <p className="shrink-0 font-mono text-base font-medium">AWG Panel</p>
+            <HeaderStats host={host} className="ms-3 flex min-w-0" />
+            {empty ? null : (
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                <Button
+                  type="button"
+                  aria-label="Добавить клиента"
+                  className="hidden sm:inline-flex"
+                  onClick={onAddClient}
+                >
+                  <PlusIcon />
+                  <span className="sm:inline">Добавить клиента</span>
+                </Button>
+                <BackupMenu restorePending={restorePending} />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label={theme === "dark" ? "Тёмная тема" : "Светлая тема"}
+                  onClick={toggleTheme}
+                >
+                  {theme === "dark" ? <Moon /> : <Sun />}
+                </Button>
+              </div>
+            )}
+          </header>
+          {children}
+        </div>
+        {empty ? null : (
+          <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 sm:hidden">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-background to-transparent" />
+            <div className="pointer-events-auto relative mx-auto w-full max-w-[752px] px-4 pb-6">
               <Button
                 type="button"
-                variant="outline"
-                size="icon"
-                aria-label={theme === "dark" ? "Тёмная тема" : "Светлая тема"}
-                onClick={toggleTheme}
+                aria-label="Добавить клиента"
+                className="h-12 w-full"
+                onClick={onAddClient}
               >
-                {theme === "dark" ? <Moon /> : <Sun />}
+                <PlusIcon />
+                Добавить клиента
               </Button>
-            </BackupProvider>
+            </div>
           </div>
-        </header>
-        {children}
-      </div>
-      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 sm:hidden">
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-background to-transparent" />
-        <div className="pointer-events-auto relative mx-auto w-full max-w-[752px] px-4 pb-6">
-          <Button
-            type="button"
-            aria-label="Добавить клиента"
-            className="h-12 w-full"
-            onClick={onAddClient}
-          >
-            <PlusIcon />
-            Добавить клиента
-          </Button>
-        </div>
-      </div>
+        )}
+      </BackupProvider>
     </div>
   );
 }

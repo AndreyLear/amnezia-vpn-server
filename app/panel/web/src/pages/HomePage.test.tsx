@@ -203,11 +203,8 @@ describe("HomePage load", () => {
     expect(cpus[0].textContent ?? "").not.toMatch(/cpu|ram|disk|CPU|RAM|Диск/);
   });
 
-  it("does not show the empty caption until GET /api/clients returns an array", async () => {
-    let resolveClients!: (value: Response) => void;
-    const clientsPending = new Promise<Response>((resolve) => {
-      resolveClients = resolve;
-    });
+  it("keeps list chrome while clients are pending", () => {
+    const clientsPending = new Promise<Response>(() => {});
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -239,15 +236,12 @@ describe("HomePage load", () => {
     render(<HomePage />);
     expect(screen.getByText("AWG Panel")).toBeInTheDocument();
     expect(screen.queryByText("Пока нет клиентов")).not.toBeInTheDocument();
-
-    await act(async () => {
-      resolveClients(jsonResponse([]));
-    });
-
-    expect(await screen.findByText("Пока нет клиентов")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Тёмная тема" })).toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Добавить клиента" })).toHaveLength(2);
   });
 
-  it("shows cat, caption, and extra add when GET /api/clients is empty", async () => {
+  it("uses empty chrome when GET /api/clients is an empty array", async () => {
     const user = userEvent.setup();
     vi.stubGlobal(
       "fetch",
@@ -278,21 +272,25 @@ describe("HomePage load", () => {
     );
 
     render(<HomePage />);
-    const caption = await screen.findByText("Пока нет клиентов");
-    expect(caption).toHaveClass("text-muted-foreground");
-    const empty = caption.parentElement as HTMLElement;
-    expect(empty.querySelector("svg")).not.toBeNull();
-    expect(empty.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    const add = await screen.findByRole("button", { name: "Добавить клиента" });
+    expect(screen.queryByText("Пока нет клиентов")).not.toBeInTheDocument();
+    expect(document.querySelector("svg[aria-hidden='true'].size-28")).toBeNull();
 
-    const addButtons = screen.getAllByRole("button", { name: "Добавить клиента" });
-    expect(addButtons.length).toBeGreaterThan(2);
-    await user.click(within(empty).getByRole("button", { name: "Добавить клиента" }));
+    const header = screen.getByRole("banner");
+    expect(header).toHaveClass("justify-center");
+    expect(screen.queryByRole("button", { name: "Тёмная тема" })).not.toBeInTheDocument();
+    expect(within(header).queryByRole("button", { name: "Добавить клиента" })).not.toBeInTheDocument();
+    expect(within(header).queryByRole("button", { name: "Бэкап" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Добавить клиента" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Бэкап" })).toBeInTheDocument();
+
+    await user.click(add);
     expect(
       await screen.findByRole("heading", { name: "Добавить клиента" }),
     ).toBeInTheDocument();
   });
 
-  it("does not show the empty-clients caption when Alice is listed", async () => {
+  it("keeps list chrome when Alice is listed", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -324,6 +322,10 @@ describe("HomePage load", () => {
     render(<HomePage />);
     expect(await screen.findByText("Alice")).toBeInTheDocument();
     expect(screen.queryByText("Пока нет клиентов")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Тёмная тема" })).toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Добавить клиента" })).toHaveLength(2);
+    expect(screen.getByTestId("client-grid")).toBeInTheDocument();
   });
 });
 

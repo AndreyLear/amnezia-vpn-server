@@ -160,12 +160,13 @@ export default function HomePage() {
 
   return (
     <AppShell
+      empty={clients !== null && clients.length === 0}
       restorePending={restorePending}
       onAddClient={() => setAddOpen(true)}
       host={host}
     >
       {clients === null ? null : clients.length === 0 ? (
-        <EmptyClients onAdd={() => setAddOpen(true)} />
+        <EmptyClients onAdd={() => setAddOpen(true)} restorePending={restorePending} />
       ) : (
         <div
           data-testid="client-grid"

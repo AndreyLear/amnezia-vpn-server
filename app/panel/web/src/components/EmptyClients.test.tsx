@@ -2,30 +2,36 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import { BackupProvider } from "@/components/BackupMenu";
 import { EmptyClients } from "@/components/EmptyClients";
 
 describe("EmptyClients", () => {
-  it("shows caption, decorative cat, and add button", async () => {
+  it("shows add and backup without caption or decorative cat", async () => {
     const user = userEvent.setup();
     const onAdd = vi.fn();
-    render(<EmptyClients onAdd={onAdd} />);
+    render(
+      <BackupProvider>
+        <EmptyClients onAdd={onAdd} restorePending={false} />
+      </BackupProvider>,
+    );
 
-    const caption = screen.getByText("Пока нет клиентов");
-    expect(caption).toHaveClass("text-muted-foreground");
-    const cat = caption.parentElement?.querySelector("svg");
-    expect(cat).not.toBeNull();
-    expect(cat).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryByText("Пока нет клиентов")).not.toBeInTheDocument();
+    expect(document.querySelector("svg[aria-hidden='true'].size-28")).toBeNull();
+    expect(
+      [...document.querySelectorAll("style")]
+        .map((el) => el.textContent ?? "")
+        .join("\n"),
+    ).not.toMatch(/empty-cat/);
 
-    await user.click(screen.getByRole("button", { name: "Добавить клиента" }));
+    const add = screen.getByRole("button", { name: "Добавить клиента" });
+    expect(add.querySelector("svg.lucide-plus")).toBeTruthy();
+    await user.click(add);
     expect(onAdd).toHaveBeenCalledTimes(1);
-  });
 
-  it("pauses blink and tail motion when the user prefers reduced motion", () => {
-    render(<EmptyClients onAdd={() => {}} />);
-    const css = [...document.querySelectorAll("style")]
-      .map((el) => el.textContent ?? "")
-      .join("\n");
-    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
-    expect(css).toMatch(/animation:\s*none/);
+    const backup = screen.getByRole("button", { name: "Бэкап" });
+    expect(backup).toHaveAttribute("data-variant", "outline");
+    await user.click(backup);
+    expect(await screen.findByText("Скачать")).toBeInTheDocument();
+    expect(screen.getByText("Загрузить")).toBeInTheDocument();
   });
 });
