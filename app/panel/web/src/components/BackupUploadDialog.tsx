@@ -167,7 +167,7 @@ export function BackupUploadDialog({
             {isSmUp ? (
               <label
                 className={`grid min-w-0 cursor-pointer gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm ${
-                  dragOver ? "border-primary bg-muted" : "border-border"
+                  dragOver ? "border-primary bg-muted" : "border-border hover:border-input"
                 }`}
                 onDragOver={(e) => {
                   e.preventDefault();

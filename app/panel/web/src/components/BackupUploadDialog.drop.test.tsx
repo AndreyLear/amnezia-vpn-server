@@ -16,6 +16,22 @@ describe("BackupUploadDialog drop", () => {
     vi.restoreAllMocks();
   });
 
+  it("uses a brighter hover border on the idle dashed dropzone", () => {
+    render(<BackupUploadDialog open onOpenChange={() => {}} />);
+    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
+    expect(dropzone?.className).toContain("border-border");
+    expect(dropzone?.className).toContain("hover:border-input");
+  });
+
+  it("keeps a primary border while dragging over the dashed dropzone", () => {
+    render(<BackupUploadDialog open onOpenChange={() => {}} />);
+    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
+    fireEvent.dragOver(dropzone!, {
+      dataTransfer: { files: [new File(["archive"], archiveName)] },
+    });
+    expect(dropzone?.className).toContain("border-primary");
+  });
+
   it("accepts a dropped backup archive", () => {
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
     const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
