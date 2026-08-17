@@ -202,5 +202,128 @@ describe("HomePage load", () => {
     expect(cpus[0]).toHaveTextContent("13%");
     expect(cpus[0].textContent ?? "").not.toMatch(/cpu|ram|disk|CPU|RAM|Диск/);
   });
+
+  it("does not show the empty caption until GET /api/clients returns an array", async () => {
+    let resolveClients!: (value: Response) => void;
+    const clientsPending = new Promise<Response>((resolve) => {
+      resolveClients = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/me")) {
+          return jsonResponse({
+            username: "admin",
+            csrf: "token",
+          });
+        }
+        if (path.includes("/api/clients")) {
+          return clientsPending;
+        }
+        if (path.includes("/api/stats/host")) {
+          return jsonResponse({
+            cpu_percent: null,
+            ram_percent: null,
+            disk_percent: null,
+            ram_used_bytes: null,
+            ram_total_bytes: null,
+            disk_used_bytes: null,
+            disk_total_bytes: null,
+          });
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<HomePage />);
+    expect(screen.getByText("AWG Panel")).toBeInTheDocument();
+    expect(screen.queryByText("Пока нет клиентов")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveClients(jsonResponse([]));
+    });
+
+    expect(await screen.findByText("Пока нет клиентов")).toBeInTheDocument();
+  });
+
+  it("shows cat, caption, and extra add when GET /api/clients is empty", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/me")) {
+          return jsonResponse({
+            username: "admin",
+            csrf: "token",
+          });
+        }
+        if (path.includes("/api/clients")) {
+          return jsonResponse([]);
+        }
+        if (path.includes("/api/stats/host")) {
+          return jsonResponse({
+            cpu_percent: null,
+            ram_percent: null,
+            disk_percent: null,
+            ram_used_bytes: null,
+            ram_total_bytes: null,
+            disk_used_bytes: null,
+            disk_total_bytes: null,
+          });
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<HomePage />);
+    const caption = await screen.findByText("Пока нет клиентов");
+    expect(caption).toHaveClass("text-muted-foreground");
+    const empty = caption.parentElement as HTMLElement;
+    expect(empty.querySelector("svg")).not.toBeNull();
+    expect(empty.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+
+    const addButtons = screen.getAllByRole("button", { name: "Добавить клиента" });
+    expect(addButtons.length).toBeGreaterThan(2);
+    await user.click(within(empty).getByRole("button", { name: "Добавить клиента" }));
+    expect(
+      await screen.findByRole("heading", { name: "Добавить клиента" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the empty-clients caption when Alice is listed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/me")) {
+          return jsonResponse({
+            username: "admin",
+            csrf: "token",
+          });
+        }
+        if (path.includes("/api/clients")) {
+          return jsonResponse([alice]);
+        }
+        if (path.includes("/api/stats/host")) {
+          return jsonResponse({
+            cpu_percent: null,
+            ram_percent: null,
+            disk_percent: null,
+            ram_used_bytes: null,
+            ram_total_bytes: null,
+            disk_used_bytes: null,
+            disk_total_bytes: null,
+          });
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<HomePage />);
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    expect(screen.queryByText("Пока нет клиентов")).not.toBeInTheDocument();
+  });
 });
 

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { AddClientDialog } from "@/components/AddClientDialog";
 import { AppShell } from "@/components/AppShell";
 import { ClientCard } from "@/components/ClientCard";
+import { EmptyClients } from "@/components/EmptyClients";
 import { ClientInfoDialog } from "@/components/ClientInfoDialog";
 import { QrDialog } from "@/components/QrDialog";
 import {
@@ -23,7 +24,7 @@ const DEMO_HOST_OVERLAY =
   !(import.meta.env as ImportMetaEnv & { VITEST?: boolean }).VITEST;
 
 export default function HomePage() {
-  const [clients, setClients] = useState<Client[]>([]);
+  const [clients, setClients] = useState<Client[] | null>(null);
   const [restorePending, setRestorePending] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [infoId, setInfoId] = useState<number | null>(null);
@@ -80,8 +81,8 @@ export default function HomePage() {
     };
   }, [load]);
 
-  const infoClient = clients.find((c) => c.id === infoId) ?? null;
-  const qrClient = clients.find((c) => c.id === qrId);
+  const infoClient = clients?.find((c) => c.id === infoId) ?? null;
+  const qrClient = clients?.find((c) => c.id === qrId);
 
   function downloadConfig(id: number) {
     window.location.assign(`/clients/${id}/config`);
@@ -113,12 +114,12 @@ export default function HomePage() {
       if (!mutationSucceeded(data)) return;
       const enabled = !client.enabled;
       setClients((list) =>
-        list.map((c) => (c.id === client.id ? { ...c, enabled } : c)),
+        list?.map((c) => (c.id === client.id ? { ...c, enabled } : c)) ?? list,
       );
       toast.success(client.enabled ? "Клиент отключён" : "Клиент включён");
       await load();
       setClients((list) =>
-        list.map((c) => (c.id === client.id ? { ...c, enabled } : c)),
+        list?.map((c) => (c.id === client.id ? { ...c, enabled } : c)) ?? list,
       );
     } finally {
       setPendingId(null);
@@ -163,23 +164,27 @@ export default function HomePage() {
       onAddClient={() => setAddOpen(true)}
       host={host}
     >
-      <div
-        data-testid="client-grid"
-        className="mt-6 gap-2 sm:gap-x-3 pb-8 max-sm:flex max-sm:flex-col max-sm:pb-28 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]"
-      >
-        {clients.map((client) => (
-          <ClientCard
-            key={client.id}
-            client={client}
-            pending={pendingId === client.id}
-            onInfo={() => setInfoId(client.id)}
-            onQr={() => setQrId(client.id)}
-            onDownload={() => downloadConfig(client.id)}
-            onToggle={() => void toggleClient(client)}
-            onDelete={() => void deleteClient(client)}
-          />
-        ))}
-      </div>
+      {clients === null ? null : clients.length === 0 ? (
+        <EmptyClients onAdd={() => setAddOpen(true)} />
+      ) : (
+        <div
+          data-testid="client-grid"
+          className="mt-6 gap-2 sm:gap-x-3 pb-8 max-sm:flex max-sm:flex-col max-sm:pb-28 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]"
+        >
+          {clients.map((client) => (
+            <ClientCard
+              key={client.id}
+              client={client}
+              pending={pendingId === client.id}
+              onInfo={() => setInfoId(client.id)}
+              onQr={() => setQrId(client.id)}
+              onDownload={() => downloadConfig(client.id)}
+              onToggle={() => void toggleClient(client)}
+              onDelete={() => void deleteClient(client)}
+            />
+          ))}
+        </div>
+      )}
       <AddClientDialog
         open={addOpen}
         pending={pendingId === "new"}
