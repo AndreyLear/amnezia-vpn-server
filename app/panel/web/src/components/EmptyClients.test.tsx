@@ -26,7 +26,8 @@ describe("EmptyClients", () => {
     const add = screen.getByRole("button", { name: "Добавить клиента" });
     expect(add.querySelector("svg.lucide-plus")).toBeTruthy();
     const root = add.parentElement;
-    expect(root).toHaveClass("flex", "flex-row", "items-center", "gap-4");
+    expect(root).toHaveClass("flex", "flex-row", "items-center", "gap-2");
+    expect(root).not.toHaveClass("gap-4");
     expect(root).not.toHaveClass("flex-col");
     expect(root?.className).not.toMatch(/min-h-\[calc\(100svh-8rem\)\]/);
     await user.click(add);
