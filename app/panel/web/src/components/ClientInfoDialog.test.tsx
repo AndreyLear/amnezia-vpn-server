@@ -468,5 +468,7 @@ describe("ClientInfoDialog", () => {
     expect(within(alert).getByRole("button", { name: "Удалить" })).toHaveClass(
       "max-sm:h-12",
     );
+    expect(alert).toHaveClass("max-sm:max-w-none", "max-sm:w-full");
+    expect(alert.className).not.toMatch(/data-\[size=default\]:max-w-xs(?!:)/);
   });
 });
