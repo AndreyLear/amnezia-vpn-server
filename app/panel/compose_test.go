@@ -144,6 +144,7 @@ func TestComposeMountMatrix(t *testing.T) {
 		"./config:/config",
 		"./status:/status:ro",
 		"./backups:/data/backups",
+		"/proc:/host/proc:ro",
 	})
 	equal(t, "panel-init volumes", mustService(t, services, "panel-init").volumes, []string{
 		"./data:/data",

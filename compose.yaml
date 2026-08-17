@@ -46,6 +46,8 @@ services:
       # M8.7/M10.2: хранилище резервных копий — panel и panel-init (rw);
       # awg backups не получает (ARCHITECTURE.md mount contract)
       - ./backups:/data/backups
+      # hostmetrics reads host CPU/RAM from this bind, not container /proc
+      - /proc:/host/proc:ro
     # M10.2-FIX2: deployment .env — AWG_PORT/VPN_SUBNET for panel
     # and panel-init (awg never loads it).
     env_file:
