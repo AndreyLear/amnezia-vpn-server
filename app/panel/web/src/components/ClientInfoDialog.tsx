@@ -174,7 +174,7 @@ export function ClientInfoDialog({
     <>
       <Dialog open={client !== null} onOpenChange={onOpenChange}>
         <DialogContent
-          className="sm:max-w-md"
+          className="sm:max-w-md pb-6"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           {client ? (

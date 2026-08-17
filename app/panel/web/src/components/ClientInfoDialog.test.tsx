@@ -168,6 +168,8 @@ describe("ClientInfoDialog", () => {
       "overflow-y-auto",
       "max-h-[calc(100dvh-2rem)]",
       "sm:max-w-md",
+      "p-4",
+      "pb-6",
     );
 
     const dl = document.querySelector("dl");
@@ -294,6 +296,7 @@ describe("ClientInfoDialog", () => {
       .getByRole("heading", { name: "Клиент", hidden: true })
       .closest('[data-slot="dialog-content"]');
     expect(clientDialog).not.toBeNull();
+    expect(edit.closest('[data-slot="dialog-content"]')).not.toHaveClass("pb-6");
     expect(within(edit).getByRole("textbox")).toHaveAttribute("id", "info-name");
     expect(within(clientDialog!).queryByRole("textbox")).toBeNull();
     const nameRow = within(clientDialog!).getByText("Имя").closest("div.flex");
