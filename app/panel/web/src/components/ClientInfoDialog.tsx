@@ -295,18 +295,18 @@ export function ClientInfoDialog({
                       </dd>
                     </div>
                   </PropertyRow>
+                  <PropertyRow>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      disabled={pending}
+                      onClick={() => setConfirmOpen(true)}
+                    >
+                      <Trash2 data-icon="inline-start" />
+                      Удалить
+                    </Button>
+                  </PropertyRow>
                 </dl>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    disabled={pending}
-                    onClick={() => setConfirmOpen(true)}
-                  >
-                    <Trash2 data-icon="inline-start" />
-                    Удалить
-                  </Button>
-                </div>
               </div>
             </>
           ) : null}

@@ -118,7 +118,7 @@ describe("ClientInfoDialog", () => {
     ).toBeNull();
   });
 
-  it("adds 4px more space between the properties list and the action buttons", () => {
+  it("puts Удалить inside the properties dl as the row after Трафик", () => {
     render(
       <ClientInfoDialog
         client={client}
@@ -131,12 +131,23 @@ describe("ClientInfoDialog", () => {
     );
 
     const remove = screen.getByRole("button", { name: "Удалить" });
-    const buttonRow = remove.parentElement;
-    expect(buttonRow).toHaveClass("flex", "flex-wrap", "gap-2");
-    expect(buttonRow).not.toHaveClass("max-sm:flex-col");
+    const dl = document.querySelector("dl");
+    expect(dl).toHaveClass("divide-y", "divide-border");
+    expect(dl).toContainElement(remove);
+
+    const trafficRow = screen.getByText("Трафик").closest("div.flex");
+    const deleteRow = remove.closest("div.flex");
+    expect(trafficRow).not.toBeNull();
+    expect(deleteRow).not.toBeNull();
+    expect(trafficRow?.parentElement).toBe(dl);
+    expect(deleteRow?.parentElement).toBe(dl);
+    expect(
+      trafficRow!.compareDocumentPosition(deleteRow!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(trafficRow!.nextElementSibling).toBe(deleteRow);
+
     expect(remove).not.toHaveClass("max-sm:h-12");
     expect(remove).not.toHaveClass("max-sm:w-full");
-    expect(buttonRow?.parentElement).toHaveClass("gap-4");
   });
 
   it("opens as a mobile bottom sheet with property dividers", () => {
@@ -189,7 +200,7 @@ describe("ClientInfoDialog", () => {
     expect(screen.getAllByRole("button", { name: "Отключить" })).toHaveLength(1);
   });
 
-  it("puts Конфиг then QR on the IP row and only Удалить in the footer", () => {
+  it("puts Конфиг then QR on the IP row and Удалить in the dl, not a footer", () => {
     render(
       <ClientInfoDialog
         client={client}
@@ -220,23 +231,20 @@ describe("ClientInfoDialog", () => {
     }
 
     const remove = screen.getByRole("button", { name: "Удалить" });
-    const footer = remove.parentElement;
-    expect(footer).not.toBeNull();
-    expect(within(footer!).getAllByRole("button")).toHaveLength(1);
-    expect(within(footer!).queryByRole("button", { name: "QR" })).not.toBeInTheDocument();
-    expect(
-      within(footer!).queryByRole("button", { name: "Конфиг" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(footer!).queryByRole("button", { name: "Отключить" }),
-    ).not.toBeInTheDocument();
+    const dl = document.querySelector("dl");
+    expect(dl).toContainElement(remove);
+    expect(ipRow).not.toContainElement(remove);
+    expect(remove.parentElement).not.toHaveClass("flex-wrap", "gap-2");
+    expect(remove.closest("div.flex-wrap.gap-2")).toBeNull();
+    expect(within(remove.closest("div.flex")!).getAllByRole("button")).toHaveLength(1);
+    expect(within(dl!).queryByRole("button", { name: "QR" })).toBeInTheDocument();
     expect(remove).toHaveAttribute("data-variant", "destructive");
     expect(remove).toHaveAttribute("data-size", "default");
     expect(remove).not.toHaveClass("max-sm:h-12");
     expect(remove).not.toHaveClass("max-sm:w-full");
 
     const toggle = screen.getByRole("button", { name: "Отключить" });
-    expect(footer).not.toContainElement(toggle);
+    expect(remove.closest("div.flex")).not.toContainElement(toggle);
     expect(toggle.parentElement).toContainElement(screen.getByText("Статус"));
   });
 
