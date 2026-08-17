@@ -40,13 +40,14 @@ fakes_reset() {
     : > "$FAKE_CALLS"
     mkdir -p "$FAKE_FS"
     rm -rf "$ROOT" "$SYSCTL_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
-        "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST"
+        "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST"
     rm -f "$NFTABLES_CONF_TEST"
     cat > "$FAKE_STATE" <<EOF
 COMPOSE_VERSION=2.30.1
 NEW_COMPOSE_VERSION=
 DAEMON=ok
 IP_FORWARD=1
+TCP_CC="bbr cubic"
 NFT_CHECK_RC=0
 NFT_APPLY_RC=0
 NFT_APPLIED=0
@@ -158,6 +159,7 @@ echo "sysctl $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 case "$*" in
     *"-n net.ipv4.ip_forward"*) echo "$IP_FORWARD" ;;
+    *"-n net.ipv4.tcp_available_congestion_control"*) echo "${TCP_CC:-bbr cubic}" ;;
     *"-w net.ipv4.ip_forward=1"*)
         sed 's|^IP_FORWARD=.*|IP_FORWARD=1|' "$FAKE_STATE" > "$FAKE_STATE.new" \
             && mv "$FAKE_STATE.new" "$FAKE_STATE"
@@ -315,6 +317,7 @@ EOF
 
 ROOT="$TMP_TEST/root"
 SYSCTL_TEST="$TMP_TEST/sysctl.d"
+JOURNALD_TEST="$TMP_TEST/journald.conf.d"
 KEYRING_TEST="$TMP_TEST/apt/keyrings"
 SOURCES_TEST="$TMP_TEST/apt/sources.list.d"
 NFTABLES_DIR_TEST="$TMP_TEST/nftables.d"
@@ -329,6 +332,7 @@ run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_FAKE_DIR="$FAKE_DIR" \
     AMNEZIA_INSTALL_OS_RELEASE="$TMP_TEST/os-release" \
     AMNEZIA_INSTALL_SYSCTL_DIR="$SYSCTL_TEST" \
+    AMNEZIA_INSTALL_JOURNALD_DIR="$JOURNALD_TEST" \
     AMNEZIA_INSTALL_KEYRING_DIR="$KEYRING_TEST" \
     AMNEZIA_INSTALL_APT_SOURCES_DIR="$SOURCES_TEST" \
     AMNEZIA_INSTALL_NFTABLES_DIR="$NFTABLES_DIR_TEST" \
@@ -750,6 +754,7 @@ test_awg_stack_forced_install() {
     AMNEZIA_INSTALL_FAKE_DIR="$FAKE_DIR" \
     AMNEZIA_INSTALL_OS_RELEASE="$TMP_TEST/os-release" \
     AMNEZIA_INSTALL_SYSCTL_DIR="$SYSCTL_TEST" \
+    AMNEZIA_INSTALL_JOURNALD_DIR="$JOURNALD_TEST" \
     AMNEZIA_INSTALL_KEYRING_DIR="$KEYRING_TEST" \
     AMNEZIA_INSTALL_APT_SOURCES_DIR="$SOURCES_TEST" \
     AMNEZIA_INSTALL_NFTABLES_DIR="$NFTABLES_DIR_TEST" \

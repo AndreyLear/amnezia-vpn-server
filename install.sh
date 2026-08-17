@@ -6,7 +6,8 @@
 #
 # install.sh is infrastructure state, not application backup (ТЗ §9).
 # It sets up the host (OS check, Docker Engine + Compose plugin from the
-# official Docker Inc. repository, persistent ip_forward) and deploys the
+# official Docker Inc. repository, persistent ip_forward/conntrack/optional
+# BBR, journald cap, weekly docker-prune timer) and deploys the
 # compose stack under a deployment root. M9.2 adds the host networking
 # part of ТЗ §9 within the constraints of the audit: a managed nftables
 # ruleset (NAT/forward/UDP acceptance) in the single table `ip amnezia`,
@@ -18,17 +19,18 @@
 #   2. Docker/Compose installation or verification
 #   3. verify Docker Compose >= 2.24.2
 #   4. enable/start the Docker service
-#   5. verify/persist host net.ipv4.ip_forward
+#   5. persist managed sysctl drop-in (ip_forward, conntrack, optional BBR)
 #   6. AmneziaWG client stack (kernel module + tools, official PPA)
 #   7. create the deployment layout under the root
 #   8. secure directory permissions
 #   9. install/copy repository deployment files
-#  10. create deployment .env (deployment-specific values)
-#  11. host networking: managed nftables ruleset (M9.2)
-#  12. docker compose --env-file versions.lock config --quiet
-#  13. build, prune golang/build cache, start the stack (compose contract)
-#  14. minimal post-install self-check (never mutates application state)
-#  15. final status + SSH tunnel hint for the loopback-only panel
+#  10. cap journald SystemMaxUse; write weekly docker-prune units (enable after up)
+#  11. create deployment .env (deployment-specific values)
+#  12. host networking: managed nftables ruleset (M9.2)
+#  13. docker compose --env-file versions.lock config --quiet
+#  14. build, prune golang/build cache, start the stack (compose contract)
+#  15. minimal post-install self-check (never mutates application state)
+#  16. final status + SSH tunnel hint for the loopback-only panel
 #
 # Arguments (only these are supported):
 #   --root DIR      deployment root (default: /opt/amnezia-vpn)
@@ -69,8 +71,10 @@
 #                                      never touch the real host
 #   AMNEZIA_INSTALL_OS_RELEASE=FILE    os-release source (default
 #                                      /etc/os-release)
-#   AMNEZIA_INSTALL_SYSCTL_DIR=DIR     persistence dir for the ip_forward
-#                                      override (default /etc/sysctl.d)
+#   AMNEZIA_INSTALL_SYSCTL_DIR=DIR     persistence dir for the managed
+#                                      sysctl drop-in (default /etc/sysctl.d)
+#   AMNEZIA_INSTALL_JOURNALD_DIR=DIR   journald drop-in dir (default
+#                                      /etc/systemd/journald.conf.d)
 #   AMNEZIA_INSTALL_KEYRING_DIR=DIR    Docker Inc. keyring dir
 #                                      (default /etc/apt/keyrings)
 #   AMNEZIA_INSTALL_APT_SOURCES_DIR=DIR   apt sources.d dir
@@ -80,7 +84,8 @@
 #   AMNEZIA_INSTALL_NFTABLES_CONF=FILE nftables.conf to hook the include
 #                                      into (default /etc/nftables.conf)
 #   AMNEZIA_INSTALL_SYSTEMD_DIR=DIR    systemd unit dir for the docker
-#                                      boot-order drop-in
+#                                      boot-order drop-in and the weekly
+#                                      docker-prune timer
 #                                      (default /etc/systemd/system)
 #   AMNEZIA_INSTALL_MODULES_DIR=DIR    modules-load dir for the
 #                                      amneziawg auto-load entry
@@ -109,6 +114,8 @@ VPN_SUBNET=10.8.0.0/24
 OS_RELEASE="${AMNEZIA_INSTALL_OS_RELEASE:-/etc/os-release}"
 SYSCTL_DIR="${AMNEZIA_INSTALL_SYSCTL_DIR:-/etc/sysctl.d}"
 SYSCTL_FILE="${SYSCTL_DIR}/99-amnezia-vpn.conf"
+JOURNALD_DIR="${AMNEZIA_INSTALL_JOURNALD_DIR:-/etc/systemd/journald.conf.d}"
+JOURNALD_FILE="${JOURNALD_DIR}/99-amnezia-vpn.conf"
 KEYRING_DIR="${AMNEZIA_INSTALL_KEYRING_DIR:-/etc/apt/keyrings}"
 APT_SOURCES_DIR="${AMNEZIA_INSTALL_APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
 NFTABLES_DIR="${AMNEZIA_INSTALL_NFTABLES_DIR:-/etc/nftables.d}"
@@ -162,7 +169,9 @@ Examples:
 
 Installs only supported OSes (Debian 12, Ubuntu 22.04, Ubuntu 24.04),
 Docker Engine + Compose plugin (>= 2.24.2) from the official Docker Inc.
-repository, persists net.ipv4.ip_forward, installs a managed nftables
+repository, persists net.ipv4.ip_forward, nf_conntrack_max and optional
+BBR, caps journald and compose json-file logs, installs a weekly
+docker-prune timer, installs a managed nftables
 ruleset (NAT/forward for the VPN subnet, UDP AWG_PORT acceptance),
 then builds and starts the stack under the deployment root.
 EOF
@@ -429,19 +438,53 @@ fi
 log "enabling and starting the Docker service"
 cmd systemctl enable --now docker || die_op "systemctl enable --now docker failed"
 
-# --- 5. net.ipv4.ip_forward (verify; persist only when disabled) ------
+# --- 5. managed sysctl drop-in (always overwrite) ---------------------
 
 ip_forward_value() { cmd sysctl -n net.ipv4.ip_forward 2>/dev/null | tr -d ' '; }
 
-if [ "$(ip_forward_value)" = "1" ]; then
-    log "net.ipv4.ip_forward already enabled"
+tcp_cc_has_bbr() {
+    local avail
+    avail="$(cmd sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
+    case " $avail " in
+        *" bbr "*) return 0 ;;
+    esac
+    return 1
+}
+
+apply_sysctl_warn() { # apply_sysctl_warn KEY=VALUE — warning, do not abort
+    if ! cmd sysctl -w "$1"; then
+        log "WARNING: sysctl -w $1 failed; continuing"
+        return 1
+    fi
+    return 0
+}
+
+log "persisting managed sysctl drop-in $SYSCTL_FILE"
+mkdir -p "$SYSCTL_DIR" || die_op "cannot create sysctl dir $SYSCTL_DIR"
+HAVE_BBR=0
+if tcp_cc_has_bbr; then
+    HAVE_BBR=1
 else
-    log "net.ipv4.ip_forward disabled: enabling and persisting it (no other sysctl is touched)"
-    mkdir -p "$SYSCTL_DIR"
-    printf 'net.ipv4.ip_forward = 1\n' > "$SYSCTL_FILE"
-    chmod 0644 "$SYSCTL_FILE"
-    cmd sysctl -w net.ipv4.ip_forward=1 || die_op "sysctl -w net.ipv4.ip_forward=1 failed"
-    [ "$(ip_forward_value)" = "1" ] || die_op "net.ipv4.ip_forward is still disabled after enabling it"
+    log "skipping BBR sysctls: bbr is not in net.ipv4.tcp_available_congestion_control"
+fi
+{
+    printf 'net.ipv4.ip_forward = 1\n'
+    printf 'net.netfilter.nf_conntrack_max = 262144\n'
+    if [ "$HAVE_BBR" = "1" ]; then
+        printf 'net.core.default_qdisc = fq\n'
+        printf 'net.ipv4.tcp_congestion_control = bbr\n'
+    fi
+} > "$SYSCTL_FILE"
+chmod 0644 "$SYSCTL_FILE"
+
+cmd sysctl -w net.ipv4.ip_forward=1 || die_op "sysctl -w net.ipv4.ip_forward=1 failed"
+[ "$(ip_forward_value)" = "1" ] || die_op "net.ipv4.ip_forward is still disabled after enabling it"
+
+cmd modprobe nf_conntrack 2>/dev/null || log "WARNING: modprobe nf_conntrack failed; continuing"
+apply_sysctl_warn net.netfilter.nf_conntrack_max=262144 || true
+if [ "$HAVE_BBR" = "1" ]; then
+    apply_sysctl_warn net.core.default_qdisc=fq || true
+    apply_sysctl_warn net.ipv4.tcp_congestion_control=bbr || true
 fi
 
 # --- 6. AmneziaWG client stack (amneziawg + amneziawg-tools) ----------
@@ -509,7 +552,47 @@ chmod 0644 "$ROOT_DIR/compose.yaml" "$ROOT_DIR/versions.lock"
 chmod 0755 "$ROOT_DIR/docker-prune.sh"
 log "deployment files installed (compose.yaml, versions.lock, docker-prune.sh, app/)"
 
-# --- 10. deployment .env (never overwrites an existing file) -----------
+# --- 10. journald cap + weekly docker-prune timer ---------------------
+
+mkdir -p "$JOURNALD_DIR" || die_op "cannot create journald dir $JOURNALD_DIR"
+cat > "$JOURNALD_FILE" <<'EOF'
+[Journal]
+SystemMaxUse=200M
+EOF
+chmod 0644 "$JOURNALD_FILE"
+if ! cmd systemctl restart systemd-journald; then
+    log "WARNING: systemctl restart systemd-journald failed; continuing"
+fi
+log "journald cap written ($JOURNALD_FILE SystemMaxUse=200M)"
+
+mkdir -p "$SYSTEMD_DIR" || die_op "cannot create systemd dir $SYSTEMD_DIR"
+cat > "$SYSTEMD_DIR/amnezia-vpn-prune.service" <<EOF
+# amnezia-vpn managed: weekly Docker build-cache prune (never system prune -a).
+[Unit]
+Description=Amnezia VPN Docker build-cache prune
+
+[Service]
+Type=oneshot
+ExecStart=${ROOT_DIR}/docker-prune.sh
+EOF
+chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-prune.service"
+cat > "$SYSTEMD_DIR/amnezia-vpn-prune.timer" <<'EOF'
+# amnezia-vpn managed: weekly docker-prune.sh
+[Unit]
+Description=Weekly Amnezia VPN Docker prune
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-prune.timer"
+cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed (prune timer)"
+log "weekly docker-prune units written (enable --now after compose up; ExecStart=$ROOT_DIR/docker-prune.sh)"
+
+# --- 11. deployment .env (never overwrites an existing file) -----------
 
 env_read() { # env_read KEY — value of KEY in the deployment .env, ""
     sed -n "s/^${1}=//p" "$ROOT_DIR/$ENV_FILE" 2>/dev/null | tail -1
@@ -919,6 +1002,14 @@ if ! docker_compose --env-file versions.lock up -d; then
         exit "$FAIL_STYLE_OP"
     fi
 fi
+
+# Enable the weekly prune timer only after compose up (and after this
+# install's own docker-prune.sh). Persistent=true would otherwise fire a
+# missed weekly slot immediately and prune builder/golang during the
+# first compose build.
+cmd systemctl enable --now amnezia-vpn-prune.timer \
+    || die_op "systemctl enable --now amnezia-vpn-prune.timer failed"
+log "weekly docker-prune timer enabled (ExecStart=$ROOT_DIR/docker-prune.sh)"
 
 # --- 13b. panel domain: reverse proxy + Let's Encrypt (T-121) ---------
 # Optional --domain mode: nginx terminates TLS in front of the

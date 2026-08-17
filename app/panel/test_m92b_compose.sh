@@ -60,6 +60,18 @@ test_panel_topology() {
     check_in '^panel:.*restart: unless-stopped' "panel: restart: unless-stopped"
 }
 
+test_log_rotation() {
+    # Colon+space after the service name so ^panel: does not also
+    # match labeled panel-init lines (panel-init: …).
+    check_in '^panel:[[:space:]].*driver: json-file' "panel: json-file logging driver"
+    check_in '^panel:[[:space:]].*max-size: "10m"' "panel: log max-size 10m"
+    check_in '^panel:[[:space:]].*max-file: "3"' "panel: log max-file 3"
+    check_in '^panel-init:[[:space:]].*driver: json-file' "panel-init: json-file logging driver"
+    check_in '^awg:[[:space:]].*driver: json-file' "awg: json-file logging driver"
+    check_in '^awg:[[:space:]].*max-size: "10m"' "awg: log max-size 10m"
+    check_in '^awg:[[:space:]].*max-file: "3"' "awg: log max-file 3"
+}
+
 test_restart_policy() {
     check_in '^awg:.*restart: unless-stopped' "awg: restart: unless-stopped"
     check_out '^panel-init:.*restart:' "panel-init: one-shot job without restart policy"
@@ -105,6 +117,7 @@ test_depends_on_preserved() {
 test_bash_syntax
 test_awg_topology
 test_panel_topology
+test_log_rotation
 test_restart_policy
 test_capabilities_devices
 test_mount_contract

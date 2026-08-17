@@ -40,13 +40,14 @@ fakes_reset() {
     : > "$FAKE_CALLS"
     mkdir -p "$FAKE_FS"
     rm -rf "$ROOT" "$SYSCTL_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
-        "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST"
+        "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST"
     rm -f "$NFTABLES_CONF_TEST"
     cat > "$FAKE_STATE" <<EOF
 COMPOSE_VERSION=${1:-2.30.1}
 NEW_COMPOSE_VERSION=
 DAEMON=ok
 IP_FORWARD=1
+TCP_CC="bbr cubic"
 NFT_CHECK_RC=0
 NFT_APPLY_RC=0
 NFT_APPLIED=0
@@ -55,6 +56,10 @@ DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
 UP_RC=0
 BUILDER_PRUNE_RC=0
+SYSCTL_IP_FORWARD_W_RC=0
+SYSCTL_CONNTRACK_W_RC=0
+SYSCTL_BBR_W_RC=0
+JOURNALD_RESTART_RC=0
 PUBLIC_IP=2.26.93.192
 DNS_A=2.26.93.192
 DNS_AAAA=
@@ -157,6 +162,12 @@ FAKE_EOF
 cat > "$FAKE_DIR/systemctl" <<'FAKE_EOF'
 #!/bin/bash
 echo "systemctl $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+case "$*" in
+    "restart systemd-journald")
+        exit "${JOURNALD_RESTART_RC:-0}"
+        ;;
+esac
 exit 0
 FAKE_EOF
 
@@ -166,10 +177,18 @@ echo "sysctl $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 case "$*" in
     *"-n net.ipv4.ip_forward"*) echo "$IP_FORWARD" ;;
+    *"-n net.ipv4.tcp_available_congestion_control"*) echo "${TCP_CC:-bbr cubic}" ;;
     *"-w net.ipv4.ip_forward=1"*)
+        [ "${SYSCTL_IP_FORWARD_W_RC:-0}" = "0" ] || exit "${SYSCTL_IP_FORWARD_W_RC}"
         sed 's|^IP_FORWARD=.*|IP_FORWARD=1|' "$FAKE_STATE" > "$FAKE_STATE.new" \
             && mv "$FAKE_STATE.new" "$FAKE_STATE"
         echo "net.ipv4.ip_forward = 1"
+        ;;
+    *"-w net.netfilter.nf_conntrack_max="*)
+        exit "${SYSCTL_CONNTRACK_W_RC:-0}"
+        ;;
+    *"-w net.core.default_qdisc=fq"* | *"-w net.ipv4.tcp_congestion_control=bbr"*)
+        exit "${SYSCTL_BBR_W_RC:-0}"
         ;;
 esac
 exit 0
@@ -364,6 +383,7 @@ EOF
 
 ROOT="$TMP_TEST/root"
 SYSCTL_TEST="$TMP_TEST/sysctl.d"
+JOURNALD_TEST="$TMP_TEST/journald.conf.d"
 KEYRING_TEST="$TMP_TEST/apt/keyrings"
 SOURCES_TEST="$TMP_TEST/apt/sources.list.d"
 NFTABLES_DIR_TEST="$TMP_TEST/nftables.d"
@@ -375,6 +395,7 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_FAKE_DIR="$FAKE_DIR" \
     AMNEZIA_INSTALL_OS_RELEASE="$TMP_TEST/os-release" \
     AMNEZIA_INSTALL_SYSCTL_DIR="$SYSCTL_TEST" \
+    AMNEZIA_INSTALL_JOURNALD_DIR="$JOURNALD_TEST" \
     AMNEZIA_INSTALL_KEYRING_DIR="$KEYRING_TEST" \
     AMNEZIA_INSTALL_APT_SOURCES_DIR="$SOURCES_TEST" \
     AMNEZIA_INSTALL_NFTABLES_DIR="$NFTABLES_DIR_TEST" \
@@ -618,8 +639,128 @@ test_ip_forward_already_enabled() {
     os_release debian 12 bookworm
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "ip_forward enabled flow: exit $rc"
-    [ -f "$SYSCTL_TEST/99-amnezia-vpn.conf" ] && fail "unrelated sysctl file written although forward=1" \
-        || pass "no sysctl file written when already enabled"
+    sysf="$SYSCTL_TEST/99-amnezia-vpn.conf"
+    if [ -f "$sysf" ] && grep -q "net.ipv4.ip_forward = 1" "$sysf" \
+        && grep -q "net.netfilter.nf_conntrack_max = 262144" "$sysf"; then
+        pass "sysctl drop-in written when ip_forward already 1 (ip_forward + conntrack)"
+    else
+        fail "sysctl drop-in missing ip_forward/conntrack when already enabled"
+    fi
+}
+
+test_sysctl_bbr_when_advertised() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "bbr advertised flow: exit $rc"
+    sysf="$SYSCTL_TEST/99-amnezia-vpn.conf"
+    grep -q "net.core.default_qdisc = fq" "$sysf" \
+        && grep -q "net.ipv4.tcp_congestion_control = bbr" "$sysf" \
+        && pass "BBR sysctls present when fake advertises bbr" \
+        || fail "BBR sysctls missing although tcp_available_congestion_control has bbr"
+}
+
+test_sysctl_bbr_skipped_when_absent() {
+    fakes_reset
+    sed 's|^TCP_CC=.*|TCP_CC="cubic reno"|' "$FAKE_STATE" > "$FAKE_STATE.new" \
+        && mv "$FAKE_STATE.new" "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "bbr absent flow: exit $rc"
+    sysf="$SYSCTL_TEST/99-amnezia-vpn.conf"
+    [ -f "$sysf" ] || { fail "sysctl drop-in missing when bbr absent"; return 0; }
+    if grep -q "tcp_congestion_control" "$sysf" || grep -q "default_qdisc" "$sysf"; then
+        fail "BBR sysctls written although fake does not advertise bbr"
+    else
+        pass "BBR sysctls omitted when fake does not advertise bbr"
+    fi
+    grep -q "net.ipv4.ip_forward = 1" "$sysf" \
+        && grep -q "net.netfilter.nf_conntrack_max = 262144" "$sysf" \
+        && pass "ip_forward+conntrack still written without BBR" \
+        || fail "ip_forward/conntrack missing when BBR skipped"
+}
+
+test_journald_cap() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "journald cap flow: exit $rc"
+    jf="$JOURNALD_TEST/99-amnezia-vpn.conf"
+    if [ -f "$jf" ] && grep -q "\[Journal\]" "$jf" && grep -q "SystemMaxUse=200M" "$jf"; then
+        pass "journald drop-in SystemMaxUse=200M in injected dir"
+    else
+        fail "journald drop-in SystemMaxUse=200M missing"
+    fi
+}
+
+test_weekly_prune_timer() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "prune timer flow: exit $rc"
+    svc="$SYSTEMD_DIR_TEST/amnezia-vpn-prune.service"
+    timer="$SYSTEMD_DIR_TEST/amnezia-vpn-prune.timer"
+    [ -f "$svc" ] && [ -f "$timer" ] \
+        && pass "prune timer+service installed" \
+        || fail "prune timer+service missing"
+    grep -Fq "ExecStart=${ROOT}/docker-prune.sh" "$svc" \
+        && pass "prune service ExecStart uses \$ROOT" \
+        || fail "prune service ExecStart does not use $ROOT/docker-prune.sh"
+    grep -q "OnCalendar=weekly" "$timer" && grep -q "Persistent=true" "$timer" \
+        && pass "prune timer OnCalendar=weekly Persistent=true" \
+        || fail "prune timer calendar/persistent missing"
+    grep -q "systemctl enable --now amnezia-vpn-prune.timer" "$FAKE_CALLS" \
+        && pass "systemctl enable --now prune timer in FAKE_CALLS" \
+        || fail "systemctl enable --now amnezia-vpn-prune.timer missing from FAKE_CALLS"
+    up_n="$(grep -nE 'docker compose .*[[:space:]]up([[:space:]]|$)' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    enable_n="$(grep -n 'systemctl enable --now amnezia-vpn-prune.timer' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    if [ -n "$up_n" ] && [ -n "$enable_n" ] && [ "$enable_n" -gt "$up_n" ]; then
+        pass "prune timer enable --now is after compose up"
+    else
+        fail "prune timer enable --now must be after compose up (up=$up_n enable=$enable_n)"
+    fi
+}
+
+test_sysctl_ip_forward_apply_aborts() {
+    fakes_reset
+    setstate SYSCTL_IP_FORWARD_W_RC 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" != "0" ] || fail "ip_forward -w fail: exit $rc, want non-zero"
+    [ "$rc" != "0" ] && pass "ip_forward -w fail: install aborted (exit $rc)"
+}
+
+test_sysctl_conntrack_apply_warns() {
+    fakes_reset
+    setstate SYSCTL_CONNTRACK_W_RC 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "conntrack -w fail: exit $rc, want 0"
+    grep -q "WARNING:" "$TMP_TEST/out" && grep -qi "conntrack" "$TMP_TEST/out" \
+        && pass "conntrack -w fail: WARNING logged, install continued" \
+        || fail "conntrack -w fail: WARNING missing from stdout"
+}
+
+test_sysctl_bbr_apply_warns() {
+    fakes_reset
+    setstate SYSCTL_BBR_W_RC 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "BBR -w fail: exit $rc, want 0"
+    grep -q "WARNING:" "$TMP_TEST/out" \
+        && pass "BBR -w fail: WARNING logged, install continued" \
+        || fail "BBR -w fail: WARNING missing from stdout"
+}
+
+test_journald_restart_warns() {
+    fakes_reset
+    setstate JOURNALD_RESTART_RC 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "journald restart fail: exit $rc, want 0"
+    grep -q "WARNING:" "$TMP_TEST/out" && grep -q "systemd-journald" "$TMP_TEST/out" \
+        && pass "journald restart fail: WARNING logged, install continued" \
+        || fail "journald restart fail: WARNING missing from stdout"
 }
 
 test_installed_compose_contract() {
@@ -638,6 +779,22 @@ test_installed_compose_contract() {
     [ "$(grep -c '^    sysctls:$' "$ROOT/compose.yaml")" = "0" ] \
         && pass "installed compose: no awg sysctls" \
         || fail "installed compose: no awg sysctls"
+    if awk '
+        /^  panel:$/ { in_panel=1; in_awg=0; next }
+        /^  awg:$/ { in_awg=1; in_panel=0; next }
+        /^  [a-zA-Z0-9_-]+:/ { in_panel=0; in_awg=0 }
+        in_panel && /driver: json-file/ { pdrv=1 }
+        in_panel && /max-size: "10m"/ { psz=1 }
+        in_panel && /max-file: "3"/ { pnf=1 }
+        in_awg && /driver: json-file/ { adrv=1 }
+        in_awg && /max-size: "10m"/ { asz=1 }
+        in_awg && /max-file: "3"/ { anf=1 }
+        END { exit (pdrv && psz && pnf && adrv && asz && anf) ? 0 : 1 }
+    ' "$ROOT/compose.yaml"; then
+        pass "installed compose: json-file max-size 10m / max-file 3 on panel and awg"
+    else
+        fail "installed compose: json-file rotation missing on panel/awg"
+    fi
     [ "$(grep -c '^    ports:$' "$ROOT/compose.yaml")" = "1" ] \
         && pass "installed compose: only the panel maps ports" \
         || fail "installed compose: only the panel maps ports"
@@ -1245,6 +1402,14 @@ test_layout_and_permissions
 test_versions_lock_used
 test_ip_forward_disabled
 test_ip_forward_already_enabled
+test_sysctl_bbr_when_advertised
+test_sysctl_bbr_skipped_when_absent
+test_journald_cap
+test_weekly_prune_timer
+test_sysctl_ip_forward_apply_aborts
+test_sysctl_conntrack_apply_warns
+test_sysctl_bbr_apply_warns
+test_journald_restart_warns
 test_m31_fresh_install_tolerated
 test_panel_init_failure_not_masked
 test_sentinel_guard_not_masked
