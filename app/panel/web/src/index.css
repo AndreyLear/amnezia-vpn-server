@@ -136,10 +136,11 @@
   z-index: 0;
   overflow: hidden;
   --ambient-primary-pos: 50% -20%;
+  --ambient-primary-mix: 16%;
   background:
     radial-gradient(
       ellipse 80% 50% at var(--ambient-primary-pos),
-      color-mix(in oklch, var(--primary) 16%, transparent),
+      color-mix(in oklch, var(--primary) var(--ambient-primary-mix), transparent),
       transparent 70%
     ),
     radial-gradient(
@@ -152,6 +153,7 @@
 
 .ambient-bg--center {
   --ambient-primary-pos: 50% 50%;
+  --ambient-primary-mix: 8%;
 }
 
 .ambient-bg::before {
