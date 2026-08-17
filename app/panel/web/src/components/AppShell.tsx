@@ -51,29 +51,31 @@ export function AppShell({
             }
           >
             <p className="shrink-0 font-mono text-base font-medium">AWG Panel</p>
-            <HeaderStats host={host} className="ms-3 flex min-w-0" />
             {empty ? null : (
-              <div className="ml-auto flex shrink-0 items-center gap-2">
-                <Button
-                  type="button"
-                  aria-label="Добавить клиента"
-                  className="hidden sm:inline-flex"
-                  onClick={onAddClient}
-                >
-                  <PlusIcon />
-                  <span className="sm:inline">Добавить клиента</span>
-                </Button>
-                <BackupMenu restorePending={restorePending} />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  aria-label={theme === "dark" ? "Тёмная тема" : "Светлая тема"}
-                  onClick={toggleTheme}
-                >
-                  {theme === "dark" ? <Moon /> : <Sun />}
-                </Button>
-              </div>
+              <>
+                <HeaderStats host={host} className="ms-3 flex min-w-0" />
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  <Button
+                    type="button"
+                    aria-label="Добавить клиента"
+                    className="hidden sm:inline-flex"
+                    onClick={onAddClient}
+                  >
+                    <PlusIcon />
+                    <span className="sm:inline">Добавить клиента</span>
+                  </Button>
+                  <BackupMenu restorePending={restorePending} />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    aria-label={theme === "dark" ? "Тёмная тема" : "Светлая тема"}
+                    onClick={toggleTheme}
+                  >
+                    {theme === "dark" ? <Moon /> : <Sun />}
+                  </Button>
+                </div>
+              </>
             )}
           </header>
           {children}

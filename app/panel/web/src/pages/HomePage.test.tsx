@@ -281,6 +281,7 @@ describe("HomePage load", () => {
     expect(header).not.toHaveClass("pt-4");
     expect(header).not.toHaveClass("sm:pt-8");
     expect(header.parentElement).toHaveClass("min-h-svh", "justify-center", "gap-8");
+    expect(within(header).queryByLabelText("CPU")).toBeNull();
     expect(add.parentElement).toHaveClass("flex", "flex-col", "items-center", "gap-4");
     expect(add.parentElement?.className).not.toMatch(/min-h-\[calc\(100svh-8rem\)\]/);
     expect(screen.queryByRole("button", { name: "Тёмная тема" })).not.toBeInTheDocument();

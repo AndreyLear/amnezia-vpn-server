@@ -209,7 +209,7 @@ describe("AppShell header", () => {
     expect(within(header).getByRole("button", { name: "Тёмная тема" })).toBeInTheDocument();
   });
 
-  it("centers title and stats and omits actions when empty", () => {
+  it("centers title only and omits stats and actions when empty", () => {
     render(
       <AppShell empty onAddClient={() => {}}>
         <p>body</p>
@@ -223,7 +223,9 @@ describe("AppShell header", () => {
     const column = header.parentElement;
     expect(column).toHaveClass("flex", "min-h-svh", "flex-col", "items-center", "justify-center", "gap-8");
     expect(screen.getByText("AWG Panel")).toBeInTheDocument();
-    expect(within(header).getAllByLabelText("CPU")).toHaveLength(1);
+    expect(within(header).queryByLabelText("CPU")).toBeNull();
+    expect(within(header).queryByLabelText("RAM")).toBeNull();
+    expect(within(header).queryByLabelText("Диск")).toBeNull();
 
     expect(screen.queryByRole("button", { name: "Тёмная тема" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Светлая тема" })).not.toBeInTheDocument();
