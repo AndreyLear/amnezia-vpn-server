@@ -136,7 +136,7 @@ describe("HeaderStats", () => {
 
     await user.hover(screen.getByLabelText("CPU"));
     const tip = await screen.findByRole("tooltip");
-    expect(tip).toHaveTextContent("Загрузка CPU 13%");
+    expect(tip).toHaveTextContent("Загрузка CPU: 13%");
     expect(tip.textContent).not.toMatch(/\.$/);
   });
 
@@ -156,7 +156,7 @@ describe("HeaderStats", () => {
     await user.hover(screen.getByLabelText("RAM"));
     const tip = await screen.findByRole("tooltip");
     expect(tip).toHaveTextContent(
-      `Загрузка RAM 75% (${formatBytes(ramUsed)} / ${formatBytes(ramTotal)})`,
+      `Загрузка RAM: 75% (${formatBytes(ramUsed)} / ${formatBytes(ramTotal)})`,
     );
     expect(tip.textContent).not.toMatch(/\.$/);
   });
@@ -177,7 +177,7 @@ describe("HeaderStats", () => {
     await user.hover(screen.getByLabelText("Диск"));
     const tip = await screen.findByRole("tooltip");
     expect(tip).toHaveTextContent(
-      `Загрузка диска 16% (${formatBytes(diskUsed)} / ${formatBytes(diskTotal)})`,
+      `Загрузка диска: 16% (${formatBytes(diskUsed)} / ${formatBytes(diskTotal)})`,
     );
     expect(tip.textContent).not.toMatch(/\.$/);
   });

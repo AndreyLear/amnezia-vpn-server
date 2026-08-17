@@ -132,7 +132,7 @@ function diskValue(host: HostSnapshot | null): string {
 
 function cpuTooltip(host: HostSnapshot | null): string | null {
   if (host?.cpu_percent == null) return null;
-  return `Загрузка CPU ${roundPercent(host.cpu_percent)}%`;
+  return `Загрузка CPU: ${roundPercent(host.cpu_percent)}%`;
 }
 
 function ramTooltip(host: HostSnapshot | null): string | null {
@@ -143,7 +143,7 @@ function ramTooltip(host: HostSnapshot | null): string | null {
   ) {
     return null;
   }
-  return `Загрузка RAM ${roundPercent(host.ram_percent)}% (${formatBytes(host.ram_used_bytes)} / ${formatBytes(host.ram_total_bytes)})`;
+  return `Загрузка RAM: ${roundPercent(host.ram_percent)}% (${formatBytes(host.ram_used_bytes)} / ${formatBytes(host.ram_total_bytes)})`;
 }
 
 function diskTooltip(host: HostSnapshot | null): string | null {
@@ -154,7 +154,7 @@ function diskTooltip(host: HostSnapshot | null): string | null {
   ) {
     return null;
   }
-  return `Загрузка диска ${roundPercent(host.disk_percent)}% (${formatBytes(host.disk_used_bytes)} / ${formatBytes(host.disk_total_bytes)})`;
+  return `Загрузка диска: ${roundPercent(host.disk_percent)}% (${formatBytes(host.disk_used_bytes)} / ${formatBytes(host.disk_total_bytes)})`;
 }
 
 export function HeaderStats({
