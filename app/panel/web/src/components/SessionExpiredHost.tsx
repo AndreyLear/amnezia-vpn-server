@@ -144,7 +144,7 @@ export function SessionExpiredHost() {
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={pending}>
+            <Button type="submit" disabled={pending} className="max-sm:h-12 max-sm:w-full">
               Повторить вход
             </Button>
           </DialogFooter>

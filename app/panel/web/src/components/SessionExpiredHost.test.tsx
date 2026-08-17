@@ -41,7 +41,7 @@ describe("session expired re-login", () => {
 
     expect(await screen.findByText("Сессия истекла")).toBeInTheDocument();
     expect(screen.getByText("Введите пароль, чтобы продолжить")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Повторить вход" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Повторить вход" })).toHaveClass("max-sm:h-12", "max-sm:w-full");
     const content = document.querySelector("[data-slot=dialog-content]");
     expect(content).toHaveClass("gap-6");
     const form = content?.querySelector("form");
