@@ -16,7 +16,7 @@ import { isBackupArchiveName } from "@/lib/backupArchive";
 const ACCEPT = ".tar.zst";
 const rejectCopy = "Нужен файл бэкапа (.tar.zst).";
 const SM_MIN_WIDTH = "(min-width: 640px)";
-export const DROPZONE_MISS_MS = 2500;
+export const DROPZONE_MISS_MS = 1500;
 
 function isMinWidthSm(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {

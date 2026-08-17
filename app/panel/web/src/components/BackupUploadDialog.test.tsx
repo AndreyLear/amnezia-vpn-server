@@ -194,6 +194,7 @@ describe("BackupUploadDialog", () => {
       const dropzone = screen
         .getByText("Перетащите файл сюда или выберите на диске")
         .closest("label");
+      expect(DROPZONE_MISS_MS).toBe(1500);
       expect(dropzone?.className.split(/\s+/)).toContain("border-destructive");
       expect(dropzone?.className.split(/\s+/)).toContain("duration-500");
       expect(fetchMock).not.toHaveBeenCalled();
