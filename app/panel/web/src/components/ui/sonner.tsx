@@ -1,10 +1,32 @@
 "use client"
 
-import type { CSSProperties } from "react"
+import { useEffect, useState, type CSSProperties } from "react"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
 
-function Toaster(props: ToasterProps) {
+const MAX_SM_QUERY = "(max-width: 639px)"
+
+function useMaxSm() {
+  const [maxSm, setMaxSm] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(MAX_SM_QUERY).matches,
+  )
+
+  useEffect(() => {
+    const media = window.matchMedia(MAX_SM_QUERY)
+    const sync = () => {
+      setMaxSm(media.matches)
+    }
+    sync()
+    media.addEventListener("change", sync)
+    return () => media.removeEventListener("change", sync)
+  }, [])
+
+  return maxSm
+}
+
+function Toaster({ ...props }: ToasterProps) {
+  const maxSm = useMaxSm()
+
   return (
     <Sonner
       theme="system"
@@ -30,6 +52,7 @@ function Toaster(props: ToasterProps) {
         },
       }}
       {...props}
+      position={maxSm ? "top-center" : props.position}
     />
   )
 }
