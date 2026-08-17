@@ -85,12 +85,12 @@ type Config struct {
 	Logger *log.Logger
 	// ShutdownTimeout bounds http.Server.Shutdown.
 	ShutdownTimeout time.Duration
-	// HostProc is the host /proc mount (Docker: /host/proc). Empty
+	// HostProcDir is the host /proc mount (Docker: /host/proc). Empty
 	// selects "/host/proc". Tests pass a temp directory.
-	HostProc string
-	// DiskPath is the filesystem path whose usage is reported. Empty
+	HostProcDir string
+	// HostDiskPath is the filesystem path whose usage is reported. Empty
 	// selects "/data". Tests pass t.TempDir().
-	DiskPath string
+	HostDiskPath string
 }
 
 // DefaultConfig returns the serve defaults.
@@ -196,11 +196,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = DefaultShutdownTimeout
 	}
-	if cfg.HostProc == "" {
-		cfg.HostProc = "/host/proc"
+	if cfg.HostProcDir == "" {
+		cfg.HostProcDir = "/host/proc"
 	}
-	if cfg.DiskPath == "" {
-		cfg.DiskPath = "/data"
+	if cfg.HostDiskPath == "" {
+		cfg.HostDiskPath = "/data"
 	}
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, loginLimit: newLoginLimiter()}
 	// Document GETs serve the embedded SPA with no RequireAuth so React

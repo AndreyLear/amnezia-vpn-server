@@ -14,12 +14,7 @@ type hostStatsResponse struct {
 
 func (s *Server) apiStatsHost(w http.ResponseWriter, r *http.Request) {
 	s.hostMu.Lock()
-	prev := s.hostCPU
-	s.hostMu.Unlock()
-
-	snap, next := hostmetrics.Read(s.cfg.HostProc, s.cfg.DiskPath, prev)
-
-	s.hostMu.Lock()
+	snap, next := hostmetrics.Read(s.cfg.HostProcDir, s.cfg.HostDiskPath, s.hostCPU)
 	s.hostCPU = next
 	s.hostMu.Unlock()
 
