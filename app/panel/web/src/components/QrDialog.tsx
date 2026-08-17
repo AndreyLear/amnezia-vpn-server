@@ -17,10 +17,10 @@ export function QrDialog({ clientId, clientName, onOpenChange }: QrDialogProps) 
       <DialogContent>
         <DialogHeader>
           <DialogTitle>QR-код: {clientName}</DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Отсканируйте код в приложении AmneziaVPN
+          </p>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          Отсканируйте код в приложении AmneziaVPN.
-        </p>
         {clientId !== null ? (
           <img
             className="mx-auto size-64"
