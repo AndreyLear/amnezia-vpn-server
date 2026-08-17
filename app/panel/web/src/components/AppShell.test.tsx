@@ -168,4 +168,30 @@ describe("AppShell header", () => {
     expect(header).toHaveClass("pt-4");
     expect(header).not.toHaveClass("py-4");
   });
+
+  it("renders HeaderStats dashes with desktop and phone copies, not as a button", () => {
+    render(
+      <AppShell onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const header = screen.getByRole("banner");
+    const cpus = within(header).getAllByText(/^CPU/);
+    expect(cpus).toHaveLength(2);
+    for (const cpu of cpus) {
+      expect(cpu).toHaveTextContent(`CPU ${"\u2014"}`);
+    }
+
+    const desktop = cpus[0].parentElement;
+    const phone = cpus[1].parentElement;
+    expect(desktop).toHaveClass("hidden", "sm:flex");
+    expect(phone).toHaveClass("flex", "sm:hidden", "w-full");
+
+    expect(within(header).queryByRole("button", { name: /CPU/ })).not.toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "Бэкап" })).toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "Тёмная тема" })).toBeInTheDocument();
+  });
 });
+

@@ -50,6 +50,13 @@ describe("HomePage load", () => {
           if (clientCalls === 1) return jsonResponse([alice]);
           return jsonResponse({ ok: false }, 500);
         }
+        if (path.includes("/api/stats/host")) {
+          return jsonResponse({
+            cpu_percent: null,
+            ram_percent: null,
+            disk_percent: null,
+          });
+        }
         throw new Error(path);
       }),
     );
@@ -78,6 +85,13 @@ describe("HomePage load", () => {
         }
         if (path.includes("/api/clients")) {
           return jsonResponse([alice]);
+        }
+        if (path.includes("/api/stats/host")) {
+          return jsonResponse({
+            cpu_percent: null,
+            ram_percent: null,
+            disk_percent: null,
+          });
         }
         throw new Error(path);
       }),
@@ -117,6 +131,13 @@ describe("HomePage load", () => {
         if (path.includes("/api/clients")) {
           return jsonResponse([alice]);
         }
+        if (path.includes("/api/stats/host")) {
+          return jsonResponse({
+            cpu_percent: null,
+            ram_percent: null,
+            disk_percent: null,
+          });
+        }
         throw new Error(path);
       }),
     );
@@ -131,4 +152,36 @@ describe("HomePage load", () => {
     await user.click(screen.getByRole("button", { name: "Действия для Alice" }));
     expect(screen.getByRole("menuitem", { name: "Включить" })).toBeInTheDocument();
   });
+
+  it("shows a rounded CPU integer in the header after host stats boot", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/me")) {
+          return jsonResponse({
+            username: "admin",
+            csrf: "token",
+          });
+        }
+        if (path.includes("/api/clients")) {
+          return jsonResponse([alice]);
+        }
+        if (path.includes("/api/stats/host")) {
+          return jsonResponse({
+            cpu_percent: 12.6,
+            ram_percent: 40.4,
+            disk_percent: 9.5,
+          });
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<HomePage />);
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    const header = screen.getByRole("banner");
+    expect(await within(header).findAllByText("CPU 13")).toHaveLength(2);
+  });
 });
+

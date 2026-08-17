@@ -12,6 +12,7 @@ import {
   setCsrf,
   setLastUsername,
   type Client,
+  type HostSnapshot,
   type MeResponse,
   type MutationResponse,
 } from "@/lib/api";
@@ -23,10 +24,23 @@ export default function HomePage() {
   const [infoId, setInfoId] = useState<number | null>(null);
   const [qrId, setQrId] = useState<number | null>(null);
   const [pendingId, setPendingId] = useState<number | "new" | null>(null);
+  const [host, setHost] = useState<HostSnapshot | null>(null);
 
   const load = useCallback(async () => {
     const list = await api<unknown>("/api/clients");
     if (Array.isArray(list)) setClients(list);
+    try {
+      const snap = await api<HostSnapshot>("/api/stats/host");
+      if (snap && typeof snap === "object") {
+        setHost({
+          cpu_percent: snap.cpu_percent ?? null,
+          ram_percent: snap.ram_percent ?? null,
+          disk_percent: snap.disk_percent ?? null,
+        });
+      }
+    } catch {
+      // keep dashes; do not toast
+    }
   }, []);
 
   useEffect(() => {
@@ -131,7 +145,11 @@ export default function HomePage() {
   }
 
   return (
-    <AppShell restorePending={restorePending} onAddClient={() => setAddOpen(true)}>
+    <AppShell
+      restorePending={restorePending}
+      onAddClient={() => setAddOpen(true)}
+      host={host}
+    >
       <div
         data-testid="client-grid"
         className="mt-6 gap-2 sm:gap-x-3 pb-8 max-sm:flex max-sm:flex-col max-sm:pb-28 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]"
