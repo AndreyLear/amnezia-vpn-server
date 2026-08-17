@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +32,7 @@ export function AddClientDialog({
 }: AddClientDialogProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   return (
     <Dialog
@@ -44,7 +45,13 @@ export function AddClientDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="gap-6">
+      <DialogContent
+        className="gap-6"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          nameInputRef.current?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Добавить клиента</DialogTitle>
         </DialogHeader>
@@ -59,6 +66,7 @@ export function AddClientDialog({
             <div className="grid gap-2">
               <Label htmlFor="client-name">Имя</Label>
               <Input
+                ref={nameInputRef}
                 id="client-name"
                 name="name"
                 required
@@ -84,7 +92,7 @@ export function AddClientDialog({
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={pending}>
+            <Button type="submit" disabled={pending} className="max-sm:h-12 max-sm:w-full">
               Добавить
             </Button>
           </DialogFooter>
