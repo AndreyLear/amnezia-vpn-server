@@ -208,6 +208,7 @@ func New(cfg Config) (*Server, error) {
 	// /api/* stays RequireAPI (401 JSON, never 303). HTML POSTs remain
 	// for existing form tests. "GET /{$}" is the exact-match root.
 	s.mux.HandleFunc("GET /{$}", s.spaIndex)
+	s.mux.HandleFunc("GET /favicon.svg", s.spaFavicon)
 	s.mux.Handle("POST /clients/new", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientNew))))
 	s.mux.Handle("POST /clients/{id}/enable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientSetEnabled(true)))))
 	s.mux.Handle("POST /clients/{id}/disable", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientSetEnabled(false)))))
@@ -378,6 +379,20 @@ func (s *Server) spaIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
+// spaFavicon serves dist/favicon.svg. Public: browsers request it without
+// a session. Unregistered, GET /favicon.svg would hit notFound and return
+// index.html as HTML.
+func (s *Server) spaFavicon(w http.ResponseWriter, r *http.Request) {
+	data, err := distFS.ReadFile("dist/favicon.svg")
+	if err != nil {
+		s.cfg.Logger.Printf("spa favicon: %v", err)
+		s.errorPage(w, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Write(data)
 }
 
