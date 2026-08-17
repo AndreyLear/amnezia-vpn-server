@@ -722,11 +722,16 @@ nftables_persist() {
     # ruleset fragment was applied directly by net_setup() and a reload
     # would destroy docker state for zero benefit. If we do start it
     # (fresh host), restart docker afterwards so it rebuilds its chains.
+    # Restart via docker.socket then docker.service: Ubuntu 24 socket-
+    # activated dockerd fails with "no sockets found via socket
+    # activation" if only docker.service is bounced.
     if ! cmd systemctl is-active --quiet nftables; then
         cmd systemctl start nftables || die_op "systemctl start nftables failed"
         if cmd systemctl is-active --quiet docker; then
-            cmd systemctl restart docker || die_op "systemctl restart docker failed after nftables start"
-            log "docker restarted: rebuilt its iptables state after the nftables flush"
+            log "restarting docker.socket and docker.service after nftables first start: already-running Docker and its containers will be bounced"
+            cmd systemctl restart docker.socket docker.service \
+                || die_op "systemctl restart docker.socket docker.service failed after nftables start"
+            log "docker restarted via socket activation: rebuilt its iptables state after the nftables flush"
         fi
     fi
     cmd nft list table ip amnezia >/dev/null 2>&1 \
