@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { QrDialog } from "@/components/QrDialog";
@@ -29,5 +29,23 @@ describe("QrDialog", () => {
     expect(header).toHaveAttribute("data-slot", "dialog-header");
     expect(header).toHaveClass("gap-2");
     expect(header).toContainElement(hint);
+  });
+
+  it("does not autofocus the close button when opened", async () => {
+    render(
+      <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
+    );
+
+    const title = screen.getByRole("heading", { name: "QR-код: Alice" });
+    const close = screen.getByRole("button", { name: /close/i });
+
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    });
+
+    expect(document.activeElement).not.toBe(close);
+    expect(title).toBeVisible();
   });
 });

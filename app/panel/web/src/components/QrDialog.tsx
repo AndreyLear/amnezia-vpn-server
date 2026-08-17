@@ -14,7 +14,7 @@ type QrDialogProps = {
 export function QrDialog({ clientId, clientName, onOpenChange }: QrDialogProps) {
   return (
     <Dialog open={clientId !== null} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent onOpenAutoFocus={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>QR-код: {clientName}</DialogTitle>
           <p className="text-sm text-muted-foreground">
