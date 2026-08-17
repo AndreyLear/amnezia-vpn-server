@@ -85,4 +85,46 @@ describe("AddClientDialog", () => {
     expect(document.getElementById("client-name")).toHaveFocus();
     expect(screen.getByRole("button", { name: "Close" })).not.toHaveFocus();
   });
+
+  it("clears name and description when parent closes then reopens without onOpenChange", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <AddClientDialog open onOpenChange={() => {}} onSubmit={vi.fn()} />,
+    );
+
+    await user.type(screen.getByLabelText("Имя"), "phone");
+    await user.type(screen.getByLabelText(/Описание/), "office");
+
+    rerender(
+      <AddClientDialog open={false} onOpenChange={() => {}} onSubmit={vi.fn()} />,
+    );
+    rerender(
+      <AddClientDialog open onOpenChange={() => {}} onSubmit={vi.fn()} />,
+    );
+
+    expect(screen.getByLabelText("Имя")).toHaveValue("");
+    expect(screen.getByLabelText(/Описание/)).toHaveValue("");
+  });
+
+  it("clears fields after submit when parent closes then reopens", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <AddClientDialog open onOpenChange={() => {}} onSubmit={onSubmit} />,
+    );
+
+    await user.type(screen.getByLabelText("Имя"), "phone");
+    await user.type(screen.getByLabelText(/Описание/), "office");
+    await user.click(screen.getByRole("button", { name: "Добавить" }));
+
+    rerender(
+      <AddClientDialog open={false} onOpenChange={() => {}} onSubmit={onSubmit} />,
+    );
+    rerender(
+      <AddClientDialog open onOpenChange={() => {}} onSubmit={onSubmit} />,
+    );
+
+    expect(screen.getByLabelText("Имя")).toHaveValue("");
+    expect(screen.getByLabelText(/Описание/)).toHaveValue("");
+  });
 });

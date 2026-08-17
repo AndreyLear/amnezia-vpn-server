@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -33,6 +33,11 @@ export function AddClientDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setName("");
+    setDescription("");
+  }, [open]);
 
   return (
     <Dialog
