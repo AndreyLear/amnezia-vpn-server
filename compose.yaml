@@ -15,6 +15,11 @@ services:
     env_file:
       - path: .env
         required: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # panel — веб-панель: владеет SQLite и config/awg0.conf
   panel:
@@ -53,6 +58,11 @@ services:
     env_file:
       - path: .env
         required: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # awg — AmneziaWG runtime: читает конфигурацию, пишет статус
   awg:
@@ -91,3 +101,8 @@ services:
       - ./config:/config:ro
       # awg пишет актуальный статус runtime для панели
       - ./status:/status
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
