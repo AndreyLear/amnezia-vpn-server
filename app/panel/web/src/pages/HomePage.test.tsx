@@ -197,10 +197,11 @@ describe("HomePage load", () => {
     render(<HomePage />);
     expect(await screen.findByText("Alice")).toBeInTheDocument();
     const header = screen.getByRole("banner");
-    const cpus = await within(header).findAllByText(/^cpu/);
+    const cpus = await within(header).findAllByLabelText("CPU");
     expect(cpus).toHaveLength(2);
     for (const cpu of cpus) {
-      expect(cpu).toHaveTextContent("cpu 13%");
+      expect(cpu).toHaveTextContent("13%");
+      expect(cpu.textContent ?? "").not.toMatch(/cpu|ram|disk|CPU|RAM|Диск/);
     }
   });
 });

@@ -177,10 +177,11 @@ describe("AppShell header", () => {
     );
 
     const header = screen.getByRole("banner");
-    const cpus = within(header).getAllByText(/^cpu/);
+    const cpus = within(header).getAllByLabelText("CPU");
     expect(cpus).toHaveLength(2);
     for (const cpu of cpus) {
-      expect(cpu).toHaveTextContent(`cpu ${"\u2014"}`);
+      expect(cpu).toHaveTextContent("\u2014");
+      expect(cpu.textContent ?? "").not.toMatch(/cpu|ram|disk|CPU|RAM|Диск/);
     }
 
     const desktop = cpus[0].parentElement;

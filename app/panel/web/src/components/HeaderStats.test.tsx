@@ -7,6 +7,7 @@ import type { HostSnapshot } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 
 const DASH = "\u2014";
+const LABEL_RE = /cpu|ram|disk|CPU|RAM|Диск/;
 
 const emptyHost: HostSnapshot = {
   cpu_percent: null,
@@ -22,33 +23,53 @@ const diskUsed = 4 * 1024 ** 3;
 const diskTotal = 25 * 1024 ** 3;
 const ramUsed = Math.round(1.9 * 1024 ** 3);
 const ramTotal = Math.round(7.6 * 1024 ** 3);
+const diskUsedTb = Math.round(0.3 * 1024 ** 4);
+
+function expectValuesOnly(el: HTMLElement) {
+  expect(el.textContent ?? "").not.toMatch(LABEL_RE);
+}
 
 describe("HeaderStats", () => {
-  it("uses lowercase cpu / ram / disk labels", () => {
-    render(<HeaderStats host={emptyHost} />);
+  it("shows values only without cpu / ram / disk labels", () => {
+    render(
+      <HeaderStats
+        host={{
+          ...emptyHost,
+          cpu_percent: 100,
+          ram_percent: 75,
+          disk_used_bytes: diskUsedTb,
+        }}
+      />,
+    );
 
-    expect(screen.getByText(/^cpu/)).toBeInTheDocument();
-    expect(screen.getByText(/^ram/)).toBeInTheDocument();
-    expect(screen.getByText(/^disk/)).toBeInTheDocument();
-    expect(screen.queryByText(/^CPU/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Диск/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("CPU")).toHaveTextContent("100%");
+    expect(screen.getByLabelText("RAM")).toHaveTextContent("75%");
+    expect(screen.getByLabelText("Диск")).toHaveTextContent("0,3 Тб");
+    expectValuesOnly(screen.getByLabelText("CPU"));
+    expectValuesOnly(screen.getByLabelText("RAM"));
+    expectValuesOnly(screen.getByLabelText("Диск"));
+    expect(screen.queryByText(/^cpu$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^ram$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^disk$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Диск")).not.toBeInTheDocument();
   });
 
   it("shows em dashes for null cpu, ram, and disk", () => {
     render(<HeaderStats host={emptyHost} />);
 
-    expect(screen.getByText(/^cpu/)).toHaveTextContent(`cpu ${DASH}`);
-    expect(screen.getByText(/^ram/)).toHaveTextContent(`ram ${DASH}`);
-    expect(screen.getByText(/^disk/)).toHaveTextContent(`disk ${DASH}`);
+    expect(screen.getByLabelText("CPU")).toHaveTextContent(DASH);
+    expect(screen.getByLabelText("RAM")).toHaveTextContent(DASH);
+    expect(screen.getByLabelText("Диск")).toHaveTextContent(DASH);
+    expectValuesOnly(screen.getByLabelText("CPU"));
     expect(screen.queryByText(/cpu\s+-/)).not.toBeInTheDocument();
   });
 
   it("shows em dashes when host is null", () => {
     render(<HeaderStats host={null} />);
 
-    expect(screen.getByText(/^cpu/)).toHaveTextContent(`cpu ${DASH}`);
-    expect(screen.getByText(/^ram/)).toHaveTextContent(`ram ${DASH}`);
-    expect(screen.getByText(/^disk/)).toHaveTextContent(`disk ${DASH}`);
+    expect(screen.getByLabelText("CPU")).toHaveTextContent(DASH);
+    expect(screen.getByLabelText("RAM")).toHaveTextContent(DASH);
+    expect(screen.getByLabelText("Диск")).toHaveTextContent(DASH);
   });
 
   it("shows cpu as a rounded integer percent with a percent sign", () => {
@@ -64,7 +85,8 @@ describe("HeaderStats", () => {
       />,
     );
 
-    expect(screen.getByText(/^cpu/)).toHaveTextContent("cpu 13%");
+    expect(screen.getByLabelText("CPU")).toHaveTextContent("13%");
+    expectValuesOnly(screen.getByLabelText("CPU"));
   });
 
   it("shows ram as an integer percent with a percent sign", () => {
@@ -77,7 +99,8 @@ describe("HeaderStats", () => {
       />,
     );
 
-    expect(screen.getByText(/^ram/)).toHaveTextContent("ram 75%");
+    expect(screen.getByLabelText("RAM")).toHaveTextContent("75%");
+    expectValuesOnly(screen.getByLabelText("RAM"));
   });
 
   it("shows disk occupied space via formatBytes of used bytes", () => {
@@ -92,9 +115,8 @@ describe("HeaderStats", () => {
       />,
     );
 
-    expect(screen.getByText(/^disk/)).toHaveTextContent(
-      `disk ${formatBytes(diskUsed)}`,
-    );
+    expect(screen.getByLabelText("Диск")).toHaveTextContent(formatBytes(diskUsed));
+    expectValuesOnly(screen.getByLabelText("Диск"));
   });
 
   it("shows CPU tooltip with load copy and percent, without a period", async () => {
@@ -108,7 +130,7 @@ describe("HeaderStats", () => {
       />,
     );
 
-    await user.hover(screen.getByText(/^cpu/));
+    await user.hover(screen.getByLabelText("CPU"));
     const tip = await screen.findByRole("tooltip");
     expect(tip).toHaveTextContent("Загрузка CPU 13%");
     expect(tip.textContent).not.toMatch(/\.$/);
@@ -127,7 +149,7 @@ describe("HeaderStats", () => {
       />,
     );
 
-    await user.hover(screen.getByText(/^ram/));
+    await user.hover(screen.getByLabelText("RAM"));
     const tip = await screen.findByRole("tooltip");
     expect(tip).toHaveTextContent(
       `Загрузка RAM 75% (${formatBytes(ramUsed)} / ${formatBytes(ramTotal)})`,
@@ -148,7 +170,7 @@ describe("HeaderStats", () => {
       />,
     );
 
-    await user.hover(screen.getByText(/^disk/));
+    await user.hover(screen.getByLabelText("Диск"));
     const tip = await screen.findByRole("tooltip");
     expect(tip).toHaveTextContent(
       `Загрузка диска 16% (${formatBytes(diskUsed)} / ${formatBytes(diskTotal)})`,
@@ -160,7 +182,7 @@ describe("HeaderStats", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(<HeaderStats host={emptyHost} />);
 
-    await user.hover(screen.getByText(/^cpu/));
+    await user.hover(screen.getByLabelText("CPU"));
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
@@ -183,9 +205,6 @@ describe("HeaderStats", () => {
     expect(screen.getByText("50%")).toHaveClass("text-emerald-500");
     expect(screen.getByText("75%")).toHaveClass("text-amber-500");
     expect(screen.getByText(formatBytes(diskUsed))).toHaveClass("text-red-500");
-    expect(screen.getByText(/^cpu/)).toHaveClass("text-muted-foreground");
-    expect(screen.getByText(/^ram/)).toHaveClass("text-muted-foreground");
-    expect(screen.getByText(/^disk/)).toHaveClass("text-muted-foreground");
   });
 
   it("keeps dashes muted", () => {
@@ -214,7 +233,7 @@ describe("HeaderStats", () => {
     );
 
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    const cpu = screen.getByText(/^cpu/);
+    const cpu = screen.getByLabelText("CPU");
     expect(cpu.closest("button")).toBeNull();
     expect(cpu.closest("[role='button']")).toBeNull();
     expect(cpu).not.toHaveClass("cursor-pointer");

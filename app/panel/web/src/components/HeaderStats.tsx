@@ -22,23 +22,23 @@ function loadColor(percent: number | null | undefined): string {
 }
 
 function Metric({
-  label,
+  ariaLabel,
   value,
   colorPercent,
   tooltip,
 }: {
-  label: string;
+  ariaLabel: string;
   value: string;
   colorPercent: number | null | undefined;
   tooltip: string | null;
 }) {
   const colored = value !== DASH;
   const inner = (
-    <span className="text-muted-foreground">
-      {label}{" "}
-      <span className={colored ? loadColor(colorPercent) : "text-muted-foreground"}>
-        {value}
-      </span>
+    <span
+      aria-label={ariaLabel}
+      className={colored ? loadColor(colorPercent) : "text-muted-foreground"}
+    >
+      {value}
     </span>
   );
   if (!tooltip) return inner;
@@ -108,19 +108,19 @@ export function HeaderStats({
         )}
       >
         <Metric
-          label="cpu"
+          ariaLabel="CPU"
           value={cpuValue(host)}
           colorPercent={host?.cpu_percent}
           tooltip={cpuTooltip(host)}
         />
         <Metric
-          label="ram"
+          ariaLabel="RAM"
           value={ramValue(host)}
           colorPercent={host?.ram_percent}
           tooltip={ramTooltip(host)}
         />
         <Metric
-          label="disk"
+          ariaLabel="Диск"
           value={diskValue(host)}
           colorPercent={host?.disk_percent}
           tooltip={diskTooltip(host)}
