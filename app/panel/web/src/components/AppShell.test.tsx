@@ -233,5 +233,30 @@ describe("AppShell header", () => {
     expect(within(header).queryByRole("button", { name: "Бэкап" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Добавить клиента" })).not.toBeInTheDocument();
   });
+
+  it("centers the ambient glow on empty state", () => {
+    const { container } = render(
+      <AppShell empty onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const bg = container.querySelector(".ambient-bg");
+    expect(bg).toBeInTheDocument();
+    expect(bg).toHaveClass("ambient-bg--center");
+  });
+
+  it("keeps the default ambient glow on the client list", () => {
+    const { container } = render(
+      <AppShell onAddClient={() => {}}>
+        <p>body</p>
+      </AppShell>,
+    );
+
+    const bg = container.querySelector(".ambient-bg");
+    expect(bg).toBeInTheDocument();
+    expect(bg).not.toHaveClass("ambient-bg--center");
+  });
 });
+
 

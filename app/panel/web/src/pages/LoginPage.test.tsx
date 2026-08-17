@@ -17,7 +17,9 @@ describe("LoginPage", () => {
 
     const { container } = render(<LoginPage />);
 
-    expect(container.querySelector(".ambient-bg")).toBeInTheDocument();
+    const bg = container.querySelector(".ambient-bg");
+    expect(bg).toBeInTheDocument();
+    expect(bg).not.toHaveClass("ambient-bg--center");
     expect(screen.getByLabelText("Имя пользователя")).toBeRequired();
     expect(screen.getByLabelText("Пароль")).toBeRequired();
     const submit = screen.getByRole("button", { name: "Войти" });

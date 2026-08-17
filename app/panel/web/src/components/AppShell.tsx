@@ -34,7 +34,7 @@ export function AppShell({
 
   return (
     <div className="relative min-h-svh">
-      <AmbientBackground />
+      <AmbientBackground center={empty} />
       <BackupProvider restorePending={restorePending}>
         <div
           className={
