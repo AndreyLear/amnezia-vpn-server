@@ -33,11 +33,14 @@ describe("EmptyClients", () => {
     await user.click(add);
     expect(onAdd).toHaveBeenCalledTimes(1);
 
-    const backup = screen.getByRole("button", { name: "Бэкап" });
+    expect(screen.queryByRole("button", { name: "Бэкап" })).not.toBeInTheDocument();
+
+    const backup = screen.getByRole("button", { name: "Загрузить бэкап" });
     expect(backup.parentElement).toBe(root);
     expect(backup).toHaveAttribute("data-variant", "outline");
+    expect(backup).not.toHaveAttribute("aria-expanded");
     await user.click(backup);
-    expect(await screen.findByText("Скачать")).toBeInTheDocument();
-    expect(screen.getByText("Загрузить")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Загрузить бэкап" })).toBeInTheDocument();
+    expect(screen.queryByText("Скачать")).not.toBeInTheDocument();
   });
 });

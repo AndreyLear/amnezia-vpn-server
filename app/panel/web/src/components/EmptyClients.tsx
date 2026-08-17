@@ -1,6 +1,6 @@
 import { PlusIcon } from "lucide-react";
 
-import { BackupMenu } from "@/components/BackupMenu";
+import { BackupUploadButton } from "@/components/BackupMenu";
 import { Button } from "@/components/ui/button";
 
 type EmptyClientsProps = {
@@ -15,7 +15,7 @@ export function EmptyClients({ onAdd, restorePending = false }: EmptyClientsProp
         <PlusIcon />
         Добавить клиента
       </Button>
-      <BackupMenu restorePending={restorePending} />
+      <BackupUploadButton restorePending={restorePending} />
     </div>
   );
 }

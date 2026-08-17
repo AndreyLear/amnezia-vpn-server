@@ -215,3 +215,24 @@ export function BackupMenu({ restorePending = false }: { restorePending?: boolea
     </BackupProvider>
   );
 }
+
+function BackupUploadTrigger() {
+  const api = useBackupMenuApi();
+  return (
+    <Button type="button" variant="outline" onClick={() => api.setUploadOpen(true)}>
+      Загрузить бэкап
+    </Button>
+  );
+}
+
+export function BackupUploadButton({ restorePending = false }: { restorePending?: boolean }) {
+  const ctx = useContext(BackupMenuContext);
+  if (ctx) {
+    return <BackupUploadTrigger />;
+  }
+  return (
+    <BackupProvider restorePending={restorePending}>
+      <BackupUploadTrigger />
+    </BackupProvider>
+  );
+}

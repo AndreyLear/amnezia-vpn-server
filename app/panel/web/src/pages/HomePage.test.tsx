@@ -290,7 +290,8 @@ describe("HomePage load", () => {
     expect(within(header).queryByRole("button", { name: "Добавить клиента" })).not.toBeInTheDocument();
     expect(within(header).queryByRole("button", { name: "Бэкап" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Добавить клиента" })).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Бэкап" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Бэкап" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Загрузить бэкап" })).toBeInTheDocument();
 
     await user.click(add);
     expect(
