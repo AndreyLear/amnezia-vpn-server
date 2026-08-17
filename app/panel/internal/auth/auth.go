@@ -23,6 +23,7 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -187,16 +188,17 @@ func (a *Auth) RequireAPI(next http.Handler) http.Handler {
 		ConsumeInvalidateSessions(a.dbPath, a.store)
 		sid, ok := ReadSessionID(r)
 		if !ok {
-			writeAPIUnauthorized(w)
+			writeAPIUnauthorized(w, "")
 			return
 		}
-		sess, ok := a.store.Get(sid)
+		sess, reason, ok := a.store.Lookup(sid)
 		if !ok {
-			writeAPIUnauthorized(w)
+			writeAPIUnauthorized(w, reason)
 			return
 		}
 		if sess, ok = a.slideIfMutating(w, r, sess); !ok {
-			writeAPIUnauthorized(w)
+			_, reason, _ = a.store.Lookup(sid)
+			writeAPIUnauthorized(w, reason)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionCtxKey{}, sess)))
@@ -219,10 +221,15 @@ func (a *Auth) slideIfMutating(w http.ResponseWriter, r *http.Request, sess Sess
 	return touched, true
 }
 
-func writeAPIUnauthorized(w http.ResponseWriter) {
+func writeAPIUnauthorized(w http.ResponseWriter, reason string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte(`{"ok":false,"message":"Unauthorized."}` + "\n"))
+	payload := struct {
+		OK      bool   `json:"ok"`
+		Message string `json:"message"`
+		Reason  string `json:"reason,omitempty"`
+	}{OK: false, Message: "Unauthorized.", Reason: reason}
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func writeAPIForbidden(w http.ResponseWriter) {
@@ -291,7 +298,7 @@ func (a *Auth) RequireCSRF(next http.Handler) http.Handler {
 		sess, ok := CurrentUser(r.Context())
 		if !ok {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
-				writeAPIUnauthorized(w)
+				writeAPIUnauthorized(w, "")
 				return
 			}
 			a.challenge(w, r)

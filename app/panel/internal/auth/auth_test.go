@@ -566,6 +566,79 @@ func TestRequireAPIUnauthorizedJSON(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"ok":false`) {
 		t.Fatalf("body = %q", rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"message":"Unauthorized."`) {
+		t.Fatalf("body must keep message Unauthorized.: %q", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"reason"`) {
+		t.Fatalf("no cookie must omit reason: %q", rec.Body.String())
+	}
+}
+
+func TestRequireAPIUnauthorizedReasonIdleReplacedGone(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	})
+
+	t.Run("idle", func(t *testing.T) {
+		store := NewSessionStore(40 * time.Millisecond)
+		sess, err := store.Create("alice")
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		time.Sleep(70 * time.Millisecond)
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sess.ID})
+		rec := httptest.NewRecorder()
+		NewAuth(store).RequireAPI(next).ServeHTTP(rec, req)
+		assertAPIUnauthorizedReason(t, rec, SessionReasonIdle)
+	})
+
+	t.Run("replaced", func(t *testing.T) {
+		store := NewSessionStore(SessionTTL)
+		old, err := store.Create("alice")
+		if err != nil {
+			t.Fatalf("Create old: %v", err)
+		}
+		keep, err := store.Create("alice")
+		if err != nil {
+			t.Fatalf("Create keep: %v", err)
+		}
+		store.DeleteByUsername("alice", keep.ID)
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: old.ID})
+		rec := httptest.NewRecorder()
+		NewAuth(store).RequireAPI(next).ServeHTTP(rec, req)
+		assertAPIUnauthorizedReason(t, rec, SessionReasonReplaced)
+	})
+
+	t.Run("gone", func(t *testing.T) {
+		store := NewSessionStore(SessionTTL)
+		sess, err := store.Create("alice")
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		store.DeleteAll()
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sess.ID})
+		rec := httptest.NewRecorder()
+		NewAuth(store).RequireAPI(next).ServeHTTP(rec, req)
+		assertAPIUnauthorizedReason(t, rec, SessionReasonGone)
+	})
+}
+
+func assertAPIUnauthorizedReason(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"message":"Unauthorized."`) {
+		t.Fatalf("body must keep message Unauthorized.: %q", body)
+	}
+	wantReason := `"reason":"` + want + `"`
+	if !strings.Contains(body, wantReason) {
+		t.Fatalf("body = %q, want %s", body, wantReason)
+	}
 }
 
 func TestRequireCSRFExpiredSessionChallenge(t *testing.T) {

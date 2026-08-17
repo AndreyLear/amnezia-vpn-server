@@ -20,27 +20,63 @@ import {
   subscribeSessionExpired,
   type LoginResponse,
   type MeResponse,
+  type SessionLossReason,
 } from "@/lib/api";
+
+const copy: Record<SessionLossReason, { title: string; description: string }> = {
+  idle: {
+    title: "Сессия истекла",
+    description: "Введите пароль, чтобы продолжить",
+  },
+  replaced: {
+    title: "Вход с другого устройства",
+    description: "Эта сессия закрыта. Если это были не вы — смените пароль через CLI",
+  },
+  gone: {
+    title: "Сессия сброшена",
+    description:
+      "Панель перезапустили или пароль сменили на сервере. Введите пароль, чтобы продолжить",
+  },
+};
+
+function reloginError(message?: string): string {
+  if (!message) return "";
+  if (/имя пользователя|логин/i.test(message)) return "Неверный пароль";
+  return message;
+}
 
 export function SessionExpiredHost() {
   const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState<SessionLossReason>("idle");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const submitting = useRef(false);
+  const openRef = useRef(false);
 
   useEffect(() => {
-    return subscribeSessionExpired((next) => {
-      setOpen(next);
+    return subscribeSessionExpired((next, nextReason) => {
       if (next) {
-        setPassword("");
-        setError("");
+        if (nextReason) setReason(nextReason);
+        if (!openRef.current) {
+          setPassword("");
+          setError("");
+        }
+        openRef.current = true;
+        setOpen(true);
+        return;
       }
+      openRef.current = false;
+      setOpen(false);
     });
   }, []);
 
   async function submit() {
     if (submitting.current) return;
+    if (!password.trim()) {
+      setError("");
+      return;
+    }
     submitting.current = true;
     setPending(true);
     setError("");
@@ -53,7 +89,7 @@ export function SessionExpiredHost() {
         }),
       });
       if (!res.ok) {
-        setError(res.message ?? "");
+        setError(reloginError(res.message));
         return;
       }
       const meRes = await fetch("/api/me", { credentials: "same-origin" });
@@ -64,11 +100,14 @@ export function SessionExpiredHost() {
       }
       completeSessionRelogin();
       setOpen(false);
+      openRef.current = false;
     } finally {
       submitting.current = false;
       setPending(false);
     }
   }
+
+  const text = copy[reason];
 
   return (
     <Dialog open={open} onOpenChange={() => {}}>
@@ -78,8 +117,8 @@ export function SessionExpiredHost() {
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>Нужно войти заново</DialogTitle>
-          <DialogDescription>Сессия истекла. Введите пароль, чтобы продолжить.</DialogDescription>
+          <DialogTitle>{text.title}</DialogTitle>
+          <DialogDescription>{text.description}</DialogDescription>
         </DialogHeader>
         <form
           className="grid gap-3"

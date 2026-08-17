@@ -683,6 +683,86 @@ func TestSessionConcurrentRotateGet(t *testing.T) {
 	}
 }
 
+func TestSessionLookupIdleNotGone(t *testing.T) {
+	s := NewSessionStore(40 * time.Millisecond)
+	sess, err := s.Create("alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	time.Sleep(70 * time.Millisecond)
+	got, reason, ok := s.Lookup(sess.ID)
+	if ok {
+		t.Fatalf("expired session must not be live: %+v", got)
+	}
+	if reason != SessionReasonIdle {
+		t.Fatalf("expired Get reason = %q, want %q (must not look like gone)", reason, SessionReasonIdle)
+	}
+	_, reason2, ok2 := s.Lookup(sess.ID)
+	if ok2 || reason2 != SessionReasonIdle {
+		t.Fatalf("second Lookup after idle: ok=%v reason=%q, want idle", ok2, reason2)
+	}
+}
+
+func TestSessionDeleteByUsernameTombsReplaced(t *testing.T) {
+	s := NewSessionStore(SessionTTL)
+	old, err := s.Create("alice")
+	if err != nil {
+		t.Fatalf("Create old: %v", err)
+	}
+	keep, err := s.Create("alice")
+	if err != nil {
+		t.Fatalf("Create keep: %v", err)
+	}
+	s.DeleteByUsername("alice", keep.ID)
+	_, reason, ok := s.Lookup(old.ID)
+	if ok {
+		t.Fatal("replaced session must not be live")
+	}
+	if reason != SessionReasonReplaced {
+		t.Fatalf("second-login SID reason = %q, want %q", reason, SessionReasonReplaced)
+	}
+	if _, live := s.Get(keep.ID); !live {
+		t.Fatal("kept session must survive")
+	}
+}
+
+func TestSessionUnknownSIDIsGone(t *testing.T) {
+	s := NewSessionStore(SessionTTL)
+	_, reason, ok := s.Lookup("abcdefghijklmnopqrstuvwxyz0123456789ABCDE")
+	if ok {
+		t.Fatal("unknown SID must not be live")
+	}
+	if reason != SessionReasonGone {
+		t.Fatalf("unknown SID reason = %q, want %q", reason, SessionReasonGone)
+	}
+}
+
+func TestSessionDeleteAllIsGoneNotIdle(t *testing.T) {
+	s := NewSessionStore(SessionTTL)
+	sess, err := s.Create("alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	s.DeleteAll()
+	_, reason, ok := s.Lookup(sess.ID)
+	if ok || reason != SessionReasonGone {
+		t.Fatalf("DeleteAll Lookup: ok=%v reason=%q, want gone", ok, reason)
+	}
+}
+
+func TestSessionForgetByUsernameIsGoneNotReplaced(t *testing.T) {
+	s := NewSessionStore(SessionTTL)
+	sess, err := s.Create("alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	s.ForgetByUsername("alice")
+	_, reason, ok := s.Lookup(sess.ID)
+	if ok || reason != SessionReasonGone {
+		t.Fatalf("CLI-style drop Lookup: ok=%v reason=%q, want gone", ok, reason)
+	}
+}
+
 func TestSessionIDValidConstantTime(t *testing.T) {
 	a, err := newSessionID()
 	if err != nil {

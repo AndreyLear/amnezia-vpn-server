@@ -96,6 +96,6 @@ func applyInvalidateFile(path string, store *SessionStore) {
 			store.DeleteAll()
 			return
 		}
-		store.DeleteByUsername(line, "")
+		store.ForgetByUsername(line)
 	}
 }

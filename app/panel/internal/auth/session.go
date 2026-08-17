@@ -31,6 +31,18 @@ import (
 // refresh the session cookie.
 const SessionTTL = 20 * time.Minute
 
+// Session-loss reasons for API 401 JSON when a session cookie was sent.
+const (
+	SessionReasonIdle     = "idle"
+	SessionReasonReplaced = "replaced"
+	SessionReasonGone     = "gone"
+)
+
+type sessionTombstone struct {
+	reason string
+	until  time.Time
+}
+
 // ErrSessionNotFound reports a missing or already-expired session.
 var ErrSessionNotFound = errors.New("auth: session not found")
 
@@ -92,9 +104,10 @@ func newCSRFToken() (string, error) {
 // are deleted; Create also drops any expired entries it encounters, so
 // abandoned sessions cannot accumulate beyond the store's activity.
 type SessionStore struct {
-	mu   sync.RWMutex
-	byID map[string]Session
-	ttl  time.Duration
+	mu         sync.RWMutex
+	byID       map[string]Session
+	tombstones map[string]sessionTombstone
+	ttl        time.Duration
 }
 
 // NewSessionStore returns an empty store. ttl is the idle session
@@ -105,8 +118,9 @@ func NewSessionStore(ttl time.Duration) *SessionStore {
 		ttl = SessionTTL
 	}
 	return &SessionStore{
-		byID: make(map[string]Session),
-		ttl:  ttl,
+		byID:       make(map[string]Session),
+		tombstones: make(map[string]sessionTombstone),
+		ttl:        ttl,
 	}
 }
 
@@ -143,27 +157,32 @@ func (s *SessionStore) Create(username string) (Session, error) {
 // per Create/Rotate), so the only races are readers vs. a concurrent
 // Delete/Rotate removing the entry.
 func (s *SessionStore) Get(id string) (Session, bool) {
+	sess, _, ok := s.Lookup(id)
+	return sess, ok
+}
+
+// Lookup is Get plus the API 401 reason when the session is not live.
+// Expired SIDs that were in the store are idle (remembered as a
+// tombstone so a later lookup is not gone). SIDs dropped by a second
+// login are replaced. Unknown SIDs — restart, CLI invalidate, restore
+// DeleteAll, logout — are gone.
+func (s *SessionStore) Lookup(id string) (Session, string, bool) {
 	now := time.Now().UTC()
-	s.mu.RLock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneTombstonesLocked(now)
 	sess, ok := s.byID[id]
-	live := ok && sess.ExpiresAt.After(now)
-	s.mu.RUnlock()
-	if ok && !live {
-		// Expiry is observed under the read lock, but removal is a
-		// write: re-acquire the write lock and re-check, so two
-		// concurrent expiring Gets (or a racing Delete) stay safe.
-		s.mu.Lock()
-		cur, still := s.byID[id]
-		if still && !cur.ExpiresAt.After(time.Now().UTC()) {
-			delete(s.byID, id)
-		}
-		s.mu.Unlock()
-		return Session{}, false
+	if ok && sess.ExpiresAt.After(now) {
+		return sess, "", true
 	}
-	if !live {
-		return Session{}, false
+	if ok {
+		s.tombstoneLocked(id, SessionReasonIdle, now)
+		return Session{}, SessionReasonIdle, false
 	}
-	return sess, true
+	if t, hit := s.tombstones[id]; hit {
+		return Session{}, t.reason, false
+	}
+	return Session{}, SessionReasonGone, false
 }
 
 // Touch returns the live session for id after sliding ExpiresAt to
@@ -178,7 +197,7 @@ func (s *SessionStore) Touch(id string) (Session, bool) {
 		return Session{}, false
 	}
 	if !sess.ExpiresAt.After(now) {
-		delete(s.byID, id)
+		s.tombstoneLocked(id, SessionReasonIdle, now)
 		return Session{}, false
 	}
 	sess.ExpiresAt = now.Add(s.ttl)
@@ -209,10 +228,27 @@ func (s *SessionStore) DeleteAll() {
 // the caller keeps the fresh session and drops any earlier ones, so a
 // new login invalidates sessions from other browsers or devices.
 func (s *SessionStore) DeleteByUsername(username, keep string) {
+	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, sess := range s.byID {
 		if sess.Username == username && id != keep {
+			if keep != "" {
+				s.tombstoneLocked(id, SessionReasonReplaced, now)
+			} else {
+				delete(s.byID, id)
+			}
+		}
+	}
+}
+
+// ForgetByUsername drops every session of username without a replaced
+// tombstone (CLI invalidate, password change from outside this login).
+func (s *SessionStore) ForgetByUsername(username string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, sess := range s.byID {
+		if sess.Username == username {
 			delete(s.byID, id)
 		}
 	}
@@ -250,7 +286,7 @@ func (s *SessionStore) Rotate(oldID, username string) (Session, error) {
 		return Session{}, ErrSessionNotFound
 	}
 	if !old.ExpiresAt.After(now) {
-		delete(s.byID, oldID)
+		s.tombstoneLocked(oldID, SessionReasonIdle, now)
 		return Session{}, ErrSessionNotFound
 	}
 	id, err := newSessionID()
@@ -275,11 +311,25 @@ func (s *SessionStore) Rotate(oldID, username string) (Session, error) {
 
 // pruneLocked drops expired sessions. Callers hold mu.
 func (s *SessionStore) pruneLocked(now time.Time) {
+	s.pruneTombstonesLocked(now)
 	for id, sess := range s.byID {
 		if !sess.ExpiresAt.After(now) {
-			delete(s.byID, id)
+			s.tombstoneLocked(id, SessionReasonIdle, now)
 		}
 	}
+}
+
+func (s *SessionStore) pruneTombstonesLocked(now time.Time) {
+	for id, t := range s.tombstones {
+		if !t.until.After(now) {
+			delete(s.tombstones, id)
+		}
+	}
+}
+
+func (s *SessionStore) tombstoneLocked(id, reason string, now time.Time) {
+	delete(s.byID, id)
+	s.tombstones[id] = sessionTombstone{reason: reason, until: now.Add(s.ttl)}
 }
 
 // String renders the session for logs. It deliberately omits the CSRF
