@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Download, Power, QrCode, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -22,6 +23,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
+
+const actionButtonClass = "max-sm:h-12 max-sm:w-full";
 
 type ClientInfoDialogProps = {
   client: Client | null;
@@ -96,6 +99,47 @@ function PropertyEditButtons({
     >
       Изменить
     </Button>
+  );
+}
+
+function EditableProperty({
+  editing,
+  htmlFor,
+  label,
+  optional,
+  actions,
+  children,
+}: {
+  editing: boolean;
+  htmlFor: string;
+  label: string;
+  optional?: boolean;
+  actions: ReactNode;
+  children: ReactNode;
+}) {
+  const caption = optional ? (
+    <>
+      {label}{" "}
+      <span className="font-normal text-muted-foreground">(опционально)</span>
+    </>
+  ) : (
+    label
+  );
+
+  return (
+    <div className="flex items-center gap-2 max-sm:py-2">
+      <div className="min-w-0 flex-1">
+        {editing ? (
+          <Label htmlFor={htmlFor} className="text-muted-foreground">
+            {caption}
+          </Label>
+        ) : (
+          <dt className="text-muted-foreground">{caption}</dt>
+        )}
+        {children}
+      </div>
+      {actions}
+    </div>
   );
 }
 
@@ -189,7 +233,7 @@ export function ClientInfoDialog({
     <>
       <Dialog open={client !== null} onOpenChange={onOpenChange}>
         <DialogContent
-          className="sm:max-w-md"
+          className="h-auto max-h-[calc(100dvh-2rem)] overflow-y-auto max-sm:top-auto max-sm:right-0 max-sm:bottom-0 max-sm:left-0 max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none sm:max-w-md"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           {client ? (
@@ -198,16 +242,12 @@ export function ClientInfoDialog({
                 <DialogTitle>Клиент</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
-                <dl className="grid gap-2 text-sm">
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      {editingName ? (
-                        <Label htmlFor="info-name" className="text-muted-foreground">
-                          Имя
-                        </Label>
-                      ) : (
-                        <dt className="text-muted-foreground">Имя</dt>
-                      )}
+                <dl className="grid gap-2 text-sm max-sm:divide-y max-sm:divide-border max-sm:gap-0">
+                  <EditableProperty
+                    editing={editingName}
+                    htmlFor="info-name"
+                    label="Имя"
+                    actions={
                       <PropertyEditButtons
                         editing={editingName}
                         pending={pending}
@@ -218,7 +258,8 @@ export function ClientInfoDialog({
                         onSave={() => void saveName()}
                         onCancel={cancelNameEdit}
                       />
-                    </div>
+                    }
+                  >
                     {editingName ? (
                       <Input
                         id="info-name"
@@ -231,20 +272,13 @@ export function ClientInfoDialog({
                     ) : (
                       <dd>{viewName}</dd>
                     )}
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      {editingDescription ? (
-                        <Label htmlFor="info-description" className="text-muted-foreground">
-                          Описание{" "}
-                          <span className="font-normal text-muted-foreground">(опционально)</span>
-                        </Label>
-                      ) : (
-                        <dt className="text-muted-foreground">
-                          Описание{" "}
-                          <span className="font-normal text-muted-foreground">(опционально)</span>
-                        </dt>
-                      )}
+                  </EditableProperty>
+                  <EditableProperty
+                    editing={editingDescription}
+                    htmlFor="info-description"
+                    label="Описание"
+                    optional
+                    actions={
                       <PropertyEditButtons
                         editing={editingDescription}
                         pending={pending}
@@ -255,7 +289,8 @@ export function ClientInfoDialog({
                         onSave={() => void saveDescription()}
                         onCancel={cancelDescriptionEdit}
                       />
-                    </div>
+                    }
+                  >
                     {editingDescription ? (
                       <Textarea
                         id="info-description"
@@ -272,8 +307,8 @@ export function ClientInfoDialog({
                     ) : (
                       <dd>{viewDescription}</dd>
                     )}
-                  </div>
-                  <div className="grid gap-0.5">
+                  </EditableProperty>
+                  <div className="grid gap-0.5 max-sm:py-2">
                     <dt className="text-muted-foreground">Статус</dt>
                     <dd>
                       {!client.enabled
@@ -283,37 +318,60 @@ export function ClientInfoDialog({
                           : "офлайн"}
                     </dd>
                   </div>
-                  <div className="grid gap-0.5">
+                  <div className="grid gap-0.5 max-sm:py-2">
                     <dt className="text-muted-foreground">IP</dt>
                     <dd className="font-mono">{client.address}</dd>
                   </div>
-                  <div className="grid gap-0.5">
+                  <div className="grid gap-0.5 max-sm:py-2">
                     <dt className="text-muted-foreground">Handshake</dt>
                     <dd>{formatHandshake(client.last_handshake_utc)}</dd>
                   </div>
-                  <div className="grid gap-0.5">
+                  <div className="grid gap-0.5 max-sm:py-2">
                     <dt className="text-muted-foreground">Трафик</dt>
                     <dd>
                       ↓ {formatBytes(client.rx_bytes)} · ↑ {formatBytes(client.tx_bytes)}
                     </dd>
                   </div>
                 </dl>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" disabled={pending} onClick={onQr}>
+                <div className="flex flex-wrap gap-2 max-sm:flex-col">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={actionButtonClass}
+                    disabled={pending}
+                    onClick={onQr}
+                  >
+                    <QrCode data-icon="inline-start" />
                     QR-код
                   </Button>
-                  <Button type="button" variant="outline" disabled={pending} onClick={onDownload}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={actionButtonClass}
+                    disabled={pending}
+                    onClick={onDownload}
+                  >
+                    <Download data-icon="inline-start" />
                     Скачать конфиг
                   </Button>
-                  <Button type="button" variant="outline" disabled={pending} onClick={onToggle}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={actionButtonClass}
+                    disabled={pending}
+                    onClick={onToggle}
+                  >
+                    <Power data-icon="inline-start" />
                     {client.enabled ? "Отключить" : "Включить"}
                   </Button>
                   <Button
                     type="button"
                     variant="destructive"
+                    className={actionButtonClass}
                     disabled={pending}
                     onClick={() => setConfirmOpen(true)}
                   >
+                    <Trash2 data-icon="inline-start" />
                     Удалить
                   </Button>
                 </div>

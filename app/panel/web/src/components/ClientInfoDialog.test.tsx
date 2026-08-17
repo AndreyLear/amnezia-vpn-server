@@ -123,10 +123,44 @@ describe("ClientInfoDialog", () => {
 
     const qr = screen.getByRole("button", { name: "QR-код" });
     const buttonRow = qr.parentElement;
-    expect(buttonRow).toHaveClass("flex", "flex-wrap", "gap-2");
+    expect(buttonRow).toHaveClass("flex", "flex-wrap", "gap-2", "max-sm:flex-col");
+    expect(qr).toHaveClass("max-sm:h-12", "max-sm:w-full");
+    expect(buttonRow?.parentElement).toHaveClass("gap-4");
+  });
 
-    const spaced = buttonRow?.classList.contains("mt-1") || buttonRow?.parentElement?.classList.contains("gap-4");
-    expect(spaced).toBe(true);
+  it("opens as a mobile bottom sheet with property dividers", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    const content = document.querySelector('[data-slot="dialog-content"]');
+    expect(content).toHaveClass(
+      "max-sm:bottom-0",
+      "max-sm:top-auto",
+      "max-sm:left-0",
+      "max-sm:right-0",
+      "max-sm:w-full",
+      "max-sm:max-w-none",
+      "max-sm:translate-x-0",
+      "max-sm:translate-y-0",
+      "max-sm:rounded-b-none",
+      "h-auto",
+      "overflow-y-auto",
+      "max-h-[calc(100dvh-2rem)]",
+      "sm:max-w-md",
+    );
+
+    const dl = document.querySelector("dl");
+    expect(dl).toHaveClass("max-sm:divide-y", "max-sm:divide-border");
+  });
+
+  it("vertically centers Изменить against the whole name property", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    const editName = screen.getByRole("button", { name: "Изменить имя" });
+    const row = editName.parentElement;
+    expect(row).toHaveClass("flex", "items-center");
+    expect(row).not.toHaveClass("justify-between");
+    expect(row).toContainElement(screen.getByText("Имя"));
+    expect(row).toContainElement(screen.getByText("Alice"));
   });
 
   it("shows name and description as read-only text with Изменить buttons", () => {
