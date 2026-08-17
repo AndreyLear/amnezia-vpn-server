@@ -26,7 +26,6 @@ import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
 
 const actionButtonClass = "max-sm:h-12 max-sm:w-full";
-const inlineEditButtonClass = "px-1 max-sm:h-12";
 const confirmButtonClass = "max-sm:h-12 max-sm:w-full";
 const saveButtonClass = "max-sm:h-12 max-sm:w-full";
 
@@ -191,9 +190,7 @@ export function ClientInfoDialog({
                     actions={
                       <Button
                         type="button"
-                        variant="ghost"
-                        size="sm"
-                        className={inlineEditButtonClass}
+                        variant="outline"
                         aria-label="Изменить имя"
                         disabled={pending}
                         onClick={startNameEdit}
@@ -210,9 +207,7 @@ export function ClientInfoDialog({
                     actions={
                       <Button
                         type="button"
-                        variant="ghost"
-                        size="sm"
-                        className={inlineEditButtonClass}
+                        variant="outline"
                         aria-label="Изменить описание"
                         disabled={pending}
                         onClick={startDescriptionEdit}
@@ -227,9 +222,7 @@ export function ClientInfoDialog({
                     actions={
                       <Button
                         type="button"
-                        variant="ghost"
-                        size="sm"
-                        className={inlineEditButtonClass}
+                        variant="outline"
                         disabled={pending}
                         onClick={onToggle}
                       >

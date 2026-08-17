@@ -384,20 +384,24 @@ describe("ClientInfoDialog", () => {
     expect(nameStack).not.toHaveClass("gap-0.5");
   });
 
-  it("uses 4px horizontal padding on Изменить", () => {
-    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
-
-    const edit = screen.getByRole("button", { name: "Изменить имя" });
-    expect(edit).toHaveClass("px-1");
-    expect(edit).not.toHaveClass("px-2");
-  });
-
-  it("gives Изменить a 48px mobile tap target", () => {
-    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
-
-    expect(screen.getByRole("button", { name: "Изменить имя" })).toHaveClass(
-      "max-sm:h-12",
+  it("styles property-row Изменить and Отключить like the outline Backup trigger", () => {
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={() => {}}
+        onToggle={() => {}}
+      />,
     );
+
+    for (const name of ["Изменить имя", "Изменить описание", "Отключить"] as const) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveAttribute("data-variant", "outline");
+      expect(button).toHaveAttribute("data-size", "default");
+      expect(button).toHaveClass("h-8");
+      expect(button).not.toHaveClass("max-sm:h-12");
+      expect(button).not.toHaveClass("px-1");
+      expect(button).not.toHaveClass("ghost");
+    }
   });
 
   it("gives Сохранить in the edit dialog a 48px mobile tap target", async () => {
