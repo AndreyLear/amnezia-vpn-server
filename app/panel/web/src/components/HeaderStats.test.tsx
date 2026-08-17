@@ -187,7 +187,7 @@ describe("HeaderStats", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("colors values emerald below 70, amber below 90, and red otherwise", () => {
+  it("colors values muted below 70, amber below 90, and red otherwise", () => {
     render(
       <HeaderStats
         host={{
@@ -202,7 +202,8 @@ describe("HeaderStats", () => {
       />,
     );
 
-    expect(screen.getByText("50%")).toHaveClass("text-emerald-500");
+    expect(screen.getByText("50%")).toHaveClass("text-muted-foreground");
+    expect(screen.getByText("50%")).not.toHaveClass("text-emerald-500");
     expect(screen.getByText("75%")).toHaveClass("text-amber-500");
     expect(screen.getByText(formatBytes(diskUsed))).toHaveClass("text-red-500");
   });

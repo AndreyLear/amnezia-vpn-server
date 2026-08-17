@@ -16,7 +16,7 @@ function roundPercent(value: number): number {
 
 function loadColor(percent: number | null | undefined): string {
   if (percent == null) return "text-muted-foreground";
-  if (percent < 70) return "text-emerald-500";
+  if (percent < 70) return "text-muted-foreground";
   if (percent < 90) return "text-amber-500";
   return "text-red-500";
 }
