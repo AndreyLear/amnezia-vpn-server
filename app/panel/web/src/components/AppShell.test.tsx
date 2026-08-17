@@ -217,9 +217,11 @@ describe("AppShell header", () => {
     );
 
     const header = screen.getByRole("banner");
-    expect(header).toHaveClass("justify-center");
-    expect(header).toHaveClass("pt-4");
-    expect(header).toHaveClass("sm:pt-8");
+    expect(header).toHaveClass("flex", "min-w-0", "items-center", "justify-center");
+    expect(header).not.toHaveClass("pt-4");
+    expect(header).not.toHaveClass("sm:pt-8");
+    const column = header.parentElement;
+    expect(column).toHaveClass("flex", "min-h-svh", "flex-col", "items-center", "justify-center", "gap-8");
     expect(screen.getByText("AWG Panel")).toBeInTheDocument();
     expect(within(header).getAllByLabelText("CPU")).toHaveLength(1);
 

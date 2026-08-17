@@ -25,10 +25,14 @@ describe("EmptyClients", () => {
 
     const add = screen.getByRole("button", { name: "Добавить клиента" });
     expect(add.querySelector("svg.lucide-plus")).toBeTruthy();
+    const root = add.parentElement;
+    expect(root).toHaveClass("flex", "flex-col", "items-center", "gap-4");
+    expect(root?.className).not.toMatch(/min-h-\[calc\(100svh-8rem\)\]/);
     await user.click(add);
     expect(onAdd).toHaveBeenCalledTimes(1);
 
     const backup = screen.getByRole("button", { name: "Бэкап" });
+    expect(backup.parentElement).toBe(root);
     expect(backup).toHaveAttribute("data-variant", "outline");
     await user.click(backup);
     expect(await screen.findByText("Скачать")).toBeInTheDocument();

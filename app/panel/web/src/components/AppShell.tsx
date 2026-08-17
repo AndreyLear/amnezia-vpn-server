@@ -36,11 +36,17 @@ export function AppShell({
     <div className="relative min-h-svh">
       <AmbientBackground />
       <BackupProvider restorePending={restorePending}>
-        <div className="relative mx-auto w-full max-w-[752px] px-4">
+        <div
+          className={
+            empty
+              ? "relative mx-auto flex min-h-svh w-full max-w-[752px] flex-col items-center justify-center gap-8 px-4"
+              : "relative mx-auto w-full max-w-[752px] px-4"
+          }
+        >
           <header
             className={
               empty
-                ? "flex min-w-0 items-center justify-center pt-4 sm:pt-8"
+                ? "flex min-w-0 items-center justify-center"
                 : "flex min-w-0 items-center pt-4 sm:pt-8"
             }
           >

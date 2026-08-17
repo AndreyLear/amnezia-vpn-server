@@ -10,7 +10,7 @@ type EmptyClientsProps = {
 
 export function EmptyClients({ onAdd, restorePending = false }: EmptyClientsProps) {
   return (
-    <div className="flex min-h-[calc(100svh-8rem)] flex-col items-center justify-center gap-4">
+    <div className="flex flex-col items-center gap-4">
       <Button type="button" onClick={onAdd}>
         <PlusIcon />
         Добавить клиента
