@@ -24,6 +24,8 @@ describe("LoginPage", () => {
       "data-size",
       "lg",
     );
+    expect(container.querySelector("form")).toHaveClass("gap-4");
+    expect(screen.getByRole("button", { name: "Войти" })).toHaveClass("mt-4");
     expect(screen.queryByLabelText("Код")).not.toBeInTheDocument();
   });
 });

@@ -79,7 +79,7 @@ export default function LoginPage() {
           />
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        <Button type="submit" size="lg" disabled={pending}>
+        <Button type="submit" size="lg" className="mt-4" disabled={pending}>
           Войти
         </Button>
       </form>
