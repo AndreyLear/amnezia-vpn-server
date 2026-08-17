@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -71,20 +71,21 @@ describe("BackupMenu restore pending", () => {
     setCsrf("");
   });
 
-  it("opens the upload dialog with restart copy when restore is already pending", async () => {
+  it("opens the upload dialog without the restart sentence when restore is already pending", async () => {
     const user = userEvent.setup();
     render(<BackupMenu restorePending />);
 
     await user.click(screen.getByRole("button", { name: "Бэкап" }));
     await user.click(await screen.findByRole("menuitem", { name: "Загрузить" }));
 
+    expect(await screen.findByRole("heading", { name: "Загрузить бэкап" })).toBeInTheDocument();
     expect(
-      await screen.findByText("Восстановление уже подготовлено. Требуется перезапуск."),
-    ).toBeInTheDocument();
+      screen.queryByText("Восстановление уже подготовлено. Требуется перезапуск."),
+    ).not.toBeInTheDocument();
     expect(document.querySelector('input[type="file"]')).toBeDisabled();
   });
 
-  it("keeps the restart copy visible after a successful prepare", async () => {
+  it("closes the upload dialog after a successful prepare", async () => {
     const user = userEvent.setup();
     setCsrf("csrf");
     vi.stubGlobal(
@@ -114,10 +115,12 @@ describe("BackupMenu restore pending", () => {
     await user.upload(input, file);
     await user.click(screen.getByRole("button", { name: "Загрузить" }));
 
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "Загрузить бэкап" })).not.toBeInTheDocument();
+    });
     expect(
-      await screen.findByText("Восстановление уже подготовлено. Требуется перезапуск."),
-    ).toBeInTheDocument();
-    expect(document.querySelector('input[type="file"]')).toBeDisabled();
+      screen.queryByText("Восстановление уже подготовлено. Требуется перезапуск."),
+    ).not.toBeInTheDocument();
   });
 });
 
