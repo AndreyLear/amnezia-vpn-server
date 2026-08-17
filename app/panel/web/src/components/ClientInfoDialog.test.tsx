@@ -102,10 +102,14 @@ describe("ClientInfoDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "QR-код" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Скачать конфиг" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "QR" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Конфиг" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Отключить" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Удалить" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "QR-код" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Скачать конфиг" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: `Действия для ${client.name}` }),
     ).not.toBeInTheDocument();
@@ -126,10 +130,12 @@ describe("ClientInfoDialog", () => {
       />,
     );
 
-    const qr = screen.getByRole("button", { name: "QR-код" });
-    const buttonRow = qr.parentElement;
-    expect(buttonRow).toHaveClass("flex", "flex-wrap", "gap-2", "max-sm:flex-col");
-    expect(qr).toHaveClass("max-sm:h-12", "max-sm:w-full");
+    const remove = screen.getByRole("button", { name: "Удалить" });
+    const buttonRow = remove.parentElement;
+    expect(buttonRow).toHaveClass("flex", "flex-wrap", "gap-2");
+    expect(buttonRow).not.toHaveClass("max-sm:flex-col");
+    expect(remove).not.toHaveClass("max-sm:h-12");
+    expect(remove).not.toHaveClass("max-sm:w-full");
     expect(buttonRow?.parentElement).toHaveClass("gap-4");
   });
 
@@ -183,7 +189,7 @@ describe("ClientInfoDialog", () => {
     expect(screen.getAllByRole("button", { name: "Отключить" })).toHaveLength(1);
   });
 
-  it("keeps QR, download, and delete in the action row without enable/disable", () => {
+  it("puts Конфиг then QR on the IP row and only Удалить in the footer", () => {
     render(
       <ClientInfoDialog
         client={client}
@@ -195,20 +201,42 @@ describe("ClientInfoDialog", () => {
       />,
     );
 
-    const qr = screen.getByRole("button", { name: "QR-код" });
-    const actionRow = qr.parentElement;
-    expect(actionRow).not.toBeNull();
-    expect(within(actionRow!).getByRole("button", { name: "QR-код" })).toBeInTheDocument();
+    const ipRow = screen.getByText("IP").closest("div.flex");
+    expect(ipRow).not.toBeNull();
+    expect(ipRow).toHaveTextContent("10.8.0.2/32");
+    const config = within(ipRow!).getByRole("button", { name: "Конфиг" });
+    const qr = within(ipRow!).getByRole("button", { name: "QR" });
+    expect(config).toHaveTextContent("Конфиг");
+    expect(qr).toHaveTextContent("QR");
+    expect(config.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    for (const button of [config, qr]) {
+      expect(button).toHaveAttribute("data-variant", "outline");
+      expect(button).toHaveAttribute("data-size", "default");
+      const icon = button.querySelector("svg");
+      expect(icon).not.toBeNull();
+      expect(icon).toHaveAttribute("data-icon", "inline-start");
+    }
+
+    const remove = screen.getByRole("button", { name: "Удалить" });
+    const footer = remove.parentElement;
+    expect(footer).not.toBeNull();
+    expect(within(footer!).getAllByRole("button")).toHaveLength(1);
+    expect(within(footer!).queryByRole("button", { name: "QR" })).not.toBeInTheDocument();
     expect(
-      within(actionRow!).getByRole("button", { name: "Скачать конфиг" }),
-    ).toBeInTheDocument();
-    expect(within(actionRow!).getByRole("button", { name: "Удалить" })).toBeInTheDocument();
-    expect(
-      within(actionRow!).queryByRole("button", { name: "Отключить" }),
+      within(footer!).queryByRole("button", { name: "Конфиг" }),
     ).not.toBeInTheDocument();
+    expect(
+      within(footer!).queryByRole("button", { name: "Отключить" }),
+    ).not.toBeInTheDocument();
+    expect(remove).toHaveAttribute("data-variant", "destructive");
+    expect(remove).toHaveAttribute("data-size", "default");
+    expect(remove).not.toHaveClass("max-sm:h-12");
+    expect(remove).not.toHaveClass("max-sm:w-full");
 
     const toggle = screen.getByRole("button", { name: "Отключить" });
-    expect(actionRow).not.toContainElement(toggle);
+    expect(footer).not.toContainElement(toggle);
     expect(toggle.parentElement).toContainElement(screen.getByText("Статус"));
   });
 

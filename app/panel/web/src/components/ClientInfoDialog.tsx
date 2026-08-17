@@ -25,7 +25,6 @@ import { Textarea } from "@/components/ui/textarea";
 import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
 
-const actionButtonClass = "max-sm:h-12 max-sm:w-full";
 const confirmButtonClass = "max-sm:h-12 max-sm:w-full";
 const saveButtonClass = "max-sm:h-12 max-sm:w-full";
 
@@ -253,7 +252,30 @@ export function ClientInfoDialog({
                       </dd>
                     </div>
                   </PropertyRow>
-                  <PropertyRow>
+                  <PropertyRow
+                    actions={
+                      <>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={pending}
+                          onClick={onDownload}
+                        >
+                          <Download data-icon="inline-start" aria-hidden />
+                          Конфиг
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={pending}
+                          onClick={onQr}
+                        >
+                          <QrCode data-icon="inline-start" aria-hidden />
+                          QR
+                        </Button>
+                      </>
+                    }
+                  >
                     <div className="grid gap-0.5">
                       <dt className="text-muted-foreground">IP</dt>
                       <dd className="font-mono">{client.address}</dd>
@@ -274,31 +296,10 @@ export function ClientInfoDialog({
                     </div>
                   </PropertyRow>
                 </dl>
-                <div className="flex flex-wrap gap-2 max-sm:flex-col">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className={actionButtonClass}
-                    disabled={pending}
-                    onClick={onQr}
-                  >
-                    <QrCode data-icon="inline-start" />
-                    QR-код
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className={actionButtonClass}
-                    disabled={pending}
-                    onClick={onDownload}
-                  >
-                    <Download data-icon="inline-start" />
-                    Скачать конфиг
-                  </Button>
+                <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
                     variant="destructive"
-                    className={actionButtonClass}
                     disabled={pending}
                     onClick={() => setConfirmOpen(true)}
                   >
