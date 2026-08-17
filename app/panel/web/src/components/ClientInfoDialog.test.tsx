@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -344,5 +344,68 @@ describe("ClientInfoDialog", () => {
     expect(save).not.toHaveClass("px-2");
     expect(cancel).toHaveClass("px-1");
     expect(cancel).not.toHaveClass("px-2");
+  });
+
+  it("gives Изменить a 48px mobile tap target", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    expect(screen.getByRole("button", { name: "Изменить имя" })).toHaveClass(
+      "max-sm:h-12",
+    );
+  });
+
+  it("gives Сохранить and Отменить 48px mobile tap targets", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={() => {}}
+        onSave={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Изменить имя" }));
+
+    expect(screen.getByRole("button", { name: "Сохранить имя" })).toHaveClass(
+      "max-sm:h-12",
+    );
+    expect(screen.getByRole("button", { name: "Отменить имя" })).toHaveClass(
+      "max-sm:h-12",
+    );
+  });
+
+  it("gives the Close button a 48px mobile tap target", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    const close = screen.getByRole("button", { name: "Close" });
+    const content = document.querySelector('[data-slot="dialog-content"]');
+    expect(content).toHaveClass("max-sm:[&_[data-size=icon-sm]]:size-12");
+    expect(close).toHaveAttribute("data-size", "icon-sm");
+    expect(
+      document.querySelector('[data-slot="dialog-header"]'),
+    ).toHaveClass("max-sm:pr-12");
+  });
+
+  it("gives delete confirm Отмена and Удалить 48px mobile tap targets", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ClientInfoDialog
+        client={client}
+        onOpenChange={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Удалить" }));
+
+    const alert = screen.getByRole("alertdialog");
+    expect(within(alert).getByRole("button", { name: "Отмена" })).toHaveClass(
+      "max-sm:h-12",
+    );
+    expect(within(alert).getByRole("button", { name: "Удалить" })).toHaveClass(
+      "max-sm:h-12",
+    );
   });
 });

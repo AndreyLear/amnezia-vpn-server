@@ -25,6 +25,8 @@ import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
 
 const actionButtonClass = "max-sm:h-12 max-sm:w-full";
+const inlineEditButtonClass = "px-1 max-sm:h-12";
+const confirmButtonClass = "max-sm:h-12 max-sm:w-full";
 
 type ClientInfoDialogProps = {
   client: Client | null;
@@ -65,7 +67,7 @@ function PropertyEditButtons({
           type="button"
           variant="ghost"
           size="sm"
-          className="px-1"
+          className={inlineEditButtonClass}
           aria-label={saveLabel}
           disabled={pending}
           onClick={onSave}
@@ -76,7 +78,7 @@ function PropertyEditButtons({
           type="button"
           variant="ghost"
           size="sm"
-          className="px-1"
+          className={inlineEditButtonClass}
           aria-label={cancelLabel}
           disabled={pending}
           onClick={onCancel}
@@ -92,7 +94,7 @@ function PropertyEditButtons({
       type="button"
       variant="ghost"
       size="sm"
-      className="px-1"
+      className={inlineEditButtonClass}
       aria-label={editLabel}
       disabled={pending}
       onClick={onEdit}
@@ -233,12 +235,12 @@ export function ClientInfoDialog({
     <>
       <Dialog open={client !== null} onOpenChange={onOpenChange}>
         <DialogContent
-          className="h-auto max-h-[calc(100dvh-2rem)] overflow-y-auto max-sm:top-auto max-sm:right-0 max-sm:bottom-0 max-sm:left-0 max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none sm:max-w-md"
+          className="h-auto max-h-[calc(100dvh-2rem)] overflow-y-auto max-sm:top-auto max-sm:right-0 max-sm:bottom-0 max-sm:left-0 max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none max-sm:[&_[data-size=icon-sm]]:size-12 sm:max-w-md"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           {client ? (
             <>
-              <DialogHeader>
+              <DialogHeader className="max-sm:pr-12">
                 <DialogTitle>Клиент</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
@@ -389,9 +391,12 @@ export function ClientInfoDialog({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogCancel className={confirmButtonClass}>
+              Отмена
+            </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
+              className={confirmButtonClass}
               disabled={pending}
               onClick={onDelete}
             >
