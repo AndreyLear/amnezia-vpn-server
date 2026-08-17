@@ -36,7 +36,15 @@ fakes_reset() {
     mkdir -p "$FAKE_HOME/.ssh"
     printf 'FAKE-ED25519-KEY\n' > "$FAKE_HOME/.ssh/id_ed25519"
     printf 'FAKE-RSA-KEY\n' > "$FAKE_HOME/.ssh/id_rsa"
-    rm -f "$FAKE_DIR/install.err"
+    rm -f "$FAKE_DIR/install.err" "$FAKE_DIR/last-bundle"
+    if [ -f "$FAKE_DIR/tar.orig" ]; then
+        cp -f "$FAKE_DIR/tar.orig" "$FAKE_DIR/tar"
+        chmod +x "$FAKE_DIR/tar"
+    fi
+    if [ -f "$FAKE_DIR/git.orig" ]; then
+        cp -f "$FAKE_DIR/git.orig" "$FAKE_DIR/git"
+        chmod +x "$FAKE_DIR/git"
+    fi
     cat > "$FAKE_STATE" <<EOF
 SSH_RC=0
 INSTALL_RC=0
@@ -111,6 +119,18 @@ cat > "$FAKE_DIR/scp" <<'FAKE_EOF'
 echo "scp $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 [ "${SSH_RC:-0}" = "0" ] || exit "${SSH_RC}"
+src=""
+for a in "$@"; do
+    case "$a" in
+        *:*) continue ;;
+    esac
+    if [ -f "$a" ]; then
+        src="$a"
+    fi
+done
+if [ -n "$src" ]; then
+    cp -f "$src" "${FAKE_DIR}/last-bundle"
+fi
 exit 0
 FAKE_EOF
 
@@ -201,6 +221,8 @@ FAKE_EOF
 
 chmod +x "$FAKE_DIR/ssh" "$FAKE_DIR/scp" "$FAKE_DIR/sshpass" \
     "$FAKE_DIR/tar" "$FAKE_DIR/curl" "$FAKE_DIR/openssl" "$FAKE_DIR/git"
+cp -f "$FAKE_DIR/tar" "$FAKE_DIR/tar.orig"
+cp -f "$FAKE_DIR/git" "$FAKE_DIR/git.orig"
 
 run_bootstrap() {
     HOME="$FAKE_HOME" \
@@ -541,9 +563,130 @@ test_tar_excludes_git_and_beads() {
     fakes_reset
     rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" --panel-port 8443)"
     [ "$rc" = "0" ] || fail "tar excludes: exit $rc"
-    grep -q -- "--exclude=.git" "$FAKE_CALLS" && grep -q -- "--exclude=.beads" "$FAKE_CALLS" \
-        && pass "tar excludes: .git and .beads" \
-        || fail "tar excludes: --exclude .git/.beads missing"
+    if grep -q "archive --format=tar" "$FAKE_CALLS"; then
+        pass "pack: git archive used when .git/git is available"
+    elif grep -q -- "--exclude=.git" "$FAKE_CALLS" \
+        && grep -q -- "--exclude=.beads" "$FAKE_CALLS" \
+        && grep -q -- "--exclude=.worktrees" "$FAKE_CALLS" \
+        && grep -q -- "--exclude=node_modules" "$FAKE_CALLS"; then
+        pass "pack: tar excludes .git, .beads, .worktrees, node_modules"
+    else
+        fail "pack: expected git archive, or tar --exclude=.git/.beads/.worktrees/node_modules"
+    fi
+}
+
+# Real tar/git (not PATH fakes): a bulky .worktrees tree must not land in src.tar.
+run_bootstrap_real_pack() {
+    local script="$1"
+    shift
+    HOME="$FAKE_HOME" \
+    PATH="$FAKE_DIR:$PATH" \
+    bash "$script" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+    echo $?
+}
+
+test_pack_skips_worktrees_contents() {
+    local pack_root listed
+    pack_root="$(mktemp -d /tmp/m123-pack.XXXXXX)"
+    mkdir -p "$pack_root/.worktrees/amnezia-vpn-server-xx" \
+        "$pack_root/node_modules/pkg" \
+        "$pack_root/tmp" \
+        "$pack_root/.dolt"
+    printf 'WORKTREE-BULK\n' > "$pack_root/.worktrees/amnezia-vpn-server-xx/huge.bin"
+    printf 'NODE-BULK\n' > "$pack_root/node_modules/pkg/index.js"
+    printf 'TMP-BULK\n' > "$pack_root/tmp/scratch"
+    printf 'DOLT-BULK\n' > "$pack_root/.dolt/data"
+    cp -f "$BOOTSTRAP_SH" "$pack_root/bootstrap.sh"
+    printf '%s\n' '#!/bin/bash' 'echo ok' > "$pack_root/install.sh"
+    chmod +x "$pack_root/bootstrap.sh" "$pack_root/install.sh"
+
+    git -C "$pack_root" init -q
+    printf '%s\n' '.worktrees/' 'node_modules/' 'tmp/' '.dolt/' > "$pack_root/.gitignore"
+    git -C "$pack_root" add bootstrap.sh install.sh .gitignore
+    git -C "$pack_root" \
+        -c user.email=m123@example.invalid \
+        -c user.name=m123 \
+        commit -qm 'fixture'
+
+    fakes_reset
+    rm -f "$FAKE_DIR/tar" "$FAKE_DIR/git"
+    rc="$(run_bootstrap_real_pack "$pack_root/bootstrap.sh" \
+        --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" --panel-port 8443)"
+    [ "$rc" = "0" ] || {
+        fail "pack skip worktrees: exit $rc"
+        cat "$TMP_TEST/err" >&2
+        rm -rf "$pack_root"
+        return 0
+    }
+    [ -f "$FAKE_DIR/last-bundle" ] || {
+        fail "pack skip worktrees: scp did not capture the archive"
+        rm -rf "$pack_root"
+        return 0
+    }
+    listed="$(tar -tf "$FAKE_DIR/last-bundle" 2>/dev/null || true)"
+    if printf '%s\n' "$listed" | grep -F '.worktrees' >/dev/null; then
+        fail "pack skip worktrees: archive contains .worktrees"
+    else
+        pass "pack skip worktrees: .worktrees not in archive"
+    fi
+    if printf '%s\n' "$listed" | grep -F 'node_modules' >/dev/null; then
+        fail "pack skip worktrees: archive contains node_modules"
+    else
+        pass "pack skip worktrees: node_modules not in archive"
+    fi
+    if printf '%s\n' "$listed" | grep -q 'install.sh'; then
+        pass "pack skip worktrees: install.sh is in the archive"
+    else
+        fail "pack skip worktrees: install.sh missing from archive"
+    fi
+    rm -rf "$pack_root"
+}
+
+test_pack_tar_fallback_excludes_worktrees() {
+    local pack_root listed
+    pack_root="$(mktemp -d /tmp/m123-pack-tar.XXXXXX)"
+    mkdir -p "$pack_root/.worktrees/amnezia-vpn-server-xx" "$pack_root/node_modules/pkg"
+    printf 'WORKTREE-BULK\n' > "$pack_root/.worktrees/amnezia-vpn-server-xx/huge.bin"
+    printf 'NODE-BULK\n' > "$pack_root/node_modules/pkg/index.js"
+    cp -f "$BOOTSTRAP_SH" "$pack_root/bootstrap.sh"
+    printf '%s\n' '#!/bin/bash' 'echo ok' > "$pack_root/install.sh"
+    chmod +x "$pack_root/bootstrap.sh" "$pack_root/install.sh"
+
+    fakes_reset
+    rm -f "$FAKE_DIR/tar"
+    # Fake git reports "not a work tree" so packing must use tar.
+    cat > "$FAKE_DIR/git" <<'FAKE_EOF'
+#!/bin/bash
+echo "git $*" >> "${FAKE_CALLS:?}"
+exit 1
+FAKE_EOF
+    chmod +x "$FAKE_DIR/git"
+
+    rc="$(run_bootstrap_real_pack "$pack_root/bootstrap.sh" \
+        --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" --panel-port 8443)"
+    [ "$rc" = "0" ] || {
+        fail "tar fallback excludes: exit $rc"
+        cat "$TMP_TEST/err" >&2
+        rm -rf "$pack_root"
+        return 0
+    }
+    [ -f "$FAKE_DIR/last-bundle" ] || {
+        fail "tar fallback excludes: scp did not capture the archive"
+        rm -rf "$pack_root"
+        return 0
+    }
+    listed="$(tar -tf "$FAKE_DIR/last-bundle" 2>/dev/null || true)"
+    if printf '%s\n' "$listed" | grep -F '.worktrees' >/dev/null; then
+        fail "tar fallback excludes: archive contains .worktrees"
+    else
+        pass "tar fallback excludes: .worktrees not in archive"
+    fi
+    if printf '%s\n' "$listed" | grep -F 'node_modules' >/dev/null; then
+        fail "tar fallback excludes: archive contains node_modules"
+    else
+        pass "tar fallback excludes: node_modules not in archive"
+    fi
+    rm -rf "$pack_root"
 }
 
 test_source_url() {
@@ -610,6 +753,8 @@ test_install_failure
 test_dns_mismatch
 test_admin_password_not_in_call_log
 test_tar_excludes_git_and_beads
+test_pack_skips_worktrees_contents
+test_pack_tar_fallback_excludes_worktrees
 test_source_url
 test_sshpass_missing
 test_invalid_panel_port

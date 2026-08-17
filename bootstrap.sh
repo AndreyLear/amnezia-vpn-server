@@ -568,15 +568,34 @@ if [ -n "$SOURCE_URL" ]; then
         die_op "failed to download --source $SOURCE_URL"
     fi
 else
-    log "packing the local repository (excluding .git/.beads)"
-    if tar -C "$SCRIPT_DIR" --exclude=.git --exclude=.beads -cf "$BUNDLE" . 2>/dev/null; then
-        :
-    elif command -v git >/dev/null 2>&1 && git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git -C "$SCRIPT_DIR" archive --format=tar HEAD > "$BUNDLE" \
-            || die_op "failed to pack the local repository (git archive)"
-    else
-        die_op "failed to pack the local repository (tar --exclude .git/.beads)"
+    packed=0
+    if command -v git >/dev/null 2>&1 \
+        && git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        log "packing the local repository (git archive)"
+        if git -C "$SCRIPT_DIR" archive --format=tar HEAD > "$BUNDLE"; then
+            packed=1
+        fi
     fi
+    if [ "$packed" -eq 0 ]; then
+        log "packing the local repository (excluding .git/.beads/.worktrees and other bulk)"
+        if tar -C "$SCRIPT_DIR" \
+            --exclude=.git \
+            --exclude=.beads \
+            --exclude=.worktrees \
+            --exclude=node_modules \
+            --exclude=tmp \
+            --exclude=.dolt \
+            --exclude=.agents \
+            --exclude=.cursor \
+            --exclude=.claude \
+            --exclude=.codex \
+            --exclude=AUDITS \
+            --exclude=docs \
+            -cf "$BUNDLE" . 2>/dev/null; then
+            packed=1
+        fi
+    fi
+    [ "$packed" -eq 1 ] || die_op "failed to pack the local repository"
 fi
 
 log "copying the project to the server"
