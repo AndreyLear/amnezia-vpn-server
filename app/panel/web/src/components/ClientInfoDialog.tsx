@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -27,6 +28,7 @@ import { formatBytes, formatHandshake } from "@/lib/format";
 const actionButtonClass = "max-sm:h-12 max-sm:w-full";
 const inlineEditButtonClass = "px-1 max-sm:h-12";
 const confirmButtonClass = "max-sm:h-12 max-sm:w-full";
+const saveButtonClass = "max-sm:h-12 max-sm:w-full";
 
 type ClientInfoDialogProps = {
   client: Client | null;
@@ -40,69 +42,6 @@ type ClientInfoDialogProps = {
   onToggle?: () => void;
   onDelete?: () => void;
 };
-
-function PropertyEditButtons({
-  editing,
-  pending,
-  editLabel,
-  saveLabel,
-  cancelLabel,
-  onEdit,
-  onSave,
-  onCancel,
-}: {
-  editing: boolean;
-  pending?: boolean;
-  editLabel: string;
-  saveLabel: string;
-  cancelLabel: string;
-  onEdit: () => void;
-  onSave: () => void;
-  onCancel: () => void;
-}) {
-  if (editing) {
-    return (
-      <div className="flex">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={inlineEditButtonClass}
-          aria-label={saveLabel}
-          disabled={pending}
-          onClick={onSave}
-        >
-          Сохранить
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={inlineEditButtonClass}
-          aria-label={cancelLabel}
-          disabled={pending}
-          onClick={onCancel}
-        >
-          Отменить
-        </Button>
-      </div>
-    );
-  }
-
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      className={inlineEditButtonClass}
-      aria-label={editLabel}
-      disabled={pending}
-      onClick={onEdit}
-    >
-      Изменить
-    </Button>
-  );
-}
 
 function PropertyRow({
   actions,
@@ -119,16 +58,12 @@ function PropertyRow({
   );
 }
 
-function EditableProperty({
-  editing,
-  htmlFor,
+function ReadOnlyProperty({
   label,
   optional,
   actions,
   children,
 }: {
-  editing: boolean;
-  htmlFor: string;
   label: string;
   optional?: boolean;
   actions: ReactNode;
@@ -145,13 +80,7 @@ function EditableProperty({
 
   return (
     <PropertyRow actions={actions}>
-      {editing ? (
-        <Label htmlFor={htmlFor} className="text-muted-foreground">
-          {caption}
-        </Label>
-      ) : (
-        <dt className="text-muted-foreground">{caption}</dt>
-      )}
+      <dt className="text-muted-foreground">{caption}</dt>
       {children}
     </PropertyRow>
   );
@@ -247,81 +176,53 @@ export function ClientInfoDialog({
     <>
       <Dialog open={client !== null} onOpenChange={onOpenChange}>
         <DialogContent
-          className="h-auto max-h-[calc(100dvh-2rem)] overflow-y-auto max-sm:top-auto max-sm:right-0 max-sm:bottom-0 max-sm:left-0 max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none max-sm:[&_[data-size=icon-sm]]:size-12 sm:max-w-md"
+          className="sm:max-w-md"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           {client ? (
             <>
-              <DialogHeader className="max-sm:pr-12">
+              <DialogHeader>
                 <DialogTitle>Клиент</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
                 <dl className="grid divide-y divide-border gap-0 text-sm">
-                  <EditableProperty
-                    editing={editingName}
-                    htmlFor="info-name"
+                  <ReadOnlyProperty
                     label="Имя"
                     actions={
-                      <PropertyEditButtons
-                        editing={editingName}
-                        pending={pending}
-                        editLabel="Изменить имя"
-                        saveLabel="Сохранить имя"
-                        cancelLabel="Отменить имя"
-                        onEdit={startNameEdit}
-                        onSave={() => void saveName()}
-                        onCancel={cancelNameEdit}
-                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={inlineEditButtonClass}
+                        aria-label="Изменить имя"
+                        disabled={pending}
+                        onClick={startNameEdit}
+                      >
+                        Изменить
+                      </Button>
                     }
                   >
-                    {editingName ? (
-                      <Input
-                        id="info-name"
-                        required
-                        maxLength={64}
-                        value={nameDraft}
-                        onChange={(e) => setNameDraft(e.target.value)}
-                        disabled={pending}
-                      />
-                    ) : (
-                      <dd>{viewName}</dd>
-                    )}
-                  </EditableProperty>
-                  <EditableProperty
-                    editing={editingDescription}
-                    htmlFor="info-description"
+                    <dd>{viewName}</dd>
+                  </ReadOnlyProperty>
+                  <ReadOnlyProperty
                     label="Описание"
                     optional
                     actions={
-                      <PropertyEditButtons
-                        editing={editingDescription}
-                        pending={pending}
-                        editLabel="Изменить описание"
-                        saveLabel="Сохранить описание"
-                        cancelLabel="Отменить описание"
-                        onEdit={startDescriptionEdit}
-                        onSave={() => void saveDescription()}
-                        onCancel={cancelDescriptionEdit}
-                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={inlineEditButtonClass}
+                        aria-label="Изменить описание"
+                        disabled={pending}
+                        onClick={startDescriptionEdit}
+                      >
+                        Изменить
+                      </Button>
                     }
                   >
-                    {editingDescription ? (
-                      <Textarea
-                        id="info-description"
-                        rows={1}
-                        value={descriptionDraft}
-                        onChange={(e) => setDescriptionDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.stopPropagation();
-                          }
-                        }}
-                        disabled={pending}
-                      />
-                    ) : (
-                      <dd>{viewDescription}</dd>
-                    )}
-                  </EditableProperty>
+                    <dd>{viewDescription}</dd>
+                  </ReadOnlyProperty>
                   <PropertyRow
                     actions={
                       <Button
@@ -403,6 +304,98 @@ export function ClientInfoDialog({
               </div>
             </>
           ) : null}
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={editingName}
+        onOpenChange={(open) => {
+          if (!open) cancelNameEdit();
+        }}
+      >
+        <DialogContent className="gap-6 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Имя</DialogTitle>
+          </DialogHeader>
+          <form
+            className="grid gap-6"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveName();
+            }}
+          >
+            <div className="grid gap-2">
+              <Label htmlFor="info-name">Имя</Label>
+              <Input
+                id="info-name"
+                required
+                maxLength={64}
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                disabled={pending}
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                type="submit"
+                className={saveButtonClass}
+                aria-label="Сохранить имя"
+                disabled={pending}
+              >
+                Сохранить
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={editingDescription}
+        onOpenChange={(open) => {
+          if (!open) cancelDescriptionEdit();
+        }}
+      >
+        <DialogContent className="gap-6 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Описание</DialogTitle>
+          </DialogHeader>
+          <form
+            className="grid gap-6"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveDescription();
+            }}
+          >
+            <div className="grid gap-2">
+              <Label htmlFor="info-description">
+                Описание{" "}
+                <span className="font-normal text-muted-foreground">
+                  (опционально)
+                </span>
+              </Label>
+              <Textarea
+                id="info-description"
+                className="field-sizing-content min-h-8 resize-none"
+                rows={1}
+                value={descriptionDraft}
+                onChange={(e) => setDescriptionDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.stopPropagation();
+                  }
+                }}
+                disabled={pending}
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                type="submit"
+                className={saveButtonClass}
+                aria-label="Сохранить описание"
+                disabled={pending}
+              >
+                Сохранить
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>

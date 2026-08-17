@@ -21,9 +21,6 @@ import { toast } from "sonner";
 
 const SM_MIN_WIDTH = "(min-width: 640px)";
 
-const sheetContentClass =
-  "h-auto max-h-[calc(100dvh-2rem)] overflow-y-auto max-sm:top-auto max-sm:right-0 max-sm:bottom-0 max-sm:left-0 max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none max-sm:[&_[data-size=icon-sm]]:size-12 gap-6";
-
 function isMinWidthSm(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return true;
@@ -174,8 +171,8 @@ function BackupHeaderTrigger() {
         Бэкап
       </Button>
       <Dialog open={sheetOpen} onOpenChange={setSheetOpen}>
-        <DialogContent className={sheetContentClass}>
-          <DialogHeader className="max-sm:pr-12">
+        <DialogContent className="gap-6">
+          <DialogHeader>
             <DialogTitle>Бэкап</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-4">

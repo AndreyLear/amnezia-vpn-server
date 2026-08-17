@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ClientInfoDialog } from "@/components/ClientInfoDialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import type { Client } from "@/lib/api";
 
 const client: Client = {
@@ -234,6 +235,25 @@ describe("ClientInfoDialog", () => {
     expect(screen.queryByRole("button", { name: "Сохранить" })).toBeNull();
   });
 
+  it("opens name edit in a nested dialog and keeps Alice as read-only text", async () => {
+    const user = userEvent.setup();
+
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: "Изменить имя" }));
+
+    const edit = screen.getByRole("dialog", { name: "Имя" });
+    const clientDialog = screen
+      .getByRole("heading", { name: "Клиент", hidden: true })
+      .closest('[data-slot="dialog-content"]');
+    expect(clientDialog).not.toBeNull();
+    expect(within(edit).getByRole("textbox")).toHaveAttribute("id", "info-name");
+    expect(within(clientDialog!).queryByRole("textbox")).toBeNull();
+    const nameRow = within(clientDialog!).getByText("Имя").closest("div.flex");
+    expect(nameRow?.querySelector("#info-name")).toBeNull();
+    expect(nameRow?.querySelector("dd")).toHaveTextContent("Alice");
+  });
+
   it("cancels name edit without calling onSave", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
@@ -248,13 +268,17 @@ describe("ClientInfoDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Изменить имя" }));
 
-    const name = screen.getByLabelText("Имя");
+    const edit = screen.getByRole("dialog", { name: "Имя" });
+    const name = within(edit).getByLabelText("Имя");
     expect(name).toHaveValue("Alice");
     await user.clear(name);
     await user.type(name, "Bob");
-    await user.click(screen.getByRole("button", { name: "Отменить имя" }));
+    await user.click(within(edit).getByRole("button", { name: "Close" }));
 
-    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Имя" })).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("dialog", { name: "Клиент" })).getByText("Alice"),
+    ).toBeInTheDocument();
     expect(document.querySelector("#info-name")).toBeNull();
     expect(onSave).not.toHaveBeenCalled();
   });
@@ -273,7 +297,9 @@ describe("ClientInfoDialog", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Изменить имя" }));
-    const name = screen.getByLabelText("Имя");
+    const name = within(screen.getByRole("dialog", { name: "Имя" })).getByLabelText(
+      "Имя",
+    );
     await user.clear(name);
     await user.type(name, "Bob");
     await user.click(screen.getByRole("button", { name: "Сохранить имя" }));
@@ -299,7 +325,9 @@ describe("ClientInfoDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Изменить описание" }));
 
-    const description = screen.getByLabelText(/Описание/);
+    const description = within(
+      screen.getByRole("dialog", { name: "Описание" }),
+    ).getByLabelText(/Описание/);
     expect(description.tagName).toBe("TEXTAREA");
     expect(description).toHaveClass("field-sizing-content", "min-h-8", "resize-none");
     expect(description).not.toHaveClass("h-8");
@@ -338,24 +366,6 @@ describe("ClientInfoDialog", () => {
     expect(screen.getByText("Alice")).toBeInTheDocument();
   });
 
-  it("keeps Save and Cancel flush without a flex gap", async () => {
-    const user = userEvent.setup();
-
-    render(
-      <ClientInfoDialog
-        client={client}
-        onOpenChange={() => {}}
-        onSave={vi.fn()}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Изменить имя" }));
-
-    const save = screen.getByRole("button", { name: "Сохранить имя" });
-    expect(save.parentElement).toHaveClass("flex");
-    expect(save.parentElement).not.toHaveClass("gap-1");
-  });
-
   it("adds a 2px label-value gap on read-only rows only", () => {
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 
@@ -374,29 +384,12 @@ describe("ClientInfoDialog", () => {
     expect(nameStack).not.toHaveClass("gap-0.5");
   });
 
-  it("uses 4px horizontal padding on inline name edit buttons", async () => {
-    const user = userEvent.setup();
-
-    render(
-      <ClientInfoDialog
-        client={client}
-        onOpenChange={() => {}}
-        onSave={vi.fn()}
-      />,
-    );
+  it("uses 4px horizontal padding on Изменить", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 
     const edit = screen.getByRole("button", { name: "Изменить имя" });
     expect(edit).toHaveClass("px-1");
     expect(edit).not.toHaveClass("px-2");
-
-    await user.click(edit);
-
-    const save = screen.getByRole("button", { name: "Сохранить имя" });
-    const cancel = screen.getByRole("button", { name: "Отменить имя" });
-    expect(save).toHaveClass("px-1");
-    expect(save).not.toHaveClass("px-2");
-    expect(cancel).toHaveClass("px-1");
-    expect(cancel).not.toHaveClass("px-2");
   });
 
   it("gives Изменить a 48px mobile tap target", () => {
@@ -407,7 +400,7 @@ describe("ClientInfoDialog", () => {
     );
   });
 
-  it("gives Сохранить and Отменить 48px mobile tap targets", async () => {
+  it("gives Сохранить in the edit dialog a 48px mobile tap target", async () => {
     const user = userEvent.setup();
 
     render(
@@ -420,11 +413,26 @@ describe("ClientInfoDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Изменить имя" }));
 
-    expect(screen.getByRole("button", { name: "Сохранить имя" })).toHaveClass(
+    const edit = screen.getByRole("dialog", { name: "Имя" });
+    expect(within(edit).getByRole("button", { name: "Сохранить имя" })).toHaveClass(
       "max-sm:h-12",
     );
-    expect(screen.getByRole("button", { name: "Отменить имя" })).toHaveClass(
-      "max-sm:h-12",
+    expect(
+      within(edit).queryByRole("button", { name: "Отменить имя" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("puts default DialogContent at the bottom on small screens", () => {
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Тест</DialogTitle>
+        </DialogContent>
+      </Dialog>,
+    );
+
+    expect(document.querySelector('[data-slot="dialog-content"]')).toHaveClass(
+      "max-sm:bottom-0",
     );
   });
 

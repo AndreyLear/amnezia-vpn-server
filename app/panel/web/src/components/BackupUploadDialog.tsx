@@ -16,9 +16,6 @@ import { isBackupArchiveName } from "@/lib/backupArchive";
 const ACCEPT = ".tar.zst";
 const rejectCopy = "Нужен файл бэкапа (.tar.zst).";
 const SM_MIN_WIDTH = "(min-width: 640px)";
-const sheetContentClass =
-  "gap-6 h-auto max-h-[calc(100dvh-2rem)] overflow-y-auto overflow-hidden max-sm:top-auto max-sm:right-0 max-sm:bottom-0 max-sm:left-0 max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none max-sm:[&_[data-size=icon-sm]]:size-12 sm:max-w-md";
-
 function isMinWidthSm(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return true;
@@ -150,8 +147,8 @@ export function BackupUploadDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className={sheetContentClass}>
-        <DialogHeader className="max-sm:pr-12">
+      <DialogContent className="gap-6 overflow-hidden sm:max-w-md">
+        <DialogHeader>
           <DialogTitle>Загрузить бэкап</DialogTitle>
         </DialogHeader>
         <form
