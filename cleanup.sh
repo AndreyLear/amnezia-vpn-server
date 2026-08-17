@@ -20,8 +20,8 @@
 #
 set -u
 
-COMPOSE_DIR=/opt/amnezia-vpn
-SRC_DIR=/opt/amnezia-vpn-src
+COMPOSE_DIR="${COMPOSE_DIR:-/opt/amnezia-vpn}"
+SRC_DIR="${SRC_DIR:-/opt/amnezia-vpn-src}"
 NFT_CONF=/etc/nftables.conf
 NFT_BEGIN='# --- amnezia-vpn begin ---'
 NFT_END='# --- amnezia-vpn end ---'
@@ -97,16 +97,22 @@ fi
 # --- docker compose stack from /opt/amnezia-vpn ------------------------
 
 if [ -f "$COMPOSE_DIR/compose.yaml" ]; then
-    if [ "$DO_IT" -eq 1 ]; then
-        log "docker compose down (from $COMPOSE_DIR)"
-        docker compose --project-directory "$COMPOSE_DIR" \
-            -f "$COMPOSE_DIR/compose.yaml" down
-        log "docker compose down --volumes (from $COMPOSE_DIR)"
-        docker compose --project-directory "$COMPOSE_DIR" \
-            -f "$COMPOSE_DIR/compose.yaml" down --volumes
+    if [ -f "$COMPOSE_DIR/versions.lock" ]; then
+        if [ "$DO_IT" -eq 1 ]; then
+            log "docker compose --env-file versions.lock down (from $COMPOSE_DIR)"
+            docker compose --project-directory "$COMPOSE_DIR" \
+                --env-file "$COMPOSE_DIR/versions.lock" \
+                -f "$COMPOSE_DIR/compose.yaml" down
+            log "docker compose --env-file versions.lock down --volumes (from $COMPOSE_DIR)"
+            docker compose --project-directory "$COMPOSE_DIR" \
+                --env-file "$COMPOSE_DIR/versions.lock" \
+                -f "$COMPOSE_DIR/compose.yaml" down --volumes
+        else
+            log "would run: docker compose --env-file versions.lock down (from $COMPOSE_DIR)"
+            log "would run: docker compose --env-file versions.lock down --volumes (from $COMPOSE_DIR)"
+        fi
     else
-        log "would run: docker compose down (from $COMPOSE_DIR)"
-        log "would run: docker compose down --volumes (from $COMPOSE_DIR)"
+        log "skip: $COMPOSE_DIR/versions.lock not found; compose down skipped"
     fi
 else
     log "skip: $COMPOSE_DIR/compose.yaml not found"
