@@ -71,6 +71,41 @@ func ifaceDump(pub, priv string, port int, fwmark string) string {
 	}, "\t")
 }
 
+// markedHeaderProtectionKey is a dump field that lives at classic fwmark
+// index 19 on the 29-field AmneziaWG line. It must never be stored as
+// fwmark or appear in JSON.
+const markedHeaderProtectionKey = "HDR-PROT-KEY-0xEE-MARKED"
+
+// ifaceDump29 renders a live-shaped 29-field interface line
+// (amneziawg-tools dump_print, awg show <iface> dump):
+//
+//	private_key public_key listen_port jc jmin jmax s1 s2 s3 s4
+//	h1 h2 h3 h4 i1 i2 i3 i4 i5
+//	header_protection_key content_padding rekey_after rekey_timeout
+//	reject_after keepalive_timeout max_handshake_attempts
+//	random_trailers disable_cookies fwmark
+//
+// Port, public key and J/S stay at the classic offsets; fwmark moved
+// from index 19 to 28. Some extra fields look like "<t>" (u16 ranges).
+func ifaceDump29(pub, priv string, port int, fwmark string) string {
+	fields := []string{
+		priv,
+		pub,
+		itoa(port),
+		"3", "21", "31", "904", "737", "0", "0", // jc jmin jmax s1 s2 s3 s4
+		"(null)", "(null)", "(null)", "(null)", // h1..h4
+		"(null)", "(null)", "(null)", "(null)", "(null)", // i1..i5
+		markedHeaderProtectionKey, // index 19 — NOT fwmark
+		"<t>", "<t>", "<t>", "<t>", "<t>", "<t>", // padding / timing ranges
+		"off", "off", // random_trailers disable_cookies
+		fwmark, // index 28
+	}
+	if len(fields) != 29 {
+		panic("ifaceDump29: want 29 fields")
+	}
+	return strings.Join(fields, "\t")
+}
+
 // peerDump renders the 8-field peer line: public_key, preshared_key ←
 // SECRET, endpoint, allowed_ips, last_handshake, rx, tx, keepalive.
 func peerDump(pub, psk, endpoint, allowed string, hs, rx, tx int64, keepalive string) string {
@@ -158,6 +193,91 @@ func TestParseGoldenJSON(t *testing.T) {
 		`{"public_key":"` + peerPubB + `","endpoint":"192.0.2.1:51820","allowed_ips":["10.8.0.2/32"],"last_handshake_utc":"2025-11-03T08:30:00Z","rx_bytes":100,"tx_bytes":200,"persistent_keepalive":"off"}]}`
 	if got := string(mustMarshal(st)); got != want {
 		t.Fatalf("golden JSON mismatch:\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// Live AmneziaWG dump: 29 interface fields, peers still 8. fwmark is the
+// last field, not index 19 (header_protection_key).
+func TestParse29FieldInterfaceDumpKeepsPeers(t *testing.T) {
+	hs := int64(1786900779)
+	dump := ifaceDump29(formKey(0xAA), markedPrivateKey, 51820, "off") + "\n" +
+		peerDump(peerPubA, markedPresharedKey, "203.0.113.9:51820", "10.8.0.3/32", hs, 4096, 8192, "off")
+
+	st, err := Parse("awg0", []byte(dump), fixedNow)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if st.Interface == nil || st.Interface.ListenPort != 51820 {
+		t.Fatalf("interface = %+v", st.Interface)
+	}
+	if st.Interface.PublicKey != formKey(0xAA) {
+		t.Fatalf("public_key = %q", st.Interface.PublicKey)
+	}
+	if st.Interface.AWGParams != (AWGParams{Jc: 3, Jmin: 21, Jmax: 31, S1: 904, S2: 737, S3: 0, S4: 0}) {
+		t.Fatalf("awg_params = %+v", st.Interface.AWGParams)
+	}
+	if st.Interface.FWMark != "off" {
+		t.Fatalf("fwmark = %q, want off (last field, not index 19)", st.Interface.FWMark)
+	}
+	if len(st.Peers) != 1 {
+		t.Fatalf("peers = %d, want 1", len(st.Peers))
+	}
+	p := st.Peers[0]
+	if p.LastHandshakeUTC == nil || p.LastHandshakeUTC.Unix() != hs {
+		t.Fatalf("handshake = %v, want %d", p.LastHandshakeUTC, hs)
+	}
+	if p.RxBytes != 4096 || p.TxBytes != 8192 {
+		t.Fatalf("counters rx=%d tx=%d", p.RxBytes, p.TxBytes)
+	}
+
+	jsonBytes := mustMarshal(st)
+	if bytes.Contains(jsonBytes, []byte(markedPrivateKey)) ||
+		bytes.Contains(jsonBytes, []byte(markedPresharedKey)) ||
+		bytes.Contains(jsonBytes, []byte(markedHeaderProtectionKey)) {
+		t.Fatalf("JSON leaks a secret:\n%s", jsonBytes)
+	}
+	if _, err := ParseJSON(jsonBytes); err != nil {
+		t.Fatalf("roundtrip: %v", err)
+	}
+}
+
+func TestGenerate29FieldDumpWritesStatusJSON(t *testing.T) {
+	hs := int64(1786900779)
+	dump := ifaceDump29(formKey(0xAA), markedPrivateKey, 443, "0xca6c") + "\n" +
+		peerDump(peerPubB, markedPresharedKey, "192.0.2.10:51820", "10.8.0.3/32", hs, 100, 200, "25")
+	dir := t.TempDir()
+	target := filepath.Join(dir, "status.json")
+	if err := Generate("awg0", target, func() time.Time { return fixedNow },
+		func(string) ([]byte, error) { return dumpBytes(dump) }); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	st, err := ReadStatus(target)
+	if err != nil {
+		t.Fatalf("ReadStatus: %v", err)
+	}
+	if st.Interface.FWMark != "0xca6c" || st.Interface.ListenPort != 443 {
+		t.Fatalf("interface = %+v", st.Interface)
+	}
+	if len(st.Peers) != 1 || st.Peers[0].RxBytes != 100 || st.Peers[0].TxBytes != 200 {
+		t.Fatalf("peers = %+v", st.Peers)
+	}
+	if st.Peers[0].LastHandshakeUTC == nil {
+		t.Fatal("handshake missing")
+	}
+}
+
+func TestParseTooFewExtraInterfaceFieldsRejected(t *testing.T) {
+	// 21 fields: classic 20 plus one extra, not yet the 29-field layout.
+	line := ifaceDump(formKey(0xAA), markedPrivateKey, 51820, "off") + "\textra"
+	_, err := Parse("awg0", []byte(line), fixedNow)
+	if err == nil {
+		t.Fatal("Parse succeeded, want field-count error")
+	}
+	if !strings.Contains(err.Error(), "got 21") {
+		t.Fatalf("error = %v, want field count 21", err)
+	}
+	if strings.Contains(err.Error(), markedPrivateKey) || strings.Contains(err.Error(), "extra") {
+		t.Fatalf("error leaks dump content: %v", err)
 	}
 }
 

@@ -34,12 +34,19 @@ import (
 // different value is rejected by the strict consumer parser.
 const SchemaVersion = "v1"
 
-// InterfaceDumpFields is the exact field count of the interface line of
+// InterfaceDumpFields is the classic field count of the interface line of
 // `awg show <iface> dump` (amneziawg-tools/src/show.c, M5_AUDIT.md §3):
 //
 //	private_key public_key listen_port jc jmin jmax s1 s2 s3 s4
 //	h1 h2 h3 h4 i1 i2 i3 i4 i5 fwmark
 const InterfaceDumpFields = 20
+
+// InterfaceDumpFieldsExtended is the live AmneziaWG dump_print count:
+// classic 0–18 (through i5), then 9 extra junk/obfuscation params, then
+// fwmark at the last index (28). Port, public key and J/S stay at the
+// classic offsets. Trailing fields beyond 29 are ignored except fwmark
+// (always the last column).
+const InterfaceDumpFieldsExtended = 29
 
 // PeerDumpFields is the exact field count of one peer line:
 //
@@ -98,9 +105,10 @@ type Peer struct {
 }
 
 // Parse decodes the raw output of `awg show <iface> dump` into a Status
-// snapshot. The interface line (#1, 20 fields) is mandatory; every
-// following non-empty line is a peer (8 fields). Secret fields are
-// discarded while the lines are split and are never part of the model.
+// snapshot. The interface line (#1) is mandatory: classic 20 fields or
+// the extended live layout (≥29 fields). Every following non-empty line
+// is a peer (8 fields). Secret fields are discarded while the lines are
+// split and are never part of the model.
 //
 // generatedAt is normalized to whole UTC seconds: JSON output is fully
 // deterministic for a given dump and generation time. Errors carry only
@@ -116,9 +124,9 @@ func Parse(iface string, dump []byte, generatedAt time.Time) (*Status, error) {
 		return nil, errors.New("status: dump is empty, want interface line")
 	}
 	ifaceFields := strings.Split(lines[0], "\t")
-	if len(ifaceFields) != InterfaceDumpFields {
-		return nil, fmt.Errorf("status: dump line 1: want %d interface fields, got %d",
-			InterfaceDumpFields, len(ifaceFields))
+	fwIdx, err := interfaceFWMarkIndex(len(ifaceFields))
+	if err != nil {
+		return nil, err
 	}
 
 	params, err := parseAWGParams(ifaceFields[3:10])
@@ -138,9 +146,11 @@ func Parse(iface string, dump []byte, generatedAt time.Time) (*Status, error) {
 			HasInterface: true,
 			// ifaceFields[0] is the interface *private* key (SECRET):
 			// intentionally not read and never stored.
+			// Extra dump columns (header_protection_key, I*, H*, timing
+			// ranges) are not stored.
 			PublicKey:  ifaceFields[1],
 			ListenPort: uint16(port),
-			FWMark:     ifaceFields[19],
+			FWMark:     ifaceFields[fwIdx],
 			AWGParams:  params,
 		},
 		Peers: []Peer{},
@@ -164,6 +174,23 @@ func Parse(iface string, dump []byte, generatedAt time.Time) (*Status, error) {
 		return st.Peers[i].PublicKey < st.Peers[j].PublicKey
 	})
 	return st, nil
+}
+
+// interfaceFWMarkIndex maps dump field count to the fwmark column.
+// Classic 20-field lines keep fwmark at index 19. Live ≥29-field lines
+// insert 9 extra params after i5, so fwmark is the last field. Counts
+// between 21 and 28 are rejected (ambiguous layout). Errors report only
+// counts — never dump content.
+func interfaceFWMarkIndex(n int) (int, error) {
+	switch {
+	case n == InterfaceDumpFields:
+		return InterfaceDumpFields - 1, nil
+	case n >= InterfaceDumpFieldsExtended:
+		return n - 1, nil
+	default:
+		return 0, fmt.Errorf("status: dump line 1: want %d or >= %d interface fields, got %d",
+			InterfaceDumpFields, InterfaceDumpFieldsExtended, n)
+	}
 }
 
 // parseAWGParams decodes dump fields 4–10 (jc jmin jmax s1 s2 s3 s4)
