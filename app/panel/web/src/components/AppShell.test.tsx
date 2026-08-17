@@ -177,10 +177,10 @@ describe("AppShell header", () => {
     );
 
     const header = screen.getByRole("banner");
-    const cpus = within(header).getAllByText(/^CPU/);
+    const cpus = within(header).getAllByText(/^cpu/);
     expect(cpus).toHaveLength(2);
     for (const cpu of cpus) {
-      expect(cpu).toHaveTextContent(`CPU ${"\u2014"}`);
+      expect(cpu).toHaveTextContent(`cpu ${"\u2014"}`);
     }
 
     const desktop = cpus[0].parentElement;
@@ -188,7 +188,7 @@ describe("AppShell header", () => {
     expect(desktop).toHaveClass("hidden", "sm:flex");
     expect(phone).toHaveClass("flex", "sm:hidden", "w-full");
 
-    expect(within(header).queryByRole("button", { name: /CPU/ })).not.toBeInTheDocument();
+    expect(within(header).queryByRole("button", { name: /cpu/i })).not.toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "Бэкап" })).toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "Тёмная тема" })).toBeInTheDocument();

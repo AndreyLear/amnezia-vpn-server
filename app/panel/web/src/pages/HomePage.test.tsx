@@ -55,6 +55,10 @@ describe("HomePage load", () => {
             cpu_percent: null,
             ram_percent: null,
             disk_percent: null,
+            ram_used_bytes: null,
+            ram_total_bytes: null,
+            disk_used_bytes: null,
+            disk_total_bytes: null,
           });
         }
         throw new Error(path);
@@ -91,6 +95,10 @@ describe("HomePage load", () => {
             cpu_percent: null,
             ram_percent: null,
             disk_percent: null,
+            ram_used_bytes: null,
+            ram_total_bytes: null,
+            disk_used_bytes: null,
+            disk_total_bytes: null,
           });
         }
         throw new Error(path);
@@ -136,6 +144,10 @@ describe("HomePage load", () => {
             cpu_percent: null,
             ram_percent: null,
             disk_percent: null,
+            ram_used_bytes: null,
+            ram_total_bytes: null,
+            disk_used_bytes: null,
+            disk_total_bytes: null,
           });
         }
         throw new Error(path);
@@ -172,6 +184,10 @@ describe("HomePage load", () => {
             cpu_percent: 12.6,
             ram_percent: 40.4,
             disk_percent: 9.5,
+            ram_used_bytes: 2040109466,
+            ram_total_bytes: 8160437862,
+            disk_used_bytes: 4 * 1024 ** 3,
+            disk_total_bytes: 25 * 1024 ** 3,
           });
         }
         throw new Error(path);
@@ -181,7 +197,11 @@ describe("HomePage load", () => {
     render(<HomePage />);
     expect(await screen.findByText("Alice")).toBeInTheDocument();
     const header = screen.getByRole("banner");
-    expect(await within(header).findAllByText("CPU 13")).toHaveLength(2);
+    const cpus = await within(header).findAllByText(/^cpu/);
+    expect(cpus).toHaveLength(2);
+    for (const cpu of cpus) {
+      expect(cpu).toHaveTextContent("cpu 13%");
+    }
   });
 });
 

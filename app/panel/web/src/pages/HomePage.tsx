@@ -36,6 +36,10 @@ export default function HomePage() {
           cpu_percent: snap.cpu_percent ?? null,
           ram_percent: snap.ram_percent ?? null,
           disk_percent: snap.disk_percent ?? null,
+          ram_used_bytes: snap.ram_used_bytes ?? null,
+          ram_total_bytes: snap.ram_total_bytes ?? null,
+          disk_used_bytes: snap.disk_used_bytes ?? null,
+          disk_total_bytes: snap.disk_total_bytes ?? null,
         });
       }
     } catch {
