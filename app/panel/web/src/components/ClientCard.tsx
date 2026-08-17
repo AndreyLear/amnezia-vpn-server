@@ -98,6 +98,39 @@ export function ClientMenu({
   );
 }
 
+function ClientName({
+  client,
+  isSmUp,
+  onInfo,
+}: {
+  client: Client;
+  isSmUp: boolean;
+  onInfo?: () => void;
+}) {
+  const nameEl = isSmUp ? (
+    <button
+      type="button"
+      className="min-w-0 truncate text-left font-heading text-base font-medium"
+      onClick={onInfo}
+    >
+      {client.name}
+    </button>
+  ) : (
+    <span className="min-w-0 truncate font-heading text-base font-medium">
+      {client.name}
+    </span>
+  );
+  if (!client.description?.trim()) {
+    return nameEl;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{nameEl}</TooltipTrigger>
+      <TooltipContent>{client.description}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function ClientCard({
   client,
   onInfo,
@@ -120,25 +153,13 @@ export function ClientCard({
       onClick={!isSmUp ? onInfo : undefined}
     >
       <CardContent className="flex min-w-0 flex-1 items-center gap-x-3 gap-y-1 sm:col-span-full sm:grid sm:grid-cols-subgrid px-2 sm:px-4">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          {isSmUp ? (
-            <button
-              type="button"
-              className="min-w-0 truncate text-left font-heading text-base font-medium"
-              onClick={onInfo}
-            >
-              {client.name}
-            </button>
-          ) : (
-            <span className="min-w-0 truncate font-heading text-base font-medium">
-              {client.name}
-            </span>
-          )}
-          {!client.enabled ? (
-            <span className="shrink-0 text-muted-foreground">Пауза</span>
-          ) : null}
-        </div>
         <TooltipProvider>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <ClientName client={client} isSmUp={isSmUp} onInfo={onInfo} />
+            {!client.enabled ? (
+              <span className="shrink-0 text-muted-foreground">Пауза</span>
+            ) : null}
+          </div>
           <div className="flex shrink-0 items-center gap-3 text-muted-foreground sm:contents">
             <Tooltip>
               <TooltipTrigger asChild>

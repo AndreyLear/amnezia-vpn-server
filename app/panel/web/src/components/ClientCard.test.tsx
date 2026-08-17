@@ -249,6 +249,23 @@ describe("ClientCard", () => {
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Исходящий трафик");
   });
 
+  it("shows the client description in a tooltip when hovering the name", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<ClientCard client={{ ...base, description: "office" }} />);
+
+    await user.hover(screen.getByText("Alice"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("office");
+  });
+
+  it("does not show a tooltip on the name when description is empty", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<ClientCard client={base} />);
+
+    await user.hover(screen.getByText("Alice"));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
   it("opens client info from the card below sm", async () => {
     stubMinWidthSm(false);
     const user = userEvent.setup();
