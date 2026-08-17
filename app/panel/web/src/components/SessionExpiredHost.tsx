@@ -112,6 +112,7 @@ export function SessionExpiredHost() {
   return (
     <Dialog open={open} onOpenChange={() => {}}>
       <DialogContent
+        className="gap-6"
         showCloseButton={false}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
@@ -121,25 +122,27 @@ export function SessionExpiredHost() {
           <DialogDescription>{text.description}</DialogDescription>
         </DialogHeader>
         <form
-          className="grid gap-3"
+          className="grid gap-6"
           onSubmit={(e) => {
             e.preventDefault();
             void submit();
           }}
         >
-          <div className="grid gap-2">
-            <Label htmlFor="session-expired-password">Пароль</Label>
-            <Input
-              id="session-expired-password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={pending}
-            />
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="session-expired-password">Пароль</Label>
+              <Input
+                id="session-expired-password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={pending}
+              />
+            </div>
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
           </div>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
           <DialogFooter>
             <Button type="submit" disabled={pending}>
               Повторить вход

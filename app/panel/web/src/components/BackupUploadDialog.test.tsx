@@ -41,6 +41,10 @@ describe("BackupUploadDialog", () => {
     const content = document.querySelector("[data-slot=dialog-content]");
     expect(content?.className).toContain("sm:max-w-md");
     expect(content?.className).toContain("overflow-hidden");
+    expect(content).toHaveClass("gap-6");
+    const form = content?.querySelector("form");
+    expect(form).toHaveClass("grid", "gap-6");
+    expect(form).not.toHaveClass("gap-3");
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     const file = new File(["archive"], "backup.tar.zst", { type: "application/octet-stream" });

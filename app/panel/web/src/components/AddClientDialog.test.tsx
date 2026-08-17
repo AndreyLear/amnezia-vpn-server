@@ -26,6 +26,23 @@ describe("AddClientDialog", () => {
     });
   });
 
+  it("spaces fields 16px apart and 24px from title and footer", () => {
+    render(
+      <AddClientDialog open onOpenChange={() => {}} onSubmit={vi.fn()} />,
+    );
+
+    const content = document.querySelector("[data-slot=dialog-content]");
+    expect(content).toHaveClass("gap-6");
+
+    const form = content?.querySelector("form");
+    expect(form).toHaveClass("grid", "gap-6");
+    expect(form).not.toHaveClass("gap-3");
+
+    const fieldStack = form?.querySelector(":scope > div");
+    expect(fieldStack).toHaveClass("grid", "gap-4");
+    expect(fieldStack?.querySelectorAll(":scope > div")).toHaveLength(2);
+  });
+
   it("uses a growing textarea for the optional description", () => {
     render(
       <AddClientDialog open onOpenChange={() => {}} onSubmit={vi.fn()} />,
