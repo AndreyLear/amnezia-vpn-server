@@ -536,10 +536,31 @@ test_persistence_start_when_inactive() {
     [ "$rc" = "0" ] || fail "persistence inactive flow: exit $rc"
     grep -q "systemctl start nftables" "$FAKE_CALLS" && pass "inactive nftables: service started" \
         || fail "inactive nftables: start not invoked"
-    grep -q "systemctl restart docker" "$FAKE_CALLS" && pass "inactive nftables: docker restarted after the distro flush" \
-        || fail "inactive nftables: docker restart missing after start"
+    grep -qx "systemctl restart docker" "$FAKE_CALLS" \
+        && fail "inactive nftables: bare docker.service restart (breaks Ubuntu 24 socket activation)" \
+        || pass "inactive nftables: did not use a bare docker.service restart"
+    grep -q "systemctl restart docker.socket docker.service" "$FAKE_CALLS" \
+        && pass "inactive nftables: docker restarted via socket activation after the distro flush" \
+        || fail "inactive nftables: docker.socket+docker.service restart missing after start"
+    grep -q "will be bounced" "$TMP_TEST/out" \
+        && pass "inactive nftables: warned that running Docker and containers will be bounced" \
+        || fail "inactive nftables: missing bounce warning for already-running Docker"
     grep -q "systemctl enable nftables" "$FAKE_CALLS" && pass "inactive nftables: still enabled" \
         || fail "inactive nftables: enable missing"
+}
+
+test_persistence_inactive_skips_docker_when_docker_down() {
+    fakes_reset
+    setstate NFTABLES_ACTIVE no "$FAKE_STATE"
+    setstate DOCKER_ACTIVE no "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "inactive nftables docker-down flow: exit $rc"
+    grep -q "systemctl start nftables" "$FAKE_CALLS" && pass "inactive nftables docker-down: nftables started" \
+        || fail "inactive nftables docker-down: nftables start missing"
+    grep -q "systemctl restart docker" "$FAKE_CALLS" \
+        && fail "inactive nftables docker-down: docker bounced though it was not active" \
+        || pass "inactive nftables docker-down: docker not bounced"
 }
 
 test_persistence_foreign_content() {
@@ -839,6 +860,7 @@ test_syntax_failure_rollback
 test_apply_failure_rollback
 test_persistence_first_run
 test_persistence_start_when_inactive
+test_persistence_inactive_skips_docker_when_docker_down
 test_persistence_foreign_content
 test_persistence_dropin
 test_subnet_from_awg0_conf
