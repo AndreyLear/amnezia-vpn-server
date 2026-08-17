@@ -20,10 +20,9 @@ describe("LoginPage", () => {
     expect(container.querySelector(".ambient-bg")).toBeInTheDocument();
     expect(screen.getByLabelText("Имя пользователя")).toBeRequired();
     expect(screen.getByLabelText("Пароль")).toBeRequired();
-    expect(screen.getByRole("button", { name: "Войти" })).toHaveAttribute(
-      "data-size",
-      "lg",
-    );
+    const submit = screen.getByRole("button", { name: "Войти" });
+    expect(submit).toHaveAttribute("data-size", "lg");
+    expect(submit).toHaveClass("h-12", "w-full");
     const form = container.querySelector("form");
     expect(form).toHaveClass("gap-6");
     expect(form).not.toHaveClass("gap-3");
