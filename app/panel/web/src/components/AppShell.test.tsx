@@ -166,6 +166,8 @@ describe("AppShell header", () => {
 
     const header = screen.getByRole("banner");
     expect(header).toHaveClass("pt-4");
+    expect(header).toHaveClass("sm:pt-8");
+    expect(header).not.toHaveClass("pt-8");
     expect(header).not.toHaveClass("py-4");
   });
 
@@ -180,6 +182,8 @@ describe("AppShell header", () => {
     expect(header).toHaveClass("flex");
     expect(header).not.toHaveClass("flex-wrap");
     expect(header).toHaveClass("pt-4");
+    expect(header).toHaveClass("sm:pt-8");
+    expect(header).not.toHaveClass("pt-8");
     expect(header).not.toHaveClass("py-4");
     expect(header).not.toHaveClass("gap-2");
 
