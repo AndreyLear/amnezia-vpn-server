@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // Crafted /proc/stat samples. First 8 counters: user nice system idle
@@ -55,6 +57,52 @@ func assertPct(t *testing.T, name string, p *float64, want, eps float64) {
 	}
 	if got < 0 || got > 100 {
 		t.Fatalf("%s = %v, want clamped to [0, 100]", name, got)
+	}
+}
+
+func TestReadRAMUsedTotalBytesFromMeminfo(t *testing.T) {
+	dir := t.TempDir()
+	disk := t.TempDir()
+	writeProc(t, dir, statSample1, meminfoOK)
+
+	snap, _ := Read(dir, disk, CPUSample{})
+	if snap.RAMUsedBytes == nil {
+		t.Fatal("RAMUsedBytes is nil")
+	}
+	if snap.RAMTotalBytes == nil {
+		t.Fatal("RAMTotalBytes is nil")
+	}
+	wantUsed := int64((8000000 - 2000000) * 1024)
+	wantTotal := int64(8000000 * 1024)
+	if *snap.RAMUsedBytes != wantUsed {
+		t.Fatalf("RAMUsedBytes = %d, want %d", *snap.RAMUsedBytes, wantUsed)
+	}
+	if *snap.RAMTotalBytes != wantTotal {
+		t.Fatalf("RAMTotalBytes = %d, want %d", *snap.RAMTotalBytes, wantTotal)
+	}
+}
+
+func TestReadDiskStatfsUsedTotal(t *testing.T) {
+	dir := t.TempDir()
+	disk := t.TempDir()
+	writeProc(t, dir, statSample1, meminfoOK)
+
+	var st unix.Statfs_t
+	if err := unix.Statfs(disk, &st); err != nil {
+		t.Fatalf("Statfs: %v", err)
+	}
+	wantTotal := int64(st.Blocks) * int64(st.Bsize)
+	wantUsed := wantTotal - int64(st.Bavail)*int64(st.Bsize)
+
+	snap, _ := Read(dir, disk, CPUSample{})
+	if snap.DiskUsedBytes == nil || snap.DiskTotalBytes == nil {
+		t.Fatalf("disk bytes nil: used=%v total=%v", snap.DiskUsedBytes, snap.DiskTotalBytes)
+	}
+	if *snap.DiskTotalBytes != wantTotal {
+		t.Fatalf("DiskTotalBytes = %d, want %d", *snap.DiskTotalBytes, wantTotal)
+	}
+	if *snap.DiskUsedBytes != wantUsed {
+		t.Fatalf("DiskUsedBytes = %d, want %d", *snap.DiskUsedBytes, wantUsed)
 	}
 }
 

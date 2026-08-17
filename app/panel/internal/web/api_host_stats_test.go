@@ -43,7 +43,11 @@ func decodeHostStatsMap(t *testing.T, rec *httptest.ResponseRecorder) map[string
 
 func assertHostStatsKeys(t *testing.T, got map[string]any) {
 	t.Helper()
-	for _, key := range []string{"cpu_percent", "ram_percent", "disk_percent"} {
+	for _, key := range []string{
+		"cpu_percent", "ram_percent", "disk_percent",
+		"ram_used_bytes", "ram_total_bytes",
+		"disk_used_bytes", "disk_total_bytes",
+	} {
 		v, ok := got[key]
 		if !ok {
 			t.Fatalf("missing key %s: %v", key, got)
@@ -111,6 +115,14 @@ func TestHostStatsCPUFirstNullThenPercent(t *testing.T) {
 	if ram < 74.99 || ram > 75.01 {
 		t.Fatalf("ram_percent = %v, want 75", ram)
 	}
+	wantUsed := float64((8000000 - 2000000) * 1024)
+	wantTotal := float64(8000000 * 1024)
+	if got["ram_used_bytes"] != wantUsed {
+		t.Fatalf("ram_used_bytes = %v, want %v", got["ram_used_bytes"], wantUsed)
+	}
+	if got["ram_total_bytes"] != wantTotal {
+		t.Fatalf("ram_total_bytes = %v, want %v", got["ram_total_bytes"], wantTotal)
+	}
 
 	writeHostStatsProc(t, proc, hostStatsStat2, hostStatsMem)
 	second := f.get("/api/stats/host")
@@ -139,7 +151,11 @@ func TestHostStatsMissingProcAndDiskNullThenClientsOK(t *testing.T) {
 	}
 	got := decodeHostStatsMap(t, rec)
 	assertHostStatsKeys(t, got)
-	for _, key := range []string{"cpu_percent", "ram_percent", "disk_percent"} {
+	for _, key := range []string{
+		"cpu_percent", "ram_percent", "disk_percent",
+		"ram_used_bytes", "ram_total_bytes",
+		"disk_used_bytes", "disk_total_bytes",
+	} {
 		if got[key] != nil {
 			t.Fatalf("%s = %v, want null", key, got[key])
 		}

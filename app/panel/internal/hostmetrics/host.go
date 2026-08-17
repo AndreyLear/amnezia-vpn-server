@@ -13,9 +13,13 @@ import (
 // Snapshot is a live host load sample. Nil fields mean that source was
 // missing or unreadable; Read never fails the whole snapshot.
 type Snapshot struct {
-	CPU  *float64 // 0-100
-	RAM  *float64
-	Disk *float64
+	CPU            *float64 // 0-100
+	RAM            *float64
+	Disk           *float64
+	RAMUsedBytes   *int64
+	RAMTotalBytes  *int64
+	DiskUsedBytes  *int64
+	DiskTotalBytes *int64
 }
 
 // CPUSample is the previous /proc/stat aggregate used for a CPU percent delta.
@@ -30,10 +34,16 @@ type CPUSample struct {
 // prev is the previous CPUSample from the last Read (zero on first call).
 func Read(procDir, diskPath string, prev CPUSample) (Snapshot, CPUSample) {
 	cpu, next := readCPU(filepath.Join(procDir, "stat"), prev)
+	ramPct, ramUsed, ramTotal := readRAM(filepath.Join(procDir, "meminfo"))
+	diskPct, diskUsed, diskTotal := readDisk(diskPath)
 	return Snapshot{
-		CPU:  cpu,
-		RAM:  readRAM(filepath.Join(procDir, "meminfo")),
-		Disk: readDisk(diskPath),
+		CPU:            cpu,
+		RAM:            ramPct,
+		Disk:           diskPct,
+		RAMUsedBytes:   ramUsed,
+		RAMTotalBytes:  ramTotal,
+		DiskUsedBytes:  diskUsed,
+		DiskTotalBytes: diskTotal,
 	}, next
 }
 
@@ -96,10 +106,10 @@ func parseStat(path string) (total, idle uint64, ok bool) {
 	return 0, 0, false
 }
 
-func readRAM(meminfoPath string) *float64 {
+func readRAM(meminfoPath string) (pct *float64, used, totalBytes *int64) {
 	f, err := os.Open(meminfoPath)
 	if err != nil {
-		return nil
+		return nil, nil, nil
 	}
 	defer f.Close()
 	var total, avail uint64
@@ -123,25 +133,28 @@ func readRAM(meminfoPath string) *float64 {
 		}
 	}
 	if !haveTotal || !haveAvail || total == 0 {
-		return nil
+		return nil, nil, nil
 	}
-	return clamp((1 - float64(avail)/float64(total)) * 100)
+	totalB := int64(total) * 1024
+	usedB := int64(total-avail) * 1024
+	return clamp((1 - float64(avail)/float64(total)) * 100), &usedB, &totalB
 }
 
-func readDisk(diskPath string) *float64 {
+func readDisk(diskPath string) (pct *float64, used, totalBytes *int64) {
 	if diskPath == "" {
 		diskPath = "/data"
 	}
 	var st unix.Statfs_t
 	if err := unix.Statfs(diskPath, &st); err != nil {
-		return nil
+		return nil, nil, nil
 	}
-	totalBytes := float64(st.Blocks) * float64(st.Bsize)
-	if totalBytes == 0 {
-		return nil
+	totalB := int64(st.Blocks) * int64(st.Bsize)
+	if totalB == 0 {
+		return nil, nil, nil
 	}
-	availBytes := float64(st.Bavail) * float64(st.Bsize)
-	return clamp((1 - availBytes/totalBytes) * 100)
+	availB := int64(st.Bavail) * int64(st.Bsize)
+	usedB := totalB - availB
+	return clamp((1 - float64(availB)/float64(totalB)) * 100), &usedB, &totalB
 }
 
 func clamp(v float64) *float64 {

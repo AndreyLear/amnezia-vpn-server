@@ -158,6 +158,10 @@ export type HostSnapshot = {
   cpu_percent: number | null;
   ram_percent: number | null;
   disk_percent: number | null;
+  ram_used_bytes: number | null;
+  ram_total_bytes: number | null;
+  disk_used_bytes: number | null;
+  disk_total_bytes: number | null;
 };
 
 /** Toast only after a confirmed success: `{ok:true}` or a created/patched client. */
