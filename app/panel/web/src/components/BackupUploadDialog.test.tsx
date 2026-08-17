@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { BackupUploadDialog } from "@/components/BackupUploadDialog";
+import { BackupUploadDialog, DROPZONE_MISS_MS } from "@/components/BackupUploadDialog";
 import { setCsrf } from "@/lib/api";
 
 vi.mock("sonner", () => ({
@@ -82,7 +82,7 @@ describe("BackupUploadDialog", () => {
         target: { files: [new File(["x"], name, { type: "application/octet-stream" })] },
       });
       expect(screen.queryByText(name)).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
       expect(toast.error).toHaveBeenCalledWith(rejectCopy);
     }
   });
@@ -173,6 +173,55 @@ describe("BackupUploadDialog", () => {
       const settled = screen.getByRole("button", { name: "Загрузить" });
       expect(settled.querySelector('[data-slot="spinner"]')).toBeNull();
     });
+  });
+
+  it("keeps Загрузить enabled when the dialog is idle with no file", () => {
+    render(<BackupUploadDialog open onOpenChange={() => {}} />);
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
+  });
+
+  it("highlights the dashed dropzone when Загрузить is pressed with no file", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      vi.mocked(toast.error).mockClear();
+      vi.mocked(toast.success).mockClear();
+
+      render(<BackupUploadDialog open onOpenChange={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: "Загрузить" }));
+
+      const dropzone = screen
+        .getByText("Перетащите файл сюда или выберите на диске")
+        .closest("label");
+      expect(dropzone?.className.split(/\s+/)).toContain("border-destructive");
+      expect(dropzone?.className.split(/\s+/)).toContain("duration-500");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(toast.success).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(DROPZONE_MISS_MS);
+      });
+      expect(dropzone?.className.split(/\s+/)).not.toContain("border-destructive");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("highlights the mobile picker when Загрузить is pressed with no file", () => {
+    stubMinWidthSm(false);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      render(<BackupUploadDialog open onOpenChange={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: "Загрузить" }));
+
+      const picker = screen.getByRole("button", { name: "Выберите файл на устройстве" });
+      expect(picker.className.split(/\s+/)).toContain("border-destructive");
+      expect(picker.className.split(/\s+/)).toContain("duration-500");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses a device picker without dropzone copy on mobile", () => {

@@ -16,6 +16,8 @@ import { isBackupArchiveName } from "@/lib/backupArchive";
 const ACCEPT = ".tar.zst";
 const rejectCopy = "Нужен файл бэкапа (.tar.zst).";
 const SM_MIN_WIDTH = "(min-width: 640px)";
+export const DROPZONE_MISS_MS = 2500;
+
 function isMinWidthSm(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return true;
@@ -56,8 +58,37 @@ export function BackupUploadDialog({
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [miss, setMiss] = useState(false);
   const isSmUp = useMinWidthSm();
   const inputRef = useRef<HTMLInputElement>(null);
+  const missTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function clearMiss() {
+    if (missTimerRef.current !== null) {
+      clearTimeout(missTimerRef.current);
+      missTimerRef.current = null;
+    }
+    setMiss(false);
+  }
+
+  function flashMiss() {
+    if (missTimerRef.current !== null) {
+      clearTimeout(missTimerRef.current);
+    }
+    setMiss(true);
+    missTimerRef.current = setTimeout(() => {
+      missTimerRef.current = null;
+      setMiss(false);
+    }, DROPZONE_MISS_MS);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (missTimerRef.current !== null) {
+        clearTimeout(missTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!open || !isSmUp) return;
@@ -94,6 +125,7 @@ export function BackupUploadDialog({
       return;
     }
     setFile(next);
+    clearMiss();
   }
 
   async function upload(next: File) {
@@ -144,6 +176,7 @@ export function BackupUploadDialog({
         if (!next) {
           setFile(null);
           setDragOver(false);
+          clearMiss();
         }
         onOpenChange(next);
       }}
@@ -156,14 +189,22 @@ export function BackupUploadDialog({
           className="grid gap-6"
           onSubmit={(e) => {
             e.preventDefault();
-            if (file) void upload(file);
+            if (!file) {
+              flashMiss();
+              return;
+            }
+            void upload(file);
           }}
         >
           <div className="grid gap-4">
             {isSmUp ? (
               <label
-                className={`grid min-w-0 cursor-pointer gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm ${
-                  dragOver ? "border-primary bg-muted" : "border-border hover:border-input"
+                className={`grid min-w-0 cursor-pointer gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm transition-colors duration-500 motion-reduce:duration-0 ${
+                  dragOver
+                    ? "border-primary bg-muted"
+                    : miss
+                      ? "border-destructive"
+                      : "border-border hover:border-input"
                 }`}
                 onDragOver={(e) => {
                   e.preventDefault();
@@ -192,7 +233,9 @@ export function BackupUploadDialog({
                 <Button
                   type="button"
                   variant="outline"
-                  className="max-sm:h-12 max-sm:w-full"
+                  className={`max-sm:h-12 max-sm:w-full transition-colors duration-500 ${
+                    miss ? "border-destructive" : ""
+                  }`}
                   disabled={pending || restorePending}
                   onClick={() => inputRef.current?.click()}
                 >
@@ -212,7 +255,7 @@ export function BackupUploadDialog({
             <Button
               type="submit"
               className="max-sm:h-12 max-sm:w-full"
-              disabled={pending || restorePending || !file}
+              disabled={pending || restorePending}
             >
               {pending ? <Spinner data-icon="inline-start" /> : null}
               Загрузить

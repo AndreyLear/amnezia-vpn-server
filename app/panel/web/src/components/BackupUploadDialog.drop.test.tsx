@@ -51,7 +51,7 @@ describe("BackupUploadDialog drop", () => {
       dataTransfer: { files: [new File(["x"], "notes.txt")] },
     });
     expect(screen.queryByText("notes.txt")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(rejectCopy);
   });
@@ -65,7 +65,7 @@ describe("BackupUploadDialog drop", () => {
       dataTransfer: { files: [new File(["archive"], "panel.zst")] },
     });
     expect(screen.queryByText("panel.zst")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
     expect(toast.error).toHaveBeenCalledWith(rejectCopy);
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
