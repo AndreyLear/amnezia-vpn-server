@@ -17,6 +17,15 @@ const base: Client = {
   tx_bytes: 0,
 };
 
+function combinedTrafficText() {
+  return screen.getByText(
+    (_content, el) =>
+      el instanceof HTMLElement &&
+      el.classList.contains("tabular-nums") &&
+      el.textContent === "0 Б / 0,1 Гб",
+  );
+}
+
 const originalMatchMedia = window.matchMedia;
 
 function stubMinWidthSm(matches: boolean) {
@@ -135,10 +144,48 @@ describe("ClientCard", () => {
     while (metrics && !metrics.classList.contains("sm:contents")) {
       metrics = metrics.parentElement;
     }
-    expect(metrics).toHaveClass("flex", "shrink-0", "items-center", "gap-3", "sm:contents");
+    expect(metrics).toHaveClass("flex", "flex-nowrap", "shrink-0", "items-center", "gap-3", "sm:contents");
     expect(metrics).not.toHaveClass("max-sm:col-span-2");
     expect(metrics).not.toHaveClass("gap-2");
     expect(metrics).not.toHaveClass("max-sm:justify-between", "max-sm:w-full");
+
+    const combined = combinedTrafficText();
+    expect(combined).toBeInTheDocument();
+    expect(combined.parentElement).toHaveClass("whitespace-nowrap");
+  });
+
+  it("combines tx and rx into one metric below sm", () => {
+    stubMinWidthSm(false);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:01:00Z"));
+    render(<ClientCard client={base} />);
+
+    const combined = combinedTrafficText();
+    expect(combined).toBeInTheDocument();
+    expect(combined).toHaveClass("tabular-nums");
+
+    const trigger = combined.parentElement;
+    expect(trigger).toHaveClass("whitespace-nowrap", "gap-[0.25rem]", "inline-flex", "items-center");
+    const icon = trigger?.querySelector("svg");
+    expect(icon).toHaveClass("lucide-arrow-up-down", "size-4");
+
+    const handshake = screen.getByText("1 мин");
+    let metrics: HTMLElement | null = handshake.parentElement;
+    while (metrics && !metrics.classList.contains("sm:contents")) {
+      metrics = metrics.parentElement;
+    }
+    expect(metrics).toHaveClass("flex-nowrap", "items-center");
+
+    expect(screen.queryByText("Входящий трафик")).not.toBeInTheDocument();
+  });
+
+  it("shows combined traffic tooltip below sm", async () => {
+    stubMinWidthSm(false);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<ClientCard client={base} />);
+
+    await user.hover(combinedTrafficText());
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Исходящий / входящий трафик");
   });
 
   it("uses sm:contents on the metrics wrapper so handshake rx tx are grid cells", () => {

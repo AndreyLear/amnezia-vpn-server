@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDownIcon, ArrowUpIcon, HandshakeIcon, MoreVerticalIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, HandshakeIcon, MoreVerticalIcon } from "lucide-react";
 
 import {
   AlertDialog,
@@ -160,7 +160,7 @@ export function ClientCard({
               <span className="shrink-0 text-muted-foreground">Пауза</span>
             ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-3 text-muted-foreground sm:contents">
+          <div className="flex flex-nowrap shrink-0 items-center gap-3 text-muted-foreground sm:contents">
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-[0.4rem]">
@@ -173,24 +173,40 @@ export function ClientCard({
               </TooltipTrigger>
               <TooltipContent>Последний handshake</TooltipContent>
             </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex items-center gap-[0.25rem]">
-                  <ArrowDownIcon className="size-4" aria-hidden />
-                  <span className="tabular-nums">{formatBytes(client.rx_bytes)}</span>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>Входящий трафик</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex items-center gap-[0.25rem]">
-                  <ArrowUpIcon className="size-4" aria-hidden />
-                  <span className="tabular-nums">{formatBytes(client.tx_bytes)}</span>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>Исходящий трафик</TooltipContent>
-            </Tooltip>
+            {!isSmUp ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center gap-[0.25rem] whitespace-nowrap">
+                    <ArrowUpDownIcon className="size-4" aria-hidden />
+                    <span className="tabular-nums">
+                      {formatBytes(client.tx_bytes)} / {formatBytes(client.rx_bytes)}
+                    </span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>Исходящий / входящий трафик</TooltipContent>
+              </Tooltip>
+            ) : (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-[0.25rem]">
+                      <ArrowDownIcon className="size-4" aria-hidden />
+                      <span className="tabular-nums">{formatBytes(client.rx_bytes)}</span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>Входящий трафик</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-[0.25rem]">
+                      <ArrowUpIcon className="size-4" aria-hidden />
+                      <span className="tabular-nums">{formatBytes(client.tx_bytes)}</span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>Исходящий трафик</TooltipContent>
+                </Tooltip>
+              </>
+            )}
           </div>
           {isSmUp ? (
             <ClientMenu
