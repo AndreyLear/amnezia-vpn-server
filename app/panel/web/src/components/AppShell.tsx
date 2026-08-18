@@ -50,7 +50,13 @@ export function AppShell({
                 : "flex min-w-0 items-center pt-4 sm:pt-8"
             }
           >
-            <p className="shrink-0 font-mono text-base font-medium">AWG Panel</p>
+            <img
+              src="/favicon.svg"
+              alt="AWG Panel"
+              width={24}
+              height={24}
+              className="size-6 shrink-0"
+            />
             {empty ? null : (
               <>
                 <HeaderStats host={host} className="ms-3 flex min-w-0" />

@@ -27,12 +27,12 @@ describe("AppShell header", () => {
     expect(screen.queryByText("Системная")).not.toBeInTheDocument();
     expect(screen.queryByText("Аккаунт")).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Аккаунт" })).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "AWG Panel" })).toBeInTheDocument();
+    expect(screen.queryByText("AmneziaVPN")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Бэкап" }));
     expect(await screen.findByText("Скачать")).toBeInTheDocument();
     expect(screen.getByText("Загрузить")).toBeInTheDocument();
-    expect(screen.getByText("AWG Panel")).toBeInTheDocument();
-    expect(screen.queryByText("AmneziaVPN")).not.toBeInTheDocument();
   });
 
   it("defaults to a dark theme toggle with a moon icon", () => {
@@ -93,16 +93,18 @@ describe("AppShell header", () => {
     expect(onAddClient).toHaveBeenCalledTimes(1);
   });
 
-  it("uses text-base on the AWG Panel title, not text-sm", () => {
+  it("uses the favicon mark as a size-6 header logo", () => {
     render(
       <AppShell onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
 
-    const title = screen.getByText("AWG Panel");
-    expect(title).toHaveClass("text-base");
-    expect(title).not.toHaveClass("text-sm");
+    const logo = screen.getByRole("img", { name: "AWG Panel" });
+    expect(logo).toHaveAttribute("src", "/favicon.svg");
+    expect(logo).toHaveClass("size-6", "shrink-0");
+    expect(logo).not.toHaveClass("text-base");
+    expect(logo).not.toHaveClass("font-mono");
   });
 
   it("hides the header add on max-sm and keeps icon plus label from sm up", () => {
@@ -187,7 +189,7 @@ describe("AppShell header", () => {
     expect(header).not.toHaveClass("py-4");
     expect(header).not.toHaveClass("gap-2");
 
-    const title = screen.getByText("AWG Panel");
+    const title = screen.getByRole("img", { name: "AWG Panel" });
     expect(title).toHaveClass("shrink-0");
     expect(title).not.toHaveClass("truncate");
 
@@ -222,7 +224,7 @@ describe("AppShell header", () => {
     expect(header).not.toHaveClass("sm:pt-8");
     const column = header.parentElement;
     expect(column).toHaveClass("flex", "min-h-svh", "flex-col", "items-center", "justify-center", "gap-8");
-    expect(screen.getByText("AWG Panel")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "AWG Panel" })).toBeInTheDocument();
     expect(within(header).queryByLabelText("CPU")).toBeNull();
     expect(within(header).queryByLabelText("RAM")).toBeNull();
     expect(within(header).queryByLabelText("Диск")).toBeNull();

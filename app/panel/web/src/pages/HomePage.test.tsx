@@ -234,7 +234,7 @@ describe("HomePage load", () => {
     );
 
     render(<HomePage />);
-    expect(screen.getByText("AWG Panel")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "AWG Panel" })).toBeInTheDocument();
     expect(screen.queryByText("Пока нет клиентов")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Тёмная тема" })).toBeInTheDocument();
     expect(within(screen.getByRole("banner")).getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();
