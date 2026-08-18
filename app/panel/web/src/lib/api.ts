@@ -154,6 +154,8 @@ export type MutationResponse = {
   id?: number;
 };
 
+export type IfaceState = "up" | "na" | "down" | "error";
+
 export type HostSnapshot = {
   cpu_percent: number | null;
   ram_percent: number | null;
@@ -162,6 +164,8 @@ export type HostSnapshot = {
   ram_total_bytes: number | null;
   disk_used_bytes: number | null;
   disk_total_bytes: number | null;
+  iface: string;
+  iface_state: IfaceState;
 };
 
 /** Toast only after a confirmed success: `{ok:true}` or a created/patched client. */

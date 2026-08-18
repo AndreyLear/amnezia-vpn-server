@@ -17,6 +17,8 @@ const emptyHost: HostSnapshot = {
   ram_total_bytes: null,
   disk_used_bytes: null,
   disk_total_bytes: null,
+  iface: "awg0",
+  iface_state: "na",
 };
 
 const diskUsed = 4 * 1024 ** 3;
@@ -68,7 +70,7 @@ describe("HeaderStats", () => {
   });
 
   it("uses a 4px gap on the stats row instead of 12px", () => {
-    const { container } = render(
+    render(
       <HeaderStats
         host={{
           ...emptyHost,
@@ -79,9 +81,9 @@ describe("HeaderStats", () => {
       />,
     );
 
-    const row = container.querySelector("[class*='gap-']");
-    expect(row).toHaveClass("gap-1");
-    expect(row).not.toHaveClass("gap-3");
+    const loadRow = screen.getByLabelText("CPU").closest("[class*='gap-1']");
+    expect(loadRow).toHaveClass("gap-1");
+    expect(loadRow).not.toHaveClass("gap-3");
   });
 
   it("does not roll-animate the slash separators when values change", () => {
@@ -239,6 +241,7 @@ describe("HeaderStats", () => {
     render(
       <HeaderStats
         host={{
+          ...emptyHost,
           cpu_percent: 50,
           ram_percent: 75,
           disk_percent: 95,
@@ -270,6 +273,7 @@ describe("HeaderStats", () => {
     render(
       <HeaderStats
         host={{
+          ...emptyHost,
           cpu_percent: 1,
           ram_percent: 2,
           disk_percent: 3,
@@ -411,5 +415,122 @@ describe("HeaderStats", () => {
     expect(screen.getByText("75%")).toBeInTheDocument();
     expect(screen.queryByText("50%")).not.toBeInTheDocument();
     expect(screen.getByLabelText("CPU")).toHaveTextContent("75%");
+  });
+
+  it("stacks the interface name above the load row in a 12px two-line column", () => {
+    render(
+      <HeaderStats
+        host={{
+          ...emptyHost,
+          cpu_percent: 10,
+          iface: "awg0",
+          iface_state: "up",
+        } as HostSnapshot}
+      />,
+    );
+
+    const iface = screen.getByLabelText("Интерфейс");
+    expect(iface).toHaveTextContent("awg0");
+    expect(iface).not.toHaveTextContent(DASH);
+    expect(iface).toHaveClass("text-xs");
+    expect(iface).not.toHaveClass("text-sm");
+
+    const loadRow = screen.getByLabelText("CPU").closest("[class*='tabular-nums']");
+    expect(loadRow).toHaveClass("gap-1");
+    expect(loadRow).not.toHaveClass("gap-3");
+    expect(loadRow).not.toHaveClass("text-sm");
+    expect(loadRow).not.toContainElement(iface);
+
+    const cluster = iface.closest("[class*='flex-col']");
+    expect(cluster).toHaveClass("flex", "flex-col", "gap-1", "text-xs");
+    expect(cluster).not.toHaveClass("gap-3");
+    expect(cluster).not.toHaveClass("text-sm");
+    expect(cluster).toContainElement(loadRow as HTMLElement);
+
+    expect(
+      iface.compareDocumentPosition(loadRow as HTMLElement) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("colors the interface name by iface_state", () => {
+    const { rerender } = render(
+      <HeaderStats
+        host={{ ...emptyHost, iface: "awg0", iface_state: "up" } as HostSnapshot}
+      />,
+    );
+    expect(screen.getByLabelText("Интерфейс")).toHaveClass("text-muted-foreground");
+    expect(screen.getByLabelText("Интерфейс")).not.toHaveClass("header-iface-shimmer");
+
+    rerender(
+      <HeaderStats
+        host={{ ...emptyHost, iface: "awg0", iface_state: "error" } as HostSnapshot}
+      />,
+    );
+    expect(screen.getByLabelText("Интерфейс")).toHaveClass("text-amber-500");
+
+    rerender(
+      <HeaderStats
+        host={{ ...emptyHost, iface: "awg0", iface_state: "down" } as HostSnapshot}
+      />,
+    );
+    expect(screen.getByLabelText("Интерфейс")).toHaveClass("text-red-500");
+  });
+
+  it("applies a glyph shimmer when host is null or iface_state is na", () => {
+    const { rerender } = render(<HeaderStats host={null} />);
+    const loading = screen.getByLabelText("Интерфейс");
+    expect(loading).toHaveClass("header-iface-shimmer");
+    expect(loading.textContent).toMatch(/awg0/);
+    expect(loading).not.toHaveTextContent(DASH);
+
+    rerender(
+      <HeaderStats
+        host={{ ...emptyHost, iface: "awg0", iface_state: "na" } as HostSnapshot}
+      />,
+    );
+    expect(screen.getByLabelText("Интерфейс")).toHaveClass("header-iface-shimmer");
+  });
+
+  it("keeps muted static iface text when reduced motion is preferred", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return false;
+      },
+    }));
+
+    render(
+      <HeaderStats
+        host={{ ...emptyHost, iface: "awg0", iface_state: "na" } as HostSnapshot}
+      />,
+    );
+    const iface = screen.getByLabelText("Интерфейс");
+    expect(iface).toHaveClass("text-muted-foreground");
+    expect(iface).not.toHaveClass("header-iface-shimmer");
+  });
+
+  it.each([
+    ["up", "Интерфейс поднят"],
+    ["na", "Нет данных статуса"],
+    ["down", "Интерфейс недоступен"],
+    ["error", "Ошибка чтения статуса"],
+  ] as const)("shows Russian tooltip for iface_state %s without a period", async (state, copy) => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <HeaderStats
+        host={{ ...emptyHost, iface: "awg0", iface_state: state } as HostSnapshot}
+      />,
+    );
+    await user.hover(screen.getByLabelText("Интерфейс"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip).toHaveTextContent(copy);
+    expect(tip.textContent).not.toMatch(/\.$/);
   });
 });

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { HostSnapshot } from "@/lib/api";
+import type { HostSnapshot, IfaceState } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -162,6 +162,56 @@ function diskTooltip(host: HostSnapshot | null): string | null {
   return `Загрузка диска: ${roundPercent(host.disk_percent)}% (${formatBytes(host.disk_used_bytes)} / ${formatBytes(host.disk_total_bytes)})`;
 }
 
+function ifaceName(host: HostSnapshot | null): string {
+  const name = host?.iface?.trim();
+  return name || "awg0";
+}
+
+function ifaceVisualState(host: HostSnapshot | null): IfaceState | "loading" {
+  if (host == null) return "loading";
+  return host.iface_state ?? "na";
+}
+
+function ifaceTooltip(state: IfaceState | "loading"): string {
+  switch (state) {
+    case "up":
+      return "Интерфейс поднят";
+    case "down":
+      return "Интерфейс недоступен";
+    case "error":
+      return "Ошибка чтения статуса";
+    default:
+      return "Нет данных статуса";
+  }
+}
+
+const ifaceColorClass: Record<IfaceState, string> = {
+  up: "text-muted-foreground",
+  error: "text-amber-500",
+  down: "text-red-500",
+  na: "text-muted-foreground",
+};
+
+function HeaderIface({ host }: { host: HostSnapshot | null }) {
+  const state = ifaceVisualState(host);
+  const shimmer =
+    (state === "loading" || state === "na") && !prefersReducedMotion();
+  const colorClass = shimmer
+    ? "header-iface-shimmer"
+    : ifaceColorClass[state === "loading" ? "na" : state];
+  const inner = (
+    <span aria-label="Интерфейс" className={cn("text-xs", colorClass)}>
+      {ifaceName(host)}
+    </span>
+  );
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{inner}</TooltipTrigger>
+      <TooltipContent>{ifaceTooltip(state)}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function HeaderStats({
   host,
   className,
@@ -173,34 +223,37 @@ export function HeaderStats({
     <TooltipProvider>
       <div
         className={cn(
-          "shrink-0 items-center gap-1 text-sm text-muted-foreground tabular-nums",
+          "flex min-w-0 flex-col gap-1 text-xs text-muted-foreground",
           className,
         )}
       >
-        <Metric
-          ariaLabel="CPU"
-          value={cpuValue(host)}
-          colorPercent={host?.cpu_percent}
-          tooltip={cpuTooltip(host)}
-        />
-        <span aria-hidden className="text-muted-foreground">
-          /
-        </span>
-        <Metric
-          ariaLabel="RAM"
-          value={ramValue(host)}
-          colorPercent={host?.ram_percent}
-          tooltip={ramTooltip(host)}
-        />
-        <span aria-hidden className="text-muted-foreground">
-          /
-        </span>
-        <Metric
-          ariaLabel="Диск"
-          value={diskValue(host)}
-          colorPercent={host?.disk_percent}
-          tooltip={diskTooltip(host)}
-        />
+        <HeaderIface host={host} />
+        <div className="flex items-center gap-1 tabular-nums">
+          <Metric
+            ariaLabel="CPU"
+            value={cpuValue(host)}
+            colorPercent={host?.cpu_percent}
+            tooltip={cpuTooltip(host)}
+          />
+          <span aria-hidden className="text-muted-foreground">
+            /
+          </span>
+          <Metric
+            ariaLabel="RAM"
+            value={ramValue(host)}
+            colorPercent={host?.ram_percent}
+            tooltip={ramTooltip(host)}
+          />
+          <span aria-hidden className="text-muted-foreground">
+            /
+          </span>
+          <Metric
+            ariaLabel="Диск"
+            value={diskValue(host)}
+            colorPercent={host?.disk_percent}
+            tooltip={diskTooltip(host)}
+          />
+        </div>
       </div>
     </TooltipProvider>
   );

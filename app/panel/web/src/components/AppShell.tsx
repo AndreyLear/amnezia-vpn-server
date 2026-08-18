@@ -59,7 +59,7 @@ export function AppShell({
             />
             {empty ? null : (
               <>
-                <HeaderStats host={host} className="ms-3 flex min-w-0" />
+                <HeaderStats host={host} className="ms-3 flex min-w-0 flex-col" />
                 <div className="ml-auto flex shrink-0 items-center gap-2">
                   <Button
                     type="button"

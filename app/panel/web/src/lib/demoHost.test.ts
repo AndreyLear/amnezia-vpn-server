@@ -12,6 +12,8 @@ function assertFilled(snap: HostSnapshot) {
   expect(snap.ram_total_bytes).not.toBeNull();
   expect(snap.disk_used_bytes).not.toBeNull();
   expect(snap.disk_total_bytes).not.toBeNull();
+  expect(snap.iface).toBe("awg0");
+  expect(snap.iface_state).toBe("up");
 }
 
 describe("nextDemoHost", () => {

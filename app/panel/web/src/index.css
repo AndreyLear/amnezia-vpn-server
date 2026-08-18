@@ -227,3 +227,34 @@
     animation: none;
   }
 }
+
+.header-iface-shimmer {
+  color: transparent;
+  background-image: linear-gradient(
+    105deg,
+    var(--muted-foreground) 35%,
+    color-mix(in oklch, var(--foreground) 88%, transparent) 50%,
+    var(--muted-foreground) 65%
+  );
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: header-iface-shimmer 1.6s linear infinite;
+}
+
+@keyframes header-iface-shimmer {
+  from {
+    background-position: 130% 0;
+  }
+  to {
+    background-position: -30% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .header-iface-shimmer {
+    animation: none;
+    color: var(--muted-foreground);
+    background-image: none;
+  }
+}

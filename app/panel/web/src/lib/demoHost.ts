@@ -58,5 +58,7 @@ export function nextDemoHost(prev: HostSnapshot | null, rng: Rng = Math.random):
     ram_total_bytes,
     disk_used_bytes,
     disk_total_bytes,
+    iface: "awg0",
+    iface_state: "up",
   };
 }

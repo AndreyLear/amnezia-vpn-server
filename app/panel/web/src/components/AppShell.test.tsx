@@ -198,8 +198,8 @@ describe("AppShell header", () => {
     expect(cpus[0]).toHaveTextContent("\u2014");
     expect(cpus[0].textContent ?? "").not.toMatch(/cpu|ram|disk|CPU|RAM|Диск/);
 
-    const stats = cpus[0].parentElement;
-    expect(stats).toHaveClass("flex", "min-w-0", "ms-3");
+    const stats = cpus[0].closest(".ms-3");
+    expect(stats).toHaveClass("flex", "flex-col", "min-w-0", "ms-3");
     expect(stats).not.toHaveClass("hidden");
     expect(stats).not.toHaveClass("sm:flex");
     expect(stats).not.toHaveClass("sm:hidden");
@@ -228,6 +228,7 @@ describe("AppShell header", () => {
     expect(within(header).queryByLabelText("CPU")).toBeNull();
     expect(within(header).queryByLabelText("RAM")).toBeNull();
     expect(within(header).queryByLabelText("Диск")).toBeNull();
+    expect(within(header).queryByLabelText("Интерфейс")).toBeNull();
 
     expect(screen.queryByRole("button", { name: "Тёмная тема" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Светлая тема" })).not.toBeInTheDocument();

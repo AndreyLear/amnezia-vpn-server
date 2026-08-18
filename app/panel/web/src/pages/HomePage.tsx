@@ -50,6 +50,8 @@ export default function HomePage() {
           ram_total_bytes: snap.ram_total_bytes ?? null,
           disk_used_bytes: snap.disk_used_bytes ?? null,
           disk_total_bytes: snap.disk_total_bytes ?? null,
+          iface: snap.iface?.trim() || "awg0",
+          iface_state: snap.iface_state ?? "na",
         });
       }
     } catch {

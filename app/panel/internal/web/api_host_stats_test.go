@@ -59,6 +59,15 @@ func assertHostStatsKeys(t *testing.T, got map[string]any) {
 			t.Fatalf("%s = %T %v, want number or null", key, v, v)
 		}
 	}
+	for _, key := range []string{"iface", "iface_state"} {
+		v, ok := got[key]
+		if !ok {
+			t.Fatalf("missing key %s: %v", key, got)
+		}
+		if _, ok := v.(string); !ok {
+			t.Fatalf("%s = %T %v, want string", key, v, v)
+		}
+	}
 }
 
 func TestHostStatsUnauthorized(t *testing.T) {
@@ -164,5 +173,85 @@ func TestHostStatsMissingProcAndDiskNullThenClientsOK(t *testing.T) {
 	clients := f.get("/api/clients")
 	if clients.Code != http.StatusOK {
 		t.Fatalf("GET /api/clients after host-stats miss: code = %d, want 200; body=%s", clients.Code, clients.Body.String())
+	}
+}
+
+const hostStatsPub = "aA11wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+func writeHostStatusJSON(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertIfaceFields(t *testing.T, got map[string]any, wantIface, wantState string) {
+	t.Helper()
+	if got["iface"] != wantIface {
+		t.Fatalf("iface = %v, want %q", got["iface"], wantIface)
+	}
+	if got["iface_state"] != wantState {
+		t.Fatalf("iface_state = %v, want %q", got["iface_state"], wantState)
+	}
+}
+
+func TestHostStatsIfaceMissingStatusFile(t *testing.T) {
+	f := newFixture(t)
+	f.server.cfg.StatusPath = filepath.Join(t.TempDir(), "no-status.json")
+	f.server.cfg.ConfPath = filepath.Join(t.TempDir(), "awg0.conf")
+
+	rec := f.get("/api/stats/host")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/stats/host code = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeHostStatsMap(t, rec)
+	assertHostStatsKeys(t, got)
+	assertIfaceFields(t, got, "awg0", "na")
+}
+
+func TestHostStatsIfaceHasInterfaceFalse(t *testing.T) {
+	f := newFixture(t)
+	writeHostStatusJSON(t, f.statusPath,
+		`{"schema":"v1","generated_at_utc":"2026-08-10T12:00:05Z","interface":null,"peers":[]}`)
+	f.server.cfg.ConfPath = filepath.Join(t.TempDir(), "awg0.conf")
+
+	rec := f.get("/api/stats/host")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeHostStatsMap(t, rec)
+	assertHostStatsKeys(t, got)
+	assertIfaceFields(t, got, "awg0", "down")
+}
+
+func TestHostStatsIfaceParseError(t *testing.T) {
+	f := newFixture(t)
+	writeHostStatusJSON(t, f.statusPath, `{not-valid-status`)
+	f.server.cfg.ConfPath = filepath.Join(t.TempDir(), "custom0.conf")
+
+	rec := f.get("/api/stats/host")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeHostStatsMap(t, rec)
+	assertHostStatsKeys(t, got)
+	assertIfaceFields(t, got, "custom0", "error")
+}
+
+func TestHostStatsIfaceHealthyUsesStatusName(t *testing.T) {
+	f := newFixture(t)
+	writeHostStatusJSON(t, f.statusPath,
+		`{"schema":"v1","generated_at_utc":"2026-08-10T12:00:05Z","interface":{"iface":"awg1","has_interface":true,"public_key":"`+hostStatsPub+`","listen_port":51820,"fwmark":"off","awg_params":{"jc":3,"jmin":21,"jmax":31,"s1":904,"s2":737,"s3":0,"s4":0}},"peers":[]}`)
+	f.server.cfg.ConfPath = filepath.Join(t.TempDir(), "awg0.conf")
+
+	rec := f.get("/api/stats/host")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeHostStatsMap(t, rec)
+	assertHostStatsKeys(t, got)
+	assertIfaceFields(t, got, "awg1", "up")
+	if _, ok := got["public_key"]; ok {
+		t.Fatalf("must not leak public_key: %v", got)
 	}
 }
