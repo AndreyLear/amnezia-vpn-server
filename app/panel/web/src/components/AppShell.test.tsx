@@ -93,18 +93,19 @@ describe("AppShell header", () => {
     expect(onAddClient).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the favicon mark as a size-6 header logo", () => {
+  it("uses an inline BrandMark as a size-8 header logo", () => {
     render(
       <AppShell onAddClient={() => {}}>
         <p>body</p>
       </AppShell>,
     );
 
-    const logo = screen.getByRole("img", { name: "AWG Panel" });
-    expect(logo).toHaveAttribute("src", "/favicon.svg");
-    expect(logo).toHaveClass("size-6", "shrink-0");
-    expect(logo).not.toHaveClass("text-base");
-    expect(logo).not.toHaveClass("font-mono");
+    const header = screen.getByRole("banner");
+    const logo = within(header).getByRole("img", { name: "AWG Panel" });
+    expect(logo.tagName.toLowerCase()).toBe("svg");
+    expect(logo).not.toHaveAttribute("src");
+    expect(logo).toHaveClass("size-8", "shrink-0");
+    expect(header.querySelector("img[src='/favicon.svg']")).toBeNull();
   });
 
   it("hides the header add on max-sm and keeps icon plus label from sm up", () => {

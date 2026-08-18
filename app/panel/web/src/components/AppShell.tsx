@@ -4,6 +4,7 @@ import { Moon, PlusIcon, Sun } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { BackupMenu, BackupProvider } from "@/components/BackupMenu";
+import { BrandMark } from "@/components/BrandMark";
 import { HeaderStats } from "@/components/HeaderStats";
 import { Button } from "@/components/ui/button";
 import type { HostSnapshot } from "@/lib/api";
@@ -50,13 +51,7 @@ export function AppShell({
                 : "flex min-w-0 items-center pt-4 sm:pt-8"
             }
           >
-            <img
-              src="/favicon.svg"
-              alt="AWG Panel"
-              width={24}
-              height={24}
-              className="size-6 shrink-0"
-            />
+            <BrandMark className="size-8 shrink-0" />
             {empty ? null : (
               <>
                 <HeaderStats host={host} className="ms-3 flex min-w-0 flex-col" />

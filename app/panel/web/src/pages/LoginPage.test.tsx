@@ -29,9 +29,11 @@ describe("LoginPage", () => {
     expect(form).toHaveClass("gap-6");
     expect(form).not.toHaveClass("gap-3");
     const logo = screen.getByRole("img", { name: "AWG Panel" });
-    expect(logo).toHaveAttribute("src", "/favicon.svg");
-    expect(logo).toHaveClass("size-12", "justify-self-center");
+    expect(logo.tagName.toLowerCase()).toBe("svg");
+    expect(logo).not.toHaveAttribute("src");
+    expect(logo).toHaveClass("size-12");
     expect(form?.firstElementChild).toBe(logo);
+    expect(container.querySelector("img[src='/favicon.svg']")).toBeNull();
     const fieldStack = form?.querySelector(":scope > div");
     expect(fieldStack).toHaveClass("grid", "gap-4");
     expect(screen.getByRole("button", { name: "Войти" })).not.toHaveClass("mt-4");

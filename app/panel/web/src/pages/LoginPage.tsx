@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
+import { BrandMark } from "@/components/BrandMark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,13 +54,7 @@ export default function LoginPage() {
           void submit();
         }}
       >
-        <img
-          src="/favicon.svg"
-          alt="AWG Panel"
-          width={48}
-          height={48}
-          className="size-12 justify-self-center"
-        />
+        <BrandMark className="size-12 justify-self-center" />
         <div className="grid gap-4">
           <div className="grid gap-2">
             <Label htmlFor="username">Имя пользователя</Label>
