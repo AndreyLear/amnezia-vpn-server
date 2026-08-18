@@ -53,6 +53,13 @@ export default function LoginPage() {
           void submit();
         }}
       >
+        <img
+          src="/favicon.svg"
+          alt="AWG Panel"
+          width={48}
+          height={48}
+          className="size-12 justify-self-center"
+        />
         <div className="grid gap-4">
           <div className="grid gap-2">
             <Label htmlFor="username">Имя пользователя</Label>
