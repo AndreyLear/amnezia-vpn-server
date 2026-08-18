@@ -200,7 +200,7 @@ function HeaderIface({ host }: { host: HostSnapshot | null }) {
     ? "header-iface-shimmer"
     : ifaceColorClass[state === "loading" ? "na" : state];
   const inner = (
-    <span aria-label="Интерфейс" className={cn("text-xs", colorClass)}>
+    <span aria-label="Интерфейс" className={cn("w-fit text-xs", colorClass)}>
       {ifaceName(host)}
     </span>
   );

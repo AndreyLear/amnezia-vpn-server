@@ -432,7 +432,7 @@ describe("HeaderStats", () => {
     const iface = screen.getByLabelText("Интерфейс");
     expect(iface).toHaveTextContent("awg0");
     expect(iface).not.toHaveTextContent(DASH);
-    expect(iface).toHaveClass("text-xs");
+    expect(iface).toHaveClass("text-xs", "w-fit");
     expect(iface).not.toHaveClass("text-sm");
 
     const loadRow = screen.getByLabelText("CPU").closest("[class*='tabular-nums']");
