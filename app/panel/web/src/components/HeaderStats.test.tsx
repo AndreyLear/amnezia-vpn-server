@@ -532,5 +532,6 @@ describe("HeaderStats", () => {
     const tip = await screen.findByRole("tooltip");
     expect(tip).toHaveTextContent(copy);
     expect(tip.textContent).not.toMatch(/\.$/);
+    expect(tip).toHaveAttribute("data-side", "right");
   });
 });

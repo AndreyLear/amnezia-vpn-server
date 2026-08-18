@@ -207,7 +207,7 @@ function HeaderIface({ host }: { host: HostSnapshot | null }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>{inner}</TooltipTrigger>
-      <TooltipContent>{ifaceTooltip(state)}</TooltipContent>
+      <TooltipContent side="right">{ifaceTooltip(state)}</TooltipContent>
     </Tooltip>
   );
 }
