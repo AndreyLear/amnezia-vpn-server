@@ -396,6 +396,119 @@ test_flags_panel_port_uses_ip_endpoint() {
         || fail "panel-port IP endpoint: summary endpoint missing/wrong"
 }
 
+test_interactive_auth_prompt_shows_digits() {
+    fakes_reset
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
+        bash "$BOOTSTRAP_SH" > "$TMP_TEST/out" 2> "$TMP_TEST/err" <<'ANSWERS'
+2.26.93.192
+root
+2
+panel.example.com
+
+vpn.example.com
+ANSWERS
+        echo $?
+    )"
+    [ "$rc" = "0" ] || { fail "auth prompt digits: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q 'Вход на сервер \[1=пароль, 2=ключ\]' "$TMP_TEST/err" \
+        && pass "auth prompt digits: 1=пароль, 2=ключ before typing" \
+        || fail "auth prompt digits: expected [1=пароль, 2=ключ] in the step 3 prompt"
+}
+
+test_interactive_domain_prompts_include_examples() {
+    fakes_reset
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
+        bash "$BOOTSTRAP_SH" > "$TMP_TEST/out" 2> "$TMP_TEST/err" <<'ANSWERS'
+2.26.93.192
+root
+2
+
+
+ANSWERS
+        echo $?
+    )"
+    [ "$rc" = "0" ] || { fail "domain prompt examples: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q 'Домен панели (пусто = панель на IP; например panel.example.com)' "$TMP_TEST/err" \
+        && pass "domain prompt examples: step 4 example hostname" \
+        || fail "domain prompt examples: step 4 missing example hostname"
+    grep -q 'Домен VPN для клиентов (пусто = IP сервера; например example.com)' "$TMP_TEST/err" \
+        && pass "domain prompt examples: step 6 example hostname" \
+        || fail "domain prompt examples: step 6 missing example hostname"
+    if grep -q -- '--panel-domain\|--vpn-domain\|--client-domain' "$TMP_TEST/err"; then
+        fail "domain prompt examples: wizard mentioned a flag name"
+    else
+        pass "domain prompt examples: wizard does not mention flag names"
+    fi
+}
+
+test_hyphenated_fqdn_flag_en_us() {
+    fakes_reset
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" LC_ALL=en_US.UTF-8 \
+        bash "$BOOTSTRAP_SH" --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
+            --panel-domain panel.super-space.com.de --vpn-domain super-space.com.de \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+        echo $?
+    )"
+    [ "$rc" = "0" ] || { fail "hyphenated FQDN flags en_US: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q -- "--domain 'panel.super-space.com.de'" "$FAKE_CALLS" \
+        && pass "hyphenated FQDN flags en_US: --panel-domain accepted" \
+        || fail "hyphenated FQDN flags en_US: panel domain not passed to install.sh"
+    grep -q -- "--client-domain 'super-space.com.de'" "$FAKE_CALLS" \
+        && pass "hyphenated FQDN flags en_US: --vpn-domain accepted" \
+        || fail "hyphenated FQDN flags en_US: vpn domain not passed to install.sh"
+}
+
+test_hyphenated_fqdn_interactive_en_us() {
+    fakes_reset
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" LC_ALL=en_US.UTF-8 \
+        bash "$BOOTSTRAP_SH" > "$TMP_TEST/out" 2> "$TMP_TEST/err" <<'ANSWERS'
+2.26.93.192
+root
+2
+panel.super-space.com.de
+
+super-space.com.de
+ANSWERS
+        echo $?
+    )"
+    [ "$rc" = "0" ] || { fail "hyphenated FQDN interactive en_US: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q -- "--domain 'panel.super-space.com.de'" "$FAKE_CALLS" \
+        && pass "hyphenated FQDN interactive en_US: panel domain accepted" \
+        || fail "hyphenated FQDN interactive en_US: panel domain rejected or not passed"
+    grep -q -- "--client-domain 'super-space.com.de'" "$FAKE_CALLS" \
+        && pass "hyphenated FQDN interactive en_US: vpn domain accepted" \
+        || fail "hyphenated FQDN interactive en_US: vpn domain rejected or not passed"
+}
+
+test_interactive_invalid_fqdn_russian_error() {
+    fakes_reset
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
+        bash "$BOOTSTRAP_SH" > "$TMP_TEST/out" 2> "$TMP_TEST/err" <<'ANSWERS'
+2.26.93.192
+root
+2
+not a domain
+
+
+ANSWERS
+        echo $?
+    )"
+    [ "$rc" = "1" ] || fail "interactive invalid FQDN: exit $rc, want 1 (die_op)"
+    if grep -q -- '--panel-domain' "$TMP_TEST/err"; then
+        fail "interactive invalid FQDN: English flag-mode usage leaked (--panel-domain)"
+    else
+        pass "interactive invalid FQDN: no --panel-domain in the error"
+    fi
+    grep -qi 'например panel.example.com' "$TMP_TEST/err" \
+        && pass "interactive invalid FQDN: Russian error with example hostname" \
+        || fail "interactive invalid FQDN: expected a Russian error with an example hostname"
+}
+
 test_interactive_key_explicit_domains() {
     # FAKE_HOME still has keys; wizard must be told «ключ» (or 2) to use them.
     fakes_reset
@@ -744,6 +857,11 @@ test_key_flags_domain_client_domain
 test_password_env_panel_port
 test_flags_domain_without_vpn_domain_uses_ip_endpoint
 test_flags_panel_port_uses_ip_endpoint
+test_interactive_auth_prompt_shows_digits
+test_interactive_domain_prompts_include_examples
+test_hyphenated_fqdn_flag_en_us
+test_hyphenated_fqdn_interactive_en_us
+test_interactive_invalid_fqdn_russian_error
 test_interactive_key_explicit_domains
 test_interactive_empty_vpn_domain_uses_ip_endpoint
 test_interactive_no_domain_panel_port

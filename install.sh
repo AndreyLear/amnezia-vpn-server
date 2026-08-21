@@ -291,25 +291,30 @@ validate_cidr "$VPN_SUBNET" || die_usage "--vpn-subnet must be an IPv4 CIDR like
 
 # validate_fqdn: lowercase letters/digits/hyphens per label, dots
 # between labels, total length <= 253, no leading/trailing dot.
+# Character classes like [A-Z] follow locale collation; under en_US*
+# they match most lowercase letters. Force C so hyphenated FQDNs
+# (e.g. panel.super-space.com.de) are accepted.
 validate_fqdn() {
-    case "$1" in
-        "" | *..* | -* | *- | .* | *. | *[!a-zA-Z0-9.-]* | *[A-Z_]*)
-            return 1
-            ;;
-    esac
-    [ "${#1}" -le 253 ] || return 1
-    # each label: 1..63 chars of [a-z0-9-], no leading/trailing hyphen
-    local rest="$1." label
-    while [ -n "$rest" ]; do
-        label="${rest%%.*}"
-        rest="${rest#*.}"
-        [ -n "$label" ] || return 1
-        [ "${#label}" -le 63 ] || return 1
-        case "$label" in
-            -* | *- | *[!a-zA-Z0-9-]* | *[A-Z_]*) return 1 ;;
+    (
+        LC_ALL=C
+        case "$1" in
+            "" | *..* | -* | *- | .* | *. | *[!a-zA-Z0-9.-]* | *[A-Z_]*)
+                exit 1
+                ;;
         esac
-    done
-    return 0
+        [ "${#1}" -le 253 ] || exit 1
+        rest="$1."
+        while [ -n "$rest" ]; do
+            label="${rest%%.*}"
+            rest="${rest#*.}"
+            [ -n "$label" ] || exit 1
+            [ "${#label}" -le 63 ] || exit 1
+            case "$label" in
+                -* | *- | *[!a-zA-Z0-9-]* | *[A-Z_]*) exit 1 ;;
+            esac
+        done
+        exit 0
+    )
 }
 
 if [ "$DOMAIN_SET" = "1" ]; then

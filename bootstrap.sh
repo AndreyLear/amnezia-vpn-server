@@ -150,23 +150,29 @@ EOF
 }
 
 validate_fqdn() {
-    case "$1" in
-        "" | *..* | -* | *- | .* | *. | *[!a-zA-Z0-9.-]* | *[A-Z_]*)
-            return 1
-            ;;
-    esac
-    [ "${#1}" -le 253 ] || return 1
-    local rest="$1." label
-    while [ -n "$rest" ]; do
-        label="${rest%%.*}"
-        rest="${rest#*.}"
-        [ -n "$label" ] || return 1
-        [ "${#label}" -le 63 ] || return 1
-        case "$label" in
-            -* | *- | *[!a-z0-9-]* ) return 1 ;;
+    # Character classes like [A-Z] follow the current locale collation,
+    # so under en_US* they match most lowercase letters and reject valid
+    # hyphenated FQDNs (e.g. panel.super-space.com.de). Force C.
+    (
+        LC_ALL=C
+        case "$1" in
+            "" | *..* | -* | *- | .* | *. | *[!a-zA-Z0-9.-]* | *[A-Z_]*)
+                exit 1
+                ;;
         esac
-    done
-    return 0
+        [ "${#1}" -le 253 ] || exit 1
+        rest="$1."
+        while [ -n "$rest" ]; do
+            label="${rest%%.*}"
+            rest="${rest#*.}"
+            [ -n "$label" ] || exit 1
+            [ "${#label}" -le 63 ] || exit 1
+            case "$label" in
+                -* | *- | *[!a-z0-9-]* ) exit 1 ;;
+            esac
+        done
+        exit 0
+    )
 }
 
 validate_ident() {
@@ -304,7 +310,7 @@ if [ "$NONINTERACTIVE" = "0" ]; then
     prompt SSH_HOST "$(step_label 1 6 "IP сервера")"
     [ -n "$SSH_HOST" ] || die_op "IP сервера обязателен"
     prompt SSH_USER "$(step_label 2 6 "Пользователь SSH")" "$DEFAULT_USER"
-    printf '%s3/6%s Вход на сервер: пароль (по умолчанию) или ключ: ' "$C_CYAN" "$C_RESET" >&2
+    printf '%s3/6%s Вход на сервер [1=пароль, 2=ключ]: ' "$C_CYAN" "$C_RESET" >&2
     IFS= read -r AUTH_CHOICE || true
     AUTH_NORM="$(printf '%s' "$AUTH_CHOICE" | tr '[:upper:]' '[:lower:]')"
     case "$AUTH_CHOICE" in
@@ -323,7 +329,7 @@ if [ "$NONINTERACTIVE" = "0" ]; then
                     AUTH_MODE=key
                     ;;
                 *)
-                    die_op "укажите пароль или ключ (Enter / 1 — пароль, 2 — ключ)"
+                    die_op "укажите 1 или 2 (1=пароль, 2=ключ)"
                     ;;
             esac
             ;;
@@ -332,7 +338,7 @@ if [ "$NONINTERACTIVE" = "0" ]; then
         prompt_secret SSH_PASSWORD "Пароль SSH (ввод скрыт)"
         [ -n "$SSH_PASSWORD" ] || die_op "пароль SSH пустой"
     fi
-    prompt DOMAIN "$(step_label 4 6 "Домен панели (пусто = панель на IP)")"
+    prompt DOMAIN "$(step_label 4 6 "Домен панели (пусто = панель на IP; например panel.example.com)")"
     if [ -n "$DOMAIN" ]; then
         DOMAIN_SET=1
         printf '%s5/6%s Порт панели [443]: ' "$C_CYAN" "$C_RESET" >&2
@@ -344,7 +350,7 @@ if [ "$NONINTERACTIVE" = "0" ]; then
         prompt PANEL_PORT "$(step_label 5 6 "Порт панели")" "$DEFAULT_PANEL_PORT"
         PANEL_PORT_SET=1
     fi
-    prompt CLIENT_DOMAIN "$(step_label 6 6 "Домен VPN для клиентов (пусто = IP сервера)")"
+    prompt CLIENT_DOMAIN "$(step_label 6 6 "Домен VPN для клиентов (пусто = IP сервера; например example.com)")"
     if [ -n "$CLIENT_DOMAIN" ]; then
         CLIENT_DOMAIN_SET=1
         BIND_CLIENTS=1
@@ -367,12 +373,22 @@ AWG_PORT="${AWG_PORT:-$DEFAULT_AWG_PORT}"
 validate_port "$AWG_PORT" || die_usage "--awg-port must be an integer in 1..65535 (got: $AWG_PORT)"
 
 if [ "$DOMAIN_SET" = "1" ] && [ -n "$DOMAIN" ]; then
-    validate_fqdn "$DOMAIN" || die_usage "--panel-domain/--domain must be a valid FQDN (got: $DOMAIN)"
+    if ! validate_fqdn "$DOMAIN"; then
+        if [ "$NONINTERACTIVE" = "0" ]; then
+            die_op "некорректный домен панели (буквы, цифры, дефис; точки между частями; например panel.example.com; пусто = IP)"
+        fi
+        die_usage "--panel-domain/--domain must be a valid FQDN (got: $DOMAIN)"
+    fi
     validate_safe "$DOMAIN" || die_usage "invalid --panel-domain/--domain (unsupported characters)"
 fi
 if [ "$CLIENT_DOMAIN_SET" = "1" ]; then
     [ -n "$CLIENT_DOMAIN" ] || die_usage "empty --vpn-domain/--client-domain"
-    validate_fqdn "$CLIENT_DOMAIN" || die_usage "--vpn-domain/--client-domain must be a valid FQDN (got: $CLIENT_DOMAIN)"
+    if ! validate_fqdn "$CLIENT_DOMAIN"; then
+        if [ "$NONINTERACTIVE" = "0" ]; then
+            die_op "некорректный домен VPN (буквы, цифры, дефис; точки между частями; например example.com; пусто = IP)"
+        fi
+        die_usage "--vpn-domain/--client-domain must be a valid FQDN (got: $CLIENT_DOMAIN)"
+    fi
     validate_safe "$CLIENT_DOMAIN" || die_usage "invalid --vpn-domain/--client-domain (unsupported characters)"
     BIND_CLIENTS=1
 fi

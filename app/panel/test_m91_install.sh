@@ -994,6 +994,19 @@ test_domain_invalid_fqdn() {
     pass "invalid --domain values rejected (exit 2)"
 }
 
+test_hyphenated_fqdn_en_us() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(LC_ALL=en_US.UTF-8 run_install --panel-domain panel.super-space.com.de --vpn-domain super-space.com.de)"
+    [ "$rc" = "0" ] || { fail "hyphenated FQDN en_US: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q "https://panel.super-space.com.de" "$TMP_TEST/out" \
+        && pass "hyphenated FQDN en_US: --panel-domain panel.super-space.com.de accepted" \
+        || fail "hyphenated FQDN en_US: panel URL missing (FQDN rejected under en_US?)"
+    grep -q "endpoint super-space.com.de" "$TMP_TEST/out" \
+        && pass "hyphenated FQDN en_US: --vpn-domain super-space.com.de accepted" \
+        || fail "hyphenated FQDN en_US: vpn domain missing from endpoint hint"
+}
+
 # --- T-124: panel IP:port mode (self-signed TLS) ------------------------
 
 test_panel_port_mode_flow() {
@@ -1419,6 +1432,7 @@ test_domain_dns_mismatch
 test_domain_dns_missing
 test_domain_certbot_failure
 test_domain_invalid_fqdn
+test_hyphenated_fqdn_en_us
 test_panel_port_mode_flow
 test_panel_port_loopback_matrix
 test_panel_port_invalid_values
