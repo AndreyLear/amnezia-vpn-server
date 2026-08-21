@@ -64,6 +64,9 @@ PUBLIC_IP=2.26.93.192
 DNS_A=2.26.93.192
 DNS_AAAA=
 CERTBOT_RC=0
+APT_LOCK_FAILS=0
+APT_LOCK_ALWAYS=0
+APT_FUSER_BUSY_REMAINING=0
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -149,14 +152,53 @@ cat > "$FAKE_DIR/apt-get" <<'FAKE_EOF'
 #!/bin/bash
 echo "apt-get $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
+lock_msg() {
+    printf '%s\n' "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 10849 (unattended-upgr)" >&2
+}
+if [ "${APT_LOCK_ALWAYS:-0}" = "1" ]; then
+    lock_msg
+    exit 100
+fi
+if [ "${APT_LOCK_FAILS:-0}" -gt 0 ] 2>/dev/null; then
+    n=$((APT_LOCK_FAILS - 1))
+    sed "s|^APT_LOCK_FAILS=.*|APT_LOCK_FAILS=${n}|" "$FAKE_STATE" \
+        > "$FAKE_STATE.new" && mv "$FAKE_STATE.new" "$FAKE_STATE"
+    lock_msg
+    exit 100
+fi
 if [ "${1:-}" = "install" ]; then
     touch "$FAKE_FS/apt-installed"
     if [ -n "$NEW_COMPOSE_VERSION" ]; then
         sed "s|^COMPOSE_VERSION=.*|COMPOSE_VERSION=${NEW_COMPOSE_VERSION}|" "$FAKE_STATE" \
             > "$FAKE_STATE.new" && mv "$FAKE_STATE.new" "$FAKE_STATE"
     fi
+    case " $* " in
+        *" nginx "*)
+            cat > "${FAKE_DIR}/nginx" <<'NGINX'
+#!/bin/bash
+echo "nginx $*" >> "${FAKE_CALLS:?}"
+exit 0
+NGINX
+            chmod +x "${FAKE_DIR}/nginx"
+            ;;
+    esac
 fi
 exit 0
+FAKE_EOF
+
+# Shadows host fuser (macOS fuser is not the Debian dpkg helper).
+cat > "$FAKE_DIR/fuser" <<'FAKE_EOF'
+#!/bin/bash
+echo "fuser $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+n="${APT_FUSER_BUSY_REMAINING:-0}"
+if [ "$n" -gt 0 ] 2>/dev/null; then
+    sed "s|^APT_FUSER_BUSY_REMAINING=.*|APT_FUSER_BUSY_REMAINING=$((n - 1))|" "$FAKE_STATE" \
+        > "$FAKE_STATE.new" && mv "$FAKE_STATE.new" "$FAKE_STATE"
+    printf '%s\n' "10849" >&2
+    exit 0
+fi
+exit 1
 FAKE_EOF
 
 cat > "$FAKE_DIR/systemctl" <<'FAKE_EOF'
@@ -299,7 +341,7 @@ FAKE_EOF
 
 chmod +x "$FAKE_DIR/curl" "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot" "$FAKE_DIR/openssl"
 
-chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl"
+chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/fuser" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl"
 
 # M9.2c fakes: the installer probes the AmneziaWG client stack and
 # manages the docker/ufw forward-accept coexistence rules.
@@ -496,6 +538,56 @@ test_compose_old_upgraded() {
         || fail "compose<2.24.2: official repo install did not run"
     grep -q "docker-compose-plugin" "$FAKE_CALLS" && pass "compose<2.24.2: compose plugin in install set" \
         || fail "compose<2.24.2: compose plugin missing from install set"
+}
+
+test_apt_retries_after_dpkg_lock() {
+    # First apt-get install nginx fails with lock-frontend (unattended-upgr);
+    # after a short wait the next call succeeds. Install must exit 0, not
+    # "apt-get install nginx failed".
+    fakes_reset
+    setstate APT_LOCK_FAILS 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rm -f "$FAKE_DIR/nginx"
+    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=8 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "dpkg lock retry: exit $rc, want 0"
+    if grep -q "apt-get install nginx failed" "$TMP_TEST/err"; then
+        fail "dpkg lock retry: died with nginx apt-get failure"
+    else
+        pass "dpkg lock retry: did not abort as nginx apt-get failure"
+    fi
+    grep -q "apt-get install -y nginx" "$FAKE_CALLS" && pass "dpkg lock retry: apt-get install nginx ran" \
+        || fail "dpkg lock retry: apt-get install nginx was not invoked"
+    cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
+#!/bin/bash
+echo "nginx $*" >> "${FAKE_CALLS:?}"
+exit 0
+FAKE_EOF
+    chmod +x "$FAKE_DIR/nginx"
+}
+
+test_apt_dpkg_lock_timeout() {
+    fakes_reset "2.19.6"
+    setstate APT_LOCK_ALWAYS 1 "$FAKE_STATE"
+    os_release ubuntu 22.04 jammy
+    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=0 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install)"
+    [ "$rc" = "1" ] || fail "dpkg lock timeout: exit $rc, want 1"
+    grep -q "install: ERROR:.*lock-frontend" "$TMP_TEST/err" \
+        && pass "dpkg lock timeout: names lock-frontend" \
+        || fail "dpkg lock timeout: lock-frontend missing from install ERROR"
+    grep -qi "rerun" "$TMP_TEST/err" && pass "dpkg lock timeout: rerun is safe" \
+        || fail "dpkg lock timeout: rerun-safe message missing"
+    grep -q "unattended-upgr" "$TMP_TEST/err" && pass "dpkg lock timeout: names locking process" \
+        || fail "dpkg lock timeout: unattended-upgr missing from error"
+    if grep -qiE 'rm[[:space:]]|delete.*lock|remove.*lock' "$TMP_TEST/err"; then
+        fail "dpkg lock timeout: told operator to delete the lock"
+    else
+        pass "dpkg lock timeout: does not tell operator to delete the lock"
+    fi
+    if grep -q "still missing or < 2.24.2" "$TMP_TEST/err"; then
+        fail "dpkg lock timeout: continued past apt instead of dying on the lock"
+    else
+        pass "dpkg lock timeout: stopped on the dpkg lock"
+    fi
 }
 
 test_compose_old_still_old() {
@@ -1394,12 +1486,15 @@ test_idempotent_rerun() {
 
 # --- main ---------------------------------------------------------------
 
+m91_run_all() {
 test_bash_syntax
 test_unsupported_os
 test_supported_os_matrix
 test_compose_current_skips_apt
 test_docker_missing_installs
 test_compose_old_upgraded
+test_apt_retries_after_dpkg_lock
+test_apt_dpkg_lock_timeout
 test_compose_old_still_old
 test_compose_minimum_boundary
 test_invalid_port
@@ -1453,6 +1548,15 @@ test_doctor_failure
 test_ssh_hint
 test_secrets_absent
 test_idempotent_rerun
+}
+
+if [ "$#" -gt 0 ]; then
+    for t in "$@"; do
+        "$t"
+    done
+else
+    m91_run_all
+fi
 
 echo
 if [ "$M91_ERRORS" -eq 0 ]; then

@@ -96,6 +96,10 @@
 #   AMNEZIA_INSTALL_SKIP_PRUNE=1       skip docker-prune.sh after compose
 #                                      build (keep golang toolchain /
 #                                      builder cache; testability)
+#   AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC  how long to wait for a busy
+#                                      dpkg lock-frontend (default 600)
+#   AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC poll/sleep interval while waiting
+#                                      (default 5; tests use 0)
 #
 # Security contract: no secrets are ever accepted, logged or printed;
 # .env is created only when absent, with 0600; the panel stays
@@ -378,6 +382,75 @@ log "OS check: $os_id $os_version ($os_codename)"
 
 cmd() { command "$@"; }
 
+DPKG_LOCK_FRONTEND="/var/lib/dpkg/lock-frontend"
+DPKG_LOCK="/var/lib/dpkg/lock"
+
+# run_apt_get: every apt-get update/install waits for a free dpkg lock
+# (unattended-upgrades) instead of dying immediately. Does not kill the
+# holder and does not remove lock files. Timeout/poll are overridable
+# for tests via AMNEZIA_INSTALL_DPKG_LOCK_*.
+dpkg_lock_held() {
+    command -v fuser >/dev/null 2>&1 || return 1
+    cmd fuser "$DPKG_LOCK_FRONTEND" >/dev/null 2>&1 && return 0
+    cmd fuser "$DPKG_LOCK" >/dev/null 2>&1 && return 0
+    return 1
+}
+
+dpkg_lock_die() {
+    local extra="${1:-}"
+    if [ -n "$extra" ]; then
+        die_op "timed out waiting for ${DPKG_LOCK_FRONTEND} (${extra}); rerun install.sh is safe"
+    fi
+    die_op "timed out waiting for ${DPKG_LOCK_FRONTEND}; rerun install.sh is safe"
+}
+
+dpkg_lock_holder_from_apt() {
+    printf '%s\n' "$1" | sed -n 's/.*held by process \([0-9][0-9]*\) (\([^)]*\)).*/held by process \1 (\2)/p' | head -1
+}
+
+wait_for_dpkg_lock() {
+    local deadline="$1" poll holder
+    poll="${AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC:-5}"
+    while dpkg_lock_held; do
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            holder="$(cmd fuser "$DPKG_LOCK_FRONTEND" 2>/dev/null | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')"
+            if [ -n "$holder" ]; then
+                dpkg_lock_die "held by process ${holder}"
+            fi
+            dpkg_lock_die
+        fi
+        log "waiting for ${DPKG_LOCK_FRONTEND}"
+        sleep "$poll"
+    done
+}
+
+run_apt_get() {
+    local timeout poll deadline rc out holder
+    timeout="${AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC:-600}"
+    poll="${AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC:-5}"
+    deadline=$(( $(date +%s) + timeout ))
+    wait_for_dpkg_lock "$deadline"
+    while true; do
+        out="$(cmd apt-get "$@" 2>&1)"
+        rc=$?
+        [ -n "$out" ] && printf '%s\n' "$out" >&2
+        if [ "$rc" -eq 0 ]; then
+            return 0
+        fi
+        if printf '%s\n' "$out" | grep -q 'Could not get lock /var/lib/dpkg/lock-frontend'; then
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+                holder="$(dpkg_lock_holder_from_apt "$out")"
+                dpkg_lock_die "$holder"
+            fi
+            log "apt-get: ${DPKG_LOCK_FRONTEND} busy; retrying"
+            sleep "$poll"
+            wait_for_dpkg_lock "$deadline"
+            continue
+        fi
+        return "$rc"
+    done
+}
+
 compose_version_min() { # docker compose version -> true when >= 2.24.2
     # The compose.yaml contract (env_file long syntax with
     # `path`/`required`) needs Compose >= 2.24.2 — older 2.20–2.23
@@ -413,8 +486,8 @@ docker_compose_ok() {
 
 docker_install() {
     log "installing Docker Engine + Compose plugin from the official Docker Inc. repository"
-    cmd apt-get update
-    cmd apt-get install -y ca-certificates curl
+    run_apt_get update
+    run_apt_get install -y ca-certificates curl
     mkdir -p "$KEYRING_DIR" || die_op "cannot create keyring dir $KEYRING_DIR"
     chmod 0755 "$KEYRING_DIR"
     cmd curl -fsSL "https://download.docker.com/linux/${os_id}/gpg" -o "$KEYRING_DIR/docker.asc"
@@ -422,8 +495,8 @@ docker_install() {
     printf 'deb [arch=amd64 signed-by=%s] https://download.docker.com/linux/%s %s stable\n' \
         "$KEYRING_DIR/docker.asc" "$os_id" "$os_codename" \
         > "$APT_SOURCES_DIR/docker.list"
-    cmd apt-get update
-    cmd apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    run_apt_get update
+    run_apt_get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 }
 
 if docker_compose_ok; then
@@ -515,10 +588,10 @@ if [ -z "${AMNEZIA_INSTALL_FORCE_AWG_INSTALL:-}" ] && amneziawg_available; then
     log "AmneziaWG client stack already present (kernel module + awg tools)"
 else
     log "installing AmneziaWG client stack from the official PPA (ppa:amnezia/ppa)"
-    cmd apt-get update
-    cmd apt-get install -y software-properties-common linux-headers-"$(cmd uname -r)"
+    run_apt_get update
+    run_apt_get install -y software-properties-common linux-headers-"$(cmd uname -r)"
     cmd add-apt-repository -y ppa:amnezia/ppa
-    DEBIAN_FRONTEND=noninteractive cmd apt-get install -y amneziawg amneziawg-tools
+    DEBIAN_FRONTEND=noninteractive run_apt_get install -y amneziawg amneziawg-tools
     mkdir -p "$MODULES_DIR" || die_op "cannot create modules-load dir $MODULES_DIR"
     printf 'amneziawg\n' > "$MODULES_FILE"
     chmod 0644 "$MODULES_FILE"
@@ -676,7 +749,7 @@ fi
 dns_preflight() {
     local fqdn="$1" pub_ip dns_a dns_aaaa
     if ! command -v dig >/dev/null 2>&1; then
-        cmd apt-get install -y dnsutils || die_op "apt-get install dnsutils failed (DNS pre-flight)"
+        run_apt_get install -y dnsutils || die_op "apt-get install dnsutils failed (DNS pre-flight)"
     fi
     pub_ip="$(cmd curl -fsS https://api.ipify.org 2>/dev/null | tr -d '[:space:]')"
     [ -n "$pub_ip" ] || die_op "cannot determine the public IP of this server (curl api.ipify.org)"
@@ -846,7 +919,7 @@ net_setup() {
 
     if ! command -v nft >/dev/null 2>&1; then
         log "nft(8) missing: installing the nftables package"
-        cmd apt-get install -y nftables || die_op "apt-get install nftables failed"
+        run_apt_get install -y nftables || die_op "apt-get install nftables failed"
     fi
 
     local subnet port input_rules
@@ -1086,7 +1159,7 @@ domain_setup() {
     dns_preflight "$DOMAIN"
 
     if ! command -v nginx >/dev/null 2>&1; then
-        cmd apt-get install -y nginx || die_op "apt-get install nginx failed"
+        run_apt_get install -y nginx || die_op "apt-get install nginx failed"
     fi
     mkdir -p "$NGINX_CONF_DIR" "$ACME_ROOT" || die_op "cannot create nginx/acme dirs"
     chmod 0750 "$NGINX_CONF_DIR"
@@ -1103,7 +1176,7 @@ domain_setup() {
     fi
 
     if ! command -v certbot >/dev/null 2>&1; then
-        cmd apt-get install -y certbot || die_op "apt-get install certbot failed"
+        run_apt_get install -y certbot || die_op "apt-get install certbot failed"
     fi
     if ! certbot certonly --webroot -w "$ACME_ROOT" -d "$DOMAIN" \
         --non-interactive --agree-tos --register-unsafely-without-email \
@@ -1167,7 +1240,7 @@ panel_port_setup() {
 
     log "panel IP:port mode: nginx TLS on port $PANEL_PORT (self-signed)"
     if ! command -v openssl >/dev/null 2>&1; then
-        cmd apt-get install -y openssl || die_op "apt-get install openssl failed"
+        run_apt_get install -y openssl || die_op "apt-get install openssl failed"
     fi
     local pub_ip
     pub_ip="$(cmd curl -fsS https://api.ipify.org 2>/dev/null | tr -d '[:space:]')"
@@ -1200,7 +1273,7 @@ panel_port_setup() {
     fi
 
     if ! command -v nginx >/dev/null 2>&1; then
-        cmd apt-get install -y nginx || die_op "apt-get install nginx failed"
+        run_apt_get install -y nginx || die_op "apt-get install nginx failed"
     fi
     mkdir -p "$NGINX_CONF_DIR" || die_op "cannot create nginx conf dir"
     chmod 0750 "$NGINX_CONF_DIR"
