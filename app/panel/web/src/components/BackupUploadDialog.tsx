@@ -128,6 +128,11 @@ export function BackupUploadDialog({
     clearMiss();
   }
 
+  function openPicker() {
+    if (pending || restorePending) return;
+    inputRef.current?.click();
+  }
+
   async function upload(next: File) {
     setPending(true);
     try {
@@ -199,13 +204,22 @@ export function BackupUploadDialog({
           <div className="grid gap-4">
             {isSmUp ? (
               <label
-                className={`grid min-w-0 cursor-pointer gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm transition-colors duration-500 motion-reduce:duration-0 ${
+                className={`grid min-w-0 gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm transition-colors duration-500 motion-reduce:duration-0 ${
+                  restorePending ? "cursor-not-allowed" : "cursor-pointer"
+                } ${
                   dragOver
                     ? "border-primary bg-muted"
                     : miss
                       ? "border-destructive"
                       : "border-border hover:border-input"
                 }`}
+                onClick={(e) => {
+                  if (e.target === inputRef.current) {
+                    return;
+                  }
+                  e.preventDefault();
+                  openPicker();
+                }}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -237,7 +251,7 @@ export function BackupUploadDialog({
                     miss ? "border-destructive" : ""
                   }`}
                   disabled={pending || restorePending}
-                  onClick={() => inputRef.current?.click()}
+                  onClick={() => openPicker()}
                 >
                   Выберите файл на устройстве
                 </Button>

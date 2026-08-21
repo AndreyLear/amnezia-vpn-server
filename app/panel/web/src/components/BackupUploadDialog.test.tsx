@@ -238,4 +238,32 @@ describe("BackupUploadDialog", () => {
       ".tar.zst",
     );
   });
+
+  it("opens the file picker when the desktop dropzone is clicked", async () => {
+    const user = userEvent.setup();
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, "click");
+    render(<BackupUploadDialog open onOpenChange={() => {}} />);
+
+    const dropzone = screen
+      .getByText("Перетащите файл сюда или выберите на диске")
+      .closest("label");
+    await user.click(dropzone!);
+
+    expect(clickSpy).toHaveBeenCalled();
+  });
+
+  it("does not look clickable when restore is pending", async () => {
+    const user = userEvent.setup();
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, "click");
+    render(<BackupUploadDialog open restorePending onOpenChange={() => {}} />);
+
+    const dropzone = screen
+      .getByText("Перетащите файл сюда или выберите на диске")
+      .closest("label");
+    expect(dropzone?.className.split(/\s+/)).not.toContain("cursor-pointer");
+    expect(dropzone?.className.split(/\s+/)).toContain("cursor-not-allowed");
+
+    await user.click(dropzone!);
+    expect(clickSpy).not.toHaveBeenCalled();
+  });
 });
