@@ -84,6 +84,19 @@ case "$cmd" in
             fi
             exit "${INSTALL_RC}"
         fi
+        # Every install replays the same milestone log; the panel-port
+        # variant only adds its TLS lines on top.
+        printf '%s\n' \
+            "install: OS check: ubuntu 24.04 (noble) supported" \
+            "install: installing Docker Engine + Compose plugin from the official Docker Inc repository" \
+            "install: persisting managed sysctl drop-in /etc/sysctl.d/99-amnezia-vpn.conf" \
+            "install: AmneziaWG client stack already present (kernel module + awg tools)" \
+            "install: deployment files installed (compose.yaml, versions.lock, docker-prune.sh)" \
+            "install: tunnel MTU 1416 (a full packet costs 1476 bytes on a 1476-byte path)" \
+            "install: WARNING: sysctl -w net.core.rmem_max=16777216 failed; continuing" \
+            "install: building the stack images (pinned versions from versions.lock)" \
+            "install: starting the stack" \
+            "install: self-check: Docker daemon reachable (docker info)"
         if printf '%s' "$cmd" | grep -q -- "--panel-port"; then
             printf '%s\n' \
                 "install: DONE — the AmneziaWG VPN Server stack is deployed." \
@@ -853,6 +866,41 @@ test_default_panel_port_without_domain() {
     assert_no_ansi "default panel-port"
 }
 
+# Somebody who just pasted a curl command should never be left staring at a
+# still terminal: the image build alone takes ten to thirty minutes on the
+# 1-vCPU hosts this gets installed on.
+test_install_progress_is_visible() {
+    fakes_reset
+    rm -f "$FAKE_HOME/.ssh/id_ed25519" "$FAKE_HOME/.ssh/id_rsa"
+    SSH_TEST_PW='s3cret-NOT-on-argv'
+    export SSH_TEST_PW
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" SSH_TEST_PW="$SSH_TEST_PW" \
+        bash "$BOOTSTRAP_SH" --ip 2.26.93.192 --password-env SSH_TEST_PW \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+        echo $?
+    )"
+    unset SSH_TEST_PW
+    [ "$rc" = "0" ] || { fail "progress flow: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    for marker in \
+        "[1/9] Проверяю систему" \
+        "[2/9] Устанавливаю Docker" \
+        "[7/9] Собираю образы" \
+        "[8/9] Запускаю сервисы" \
+        "[9/9] Проверяю установку"; do
+        stderr | grep -qF "$marker" \
+            && pass "progress shown: $marker" \
+            || fail "progress step missing: $marker"
+    done
+    stderr | grep -qF "Полная загрузка процессора в это время нормальна" \
+        && pass "the long build explains itself" \
+        || fail "the build step must explain the wait and the CPU load"
+    stderr | grep -q "WARNING: sysctl -w net.core.rmem_max" \
+        && pass "installer warnings still reach the operator" \
+        || fail "installer warnings must not be swallowed"
+    assert_no_ansi "progress"
+}
+
 # --- main ---------------------------------------------------------------
 
 test_bash_syntax
@@ -883,6 +931,7 @@ test_source_url
 test_sshpass_missing
 test_invalid_panel_port
 test_default_panel_port_without_domain
+test_install_progress_is_visible
 
 echo
 if [ "$M123_ERRORS" -eq 0 ]; then

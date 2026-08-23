@@ -651,10 +651,59 @@ bash ./install.sh $INSTALL_FLAGS
 EOF
 )
 
+# --- installer progress ------------------------------------------------
+# install.sh logs one line per action; piping that raw at somebody who just
+# pasted a curl command is noise, and hiding it entirely (which is what this
+# used to do) leaves them staring at a still terminal for the ten to thirty
+# minutes the image build takes. Translate the milestones into numbered
+# steps and keep the full log in a file for diagnosis.
+PROGRESS_TOTAL=9
+PROGRESS_STEP=0
+
+progress_step() { # progress_step N TEXT
+    [ "$1" -gt "$PROGRESS_STEP" ] || return 0
+    PROGRESS_STEP="$1"
+    printf 'bootstrap: [%s/%s] %s\n' "$1" "$PROGRESS_TOTAL" "$2" >&2
+}
+
+install_progress() { # stdin: the installer log; also written to $INSTALL_OUT
+    local line
+    while IFS= read -r line; do
+        printf '%s\n' "$line" >> "$INSTALL_OUT"
+        case "$line" in
+            *"OS check:"*)
+                progress_step 1 "Проверяю систему" ;;
+            *"installing Docker Engine"*|*"Docker Compose: already present"*)
+                progress_step 2 "Устанавливаю Docker" ;;
+            *"persisting managed sysctl drop-in"*)
+                progress_step 3 "Настраиваю ядро и сетевые оптимизации" ;;
+            *"AmneziaWG client stack"*)
+                progress_step 4 "Устанавливаю AmneziaWG" ;;
+            *"deployment files installed"*)
+                progress_step 5 "Разворачиваю файлы на сервере" ;;
+            *"tunnel MTU"*)
+                progress_step 6 "Измеряю канал сервера" ;;
+            *"building the stack images"*)
+                progress_step 7 "Собираю образы — самый долгий шаг, обычно 10–30 минут. Полная загрузка процессора в это время нормальна" ;;
+            *"starting the stack"*)
+                progress_step 8 "Запускаю сервисы" ;;
+            *"self-check:"*|*"TLS certificate"*)
+                progress_step 9 "Проверяю установку" ;;
+            *ERROR*|*WARNING*)
+                # Never swallow a problem: these are what the operator has
+                # to act on, and they already carry an "install:" prefix.
+                printf '%s\n' "$line" >&2 ;;
+        esac
+    done
+}
+
 log "running install.sh on the server"
 INSTALL_OUT="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-install.XXXXXX")"
-remote_cmd "$REMOTE_INSTALL" > "$INSTALL_OUT" 2>&1
-INSTALL_RC=$?
+# Pipe the installer log through the progress filter: the filter keeps the
+# full log in a file for diagnosis and prints only milestones, so somebody
+# who just pasted a curl command can see what the machine is doing.
+remote_cmd "$REMOTE_INSTALL" 2>&1 | install_progress
+INSTALL_RC=${PIPESTATUS[0]}
 if [ "$INSTALL_RC" -ne 0 ]; then
     if grep -q "Create an A record" "$INSTALL_OUT" 2>/dev/null; then
         printf 'bootstrap: ERROR: install.sh failed: DNS record does not match this server.\n' >&2
