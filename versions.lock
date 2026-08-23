@@ -2,6 +2,12 @@
 # All versions are intentionally pinned.
 # Do not use latest/master in production builds.
 
+# Published container images. install.sh pulls exactly this version from
+# GHCR; --build rebuilds the same sources locally instead. The registry
+# path must stay lowercase — GHCR rejects anything else.
+IMAGE_REGISTRY=ghcr.io/andreylear/amnezia-vpn-server
+IMAGE_VERSION=2.0.0
+
 # Go toolchain
 GO_VERSION=1.25.12
 
