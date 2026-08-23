@@ -784,7 +784,10 @@ client_domain_setup
 TUNNEL_ENCAP_OVERHEAD=60
 TUNNEL_MTU_CEILING=1420   # never exceed the historical WireGuard default
 TUNNEL_MTU_FLOOR=1280     # IPv6 minimum link MTU: every path must carry it
-UPLINK_PMTU_TARGETS="${AMNEZIA_INSTALL_PMTU_TARGETS:-1.1.1.1 8.8.8.8}"
+# ${VAR-default}, not ${VAR:-default}: an explicitly empty value means
+# "do not measure" (the harnesses set it that way for the runs that are
+# not about MTU), while an unset variable takes the real targets.
+UPLINK_PMTU_TARGETS="${AMNEZIA_INSTALL_PMTU_TARGETS-1.1.1.1 8.8.8.8}"
 
 # probe_pmtu TARGET: largest ICMP payload that reaches TARGET unfragmented,
 # as a full IP packet size; empty when the target does not answer at all.
