@@ -28,7 +28,9 @@ trap 'rm -rf "$FAKE_DIR" "$TMP_TEST"' EXIT
 
 setstate() {
     local key="$1" value="$2" file="$3"
-    sed "s|^${key}=.*|${key}=${value}|" "$file" > "$file.new" && mv "$file.new" "$file"
+    # Quote the value: the state file is sourced, so a value with spaces
+    # would otherwise be read as an assignment followed by a command.
+    sed "s|^${key}=.*|${key}=\"${value}\"|" "$file" > "$file.new" && mv "$file.new" "$file"
 }
 
 fakes_reset() {
@@ -53,6 +55,7 @@ INIT_STDERR=
 CURL_SOURCE_RC=0
 UP_RC=0
 ADDUSER_RC=0
+ADDUSER_STDERR=
 CURL_PANEL_RC=0
 CURL_PANEL_CODE=200
 PUBLIC_IP=2.26.93.192
@@ -117,6 +120,7 @@ case "$cmd" in
         exit "${UP_RC:-0}"
         ;;
     *'add-user'*)
+        [ -n "${ADDUSER_STDERR:-}" ] && printf '%s\n' "${ADDUSER_STDERR}" >&2
         exit "${ADDUSER_RC:-0}"
         ;;
     *api.ipify.org*)
@@ -1027,6 +1031,35 @@ test_failed_pack_explains_itself() {
         || fail "the failure must name what it tried to fetch"
 }
 
+# Same shape as the server-row case: a run that was interrupted leaves the
+# admin behind, and the wizard is the first thing anyone reruns. It used to
+# die on "auth user already exists" against a working system.
+test_rerun_survives_existing_admin() {
+    fakes_reset
+    setstate ADDUSER_RC 1 "$FAKE_STATE"
+    setstate ADDUSER_STDERR "panel auth add-user: db: auth user already exists" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" = "0" ] || fail "rerun with an existing admin: exit $rc, want 0"
+    # The generated password was never applied, so printing it would be a lie.
+    stdout | grep -q "Password:  TmpP4ssw0rd" \
+        && fail "the summary printed a password that was never set" \
+        || pass "no invented password in the summary"
+    stdout | grep -qi "auth set-password" \
+        && pass "the summary shows how to change the password instead" \
+        || fail "the summary must show the set-password command"
+}
+
+# A real add-user failure still stops the wizard.
+test_real_adduser_failure_still_aborts() {
+    fakes_reset
+    setstate ADDUSER_RC 1 "$FAKE_STATE"
+    setstate ADDUSER_STDERR "panel auth add-user: db: disk I/O error" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" != "0" ] \
+        && pass "a real add-user failure still aborts" \
+        || fail "a real add-user failure must abort"
+}
+
 # --- main ---------------------------------------------------------------
 
 test_bash_syntax
@@ -1063,6 +1096,8 @@ test_failed_pack_explains_itself
 test_summary_points_at_the_server_for_passwords
 test_ssh_keepalive_tolerates_a_busy_host
 test_rerun_survives_existing_server_row
+test_rerun_survives_existing_admin
+test_real_adduser_failure_still_aborts
 test_real_init_failure_still_aborts
 
 echo
