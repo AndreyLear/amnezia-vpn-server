@@ -686,13 +686,29 @@ else
     run_apt_get update || die_op "apt-get update failed (AmneziaWG prerequisites)"
     run_apt_get install -y software-properties-common linux-headers-"$(cmd uname -r)" \
         || die_op "apt-get install software-properties-common/linux-headers failed"
-    # Takes the apt locks and runs its own update, so it waits like the
-    # apt calls do — and its failure is reported here rather than as a
-    # missing package two steps later.
-    wait_for_dpkg_lock "$(( $(date +%s) + ${AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC:-600} ))"
-    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-        cmd add-apt-repository -y ppa:amnezia/ppa \
-        || die_op "add-apt-repository ppa:amnezia/ppa failed"
+    # Takes the apt locks and runs its own update, so it waits like the apt
+    # calls do — and its failure is reported here rather than as a missing
+    # package two steps later.
+    #
+    # Launchpad also answers 500 with GPGKeyTemporarilyNotFoundError from time
+    # to time and has the key seconds later, so a single attempt would end an
+    # install over a hiccup on someone else's server.
+    ppa_attempts="${AMNEZIA_INSTALL_PPA_ATTEMPTS:-5}"
+    ppa_sleep="${AMNEZIA_INSTALL_PPA_RETRY_SLEEP:-10}"
+    ppa_try=1
+    while : ; do
+        wait_for_dpkg_lock "$(( $(date +%s) + ${AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC:-600} ))"
+        if DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+            cmd add-apt-repository -y ppa:amnezia/ppa; then
+            break
+        fi
+        if [ "$ppa_try" -ge "$ppa_attempts" ]; then
+            die_op "add-apt-repository ppa:amnezia/ppa failed after ${ppa_attempts} attempts; Launchpad may be unavailable — try again later"
+        fi
+        log "add-apt-repository ppa:amnezia/ppa failed (attempt ${ppa_try}/${ppa_attempts}); retrying in ${ppa_sleep}s"
+        sleep "$ppa_sleep"
+        ppa_try=$(( ppa_try + 1 ))
+    done
     run_apt_get install -y amneziawg amneziawg-tools \
         || die_op "apt-get install amneziawg amneziawg-tools failed"
     mkdir -p "$MODULES_DIR" || die_op "cannot create modules-load dir $MODULES_DIR"
