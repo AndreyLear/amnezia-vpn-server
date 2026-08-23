@@ -118,7 +118,8 @@ func TestMTUFromSettingsHonoursStoredValue(t *testing.T) {
 // breaks the tunnel: the operator has to see the error.
 func TestMTUFromSettingsRejectsGarbage(t *testing.T) {
 	handle, _ := newTestDB(t)
-	for _, bad := range []string{"", "abc", "9000", "1279"} {
+	// "" is not garbage: it means the key was never set (older archives).
+	for _, bad := range []string{"abc", "9000", "1279"} {
 		if err := db.SetSetting(handle, "mtu", bad); err != nil {
 			t.Fatalf("SetSetting: %v", err)
 		}

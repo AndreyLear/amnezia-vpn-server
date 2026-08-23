@@ -54,7 +54,9 @@ func postAPIRestoreWith(t *testing.T, f *fixture, fields map[string]string, data
 func archiveFromOtherHost(t *testing.T, f *fixture, dir, oldEndpoint, oldMTU, newEndpoint, newMTU string) []byte {
 	t.Helper()
 	setSetting(t, f, "endpoint", oldEndpoint)
-	setSetting(t, f, "mtu", oldMTU)
+	if oldMTU != "" {
+		setSetting(t, f, "mtu", oldMTU)
+	}
 	name := makeBackup(t, f, dir, time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC))
 	setSetting(t, f, "endpoint", newEndpoint)
 	setSetting(t, f, "mtu", newMTU)
@@ -155,6 +157,27 @@ func TestRestoreKeepsServerAddressWhenChosen(t *testing.T) {
 	}
 	if got := getSetting(t, f, "mtu"); got != "1416" {
 		t.Fatalf("mtu = %q, want the value measured for this uplink", got)
+	}
+}
+
+// The MTU belongs to this host's uplink, not to the backup: it is measured
+// during install and must survive a restore whichever address the operator
+// keeps. An archive taken before the setting existed carries none at all,
+// and letting that win puts the tunnel back on a guessed default.
+func TestRestoreKeepsMeasuredMTUWithArchiveAddress(t *testing.T) {
+	f := newFixture(t)
+	dir := setBackupsPath(t)
+	data := archiveFromOtherHost(t, f, dir, "old.example.com:443", "", "2.26.93.192:443", "1416")
+
+	rec := postAPIRestoreWith(t, f, map[string]string{"endpoint": "archive"}, data)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := getSetting(t, f, "endpoint"); got != "old.example.com:443" {
+		t.Fatalf("endpoint = %q, want the archived address", got)
+	}
+	if got := getSetting(t, f, "mtu"); got != "1416" {
+		t.Fatalf("mtu = %q, want this host's measured 1416", got)
 	}
 }
 
