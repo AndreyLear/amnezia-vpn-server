@@ -18,14 +18,14 @@ describe("BackupUploadDialog drop", () => {
 
   it("uses a brighter hover border on the idle dashed dropzone", () => {
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
-    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
+    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest('[role="button"]');
     expect(dropzone?.className).toContain("border-border");
     expect(dropzone?.className).toContain("hover:border-input");
   });
 
   it("keeps a primary border while dragging over the dashed dropzone", () => {
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
-    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
+    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest('[role="button"]');
     fireEvent.dragOver(dropzone!, {
       dataTransfer: { files: [new File(["archive"], archiveName)] },
     });
@@ -34,7 +34,7 @@ describe("BackupUploadDialog drop", () => {
 
   it("accepts a dropped backup archive", () => {
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
-    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
+    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest('[role="button"]');
     expect(dropzone).toBeTruthy();
     const file = new File(["archive"], archiveName);
     fireEvent.drop(dropzone!, {
@@ -46,7 +46,7 @@ describe("BackupUploadDialog drop", () => {
 
   it("rejects notes.txt dropped on the dashed box", () => {
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
-    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
+    const dropzone = screen.getByText("Перетащите файл сюда или выберите на диске").closest('[role="button"]');
     fireEvent.drop(dropzone!, {
       dataTransfer: { files: [new File(["x"], "notes.txt")] },
     });
@@ -80,7 +80,7 @@ describe("BackupUploadDialog drop", () => {
       dataTransfer: { files: [file] },
     });
     expect(dragOver).toBe(false);
-    const label = screen.getByText("Перетащите файл сюда или выберите на диске").closest("label");
+    const label = screen.getByText("Перетащите файл сюда или выберите на диске").closest('[role="button"]');
     expect(label?.className).toContain("border-primary");
     fireEvent.drop(overlay!, {
       dataTransfer: { files: [file] },

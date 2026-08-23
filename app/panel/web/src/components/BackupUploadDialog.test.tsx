@@ -193,7 +193,7 @@ describe("BackupUploadDialog", () => {
 
       const dropzone = screen
         .getByText("Перетащите файл сюда или выберите на диске")
-        .closest("label");
+        .closest('[role="button"]');
       expect(DROPZONE_MISS_MS).toBe(1500);
       expect(dropzone?.className.split(/\s+/)).toContain("border-destructive");
       expect(dropzone?.className.split(/\s+/)).toContain("duration-500");
@@ -253,7 +253,7 @@ describe("BackupUploadDialog", () => {
 
     const dropzone = screen
       .getByText("Перетащите файл сюда или выберите на диске")
-      .closest("label");
+      .closest('[role="button"]');
     await user.click(dropzone!);
 
     expect(activated).toHaveBeenCalled();
@@ -266,7 +266,7 @@ describe("BackupUploadDialog", () => {
 
     const dropzone = screen
       .getByText("Перетащите файл сюда или выберите на диске")
-      .closest("label");
+      .closest('[role="button"]');
     expect(dropzone?.className.split(/\s+/)).not.toContain("cursor-pointer");
     expect(dropzone?.className.split(/\s+/)).toContain("cursor-not-allowed");
 
