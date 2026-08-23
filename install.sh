@@ -772,6 +772,80 @@ client_domain_setup() {
 
 client_domain_setup
 
+# --- 10c. tunnel MTU pre-flight (T-6ztc) ------------------------------
+# A full-size tunnel packet costs MTU + 60 bytes on the wire (32 AmneziaWG
+# header/tag + 8 UDP + 20 IPv4). awg-quick would size the tunnel from the
+# MTU of the default-route interface (1500 - 80 = 1420), which is wrong
+# whenever the uplink is itself tunnelled: hosting providers running
+# GRE/VXLAN hand out a 1500-byte interface over a 1476-byte path, and the
+# resulting 1480-byte packets are silently lost. Nobody installing this is
+# expected to work that out, so measure the path and store the answer;
+# `panel server init --mtu` picks it up from the deployment .env.
+TUNNEL_ENCAP_OVERHEAD=60
+TUNNEL_MTU_CEILING=1420   # never exceed the historical WireGuard default
+TUNNEL_MTU_FLOOR=1280     # IPv6 minimum link MTU: every path must carry it
+UPLINK_PMTU_TARGETS="${AMNEZIA_INSTALL_PMTU_TARGETS:-1.1.1.1 8.8.8.8}"
+
+# probe_pmtu TARGET: largest ICMP payload that reaches TARGET unfragmented,
+# as a full IP packet size; empty when the target does not answer at all.
+probe_pmtu() {
+    local target="$1" lo=1200 hi=1472 mid
+    # Most uplinks are clean 1500: check that first so the common case
+    # costs one probe instead of a full binary search.
+    if cmd ping -c1 -W2 -M do -s "$hi" "$target" >/dev/null 2>&1; then
+        printf '%s\n' "$(( hi + 28 ))"
+        return 0
+    fi
+    cmd ping -c1 -W2 -M do -s "$lo" "$target" >/dev/null 2>&1 || return 1
+    while [ $((hi - lo)) -gt 1 ]; do
+        mid=$(( (lo + hi) / 2 ))
+        if cmd ping -c1 -W2 -M do -s "$mid" "$target" >/dev/null 2>&1; then
+            lo="$mid"
+        else
+            hi="$mid"
+        fi
+    done
+    printf '%s\n' "$(( lo + 28 ))"
+}
+
+# measure_uplink_pmtu: the smallest path MTU seen across the probe targets,
+# so the tunnel is sized for the worst path, not the luckiest one.
+measure_uplink_pmtu() {
+    local target probe best=0
+    for target in $UPLINK_PMTU_TARGETS; do
+        probe="$(probe_pmtu "$target")" || continue
+        [ -n "$probe" ] || continue
+        if [ "$best" -eq 0 ] || [ "$probe" -lt "$best" ]; then
+            best="$probe"
+        fi
+    done
+    [ "$best" -gt 0 ] && printf '%s\n' "$best"
+}
+
+tunnel_mtu_preflight() {
+    local pmtu mtu
+    pmtu="$(measure_uplink_pmtu)"
+    if [ -z "$pmtu" ]; then
+        log "WARNING: could not measure the uplink path MTU (ICMP filtered?); the built-in default applies"
+        return 0
+    fi
+    mtu=$(( pmtu - TUNNEL_ENCAP_OVERHEAD ))
+    if [ "$mtu" -gt "$TUNNEL_MTU_CEILING" ]; then
+        mtu="$TUNNEL_MTU_CEILING"
+    fi
+    if [ "$mtu" -lt "$TUNNEL_MTU_FLOOR" ]; then
+        log "WARNING: uplink path MTU $pmtu is unusually small; clamping the tunnel to $TUNNEL_MTU_FLOOR"
+        mtu="$TUNNEL_MTU_FLOOR"
+    fi
+    if [ "$pmtu" -lt 1500 ]; then
+        log "uplink path MTU is $pmtu, not the usual 1500 (this uplink tunnels its own traffic)"
+    fi
+    log "tunnel MTU $mtu (a full packet costs $((mtu + TUNNEL_ENCAP_OVERHEAD)) bytes on a $pmtu-byte path)"
+    env_set TUNNEL_MTU "$mtu"
+}
+
+tunnel_mtu_preflight
+
 # --- 11. host networking: managed nftables ruleset (M9.2) --------------
 
 NFT_FRAGMENT="amnezia-vpn.nft"
@@ -824,6 +898,14 @@ table ip amnezia {
         # accept is seen even when a host firewall defaults FORWARD to
         # DROP — without touching any foreign rule.
         type filter hook forward priority -100; policy accept;
+        # Clamp TCP MSS to the outgoing route MTU. Path MTU Discovery is
+        # the only other thing keeping segments small enough for the
+        # tunnel, and it fails silently wherever the transit drops the
+        # ICMP fragmentation-needed reply (mobile carriers, PPPoE at
+        # 1492, plenty of home routers): small requests get through and
+        # large transfers stall. The clamp must precede the accepts —
+        # accept terminates the chain.
+        tcp flags syn tcp option maxseg size set rt mtu
         ip saddr $1 accept
         ip daddr $1 accept
     }

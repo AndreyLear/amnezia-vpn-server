@@ -701,7 +701,11 @@ fi
 # --- application bootstrap ---------------------------------------------
 
 log "initializing the server row"
-INIT_CMD="cd '$ROOT_DIR' && docker compose --env-file versions.lock run --rm panel-init /app/panel server init 10.8.0.1/24 '$AWG_PORT' --endpoint '$ENDPOINT' --dns 1.1.1.1,8.8.8.8"
+# install.sh measured the uplink path MTU and stored the resulting tunnel
+# MTU in the deployment .env; read it there (on the server, hence the
+# escaping) so the operator never has to work the number out. Missing value
+# = the panel's own safe default.
+INIT_CMD="cd '$ROOT_DIR' && MTU_ARG=\"\"; if [ -f .env ]; then TUNNEL_MTU=\"\$(sed -n 's/^TUNNEL_MTU=//p' .env | tail -1)\"; if [ -n \"\$TUNNEL_MTU\" ]; then MTU_ARG=\"--mtu \$TUNNEL_MTU\"; fi; fi; docker compose --env-file versions.lock run --rm panel-init /app/panel server init 10.8.0.1/24 '$AWG_PORT' --endpoint '$ENDPOINT' --dns 1.1.1.1,8.8.8.8 \$MTU_ARG"
 if ! remote_cmd "$INIT_CMD" >/dev/null; then
     die_op "application bootstrap failed: panel server init did not succeed"
 fi
