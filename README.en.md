@@ -16,7 +16,7 @@ VPN protocols are blocked.
 
 | | Minimum | Note |
 | --- | --- | --- |
-| System | Ubuntu 24.04 or 22.04, Debian 12 | the installer supports no other distributions |
+| System | Ubuntu 24.04 | recommended; Ubuntu 22.04 and Debian 12 are accepted too |
 | CPU | 1 core | measured on one core: 3–5 minutes to install, up to 45 MB/s throughput |
 | Memory | 1 GB, 2 GB is better | 2 GB leaves room as the client count grows |
 | Disk | 10 GB | images and the database take under 1 GB |
@@ -24,6 +24,20 @@ VPN protocols are blocked.
 
 Such a server costs 3–5 dollars a month at most hosting providers. Watch the
 traffic allowance: a VPN uses as much as its users do.
+
+**Which system to pick.** Use Ubuntu 24.04 — that is what this is tested on.
+AmneziaWG is installed from `ppa:amnezia/ppa`, an Ubuntu mechanism, and it
+brings a kernel module: the encryption runs in the kernel rather than in a
+separate process, which is where the throughput comes from. Ubuntu 22.04 works
+the same way.
+
+Debian 12 is accepted but untested here: the PPA is not native to it, and the
+module may fail to rebuild after a kernel upgrade, which stops the tunnel from
+coming up. Anything else — Rocky, Alma, Fedora, Arch, Alpine — is refused
+outright.
+
+There is nothing to gain from another distribution. Throughput comes from the
+host's uplink and core count, not from the OS.
 
 **A domain** is optional. Without one everything works over the server's IP
 address. With one you get a real certificate instead of a self-signed one, and
