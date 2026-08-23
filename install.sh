@@ -565,9 +565,32 @@ if ensure_bbr; then
 else
     log "skipping BBR sysctls: this kernel does not provide bbr"
 fi
+# Gateway tuning. Kernel defaults are sized for a desktop; each line
+# below is here for a reason that shows up on a VPN gateway:
+#   rmem/wmem_max     the tunnel is one UDP socket carrying every client,
+#                     and the default 208 KiB ceiling drops packets on
+#                     bursts (a ceiling, not an allocation)
+#   netdev_max_backlog  packets queued for softirq on a single-vCPU host
+#   ip_local_port_range masquerade needs translation ports; the default
+#                     32768-60999 leaves ~28k per destination
+#   tcp_slow_start_after_idle=0  keeps the window after idle gaps, which
+#                     is what long-lived downloads actually see
+#   conntrack established timeout  five days of state on a 2 GiB host is
+#                     memory spent on connections that ended long ago
+TUNING_SYSCTLS='net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.core.netdev_max_backlog=16384
+net.ipv4.ip_local_port_range=10240 65535
+net.ipv4.tcp_slow_start_after_idle=0
+net.netfilter.nf_conntrack_tcp_timeout_established=86400'
+
 {
     printf 'net.ipv4.ip_forward = 1\n'
     printf 'net.netfilter.nf_conntrack_max = 262144\n'
+    printf '%s\n' "$TUNING_SYSCTLS" | while IFS='=' read -r key value; do
+        [ -n "$key" ] || continue
+        printf '%s = %s\n' "$key" "$value"
+    done
     if [ "$HAVE_BBR" = "1" ]; then
         printf 'net.core.default_qdisc = fq\n'
         printf 'net.ipv4.tcp_congestion_control = bbr\n'
@@ -580,6 +603,11 @@ cmd sysctl -w net.ipv4.ip_forward=1 || die_op "sysctl -w net.ipv4.ip_forward=1 f
 
 cmd modprobe nf_conntrack 2>/dev/null || log "WARNING: modprobe nf_conntrack failed; continuing"
 apply_sysctl_warn net.netfilter.nf_conntrack_max=262144 || true
+# Applied one by one: a kernel without a given knob must warn, not abort.
+printf '%s\n' "$TUNING_SYSCTLS" | while IFS= read -r kv; do
+    [ -n "$kv" ] || continue
+    apply_sysctl_warn "$kv" || true
+done
 if [ "$HAVE_BBR" = "1" ]; then
     apply_sysctl_warn net.core.default_qdisc=fq || true
     apply_sysctl_warn net.ipv4.tcp_congestion_control=bbr || true

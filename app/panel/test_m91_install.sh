@@ -60,6 +60,7 @@ BUILDER_PRUNE_RC=0
 SYSCTL_IP_FORWARD_W_RC=0
 SYSCTL_CONNTRACK_W_RC=0
 SYSCTL_BBR_W_RC=0
+SYSCTL_TUNING_W_RC=0
 JOURNALD_RESTART_RC=0
 PUBLIC_IP=2.26.93.192
 DNS_A=2.26.93.192
@@ -253,6 +254,12 @@ case "$*" in
         ;;
     *"-w net.core.default_qdisc=fq"* | *"-w net.ipv4.tcp_congestion_control=bbr"*)
         exit "${SYSCTL_BBR_W_RC:-0}"
+        ;;
+    *"-w net.core.rmem_max="* | *"-w net.core.wmem_max="* \
+    | *"-w net.core.netdev_max_backlog="* | *"-w net.ipv4.ip_local_port_range="* \
+    | *"-w net.ipv4.tcp_slow_start_after_idle="* \
+    | *"-w net.netfilter.nf_conntrack_tcp_timeout_established="*)
+        exit "${SYSCTL_TUNING_W_RC:-0}"
         ;;
 esac
 exit 0
@@ -775,6 +782,46 @@ test_ip_forward_already_enabled() {
     fi
 }
 
+# A VPN gateway runs on kernel defaults sized for a desktop unless the
+# installer says otherwise: 208 KiB socket ceilings, ~28k NAT ports and a
+# five-day conntrack timeout on a 2 GiB host.
+test_sysctl_host_tuning() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "host tuning flow: exit $rc"
+    sysf="$SYSCTL_TEST/99-amnezia-vpn.conf"
+    [ -f "$sysf" ] || { fail "sysctl drop-in missing"; return 0; }
+    for kv in \
+        "net.core.rmem_max = 16777216" \
+        "net.core.wmem_max = 16777216" \
+        "net.core.netdev_max_backlog = 16384" \
+        "net.ipv4.ip_local_port_range = 10240 65535" \
+        "net.ipv4.tcp_slow_start_after_idle = 0" \
+        "net.netfilter.nf_conntrack_tcp_timeout_established = 86400"; do
+        grep -q "^${kv}$" "$sysf" \
+            && pass "tuning persisted: $kv" \
+            || fail "tuning missing from drop-in: $kv"
+    done
+    # ...and applied to the running kernel, not just written to a file.
+    grep -q "sysctl -w net.core.rmem_max=16777216" "$FAKE_CALLS" \
+        && pass "tuning applied to the running kernel" \
+        || fail "tuning must be applied with sysctl -w as well"
+}
+
+# A kernel that refuses one of the knobs must not fail the install.
+test_sysctl_host_tuning_survives_refusal() {
+    fakes_reset
+    sed 's|^SYSCTL_TUNING_W_RC=.*|SYSCTL_TUNING_W_RC=1|' "$FAKE_STATE" > "$FAKE_STATE.new" \
+        && mv "$FAKE_STATE.new" "$FAKE_STATE"
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "refused tuning must not abort the install: exit $rc"
+    stdout | grep -q "WARNING: sysctl -w net.core.rmem_max" \
+        && pass "refused tuning warns instead of aborting" \
+        || fail "refused tuning must warn"
+}
+
 test_sysctl_bbr_when_advertised() {
     fakes_reset
     os_release debian 12 bookworm
@@ -791,6 +838,8 @@ test_sysctl_bbr_when_advertised() {
 # tcp_available_congestion_control reads "reno cubic" and a check made
 # before modprobe concludes the kernel has no BBR — which is how the
 # optimisation ended up never being applied on a real install.
+test_sysctl_host_tuning
+test_sysctl_host_tuning_survives_refusal
 test_sysctl_bbr_loaded_from_module() {
     fakes_reset
     sed 's|^TCP_CC=.*|TCP_CC="cubic reno"|' "$FAKE_STATE" > "$FAKE_STATE.new" \
