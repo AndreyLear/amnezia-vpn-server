@@ -193,7 +193,7 @@ describe("BackupUploadDialog", () => {
 
       const dropzone = screen
         .getByText("Перетащите файл сюда или выберите на диске")
-        .closest('[role="button"]');
+        .closest('[data-testid="dropzone"]');
       expect(DROPZONE_MISS_MS).toBe(1500);
       expect(dropzone?.className.split(/\s+/)).toContain("border-destructive");
       expect(dropzone?.className.split(/\s+/)).toContain("duration-500");
@@ -239,24 +239,15 @@ describe("BackupUploadDialog", () => {
     );
   });
 
-  // The picker must open through the label's own activation of the nested
-  // input, not through a scripted input.click(): browsers treat a
-  // script-issued click during an already-handled event inconsistently and
-  // Safari refuses it, which is how the picker stopped opening at all.
-  it("opens the file picker when the desktop dropzone is clicked", async () => {
-    const user = userEvent.setup();
+  // The input covers the dropzone, so a click anywhere on the dashed box lands
+  // on the input itself and the browser opens its own dialog. Nothing calls
+  // click() on it: that is the call Helium refuses and Safari refused before.
+  it("puts the file input over the desktop dropzone", () => {
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
-
-    const input = document.querySelector('input[type="file"]')!;
-    const activated = vi.fn();
-    input.addEventListener("click", activated);
-
-    const dropzone = screen
-      .getByText("Перетащите файл сюда или выберите на диске")
-      .closest('[role="button"]');
-    await user.click(dropzone!);
-
-    expect(activated).toHaveBeenCalled();
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const zone = screen.getByTestId("dropzone");
+    expect(zone.contains(input)).toBe(true);
+    expect(input.className).toContain("opacity-0");
   });
 
   it("does not look clickable when restore is pending", async () => {
@@ -266,7 +257,7 @@ describe("BackupUploadDialog", () => {
 
     const dropzone = screen
       .getByText("Перетащите файл сюда или выберите на диске")
-      .closest('[role="button"]');
+      .closest('[data-testid="dropzone"]');
     expect(dropzone?.className.split(/\s+/)).not.toContain("cursor-pointer");
     expect(dropzone?.className.split(/\s+/)).toContain("cursor-not-allowed");
 

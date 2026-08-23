@@ -175,12 +175,23 @@ export function BackupUploadDialog({
     }
   }
 
+  // The input is the click target, not something a handler reaches for.
+  // Helium refuses to open the chooser from a scripted input.click() even
+  // inside a user gesture, and Safari refused the scripted click a <label>
+  // handler issued. Stretching the real input over the dropzone at zero
+  // opacity leaves the browser opening its own dialog from a plain click on
+  // a plain input — no policy of any browser stands between the two. Enter
+  // and Space work for free, and the input accepts dropped files itself.
   const fileInput = (
     <input
       ref={inputRef}
       type="file"
       accept={ACCEPT}
-      className="sr-only"
+      className={
+        isSmUp
+          ? "absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+          : "sr-only"
+      }
       disabled={pending || restorePending}
       onChange={(e) => {
         const next = e.target.files?.[0];
@@ -281,17 +292,8 @@ export function BackupUploadDialog({
               // input from the label at all. A plain clickable block calling
               // click() on an input that sits beside it works in both.
               <div
-                role="button"
-                tabIndex={restorePending || pending ? -1 : 0}
-                aria-label="Выберите файл бэкапа"
-                onClick={() => openPicker()}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    openPicker();
-                  }
-                }}
-                className={`grid min-w-0 gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm transition-colors duration-500 motion-reduce:duration-0 ${
+                data-testid="dropzone"
+                className={`relative grid min-w-0 gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm transition-colors duration-500 motion-reduce:duration-0 ${
                   restorePending ? "cursor-not-allowed" : "cursor-pointer"
                 } ${
                   dragOver
@@ -320,6 +322,7 @@ export function BackupUploadDialog({
                 >
                   {file ? file.name : "Формат: .tar.zst"}
                 </span>
+                {fileInput}
               </div>
             ) : (
               <div className="grid min-w-0 gap-4 overflow-hidden">
@@ -340,12 +343,9 @@ export function BackupUploadDialog({
                 >
                   {file ? file.name : "Формат: .tar.zst"}
                 </span>
+                {fileInput}
               </div>
             )}
-            {/* One input for both layouts, outside the clickable area: the
-                handlers reach it through the ref, so nothing depends on where
-                it sits in the markup. */}
-            {fileInput}
           </div>
           <DialogFooter>
             <Button
