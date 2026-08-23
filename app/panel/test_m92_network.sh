@@ -805,6 +805,7 @@ test_awg_stack_forced_install() {
     AMNEZIA_INSTALL_NFTABLES_CONF="$NFTABLES_CONF_TEST" \
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
     AMNEZIA_INSTALL_MODULES_DIR="$TMP_TEST/modules-load.d" \
+    AMNEZIA_INSTALL_PMTU_TARGETS="" \
     PATH="$FAKE_DIR:$PATH" \
     bash "$INSTALL_SH" --root "$ROOT" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
