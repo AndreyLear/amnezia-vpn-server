@@ -54,6 +54,17 @@ const (
 // Flash messages are fixed strings; they never contain request input,
 // names, paths or secrets. The whole panel is Russian (T-120 round 2).
 const (
+	// endpointChoiceField carries the operator's answer when an archive was
+	// taken on a different server: "archive" keeps the address stored in the
+	// backup, "server" keeps the address of the machine being restored onto.
+	endpointChoiceField = "endpoint"
+	// Settings keys owned by awgconf; duplicated here rather than exported
+	// so the web layer does not gain a dependency on its internals.
+	settingsEndpointKey   = "endpoint"
+	settingsMTUKey        = "mtu"
+	endpointChoiceArchive = "archive"
+	endpointChoiceServer  = "server"
+
 	flashRestoreMissingFile     = "Не указан файл бэкапа."
 	flashRestoreInvalidFileName = "Недопустимое имя файла бэкапа."
 	flashRestoreFailed          = "Восстановление не удалось."
@@ -63,6 +74,7 @@ const (
 	// user input; both strings stay fixed.
 	flashRestoreApplied     = "Восстановление применено. Активных клиентов: %d."
 	flashRestoreApplyFailed = "Бэкап подготовлен, но применить его не удалось. Требуется перезапуск."
+	flashRestoreNeedsChoice = "Бэкап снят на другом сервере: выберите, какой адрес использовать"
 )
 
 // pendingExists reports whether a restore is already pending next to
@@ -140,9 +152,10 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 	uploadPath := filepath.Join(tmp, "upload.tar.zst")
 
 	var (
-		csrfToken string
-		uploaded  bool
-		fileName  string
+		csrfToken      string
+		uploaded       bool
+		fileName       string
+		endpointChoice string
 	)
 	for {
 		part, err := mr.NextPart()
@@ -156,6 +169,8 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 		switch part.FormName() {
 		case auth.CSRFFieldName:
 			csrfToken = readPartText(part)
+		case endpointChoiceField:
+			endpointChoice = readPartText(part)
 		case "backup":
 			fileName = part.FileName()
 			if fileName == "" {
@@ -201,6 +216,36 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 		return
 	}
 
+	// An archive from another server carries that server's endpoint (the
+	// address baked into every client config) and the MTU measured for its
+	// uplink. Applying those silently is what breaks a migration, so ask
+	// before touching anything — and only when they actually differ.
+	archived, err := backup.Inspect(uploadPath)
+	if err != nil {
+		s.cfg.Logger.Printf("restore inspect: %v", err)
+		s.restoreAnswer(w, r, jsonAPI, http.StatusBadRequest, false, flashRestoreFailed)
+		return
+	}
+	liveEndpoint := s.settingOrEmpty(settingsEndpointKey)
+	liveMTU := s.settingOrEmpty(settingsMTUKey)
+	differs := archived.Endpoint != liveEndpoint || archived.MTU != liveMTU
+	if differs && endpointChoice == "" {
+		if jsonAPI {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"ok":               false,
+				"needs_choice":     true,
+				"message":          flashRestoreNeedsChoice,
+				"archive_endpoint": archived.Endpoint,
+				"server_endpoint":  liveEndpoint,
+				"archive_mtu":      archived.MTU,
+				"server_mtu":       liveMTU,
+			})
+			return
+		}
+		s.restoreAnswer(w, r, jsonAPI, http.StatusSeeOther, false, flashRestoreNeedsChoice)
+		return
+	}
+
 	s.mutex.Lock()
 	_, err = backup.Restore(s.db(), s.cfg.DBPath, uploadPath, backupsDir(), nil)
 	var appliedN int
@@ -226,6 +271,14 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 		s.cfg.Logger.Printf("restore apply: %v", applyErr)
 		s.restoreAnswer(w, r, jsonAPI, http.StatusBadRequest, false, flashRestoreApplyFailed)
 		return
+	}
+	// "server": the restored database carries the old host's address and
+	// MTU; put this machine's values back so clients reach the server they
+	// were just migrated to.
+	if endpointChoice == endpointChoiceServer {
+		if err := s.restoreHostSettings(liveEndpoint, liveMTU); err != nil {
+			s.cfg.Logger.Printf("restore host settings: %v", err)
+		}
 	}
 	if _, err := db.AuthUserByUsername(s.db(), sess.Username); err != nil {
 		auth.ClearSessionCookie(w)
@@ -349,4 +402,32 @@ func validUploadName(name string) bool {
 		return false
 	}
 	return strings.HasSuffix(strings.ToLower(name), ".tar.zst")
+}
+
+// settingOrEmpty reads one settings key, treating any failure as "unset":
+// the caller only compares it against the archive.
+func (s *Server) settingOrEmpty(key string) string {
+	v, _, err := db.GetSetting(s.db(), key)
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
+// restoreHostSettings writes this machine's endpoint and MTU back over the
+// values the archive brought with it. An empty value is skipped rather than
+// stored: it would leave `client config` unable to render an endpoint.
+func (s *Server) restoreHostSettings(endpoint, mtu string) error {
+	for key, value := range map[string]string{
+		settingsEndpointKey: endpoint,
+		settingsMTUKey:      mtu,
+	} {
+		if value == "" {
+			continue
+		}
+		if err := db.SetSetting(s.db(), key, value); err != nil {
+			return fmt.Errorf("set %s: %w", key, err)
+		}
+	}
+	return nil
 }
