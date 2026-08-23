@@ -816,9 +816,23 @@ ADMIN_PASSWORD="$(openssl rand -base64 18 2>/dev/null | tr -d '\n')"
 
 log "creating the admin user"
 set +x
-if ! printf '%s\n' "$ADMIN_PASSWORD" | remote_cmd_in "cd '$ROOT_DIR' && docker compose --env-file versions.lock run --rm -T panel-init /app/panel auth add-user admin --password-stdin" >/dev/null; then
-    die_op "application bootstrap failed: panel auth add-user admin did not succeed"
+ADMIN_EXISTED=0
+ADDUSER_OUT="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-adduser.XXXXXX")"
+if ! printf '%s\n' "$ADMIN_PASSWORD" | remote_cmd_in "cd '$ROOT_DIR' && docker compose --env-file versions.lock run --rm -T panel-init /app/panel auth add-user admin --password-stdin" >/dev/null 2>"$ADDUSER_OUT"; then
+    # A run that was cut off, or a plain rerun, already created the admin.
+    # That is the state we want — but the password generated a moment ago was
+    # never applied, so it must not appear in the summary as if it works.
+    if grep -q "auth user already exists" "$ADDUSER_OUT" 2>/dev/null; then
+        log "administrator already exists; the password stays as it was"
+        ADMIN_EXISTED=1
+        ADMIN_PASSWORD=""
+    else
+        cat "$ADDUSER_OUT" >&2 || true
+        rm -f "$ADDUSER_OUT"
+        die_op "application bootstrap failed: panel auth add-user admin did not succeed"
+    fi
 fi
+rm -f "$ADDUSER_OUT"
 
 # --- panel health check ------------------------------------------------
 
@@ -855,7 +869,11 @@ esac
     fi
     printf 'Panel:     %s\n' "$PANEL_URL"
     printf 'Login:     admin\n'
-    printf 'Password:  %s\n' "$ADMIN_PASSWORD"
+    if [ "$ADMIN_EXISTED" = "1" ]; then
+        printf 'Password:  прежний — администратор уже был создан\n'
+    else
+        printf 'Password:  %s\n' "$ADMIN_PASSWORD"
+    fi
     printf 'Endpoint:  %s\n' "$ENDPOINT"
     if [ -n "$FINGERPRINT" ]; then
         printf 'TLS SHA256 fingerprint: %s\n' "$FINGERPRINT"
