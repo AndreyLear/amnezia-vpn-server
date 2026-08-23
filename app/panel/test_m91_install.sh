@@ -1283,12 +1283,14 @@ test_installed_compose_contract() {
     os_release debian 12 bookworm
     rc="$(run_install --build)"
     [ "$rc" = "0" ] || fail "installed compose flow: exit $rc"
-    [ "$(grep -c '^    network_mode: host$' "$ROOT/compose.yaml")" = "1" ] \
-        && pass "installed compose: awg network_mode: host" \
-        || fail "installed compose: awg network_mode: host"
-    [ "$(grep -c '^    restart: unless-stopped$' "$ROOT/compose.yaml")" = "2" ] \
-        && pass "installed compose: restart: unless-stopped on panel+awg" \
-        || fail "installed compose: restart: unless-stopped on panel+awg"
+    # awg and dns both need the host netns; panel, awg and dns all
+    # survive a reboot, panel-init stays a one-shot job.
+    [ "$(grep -c '^    network_mode: host$' "$ROOT/compose.yaml")" = "2" ] \
+        && pass "installed compose: network_mode: host on awg+dns" \
+        || fail "installed compose: network_mode: host on awg+dns"
+    [ "$(grep -c '^    restart: unless-stopped$' "$ROOT/compose.yaml")" = "3" ] \
+        && pass "installed compose: restart: unless-stopped on panel+awg+dns" \
+        || fail "installed compose: restart: unless-stopped on panel+awg+dns"
     [ "$(grep -c '^    sysctls:$' "$ROOT/compose.yaml")" = "0" ] \
         && pass "installed compose: no awg sysctls" \
         || fail "installed compose: no awg sysctls"
@@ -1993,6 +1995,10 @@ test_pmtu_preflight_sizes_tunnel_for_a_tunnelled_uplink
 test_pmtu_preflight_caps_at_the_default
 test_pmtu_preflight_survives_filtered_icmp
 test_pmtu_preflight_clamps_a_tiny_path
+test_tunnel_dns_answers_the_panel_domain
+test_tunnel_dns_without_a_panel_domain
+test_tunnel_dns_can_be_turned_off
+test_tunnel_dns_follows_the_vpn_subnet
 }
 
 # --- tunnel MTU pre-flight (amnezia-vpn-server-6ztc) --------------------
@@ -2057,6 +2063,79 @@ test_pmtu_preflight_clamps_a_tiny_path() {
     grep -q "^TUNNEL_MTU=1280$" "$ROOT/.env" \
         && pass "1300-byte uplink -> TUNNEL_MTU clamped to 1280" \
         || fail "1300-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
+}
+
+# --- split DNS inside the tunnel (amnezia-vpn-server-rnub) --------------
+
+# The panel hostname resolves to the public address for the whole
+# internet, and must resolve to the tunnel address for a connected
+# client — otherwise the panel is unreachable from a device using this
+# very VPN, and the hostname is worth nothing.
+test_tunnel_dns_answers_the_panel_domain() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "tunnel DNS domain flow: exit $rc"
+    grep -q "^PANEL_DOMAIN=panel.example.com$" "$ROOT/.env" \
+        && pass "tunnel DNS: the panel hostname is handed to the resolver" \
+        || fail "tunnel DNS: PANEL_DOMAIN missing from .env"
+    grep -q "^TUNNEL_ADDRESS=10.8.0.1$" "$ROOT/.env" \
+        && pass "tunnel DNS: resolver bound to the tunnel address" \
+        || fail "tunnel DNS: TUNNEL_ADDRESS missing from .env"
+    # Clients get our resolver first and a public one after it: if the
+    # service stops, name resolution must not stop with it.
+    grep -q "^TUNNEL_DNS=10.8.0.1,1.1.1.1$" "$ROOT/.env" \
+        && pass "tunnel DNS: clients get the resolver plus a fallback" \
+        || fail "tunnel DNS: TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing)"
+}
+
+# Without a panel hostname there is nothing to answer for, but a caching
+# resolver in the tunnel is still what clients should use.
+test_tunnel_dns_without_a_panel_domain() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "tunnel DNS loopback flow: exit $rc"
+    if grep -q "^PANEL_DOMAIN=" "$ROOT/.env"; then
+        fail "tunnel DNS: PANEL_DOMAIN written without a panel domain"
+    else
+        pass "tunnel DNS: no hostname override without a panel domain"
+    fi
+    grep -q "^TUNNEL_DNS=10.8.0.1,1.1.1.1$" "$ROOT/.env" \
+        && pass "tunnel DNS: clients still get the in-tunnel resolver" \
+        || fail "tunnel DNS: TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing)"
+}
+
+# A server already running its own resolver on port 53 has to be able to
+# opt out, and then clients must be sent straight to the public ones.
+test_tunnel_dns_can_be_turned_off() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --domain panel.example.com --no-tunnel-dns)"
+    [ "$rc" = "0" ] || fail "--no-tunnel-dns flow: exit $rc"
+    grep -q "^TUNNEL_DNS=1.1.1.1,8.8.8.8$" "$ROOT/.env" \
+        && pass "--no-tunnel-dns: clients get the public resolvers" \
+        || fail "--no-tunnel-dns: TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing)"
+    if grep -q "^PANEL_DOMAIN=" "$ROOT/.env"; then
+        fail "--no-tunnel-dns: PANEL_DOMAIN still written"
+    else
+        pass "--no-tunnel-dns: no hostname override"
+    fi
+}
+
+# The tunnel address is not a constant: a deployment on another subnet
+# must bind and hand out its own gateway.
+test_tunnel_dns_follows_the_vpn_subnet() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --vpn-subnet 10.20.0.0/24 --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "custom subnet flow: exit $rc"
+    grep -q "^TUNNEL_ADDRESS=10.20.0.1$" "$ROOT/.env" \
+        && pass "tunnel DNS: address derived from the deployment subnet" \
+        || fail "tunnel DNS: TUNNEL_ADDRESS is $(grep TUNNEL_ADDRESS "$ROOT/.env" || echo missing)"
+    grep -q "^TUNNEL_DNS=10.20.0.1,1.1.1.1$" "$ROOT/.env" \
+        && pass "tunnel DNS: clients get that address" \
+        || fail "tunnel DNS: TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing)"
 }
 
 if [ "$#" -gt 0 ]; then

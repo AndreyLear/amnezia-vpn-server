@@ -106,3 +106,37 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # dns — split DNS внутри туннеля (T-rnub)
+  dns:
+    build:
+      context: .
+      dockerfile: app/dns/Dockerfile
+      network: host
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION:?ALPINE_VERSION must be set via versions.lock}
+    image: ${IMAGE_REGISTRY:?IMAGE_REGISTRY must be set via versions.lock}/dns:${IMAGE_VERSION:?IMAGE_VERSION must be set via versions.lock}
+    # T-rnub: адрес панели совпадает с концом туннеля, поэтому под VPN
+    # клиент не может до него достучаться — пакет, адресованный самому
+    # туннелю, в туннель не уходит. Этот сервис отвечает на имя панели
+    # адресом внутри туннеля, а остальное форвардит как обычный резолвер.
+    #
+    # network_mode: host — слушать нужно 10.8.0.1, адрес awg0, который
+    # существует только в host netns (как и сам awg). Порты не
+    # публикуются: bind-dynamic привязывает ровно этот адрес, поэтому
+    # снаружи резолвер недоступен.
+    network_mode: host
+    restart: unless-stopped
+    cap_drop:
+      - NET_RAW
+    depends_on:
+      panel-init:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env
+        required: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

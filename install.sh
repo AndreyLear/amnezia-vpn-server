@@ -162,6 +162,10 @@ Options:
                     https://PANEL_DOMAIN:PORT (nftables: tcp 80 + tcp
                     PORT). Without a panel domain: self-signed
                     https://<server-ip>:PORT (T-124).
+  --no-tunnel-dns
+                do not run the in-tunnel resolver. Without it the panel
+                hostname stays unreachable from a device connected to
+                this VPN, and clients get the public resolvers directly.
   --build       compile the images on this server instead of pulling the
                 published ones (slow: it downloads a Go toolchain and
                 builds amneziawg-go, amneziawg-tools and the panel)
@@ -241,6 +245,10 @@ PANEL_TLS_REGEN=0
 # Published images are the default; --build compiles everything on this
 # host instead (development, or a registry this host cannot reach).
 BUILD_FROM_SOURCE=0
+# T-rnub: the split DNS that makes the panel hostname resolve to the
+# tunnel address for connected clients. On by default; --no-tunnel-dns
+# turns it off for deployments that run their own resolver on port 53.
+TUNNEL_DNS_ENABLED=1
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -289,6 +297,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --build)
             BUILD_FROM_SOURCE=1
+            shift
+            ;;
+        --no-tunnel-dns)
+            TUNNEL_DNS_ENABLED=0
             shift
             ;;
         *)
@@ -748,7 +760,8 @@ copy_tree "$SCRIPT_DIR/versions.lock" "$ROOT_DIR/"
 copy_tree "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR/"
 # Build context is the repository root (compose.yaml build.context = "."):
 # the app/ tree (panel Dockerfile + Go module incl. embedded templates,
-# awg Dockerfile + entrypoint scripts) must be present under the root.
+# awg Dockerfile + entrypoint scripts, dns Dockerfile + entrypoint) must
+# be present under the root.
 copy_tree "$SCRIPT_DIR/app" "$ROOT_DIR/"
 chmod 0644 "$ROOT_DIR/compose.yaml" "$ROOT_DIR/versions.lock"
 chmod 0755 "$ROOT_DIR/docker-prune.sh"
@@ -862,6 +875,76 @@ elif grep -q '^AMNEZIA_SECURE_COOKIES=' "$ROOT_DIR/$ENV_FILE"; then
     env_unset AMNEZIA_SECURE_COOKIES
     log "AMNEZIA_SECURE_COOKIES removed from $ENV_FILE (loopback panel mode)"
 fi
+
+# --- 11b. split DNS inside the tunnel (T-rnub) -------------------------
+# The panel is reachable at the same address the tunnel ends at, so a
+# connected client cannot open it: a packet addressed to the endpoint
+# cannot travel through the endpoint, and iOS installs no bypass route
+# for it. Telling people to use https://10.8.0.1 defeats the point of
+# giving the panel a hostname — it has to work from anywhere.
+#
+# The dns service answers that one hostname with the tunnel address and
+# forwards everything else, so one URL works both on and off the VPN and
+# the Let's Encrypt certificate stays valid either way. Client configs
+# list a public resolver after it: if the service dies, name resolution
+# survives.
+
+TUNNEL_UPSTREAM_DNS="${AMNEZIA_INSTALL_UPSTREAM_DNS:-1.1.1.1,8.8.8.8}"
+
+# tunnel_gateway_address: the server's own address inside the tunnel.
+# config/awg0.conf is authoritative once the panel has written it; before
+# that, derive host .1 of the deployment subnet.
+tunnel_gateway_address() {
+    local addr
+    if [ -f "$ROOT_DIR/config/awg0.conf" ]; then
+        addr="$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$ROOT_DIR/config/awg0.conf" | head -1)"
+        addr="${addr%%/*}"
+        addr="${addr%%,*}"
+        addr="$(printf '%s' "$addr" | tr -d '[:space:]')"
+        if printf '%s' "$addr" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            printf '%s' "$addr"
+            return 0
+        fi
+    fi
+    printf '%s.1' "$(printf '%s' "${VPN_SUBNET%%/*}" | cut -d. -f1-3)"
+}
+
+tunnel_dns_setup() {
+    local gateway
+    gateway="$(tunnel_gateway_address)"
+
+    if [ "$TUNNEL_DNS_ENABLED" != "1" ]; then
+        env_set TUNNEL_DNS "$TUNNEL_UPSTREAM_DNS"
+        env_unset PANEL_DOMAIN
+        log "tunnel DNS disabled (--no-tunnel-dns): clients get ${TUNNEL_UPSTREAM_DNS}"
+        return 0
+    fi
+
+    env_set TUNNEL_ADDRESS "$gateway"
+    env_set UPSTREAM_DNS "$TUNNEL_UPSTREAM_DNS"
+    # The resolver goes first, a public one second: the fallback is what
+    # keeps clients online if the service stops.
+    env_set TUNNEL_DNS "${gateway},${TUNNEL_UPSTREAM_DNS%%,*}"
+
+    if [ -n "$DOMAIN" ]; then
+        env_set PANEL_DOMAIN "$DOMAIN"
+        log "tunnel DNS: ${DOMAIN} -> ${gateway} for connected clients"
+    else
+        env_unset PANEL_DOMAIN
+        log "tunnel DNS: caching resolver on ${gateway} (no panel domain to answer for)"
+    fi
+
+    # Something already holding the wildcard port 53 would make the
+    # resolver restart-loop. Not fatal — the fallback in the client
+    # config keeps clients working — but the operator has to know.
+    if command -v ss >/dev/null 2>&1; then
+        if cmd ss -lnu 2>/dev/null | awk '{print $5}' | grep -Eq '^(0\.0\.0\.0|\*):53$'; then
+            log "WARNING: another service already listens on 0.0.0.0:53; the tunnel resolver cannot bind ${gateway}:53. Stop it, or rerun with --no-tunnel-dns"
+        fi
+    fi
+}
+
+tunnel_dns_setup
 
 # --- 10b. client endpoint domain (T-129 / T-156): DNS pre-flight ------
 # Optional --vpn-domain / --client-domain: the endpoint baked into
@@ -1040,6 +1123,12 @@ table ip amnezia {
     chain input {
         type filter hook input priority -100; policy accept;
         udp dport $2 accept
+        # T-rnub: split DNS for tunnel clients. iifname "awg0" is the whole
+        # exposure: the resolver binds 10.8.0.1 only, so it is unreachable
+        # from the internet by construction, and this accept just keeps a
+        # foreign input policy (ufw and friends) from dropping it.
+        iifname "awg0" udp dport 53 accept
+        iifname "awg0" tcp dport 53 accept
 ${input_rules}
     }
 
@@ -1563,7 +1652,7 @@ EOF
 if [ -n "$CLIENT_DOMAIN" ]; then
     cat <<EOF
 install:     docker compose --env-file versions.lock run --rm panel-init \\
-install:       /app/panel server init 10.8.0.1/24 ${AWG_PORT} --endpoint ${CLIENT_DOMAIN}:${AWG_PORT} --dns 1.1.1.1,8.8.8.8
+install:       /app/panel server init 10.8.0.1/24 ${AWG_PORT} --endpoint ${CLIENT_DOMAIN}:${AWG_PORT} --dns $(env_read TUNNEL_DNS)
 install:   (clients are bound to ${CLIENT_DOMAIN}: moving to another server
 install:   is an A-record change — clients reconnect themselves, configs are
 install:   not re-issued; migrate the database with the backup buttons)
@@ -1571,14 +1660,16 @@ EOF
 else
     cat <<EOF
 install:     docker compose --env-file versions.lock run --rm panel-init \\
-install:       /app/panel server init 10.8.0.1/24 ${AWG_PORT} --endpoint <public-ip>:${AWG_PORT} --dns 1.1.1.1,8.8.8.8
+install:       /app/panel server init 10.8.0.1/24 ${AWG_PORT} --endpoint <public-ip>:${AWG_PORT} --dns $(env_read TUNNEL_DNS)
 EOF
 fi
 cat <<EOF
-install:   (--dns is recommended: client configs only get a DNS line when the
-install:   server has one; without it a full-tunnel client (AllowedIPs
-install:   0.0.0.0/0) loses the local network's DNS, and internet goes dark.
-install:   DNS can also be set later with: /app/panel server update --dns ...)
+install:   (--dns is not optional in practice: client configs only get a DNS
+install:   line when the server has one, and a full-tunnel client (AllowedIPs
+install:   0.0.0.0/0) without it loses the local network's resolver and goes
+install:   dark. The value above is what this install decided — the in-tunnel
+install:   resolver first, a public one as fallback. Change it later with:
+install:   /app/panel server update --dns ...)
 install:   or restore an existing database:
 install:     docker compose --env-file versions.lock run --rm panel-init \\
 install:       /app/panel restore <archive>

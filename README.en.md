@@ -89,6 +89,11 @@ address, whether it is enabled, when it last connected and how much traffic it
 has moved. **The Backup button** downloads or uploads the file with everything
 you have configured.
 
+The panel opens at the same address whether the VPN is on or off. The server
+runs its own resolver inside the tunnel: for connected devices it answers the
+panel's hostname with the panel's in-tunnel address. The certificate stays
+valid — the name does not change.
+
 ## Clients
 
 A client is one device: a phone, a laptop, a router. Each has its own keys, so
@@ -194,15 +199,23 @@ by hand.
 
 ## How it works
 
-Three containers: the panel (which owns the SQLite database), AmneziaWG, and a
-one-shot init job. The panel listens on the server's loopback only; nginx
-serves it to the outside with a certificate.
+Four containers: the panel (which owns the SQLite database), AmneziaWG, a
+resolver for connected clients, and a one-shot init job. The panel listens on
+the server's loopback only; nginx serves it to the outside with a
+certificate.
 
 SQLite is the single source of truth — everything else is rebuilt from it,
 which is why a backup of the database restores both clients and server keys.
 
 IPv6 is disabled on the client: otherwise YouTube, Instagram and other
 dual-stack sites would go around the tunnel instead of through it.
+
+The in-tunnel resolver exists because the panel lives at the same address the
+tunnel ends at. A packet sent to that address never enters the tunnel, and iOS
+creates no bypass route for it — so without answering the hostname differently,
+the panel would be unreachable from exactly the devices connected to it.
+Clients get two resolvers, ours and a public fallback, so stopping the service
+never leaves a client without name resolution.
 
 More in [DEVELOPMENT.md](DEVELOPMENT.md).
 

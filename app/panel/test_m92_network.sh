@@ -457,6 +457,11 @@ test_default_rules() {
     assert_in "tcp flags syn tcp option maxseg size set rt mtu" "$NFT_SYS_FILE" "forward: TCP MSS clamped to the route MTU"
     assert_mss_clamp_precedes_accept
     assert_in "udp dport 443 accept" "$NFT_SYS_FILE" "input: default UDP 443 accepted"
+    # T-rnub: the in-tunnel resolver is reachable from the tunnel and
+    # from nowhere else — iifname "awg0" is what keeps it off the WAN.
+    assert_in 'iifname "awg0" udp dport 53 accept' "$NFT_SYS_FILE" "input: tunnel DNS accepted over UDP"
+    assert_in 'iifname "awg0" tcp dport 53 accept' "$NFT_SYS_FILE" "input: tunnel DNS accepted over TCP"
+    assert_not_in '^ *udp dport 53 accept' "$NFT_SYS_FILE" "input: DNS never accepted off the tunnel"
     assert_in 'ip saddr 10.8.0.0/24 oifname != "awg0" masquerade' "$NFT_SYS_FILE" "postrouting: NAT for subnet, never into the tunnel"
 }
 

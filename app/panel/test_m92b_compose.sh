@@ -70,6 +70,8 @@ test_log_rotation() {
     check_in '^awg:[[:space:]].*driver: json-file' "awg: json-file logging driver"
     check_in '^awg:[[:space:]].*max-size: "10m"' "awg: log max-size 10m"
     check_in '^awg:[[:space:]].*max-file: "3"' "awg: log max-file 3"
+    check_in '^dns:[[:space:]].*driver: json-file' "dns: json-file logging driver"
+    check_in '^dns:[[:space:]].*max-size: "10m"' "dns: log max-size 10m"
 }
 
 test_restart_policy() {
@@ -81,6 +83,20 @@ test_capabilities_devices() {
     check_in '^awg:.*- NET_ADMIN' "awg: CAP_NET_ADMIN present"
     check_in '^awg:.*- NET_RAW' "awg: NET_RAW dropped (cap_drop)"
     check_in '^awg:.*/dev/net/tun:/dev/net/tun' "awg: /dev/net/tun device mapped"
+}
+
+# T-rnub: the resolver answers the panel hostname with the tunnel
+# address. It has to live in the host netns for the same reason awg
+# does — 10.8.0.1 exists nowhere else — and it must publish no ports:
+# a resolver reachable from the internet is an open resolver.
+test_dns_topology() {
+    check_in '^dns:.*network_mode: host' "dns: network_mode: host (10.8.0.1 lives there)"
+    check_out '^dns: +ports:' "dns: no ports: mapping (never exposed to the WAN)"
+    check_in '^dns:.*restart: unless-stopped' "dns: restart: unless-stopped"
+    check_in '^dns:.*- NET_RAW' "dns: NET_RAW dropped (cap_drop)"
+    check_out '^dns:.*/data' "dns: no data mount"
+    check_out '^dns:.*/config' "dns: no config mount"
+    check_in '^dns:.*path: \.env' "dns: deployment .env loaded (panel domain, upstreams)"
 }
 
 test_mount_contract() {
@@ -102,9 +118,11 @@ test_mount_contract() {
 }
 
 test_startup_order() {
-    [ "$(grep -c 'service_completed_successfully' "$COMPOSE")" = "2" ] \
-        && pass "panel and awg depend on panel-init completion" \
-        || fail "panel and awg depend on panel-init completion"
+    # Named per service, not counted: a new service used to break this
+    # check without anything actually being wrong.
+    check_in '^panel:.*service_completed_successfully' "panel waits for panel-init to finish"
+    check_in '^awg:.*service_completed_successfully' "awg waits for panel-init to finish"
+    check_in '^dns:.*service_completed_successfully' "dns waits for panel-init to finish"
 }
 
 test_depends_on_preserved() {
@@ -120,6 +138,7 @@ test_panel_topology
 test_log_rotation
 test_restart_policy
 test_capabilities_devices
+test_dns_topology
 test_mount_contract
 test_startup_order
 test_depends_on_preserved
