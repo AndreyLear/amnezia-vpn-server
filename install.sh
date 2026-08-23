@@ -393,6 +393,22 @@ log "OS check: $os_id $os_version ($os_codename)"
 
 cmd() { command "$@"; }
 
+# The lock knobs come from the environment, so validate them the way
+# operator flags are validated. Left unchecked, a value like "10m" is a
+# variable name to bash arithmetic: under set -u the installer died with
+# "10m: unbound variable" and exit 127 in the middle of a run, without an
+# install: ERROR line to explain what happened.
+validate_lock_seconds() { # validate_lock_seconds VAR_NAME
+    local name="$1" value
+    eval "value=\${$name:-}"
+    [ -n "$value" ] || return 0
+    case "$value" in
+        ''|*[!0-9]*) die_usage "$name must be a whole number of seconds, got \"$value\"" ;;
+    esac
+}
+validate_lock_seconds AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC
+validate_lock_seconds AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC
+
 DPKG_LOCK_FRONTEND="/var/lib/dpkg/lock-frontend"
 DPKG_LOCK="/var/lib/dpkg/lock"
 
@@ -436,19 +452,34 @@ wait_for_dpkg_lock() {
 }
 
 run_apt_get() {
-    local timeout poll deadline rc out holder
+    local timeout poll deadline rc out out_file holder
     timeout="${AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC:-600}"
     poll="${AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC:-5}"
     deadline=$(( $(date +%s) + timeout ))
     wait_for_dpkg_lock "$deadline"
     while true; do
-        out="$(cmd apt-get "$@" 2>&1)"
-        rc=$?
-        [ -n "$out" ] && printf '%s\n' "$out" >&2
+        # Non-interactive, always: needrestart ships enabled on Ubuntu
+        # 22.04/24.04 and opens a whiptail dialog during apt-get install,
+        # and debconf can ask about conffiles. A prompt nobody can answer
+        # is an install that hangs with no explanation.
+        #
+        # The output is shown as it arrives and kept in a file: capturing
+        # it into a variable left the operator watching a still terminal
+        # through the longest steps of the install.
+        out_file="$(mktemp "${TMPDIR:-/tmp}/amnezia-apt.XXXXXX")"
+        DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+            cmd apt-get "$@" 2>&1 | tee "$out_file"
+        rc=${PIPESTATUS[0]}
+        out="$(cat "$out_file" 2>/dev/null)"
+        rm -f "$out_file"
         if [ "$rc" -eq 0 ]; then
             return 0
         fi
-        if printf '%s\n' "$out" | grep -q 'Could not get lock /var/lib/dpkg/lock-frontend'; then
+        # apt reports whichever lock it lost: apt-get update contends on
+        # /var/lib/apt/lists/lock, installs on the dpkg frontend lock, and
+        # older wording names /var/lib/dpkg/lock. Match the message, not
+        # one path, or the retry never fires where it is needed most.
+        if printf '%s\n' "$out" | grep -q 'Could not get lock'; then
             if [ "$(date +%s)" -ge "$deadline" ]; then
                 holder="$(dpkg_lock_holder_from_apt "$out")"
                 dpkg_lock_die "$holder"
@@ -497,8 +528,9 @@ docker_compose_ok() {
 
 docker_install() {
     log "installing Docker Engine + Compose plugin from the official Docker Inc. repository"
-    run_apt_get update
-    run_apt_get install -y ca-certificates curl
+    run_apt_get update || die_op "apt-get update failed (Docker repository setup)"
+    run_apt_get install -y ca-certificates curl \
+        || die_op "apt-get install ca-certificates curl failed"
     mkdir -p "$KEYRING_DIR" || die_op "cannot create keyring dir $KEYRING_DIR"
     chmod 0755 "$KEYRING_DIR"
     cmd curl -fsSL "https://download.docker.com/linux/${os_id}/gpg" -o "$KEYRING_DIR/docker.asc"
@@ -506,8 +538,9 @@ docker_install() {
     printf 'deb [arch=amd64 signed-by=%s] https://download.docker.com/linux/%s %s stable\n' \
         "$KEYRING_DIR/docker.asc" "$os_id" "$os_codename" \
         > "$APT_SOURCES_DIR/docker.list"
-    run_apt_get update
-    run_apt_get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    run_apt_get update || die_op "apt-get update failed (Docker repository)"
+    run_apt_get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+        || die_op "apt-get install docker-ce failed"
 }
 
 if docker_compose_ok; then
@@ -646,10 +679,18 @@ if [ -z "${AMNEZIA_INSTALL_FORCE_AWG_INSTALL:-}" ] && amneziawg_available; then
     log "AmneziaWG client stack already present (kernel module + awg tools)"
 else
     log "installing AmneziaWG client stack from the official PPA (ppa:amnezia/ppa)"
-    run_apt_get update
-    run_apt_get install -y software-properties-common linux-headers-"$(cmd uname -r)"
-    cmd add-apt-repository -y ppa:amnezia/ppa
-    DEBIAN_FRONTEND=noninteractive run_apt_get install -y amneziawg amneziawg-tools
+    run_apt_get update || die_op "apt-get update failed (AmneziaWG prerequisites)"
+    run_apt_get install -y software-properties-common linux-headers-"$(cmd uname -r)" \
+        || die_op "apt-get install software-properties-common/linux-headers failed"
+    # Takes the apt locks and runs its own update, so it waits like the
+    # apt calls do — and its failure is reported here rather than as a
+    # missing package two steps later.
+    wait_for_dpkg_lock "$(( $(date +%s) + ${AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC:-600} ))"
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+        cmd add-apt-repository -y ppa:amnezia/ppa \
+        || die_op "add-apt-repository ppa:amnezia/ppa failed"
+    run_apt_get install -y amneziawg amneziawg-tools \
+        || die_op "apt-get install amneziawg amneziawg-tools failed"
     mkdir -p "$MODULES_DIR" || die_op "cannot create modules-load dir $MODULES_DIR"
     printf 'amneziawg\n' > "$MODULES_FILE"
     chmod 0644 "$MODULES_FILE"

@@ -68,7 +68,10 @@ DNS_A=2.26.93.192
 DNS_AAAA=
 CERTBOT_RC=0
 APT_LOCK_FAILS=0
+APT_LOCK_FILE=/var/lib/dpkg/lock-frontend
 APT_LOCK_ALWAYS=0
+APT_FAIL_MATCH=
+ADD_APT_REPO_RC=0
 APT_FUSER_BUSY_REMAINING=0
 FAKE_PMTU=1500
 EOF
@@ -156,10 +159,22 @@ FAKE_EOF
 cat > "$FAKE_DIR/apt-get" <<'FAKE_EOF'
 #!/bin/bash
 echo "apt-get $*" >> "${FAKE_CALLS:?}"
+# Record the frontend settings: an apt that can still open a whiptail or
+# debconf dialog will hang an install whose output nobody can see.
+echo "apt-get-env DEBIAN_FRONTEND=${DEBIAN_FRONTEND:-unset} NEEDRESTART_MODE=${NEEDRESTART_MODE:-unset}" >> "${FAKE_CALLS:?}"
+printf '%s\n' "Get:1 https://example.invalid stable/main amd64 Packages"
 . "${FAKE_STATE:?}"
 lock_msg() {
-    printf '%s\n' "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 10849 (unattended-upgr)" >&2
+    # APT_LOCK_FILE lets a test reproduce the wording apt-get update emits:
+    # it contends on the lists lock, not the dpkg frontend lock.
+    printf '%s\n' "E: Could not get lock ${APT_LOCK_FILE:-/var/lib/dpkg/lock-frontend}. It is held by process 10849 (unattended-upgr)" >&2
 }
+# APT_FAIL_MATCH makes the matching invocation fail the way apt does when
+# a package is missing: not a lock error, so it must not be retried.
+if [ -n "${APT_FAIL_MATCH:-}" ] && printf '%s' "$*" | grep -q -- "${APT_FAIL_MATCH}"; then
+    printf '%s\n' "E: Unable to locate package ${APT_FAIL_MATCH}" >&2
+    exit 100
+fi
 if [ "${APT_LOCK_ALWAYS:-0}" = "1" ]; then
     lock_msg
     exit 100
@@ -200,7 +215,11 @@ n="${APT_FUSER_BUSY_REMAINING:-0}"
 if [ "$n" -gt 0 ] 2>/dev/null; then
     sed "s|^APT_FUSER_BUSY_REMAINING=.*|APT_FUSER_BUSY_REMAINING=$((n - 1))|" "$FAKE_STATE" \
         > "$FAKE_STATE.new" && mv "$FAKE_STATE.new" "$FAKE_STATE"
-    printf '%s\n' "10849" >&2
+    # Real fuser prints the PIDs on stdout and only the "FILE:" header on
+    # stderr; wait_for_dpkg_lock reads stdout, so a fake that inverts them
+    # hides the "held by process N" path from every test.
+    printf '%s:\n' "$1" >&2
+    printf '%s\n' "10849"
     exit 0
 fi
 exit 1
@@ -416,7 +435,8 @@ FAKE_EOF
 cat > "$FAKE_DIR/add-apt-repository" <<'FAKE_EOF'
 #!/bin/bash
 echo "add-apt-repository $*" >> "${FAKE_CALLS:?}"
-exit 0
+. "${FAKE_STATE:?}"
+exit "${ADD_APT_REPO_RC:-0}"
 FAKE_EOF
 
 cat > "$FAKE_DIR/iptables" <<'FAKE_EOF'
@@ -790,6 +810,170 @@ test_ip_forward_already_enabled() {
 # Compiling on the user's VPS means downloading an 800 MB Go toolchain and
 # building amneziawg-go, amneziawg-tools and the panel on (usually) one
 # vCPU, to produce ~60 MB that CI already built. Pulling is the default.
+# needrestart ships enabled on Ubuntu 22.04/24.04 and opens a whiptail
+# dialog during apt-get install. With apt's output captured into a variable
+# the operator sees a blank terminal while apt blocks on stdin — an install
+# that looks hung. Every apt call must be non-interactive.
+# apt-get update contends on the lists lock, not the dpkg frontend lock,
+# and reports a different path. A retry that only matches the frontend
+# wording gives up in exactly the unattended-upgrades scenario it exists
+# for, then the install continues with stale package lists.
+# Every other operator-supplied value is validated before use; these two
+# were not, and "10m" made bash treat the value as a variable name under
+# set -u: the installer died with "10m: unbound variable" and exit 127
+# mid-run, with no install: ERROR line to explain it.
+# The fuser-based wait loop had no coverage at all: no test ever set
+# APT_FUSER_BUSY_REMAINING above zero, so the "waiting for" log, the sleep
+# and the deadline branch were never entered.
+test_waits_while_dpkg_lock_is_held() {
+    fakes_reset
+    setstate APT_FUSER_BUSY_REMAINING 2 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rm -f "$FAKE_DIR/nginx"   # forces an apt install, i.e. a lock wait
+    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=30 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "held-lock wait: exit $rc, want 0"
+    stdout | grep -q "waiting for /var/lib/dpkg/lock-frontend" \
+        && pass "the installer says it is waiting for the lock" \
+        || fail "waiting for the lock must be visible"
+    cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
+#!/bin/bash
+echo "nginx $*" >> "${FAKE_CALLS:?}"
+exit 0
+FAKE_EOF
+    chmod +x "$FAKE_DIR/nginx"
+}
+
+# A lock that never frees must end with the deadline message naming the
+# holder, not with a later unrelated failure.
+test_dpkg_lock_deadline_reports_the_holder() {
+    fakes_reset
+    setstate APT_FUSER_BUSY_REMAINING 9999 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rm -f "$FAKE_DIR/nginx"
+    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=0 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
+    [ "$rc" != "0" ] || fail "a lock held past the deadline must fail the install"
+    stderr | grep -q "timed out waiting for /var/lib/dpkg/lock-frontend" \
+        && pass "the deadline message names the lock" \
+        || fail "the deadline message must name the lock"
+    stderr | grep -q "held by process 10849" \
+        && pass "the deadline message names the holder" \
+        || fail "the deadline message must name the holding process"
+    cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
+#!/bin/bash
+echo "nginx $*" >> "${FAKE_CALLS:?}"
+exit 0
+FAKE_EOF
+    chmod +x "$FAKE_DIR/nginx"
+}
+
+test_lock_timeout_must_be_numeric() {
+    # An empty value is not a mistake: it means "unset", and the code
+    # falls back to its default. Only a present, unusable value is an error.
+    for bad in 10m abc -5; do
+        fakes_reset
+        os_release ubuntu 24.04 noble
+        rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC="$bad" run_install)"
+        if [ "$rc" = "2" ]; then
+            pass "AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=$bad rejected as usage error"
+        else
+            fail "AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=$bad: exit $rc, want 2"
+        fi
+        stderr | grep -q "AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC" \
+            && pass "the message names the variable ($bad)" \
+            || fail "the message must name the variable ($bad)"
+    done
+}
+
+test_lock_poll_must_be_numeric() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=soon run_install)"
+    [ "$rc" = "2" ] \
+        && pass "AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=soon rejected as usage error" \
+        || fail "AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=soon: exit $rc, want 2"
+}
+
+test_apt_retries_on_lists_lock() {
+    fakes_reset
+    setstate APT_LOCK_FAILS 1 "$FAKE_STATE"
+    setstate APT_LOCK_FILE /var/lib/apt/lists/lock "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rm -f "$FAKE_DIR/nginx"   # forces the nginx install, i.e. a real apt call
+    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=8 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "lists-lock retry: exit $rc, want 0"
+    stdout | grep -q "busy; retrying" \
+        && pass "a lists-lock message is retried like a frontend lock" \
+        || fail "lists lock must be retried too"
+    cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
+#!/bin/bash
+echo "nginx $*" >> "${FAKE_CALLS:?}"
+exit 0
+FAKE_EOF
+    chmod +x "$FAKE_DIR/nginx"
+}
+
+# A failed package install has to stop the install where it happened. It
+# used to be swallowed, and the run died later on an unrelated message.
+test_failed_apt_install_stops_with_its_own_message() {
+    fakes_reset "2.19.6"
+    setstate NEW_COMPOSE_VERSION 2.30.0 "$FAKE_STATE"
+    setstate APT_FAIL_MATCH docker-ce "$FAKE_STATE"
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" != "0" ] || fail "a failed docker-ce install must not exit 0"
+    stderr | grep -qi "docker" \
+        && pass "the failure names the step that failed" \
+        || fail "the failure must name docker, not a later symptom"
+    stderr | grep -qi "still missing or < 2.24.2" \
+        && fail "the failure must not surface as the later compose symptom" \
+        || pass "no misleading downstream message"
+}
+
+# add-apt-repository takes the apt locks and runs its own update; an
+# unchecked failure here surfaced as "Unable to locate package amneziawg"
+# and finally as a modprobe error pointing at the wrong thing.
+test_failed_ppa_stops_with_its_own_message() {
+    fakes_reset
+    setstate ADD_APT_REPO_RC 1 "$FAKE_STATE"
+    os_release ubuntu 24.04 noble
+    rc="$(AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1 run_install)"
+    [ "$rc" != "0" ] || fail "a failed add-apt-repository must not exit 0"
+    stderr | grep -qi "ppa\|repository" \
+        && pass "the failure names the repository step" \
+        || fail "the failure must name the repository step"
+}
+
+test_apt_is_never_interactive() {
+    fakes_reset "2.19.6"   # too old: forces the docker-ce install path
+    setstate NEW_COMPOSE_VERSION 2.30.0 "$FAKE_STATE"
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "apt frontend flow: exit $rc"
+    if grep -q "apt-get-env DEBIAN_FRONTEND=unset" "$FAKE_CALLS"; then
+        fail "an apt call ran without DEBIAN_FRONTEND=noninteractive"
+    else
+        pass "every apt call is non-interactive"
+    fi
+    grep -q "apt-get-env .*NEEDRESTART_MODE=a" "$FAKE_CALLS" \
+        && pass "needrestart is answered automatically" \
+        || fail "needrestart must not be able to prompt"
+}
+
+# apt's output must not be captured into a variable. The installer prints
+# progress now (amnezia-vpn-server-62pg), and a multi-minute docker-ce or
+# nginx install that prints nothing until it finishes reads as a hang —
+# which is exactly what a swallowed stream produced before.
+test_apt_output_is_not_swallowed() {
+    if grep -qE 'out="\$\(cmd apt-get' "$INSTALL_SH"; then
+        fail "apt output must not be captured into a variable"
+    else
+        pass "apt output is not captured into a variable"
+    fi
+    grep -q 'cmd apt-get "\$@" 2>&1 | tee' "$INSTALL_SH" \
+        && pass "apt output is streamed while still being kept for analysis" \
+        || fail "apt output must be streamed and kept (tee)"
+}
+
 test_images_are_pulled_by_default() {
     fakes_reset
     os_release ubuntu 24.04 noble
@@ -1678,6 +1862,15 @@ test_versions_lock_used
 test_ip_forward_disabled
 test_ip_forward_already_enabled
 test_sysctl_bbr_when_advertised
+test_apt_output_is_not_swallowed
+test_waits_while_dpkg_lock_is_held
+test_dpkg_lock_deadline_reports_the_holder
+test_lock_timeout_must_be_numeric
+test_lock_poll_must_be_numeric
+test_apt_retries_on_lists_lock
+test_failed_apt_install_stops_with_its_own_message
+test_failed_ppa_stops_with_its_own_message
+test_apt_is_never_interactive
 test_images_are_pulled_by_default
 test_build_flag_compiles_locally
 test_unreachable_registry_falls_back_to_build
@@ -1793,6 +1986,13 @@ test_pmtu_preflight_clamps_a_tiny_path() {
 
 if [ "$#" -gt 0 ]; then
     for t in "$@"; do
+        # A renamed or mistyped test used to print "command not found" and
+        # still finish with ALL TESTS PASSED and exit 0 — a CI job could go
+        # green having run nothing.
+        if ! declare -F "$t" >/dev/null; then
+            echo "M9.1 install.sh: no such test: $t" >&2
+            exit 2
+        fi
         "$t"
     done
 else
