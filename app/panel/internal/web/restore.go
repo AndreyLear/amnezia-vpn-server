@@ -272,13 +272,19 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 		s.restoreAnswer(w, r, jsonAPI, http.StatusBadRequest, false, flashRestoreApplyFailed)
 		return
 	}
-	// "server": the restored database carries the old host's address and
-	// MTU; put this machine's values back so clients reach the server they
-	// were just migrated to.
+	// The MTU belongs to this host's uplink, not to the backup: install.sh
+	// measured it here, and an archive either carries another server's value
+	// or (if it predates the setting) none at all. Restore it whichever
+	// address was chosen — it is not part of the question.
+	//
+	// The endpoint is the part the operator decides: "server" means clients
+	// should reach the machine they were just migrated to.
+	restoreEndpoint := ""
 	if endpointChoice == endpointChoiceServer {
-		if err := s.restoreHostSettings(liveEndpoint, liveMTU); err != nil {
-			s.cfg.Logger.Printf("restore host settings: %v", err)
-		}
+		restoreEndpoint = liveEndpoint
+	}
+	if err := s.restoreHostSettings(restoreEndpoint, liveMTU); err != nil {
+		s.cfg.Logger.Printf("restore host settings: %v", err)
 	}
 	if _, err := db.AuthUserByUsername(s.db(), sess.Username); err != nil {
 		auth.ClearSessionCookie(w)
@@ -416,7 +422,9 @@ func (s *Server) settingOrEmpty(key string) string {
 
 // restoreHostSettings writes this machine's endpoint and MTU back over the
 // values the archive brought with it. An empty value is skipped rather than
-// stored: it would leave `client config` unable to render an endpoint.
+// stored: an empty endpoint would leave `client config` unable to render
+// one, and callers pass "" for the endpoint precisely when the operator
+// chose to keep the archive's address.
 func (s *Server) restoreHostSettings(endpoint, mtu string) error {
 	for key, value := range map[string]string{
 		settingsEndpointKey: endpoint,

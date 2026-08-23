@@ -58,7 +58,10 @@ func MTUFromSettings(handle *sql.DB) (uint16, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read mtu setting: %w", err)
 	}
-	if !ok {
+	// Absent, or present but empty: an archive written before this setting
+	// existed carries no value, and refusing to render a config over that
+	// would fail the restore rather than fall back.
+	if !ok || raw == "" {
 		return DefaultMTU, nil
 	}
 	parsed, err := strconv.ParseUint(raw, 10, 16)

@@ -591,15 +591,19 @@ mkdir -p "$SYSCTL_DIR" || die_op "cannot create sysctl dir $SYSCTL_DIR"
 # modprobe concludes the kernel has no BBR — which is why this optimisation
 # never actually reached a fresh install. Load it first, then decide.
 ensure_bbr() {
-    tcp_cc_has_bbr && return 0
-    cmd modprobe tcp_bbr 2>/dev/null || return 1
-    tcp_cc_has_bbr || return 1
-    # Keep it across reboots the same way the amneziawg module is kept.
+    if ! tcp_cc_has_bbr; then
+        cmd modprobe tcp_bbr 2>/dev/null || return 1
+        tcp_cc_has_bbr || return 1
+        log "loaded the tcp_bbr module (it is not loaded by default)"
+    fi
+    # Persist the module whenever BBR is going to be used, not only when we
+    # were the ones to load it: a host where something else had already
+    # pulled tcp_bbr in would otherwise come back after a reboot without the
+    # module, and the sysctl asking for bbr would quietly leave it on cubic.
     if mkdir -p "$MODULES_DIR" 2>/dev/null; then
         printf 'tcp_bbr\n' > "$MODULES_DIR/amnezia-vpn-bbr.conf" 2>/dev/null \
             && chmod 0644 "$MODULES_DIR/amnezia-vpn-bbr.conf" 2>/dev/null
     fi
-    log "loaded the tcp_bbr module (it is not loaded by default)"
     return 0
 }
 
