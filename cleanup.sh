@@ -9,12 +9,13 @@
 # Removes only artifacts created by install.sh:
 #   - docker compose down / down --volumes from /opt/amnezia-vpn
 #   - containers amnezia-vpn-*
-#   - images amnezia-vpn-server/*
+#   - images amnezia-vpn-server/* (including the ghcr.io/<owner>/ prefix)
 #   - volumes amnezia-vpn_*
 #   - nft table ip amnezia and the marker block in /etc/nftables.conf
 #   - systemd units amnezia-vpn-forward.service and
 #     docker.service.d/amnezia-vpn-nftables.conf
-#   - /etc/modules-load.d/amneziawg.conf, ip link awg0
+#   - /etc/modules-load.d/amneziawg.conf, /etc/modules-load.d/amnezia-vpn-bbr.conf,
+#     /etc/sysctl.d/99-amnezia-vpn.conf, ip link awg0
 #   - nginx site amnezia-panel
 #   - /opt/amnezia-vpn, /opt/amnezia-vpn-src
 #
@@ -28,6 +29,8 @@ NFT_END='# --- amnezia-vpn end ---'
 SYSTEMD_DIR=/etc/systemd/system
 NGINX_SITE=/etc/nginx/sites-enabled/amnezia-panel
 MODULES_FILE=/etc/modules-load.d/amneziawg.conf
+BBR_MODULES_FILE=/etc/modules-load.d/amnezia-vpn-bbr.conf
+SYSCTL_FILE=/etc/sysctl.d/99-amnezia-vpn.conf
 
 DO_IT=0
 FORCE=0
@@ -66,8 +69,11 @@ fi
 foreign_artifacts() {
     docker ps -a --format '{{.Names}}' 2>/dev/null \
         | awk '/^amnezia-/ && !/^amnezia-vpn-/'
+    # Since the images moved to GHCR they carry a registry prefix
+    # (ghcr.io/<owner>/amnezia-vpn-server/panel). Without it here, cleanup
+    # mistook its own images for another project's and refused to run.
     docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
-        | awk '/amnezia-/ && !/^amnezia-vpn-server\//'
+        | awk '/amnezia-/ && !/(^|\/)amnezia-vpn-server\//'
     docker volume ls --format '{{.Name}}' 2>/dev/null \
         | awk '/^amnezia-/ && !/^amnezia-vpn_/'
     ls "$SYSTEMD_DIR" 2>/dev/null \
@@ -136,7 +142,7 @@ fi
 
 # --- images amnezia-vpn-server/* ---------------------------------------
 
-images="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | awk '/^amnezia-vpn-server\//')"
+images="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | awk '/(^|\/)amnezia-vpn-server\//')"
 if [ -n "$images" ]; then
     log "images to remove:"
     printf '%s\n' "$images" | sed 's/^/cleanup:   /'
@@ -224,18 +230,26 @@ else
     log "skip: $DROPIN not present"
 fi
 
-# --- modules-load ------------------------------------------------------
+# --- modules-load and sysctl ------------------------------------------
+#
+# install.sh writes three files outside the deploy root: the amneziawg
+# module, the tcp_bbr module and the managed sysctl drop-in. Leaving the
+# last two behind means a host that no longer runs this product still loads
+# tcp_bbr at boot and still carries our ip_forward, conntrack and buffer
+# settings.
 
-if [ -f "$MODULES_FILE" ]; then
-    if [ "$DO_IT" -eq 1 ]; then
-        rm -f "$MODULES_FILE"
-        log "removed $MODULES_FILE"
+for managed in "$MODULES_FILE" "$BBR_MODULES_FILE" "$SYSCTL_FILE"; do
+    if [ -f "$managed" ]; then
+        if [ "$DO_IT" -eq 1 ]; then
+            rm -f "$managed"
+            log "removed $managed"
+        else
+            log "would remove $managed"
+        fi
     else
-        log "would remove $MODULES_FILE"
+        log "skip: $managed not present"
     fi
-else
-    log "skip: $MODULES_FILE not present"
-fi
+done
 
 # --- awg0 interface ----------------------------------------------------
 
