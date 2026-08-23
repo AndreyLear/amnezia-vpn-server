@@ -215,7 +215,6 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /clients/{id}/delete", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientDelete))))
 	s.mux.Handle("POST /clients/{id}/rename", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.clientRename))))
 	s.mux.Handle("POST /logout", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.logout))))
-	s.mux.Handle("POST /account/password", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.changePassword))))
 	// T-125: one-click download (fresh archive, not stored).
 	s.mux.Handle("POST /backups/download", s.auth.RequireAuth(s.auth.RequireCSRF(http.HandlerFunc(s.backupDownloadNow))))
 	// The restore POST is the one multipart route of the panel: it
@@ -233,7 +232,6 @@ func New(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/login", s.apiLogin)
 	s.mux.Handle("GET /api/me", s.auth.RequireAPI(http.HandlerFunc(s.apiMe)))
 	s.mux.Handle("POST /api/logout", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiLogout))))
-	s.mux.Handle("POST /api/account/password", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiChangePassword))))
 	s.mux.Handle("POST /api/backups/download", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiBackupDownload))))
 	s.mux.Handle("POST /api/backups/restore", s.auth.RequireAPI(http.HandlerFunc(s.apiBackupRestore)))
 	s.mux.Handle("GET /api/stats/host", s.auth.RequireAPI(http.HandlerFunc(s.apiStatsHost)))

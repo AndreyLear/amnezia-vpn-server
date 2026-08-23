@@ -843,7 +843,11 @@ esac
         printf 'TLS SHA256 fingerprint: %s\n' "$FINGERPRINT"
     fi
     printf '\n'
-    printf 'Change the password at /account.\n'
+    # The panel has no password form (it was removed deliberately): the
+    # only way to change it is this command on the server.
+    printf 'Change the password on the server:\n'
+    printf '  ssh %s@%s "cd %s && docker compose --env-file versions.lock run --rm -T panel-init /app/panel auth set-password admin --password-stdin"\n' \
+        "$SSH_USER" "$SSH_HOST" "$ROOT_DIR"
     printf 'Upload a backup on Backups to restore clients (does not change the panel user).\n'
 } 
 
