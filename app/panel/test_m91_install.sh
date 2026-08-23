@@ -1120,6 +1120,23 @@ test_sysctl_bbr_when_advertised() {
 # modules-load entry: without it the module is gone after a reboot and the
 # sysctl asking for bbr silently leaves the host on cubic. Found on the test
 # VPS, where an earlier modprobe had left the module in place.
+# The autoload entry belongs on every host that runs the tunnel, not only on
+# hosts where this installer happened to install the package. Without it the
+# module comes back after a reboot only because the kernel loads it on demand
+# when the interface is created — an accident, not a setting.
+test_awg_modules_load_written_when_already_present() {
+    fakes_reset          # the awg fake is present, so the stack looks installed
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "already-present flow: exit $rc"
+    stdout | grep -q "already present" \
+        && pass "the run took the already-present path" \
+        || fail "this scenario must take the already-present path"
+    grep -rq "amneziawg" "$MODULES_TEST/amneziawg.conf" 2>/dev/null \
+        && pass "amneziawg persisted for the next boot" \
+        || fail "amneziawg must be persisted even when the package was already there"
+}
+
 test_bbr_persisted_even_when_already_loaded() {
     fakes_reset          # TCP_CC already advertises bbr
     os_release ubuntu 24.04 noble
@@ -1932,6 +1949,7 @@ test_build_flag_compiles_locally
 test_unreachable_registry_falls_back_to_build
 test_sysctl_host_tuning
 test_sysctl_host_tuning_survives_refusal
+test_awg_modules_load_written_when_already_present
 test_bbr_persisted_even_when_already_loaded
 test_sysctl_bbr_loaded_from_module
 test_sysctl_bbr_skipped_when_absent

@@ -711,12 +711,17 @@ else
     done
     run_apt_get install -y amneziawg amneziawg-tools \
         || die_op "apt-get install amneziawg amneziawg-tools failed"
-    mkdir -p "$MODULES_DIR" || die_op "cannot create modules-load dir $MODULES_DIR"
-    printf 'amneziawg\n' > "$MODULES_FILE"
-    chmod 0644 "$MODULES_FILE"
     cmd modprobe amneziawg || die_op "amneziawg kernel module failed to load after installation"
     log "AmneziaWG client stack installed: $(cmd awg version 2>/dev/null | head -1)"
 fi
+
+# Persist the module for the next boot whichever branch ran. Writing it only
+# where the installer had installed the package left hosts that already had it
+# relying on the kernel loading the module on demand when the interface is
+# created — which works, but is not something to depend on.
+mkdir -p "$MODULES_DIR" || die_op "cannot create modules-load dir $MODULES_DIR"
+printf 'amneziawg\n' > "$MODULES_FILE"
+chmod 0644 "$MODULES_FILE"
 
 # --- 7./8. deployment layout + permissions ----------------------------
 
