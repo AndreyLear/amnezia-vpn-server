@@ -39,7 +39,7 @@ fakes_reset() {
     unset AMNEZIA_INSTALL_SKIP_PRUNE
     : > "$FAKE_CALLS"
     mkdir -p "$FAKE_FS"
-    rm -rf "$ROOT" "$SYSCTL_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
+    rm -rf "$ROOT" "$SYSCTL_TEST" "$MODULES_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
         "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST"
     rm -f "$NFTABLES_CONF_TEST"
     cat > "$FAKE_STATE" <<EOF
@@ -52,6 +52,7 @@ NFT_CHECK_RC=0
 NFT_APPLY_RC=0
 NFT_APPLIED=0
 MODPROBE_OK=yes
+MODPROBE_BBR_OK=yes
 DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
 UP_RC=0
@@ -370,6 +371,17 @@ cat > "$FAKE_DIR/modprobe" <<'FAKE_EOF'
 #!/bin/bash
 echo "modprobe $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
+if [ "$1" = "tcp_bbr" ]; then
+    # A kernel that ships tcp_bbr as a module only advertises bbr in
+    # tcp_available_congestion_control once it is loaded.
+    [ "${MODPROBE_BBR_OK:-yes}" = "yes" ] || exit 1
+    case "${TCP_CC:-}" in
+        *bbr*) ;;
+        *) sed "s|^TCP_CC=.*|TCP_CC=\"${TCP_CC} bbr\"|" "$FAKE_STATE" \
+               > "$FAKE_STATE.new" && mv "$FAKE_STATE.new" "$FAKE_STATE" ;;
+    esac
+    exit 0
+fi
 [ "${MODPROBE_OK:-yes}" = "yes" ] || exit 1
 exit 0
 FAKE_EOF
@@ -446,6 +458,7 @@ EOF
 
 ROOT="$TMP_TEST/root"
 SYSCTL_TEST="$TMP_TEST/sysctl.d"
+MODULES_TEST="$TMP_TEST/modules-load.d"
 JOURNALD_TEST="$TMP_TEST/journald.conf.d"
 KEYRING_TEST="$TMP_TEST/apt/keyrings"
 SOURCES_TEST="$TMP_TEST/apt/sources.list.d"
@@ -458,6 +471,7 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_FAKE_DIR="$FAKE_DIR" \
     AMNEZIA_INSTALL_OS_RELEASE="$TMP_TEST/os-release" \
     AMNEZIA_INSTALL_SYSCTL_DIR="$SYSCTL_TEST" \
+    AMNEZIA_INSTALL_MODULES_DIR="$MODULES_TEST" \
     AMNEZIA_INSTALL_JOURNALD_DIR="$JOURNALD_TEST" \
     AMNEZIA_INSTALL_KEYRING_DIR="$KEYRING_TEST" \
     AMNEZIA_INSTALL_APT_SOURCES_DIR="$SOURCES_TEST" \
@@ -773,9 +787,36 @@ test_sysctl_bbr_when_advertised() {
         || fail "BBR sysctls missing although tcp_available_congestion_control has bbr"
 }
 
+# On a clean Ubuntu 24.04 tcp_bbr ships as a module and is not loaded, so
+# tcp_available_congestion_control reads "reno cubic" and a check made
+# before modprobe concludes the kernel has no BBR — which is how the
+# optimisation ended up never being applied on a real install.
+test_sysctl_bbr_loaded_from_module() {
+    fakes_reset
+    sed 's|^TCP_CC=.*|TCP_CC="cubic reno"|' "$FAKE_STATE" > "$FAKE_STATE.new" \
+        && mv "$FAKE_STATE.new" "$FAKE_STATE"
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "bbr module flow: exit $rc"
+    grep -q "modprobe tcp_bbr" "$FAKE_CALLS" \
+        && pass "tcp_bbr is loaded before deciding BBR is unavailable" \
+        || fail "install.sh must try modprobe tcp_bbr"
+    sysf="$SYSCTL_TEST/99-amnezia-vpn.conf"
+    grep -q "net.ipv4.tcp_congestion_control = bbr" "$sysf" \
+        && grep -q "net.core.default_qdisc = fq" "$sysf" \
+        && pass "BBR+fq applied once the module is loaded" \
+        || fail "BBR+fq missing although the module loaded"
+    grep -rq "tcp_bbr" "$MODULES_TEST" 2>/dev/null \
+        && pass "tcp_bbr persisted for the next boot" \
+        || fail "tcp_bbr must be persisted in modules-load.d"
+}
+
 test_sysctl_bbr_skipped_when_absent() {
     fakes_reset
     sed 's|^TCP_CC=.*|TCP_CC="cubic reno"|' "$FAKE_STATE" > "$FAKE_STATE.new" \
+        && mv "$FAKE_STATE.new" "$FAKE_STATE"
+    # ...and the module cannot be loaded either: this kernel has no BBR.
+    sed 's|^MODPROBE_BBR_OK=.*|MODPROBE_BBR_OK=no|' "$FAKE_STATE" > "$FAKE_STATE.new" \
         && mv "$FAKE_STATE.new" "$FAKE_STATE"
     os_release debian 12 bookworm
     rc="$(run_install)"
@@ -1532,6 +1573,7 @@ test_versions_lock_used
 test_ip_forward_disabled
 test_ip_forward_already_enabled
 test_sysctl_bbr_when_advertised
+test_sysctl_bbr_loaded_from_module
 test_sysctl_bbr_skipped_when_absent
 test_journald_cap
 test_weekly_prune_timer

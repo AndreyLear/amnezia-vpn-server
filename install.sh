@@ -518,6 +518,8 @@ cmd systemctl enable --now docker || die_op "systemctl enable --now docker faile
 
 # --- 5. managed sysctl drop-in (always overwrite) ---------------------
 
+MODULES_DIR="${AMNEZIA_INSTALL_MODULES_DIR:-/etc/modules-load.d}"
+
 ip_forward_value() { cmd sysctl -n net.ipv4.ip_forward 2>/dev/null | tr -d ' '; }
 
 tcp_cc_has_bbr() {
@@ -539,11 +541,29 @@ apply_sysctl_warn() { # apply_sysctl_warn KEY=VALUE — warning, do not abort
 
 log "persisting managed sysctl drop-in $SYSCTL_FILE"
 mkdir -p "$SYSCTL_DIR" || die_op "cannot create sysctl dir $SYSCTL_DIR"
+# ensure_bbr: tcp_available_congestion_control only lists what is loaded.
+# On a clean Ubuntu/Debian tcp_bbr ships as a module and nothing has pulled
+# it in yet, so the list reads "reno cubic" and a check made before the
+# modprobe concludes the kernel has no BBR — which is why this optimisation
+# never actually reached a fresh install. Load it first, then decide.
+ensure_bbr() {
+    tcp_cc_has_bbr && return 0
+    cmd modprobe tcp_bbr 2>/dev/null || return 1
+    tcp_cc_has_bbr || return 1
+    # Keep it across reboots the same way the amneziawg module is kept.
+    if mkdir -p "$MODULES_DIR" 2>/dev/null; then
+        printf 'tcp_bbr\n' > "$MODULES_DIR/amnezia-vpn-bbr.conf" 2>/dev/null \
+            && chmod 0644 "$MODULES_DIR/amnezia-vpn-bbr.conf" 2>/dev/null
+    fi
+    log "loaded the tcp_bbr module (it is not loaded by default)"
+    return 0
+}
+
 HAVE_BBR=0
-if tcp_cc_has_bbr; then
+if ensure_bbr; then
     HAVE_BBR=1
 else
-    log "skipping BBR sysctls: bbr is not in net.ipv4.tcp_available_congestion_control"
+    log "skipping BBR sysctls: this kernel does not provide bbr"
 fi
 {
     printf 'net.ipv4.ip_forward = 1\n'
@@ -577,7 +597,6 @@ fi
 # skip the install; the module auto-loads at boot and DKMS rebuilds it
 # after kernel upgrades.
 
-MODULES_DIR="${AMNEZIA_INSTALL_MODULES_DIR:-/etc/modules-load.d}"
 MODULES_FILE="$MODULES_DIR/amneziawg.conf"
 
 amneziawg_available() {
