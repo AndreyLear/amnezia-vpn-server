@@ -79,3 +79,5 @@ CLAUDE.md
 
 # Git worktrees (local checkouts; never commit contents)
 .worktrees/
+
+.superpowers
