@@ -275,7 +275,22 @@ export function BackupUploadDialog({
                 </p>
               </div>
             ) : isSmUp ? (
-              <label
+              // Not a <label> with the input inside it. Browsers disagree
+              // about that arrangement: Safari refused the scripted click the
+              // label handler issued, and Helium never activated the hidden
+              // input from the label at all. A plain clickable block calling
+              // click() on an input that sits beside it works in both.
+              <div
+                role="button"
+                tabIndex={restorePending || pending ? -1 : 0}
+                aria-label="Выберите файл бэкапа"
+                onClick={() => openPicker()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openPicker();
+                  }
+                }}
                 className={`grid min-w-0 gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm transition-colors duration-500 motion-reduce:duration-0 ${
                   restorePending ? "cursor-not-allowed" : "cursor-pointer"
                 } ${
@@ -305,8 +320,7 @@ export function BackupUploadDialog({
                 >
                   {file ? file.name : "Формат: .tar.zst"}
                 </span>
-                {fileInput}
-              </label>
+              </div>
             ) : (
               <div className="grid min-w-0 gap-4 overflow-hidden">
                 <Button
@@ -326,9 +340,12 @@ export function BackupUploadDialog({
                 >
                   {file ? file.name : "Формат: .tar.zst"}
                 </span>
-                {fileInput}
               </div>
             )}
+            {/* One input for both layouts, outside the clickable area: the
+                handlers reach it through the ref, so nothing depends on where
+                it sits in the markup. */}
+            {fileInput}
           </div>
           <DialogFooter>
             <Button
