@@ -360,6 +360,13 @@ assert_not_in() {
     grep -q "$1" "$2" && fail "$3" || pass "$3"
 }
 
+# Same as assert_not_in, but only over actual rule lines: the fragment
+# carries explanatory comments, and a word appearing in prose must not be
+# mistaken for a rule.
+assert_not_in_rules() {
+    grep -v '^[[:space:]]*#' "$2" | grep -q "$1" && fail "$3" || pass "$3"
+}
+
 # --- tests ---------------------------------------------------------------
 
 test_bash_syntax() {
@@ -402,6 +409,20 @@ test_host_cidr_normalized() {
     assert_not_in "10.8.0.7" "$NFT_SYS_FILE" "host bits never appear in the ruleset"
 }
 
+# The clamp is only reached while the packet is still traversing the chain:
+# `accept` terminates it, so a clamp placed after the subnet accepts would
+# never run. Assert the order, not just the presence.
+assert_mss_clamp_precedes_accept() {
+    local clamp accept
+    clamp="$(grep -n "maxseg size set rt mtu" "$NFT_SYS_FILE" | head -1 | cut -d: -f1)"
+    accept="$(grep -n "ip saddr .* accept" "$NFT_SYS_FILE" | head -1 | cut -d: -f1)"
+    if [ -n "$clamp" ] && [ -n "$accept" ] && [ "$clamp" -lt "$accept" ]; then
+        pass "forward: MSS clamp precedes the subnet accepts"
+    else
+        fail "forward: MSS clamp must precede the subnet accepts (clamp=${clamp:-none} accept=${accept:-none})"
+    fi
+}
+
 test_default_rules() {
     fakes_reset
     os_release debian 12 bookworm
@@ -412,6 +433,8 @@ test_default_rules() {
     assert_in "^table ip amnezia {" "$NFT_SYS_FILE" "table ip amnezia declared"
     assert_in "ip saddr 10.8.0.0/24 accept" "$NFT_SYS_FILE" "forward: vpn subnet saddr accepted"
     assert_in "ip daddr 10.8.0.0/24 accept" "$NFT_SYS_FILE" "forward: vpn subnet daddr accepted"
+    assert_in "tcp flags syn tcp option maxseg size set rt mtu" "$NFT_SYS_FILE" "forward: TCP MSS clamped to the route MTU"
+    assert_mss_clamp_precedes_accept
     assert_in "udp dport 443 accept" "$NFT_SYS_FILE" "input: default UDP 443 accepted"
     assert_in 'ip saddr 10.8.0.0/24 oifname != "awg0" masquerade' "$NFT_SYS_FILE" "postrouting: NAT for subnet, never into the tunnel"
 }
@@ -449,7 +472,7 @@ test_no_flush_no_drop() {
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "no-flush flow: exit $rc"
     assert_not_in "flush ruleset" "$NFT_SYS_FILE" "never flushes the host ruleset"
-    assert_not_in " drop" "$NFT_SYS_FILE" "no drop rules anywhere"
+    assert_not_in_rules " drop" "$NFT_SYS_FILE" "no drop rules anywhere"
     assert_not_in "policy drop" "$NFT_SYS_FILE" "no drop policies"
 }
 

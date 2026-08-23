@@ -824,6 +824,14 @@ table ip amnezia {
         # accept is seen even when a host firewall defaults FORWARD to
         # DROP — without touching any foreign rule.
         type filter hook forward priority -100; policy accept;
+        # Clamp TCP MSS to the outgoing route MTU. Path MTU Discovery is
+        # the only other thing keeping segments small enough for the
+        # tunnel, and it fails silently wherever the transit drops the
+        # ICMP fragmentation-needed reply (mobile carriers, PPPoE at
+        # 1492, plenty of home routers): small requests get through and
+        # large transfers stall. The clamp must precede the accepts —
+        # accept terminates the chain.
+        tcp flags syn tcp option maxseg size set rt mtu
         ip saddr $1 accept
         ip daddr $1 accept
     }
