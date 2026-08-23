@@ -786,8 +786,12 @@ test_awg_stack_present_skips_install() {
         || pass "awg stack skipped when module + awg tools are present"
     grep -q "apt-get install -y amneziawg" "$FAKE_CALLS" && fail "amneziawg packages installed though present" \
         || pass "no amneziawg package install when already present"
-    [ ! -f "$TMP_TEST/modules-load.d/amneziawg.conf" ] && pass "no modules-load entry when already present" \
-        || fail "modules-load entry written though module is present"
+    # The packages are not reinstalled, but the autoload entry is still
+    # written: the host runs the tunnel either way, and leaving it out made
+    # the module's return after a reboot depend on the kernel loading it on
+    # demand rather than on a setting.
+    [ -f "$TMP_TEST/modules-load.d/amneziawg.conf" ] && pass "modules-load entry written even when already present" \
+        || fail "modules-load entry missing when the stack was already present"
 }
 
 test_awg_stack_forced_install() {
