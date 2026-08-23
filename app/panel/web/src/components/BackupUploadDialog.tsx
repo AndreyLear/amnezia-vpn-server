@@ -49,6 +49,16 @@ type BackupUploadDialogProps = {
   onPrepared?: () => void;
 };
 
+type EndpointChoice = "archive" | "server";
+
+type RestoreResponse = MutationResponse & {
+  needs_choice?: boolean;
+  archive_endpoint?: string;
+  server_endpoint?: string;
+  archive_mtu?: string;
+  server_mtu?: string;
+};
+
 export function BackupUploadDialog({
   open,
   restorePending = false,
@@ -58,6 +68,7 @@ export function BackupUploadDialog({
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [choice, setChoice] = useState<RestoreResponse | null>(null);
   const [miss, setMiss] = useState(false);
   const isSmUp = useMinWidthSm();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -125,6 +136,7 @@ export function BackupUploadDialog({
       return;
     }
     setFile(next);
+    setChoice(null);
     clearMiss();
   }
 
@@ -133,15 +145,23 @@ export function BackupUploadDialog({
     inputRef.current?.click();
   }
 
-  async function upload(next: File) {
+  async function upload(next: File, endpoint?: EndpointChoice) {
     setPending(true);
     try {
       const body = new FormData();
       body.append("backup", next);
-      const data = await api<MutationResponse>("/api/backups/restore", {
+      if (endpoint) body.append("endpoint", endpoint);
+      const data = await api<RestoreResponse>("/api/backups/restore", {
         method: "POST",
         body,
       });
+      // The archive was taken on a different server: it carries that
+      // server's address, and applying it blindly would point every client
+      // at the machine being migrated away from.
+      if (data?.needs_choice) {
+        setChoice(data);
+        return;
+      }
       if (!mutationSucceeded(data)) {
         toast.error(data?.message ?? "Восстановление не удалось.");
         return;
@@ -202,7 +222,44 @@ export function BackupUploadDialog({
           }}
         >
           <div className="grid gap-4">
-            {isSmUp ? (
+            {choice ? (
+              <div className="grid gap-4">
+                <p className="text-sm">
+                  Бэкап снят на другом сервере
+                </p>
+                <div className="grid gap-2 rounded-lg border border-border p-4 text-sm">
+                  <span className="min-w-0 break-all">
+                    Адрес в бэкапе: {choice.archive_endpoint || "не задан"}
+                  </span>
+                  <span className="min-w-0 break-all text-muted-foreground">
+                    Этот сервер: {choice.server_endpoint || "не задан"}
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="max-sm:h-12 max-sm:w-full"
+                  disabled={pending}
+                  onClick={() => file && void upload(file, "archive")}
+                >
+                  Оставить адрес из бэкапа
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="max-sm:h-12 max-sm:w-full"
+                  disabled={pending}
+                  onClick={() => file && void upload(file, "server")}
+                >
+                  Использовать адрес этого сервера
+                </Button>
+                <p className="text-sm text-muted-foreground">
+                  Адрес из бэкапа подойдёт, если вы переносите домен на новый сервер: старые
+                  конфиги клиентов продолжат работать. С адресом этого сервера конфиги придётся
+                  перевыпустить
+                </p>
+              </div>
+            ) : isSmUp ? (
               <label
                 className={`grid min-w-0 gap-2 overflow-hidden rounded-lg border border-dashed p-6 text-center text-sm transition-colors duration-500 motion-reduce:duration-0 ${
                   restorePending ? "cursor-not-allowed" : "cursor-pointer"
