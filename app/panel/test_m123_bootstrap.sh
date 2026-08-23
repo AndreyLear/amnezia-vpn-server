@@ -50,6 +50,7 @@ SSH_RC=0
 INSTALL_RC=0
 INIT_RC=0
 INIT_STDERR=
+CURL_SOURCE_RC=0
 UP_RC=0
 ADDUSER_RC=0
 CURL_PANEL_RC=0
@@ -199,6 +200,10 @@ if printf '%s' "$*" | grep -q "api.ipify.org"; then
     exit 0
 fi
 if [ -n "$oarg" ] && [ "$oarg" != "/dev/null" ]; then
+    # CURL_SOURCE_RC lets a test make the project download fail.
+    if printf '%s' "$*" | grep -q "codeload\|github"; then
+        [ "${CURL_SOURCE_RC:-0}" = "0" ] || exit "${CURL_SOURCE_RC}"
+    fi
     mkdir -p "$(dirname "$oarg")"
     printf '%s\n' "${SOURCE_BODY}" > "$oarg"
     exit 0
@@ -224,13 +229,26 @@ FAKE_EOF
 cat > "$FAKE_DIR/git" <<'FAKE_EOF'
 #!/bin/bash
 echo "git $*" >> "${FAKE_CALLS:?}"
+dir="."
 if [ "$1" = "-C" ]; then
+    dir="$2"
     shift 2
 fi
-if [ "${1:-}" = "archive" ]; then
-    printf 'FAKE-GIT-ARCHIVE\n'
-    exit 0
-fi
+case "${1:-}" in
+    rev-parse)
+        # Answer like the real thing: a directory without .git is not a work
+        # tree. A fake that always says yes hides the standalone path, where
+        # bootstrap.sh has no checkout beside it.
+        [ -d "$dir/.git" ] || exit 128
+        printf 'true\n'
+        exit 0
+        ;;
+    archive)
+        [ -d "$dir/.git" ] || exit 128
+        printf 'FAKE-GIT-ARCHIVE\n'
+        exit 0
+        ;;
+esac
 exit 0
 FAKE_EOF
 
@@ -964,6 +982,51 @@ test_summary_points_at_the_server_for_passwords() {
         || fail "the summary must show the set-password command"
 }
 
+# The README tells people to download bootstrap.sh on its own and run it.
+# With no checkout beside it the script used to tar whatever directory it
+# happened to sit in — Downloads, or the home directory — and die on
+# "failed to pack the local repository". It has to fetch the project itself.
+test_standalone_downloads_the_project() {
+    fakes_reset
+    lonely="$TMP_TEST/lonely"
+    rm -rf "$lonely"; mkdir -p "$lonely"
+    cp "$BOOTSTRAP_SH" "$lonely/bootstrap.sh"
+    # a bulky neighbour: packing this directory is exactly what must not happen
+    mkdir -p "$lonely/unrelated" && printf 'x%.0s' $(seq 1 200) > "$lonely/unrelated/big.bin"
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
+        bash "$lonely/bootstrap.sh" --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+        echo $?
+    )"
+    [ "$rc" = "0" ] || { fail "standalone run: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    stderr | grep -qi "downloading the project" \
+        && pass "a lone bootstrap.sh downloads the project" \
+        || fail "a lone bootstrap.sh must download the project, not pack its directory"
+    grep -q "unrelated" "$FAKE_CALLS" \
+        && fail "the neighbouring directory was packed" \
+        || pass "nothing from the surrounding directory was packed"
+}
+
+# When packing does fail, the operator has to see why.
+test_failed_pack_explains_itself() {
+    fakes_reset
+    setstate CURL_SOURCE_RC 1 "$FAKE_STATE"
+    lonely="$TMP_TEST/lonely2"
+    rm -rf "$lonely"; mkdir -p "$lonely"
+    cp "$BOOTSTRAP_SH" "$lonely/bootstrap.sh"
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
+        bash "$lonely/bootstrap.sh" --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+        echo $?
+    )"
+    [ "$rc" != "0" ] || fail "a failed download must abort"
+    stderr | grep -qi "github\|скачать\|download" \
+        && pass "the failure says what could not be fetched" \
+        || fail "the failure must name what it tried to fetch"
+}
+
 # --- main ---------------------------------------------------------------
 
 test_bash_syntax
@@ -995,6 +1058,8 @@ test_sshpass_missing
 test_invalid_panel_port
 test_default_panel_port_without_domain
 test_install_progress_is_visible
+test_standalone_downloads_the_project
+test_failed_pack_explains_itself
 test_summary_points_at_the_server_for_passwords
 test_ssh_keepalive_tolerates_a_busy_host
 test_rerun_survives_existing_server_row

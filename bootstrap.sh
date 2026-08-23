@@ -588,6 +588,7 @@ validate_safe "$REMOTE_TMP" || die_op "SSH failed: unexpected mktemp path from t
 
 # --- pack or download the project --------------------------------------
 
+PROJECT_TARBALL_URL="${AMNEZIA_PROJECT_TARBALL_URL:-https://codeload.github.com/AndreyLear/amnezia-vpn-server/tar.gz/refs/heads/main}"
 BUNDLE="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-src.XXXXXX")"
 
 if [ -n "$SOURCE_URL" ]; then
@@ -602,6 +603,18 @@ else
         log "packing the local repository (git archive)"
         if git -C "$SCRIPT_DIR" archive --format=tar HEAD > "$BUNDLE"; then
             packed=1
+        fi
+    fi
+    # Downloaded on its own, the way the README tells people to: there is no
+    # project beside the script, so fetch it. Packing $SCRIPT_DIR here would
+    # tar up whatever the file was saved into — Downloads, or the home
+    # directory — and fail on its size or on unreadable files.
+    if [ "$packed" -eq 0 ] && [ ! -f "$SCRIPT_DIR/install.sh" ]; then
+        log "downloading the project from GitHub (no checkout beside this script)"
+        if curl -fsSL --max-time 120 -o "$BUNDLE" "$PROJECT_TARBALL_URL"; then
+            packed=1
+        else
+            die_op "cannot download the project from $PROJECT_TARBALL_URL — check the network, or clone the repository and run ./bootstrap.sh from it"
         fi
     fi
     if [ "$packed" -eq 0 ]; then
@@ -619,11 +632,16 @@ else
             --exclude=.codex \
             --exclude=AUDITS \
             --exclude=docs \
-            -cf "$BUNDLE" . 2>/dev/null; then
+            -cf "$BUNDLE" . 2>"$BUNDLE.err"; then
             packed=1
         fi
     fi
-    [ "$packed" -eq 1 ] || die_op "failed to pack the local repository"
+    if [ "$packed" -ne 1 ]; then
+        [ -s "$BUNDLE.err" ] && head -3 "$BUNDLE.err" >&2
+        rm -f "$BUNDLE.err"
+        die_op "failed to pack the local repository at $SCRIPT_DIR"
+    fi
+    rm -f "$BUNDLE.err"
 fi
 
 log "copying the project to the server"
