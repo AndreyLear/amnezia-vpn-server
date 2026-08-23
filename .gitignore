@@ -67,7 +67,13 @@ CHANGELOG.md
 .claude/
 .codex/
 .cursor/
-.github/
+# Local CI config stays local, with one deliberate exception: the release
+# workflow has to live in the repository for GitHub to run it, and without
+# it there are no published images to pull.
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/release.yml
 AGENTS.md
 CLAUDE.md
 

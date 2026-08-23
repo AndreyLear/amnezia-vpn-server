@@ -56,6 +56,7 @@ MODPROBE_BBR_OK=yes
 DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
 UP_RC=0
+COMPOSE_PULL_RC=0
 BUILDER_PRUNE_RC=0
 SYSCTL_IP_FORWARD_W_RC=0
 SYSCTL_CONNTRACK_W_RC=0
@@ -96,7 +97,7 @@ if [ "${1:-}" = "compose" ]; then
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --env-file) shift 2 ;;
-            version | config | build | up | ps | logs) verb="$1"; break ;;
+            version | config | build | pull | up | ps | logs) verb="$1"; break ;;
             *) shift ;;
         esac
     done
@@ -118,6 +119,7 @@ if [ "${1:-}" = "compose" ]; then
             echo "amneziavpn-awg-1          awg          /entrypoint.sh    Created 0 seconds ago"
             ;;
         build) exit 0 ;;
+        pull) exit "${COMPOSE_PULL_RC:-0}" ;;
         up) exit "${UP_RC:-0}" ;;
     esac
     exit 0
@@ -785,6 +787,58 @@ test_ip_forward_already_enabled() {
 # A VPN gateway runs on kernel defaults sized for a desktop unless the
 # installer says otherwise: 208 KiB socket ceilings, ~28k NAT ports and a
 # five-day conntrack timeout on a 2 GiB host.
+# Compiling on the user's VPS means downloading an 800 MB Go toolchain and
+# building amneziawg-go, amneziawg-tools and the panel on (usually) one
+# vCPU, to produce ~60 MB that CI already built. Pulling is the default.
+test_images_are_pulled_by_default() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "pull flow: exit $rc"
+    grep -q "compose .*pull" "$FAKE_CALLS" \
+        && pass "published images are pulled" \
+        || fail "install.sh must pull the published images"
+    grep -q "compose .*build" "$FAKE_CALLS" \
+        && fail "default install must not compile the images" \
+        || pass "default install does not compile anything"
+    # Nothing was built, so there is no toolchain or build cache to prune.
+    grep -q "pruning Docker build cache" "$TMP_TEST/out" \
+        && fail "prune has nothing to do after a pull" \
+        || pass "prune skipped when nothing was built"
+}
+
+test_build_flag_compiles_locally() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --build)"
+    [ "$rc" = "0" ] || fail "--build flow: exit $rc"
+    grep -q "compose .*build" "$FAKE_CALLS" \
+        && pass "--build compiles the images here" \
+        || fail "--build must compile the images"
+    grep -q "compose .*pull" "$FAKE_CALLS" \
+        && fail "--build must not pull" \
+        || pass "--build does not pull"
+    grep -q "pruning Docker build cache" "$TMP_TEST/out" \
+        && pass "--build prunes the toolchain afterwards" \
+        || fail "--build must prune the toolchain"
+}
+
+# A registry this host cannot reach must not end the install: fall back to
+# the old path and say so.
+test_unreachable_registry_falls_back_to_build() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set COMPOSE_PULL_RC 1
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "registry fallback flow: exit $rc"
+    stdout | grep -q "could not pull the prebuilt images" \
+        && pass "failed pull is explained" \
+        || fail "failed pull must be explained"
+    grep -q "compose .*build" "$FAKE_CALLS" \
+        && pass "failed pull falls back to building" \
+        || fail "failed pull must fall back to building"
+}
+
 test_sysctl_host_tuning() {
     fakes_reset
     os_release ubuntu 24.04 noble
@@ -838,8 +892,6 @@ test_sysctl_bbr_when_advertised() {
 # tcp_available_congestion_control reads "reno cubic" and a check made
 # before modprobe concludes the kernel has no BBR — which is how the
 # optimisation ended up never being applied on a real install.
-test_sysctl_host_tuning
-test_sysctl_host_tuning_survives_refusal
 test_sysctl_bbr_loaded_from_module() {
     fakes_reset
     sed 's|^TCP_CC=.*|TCP_CC="cubic reno"|' "$FAKE_STATE" > "$FAKE_STATE.new" \
@@ -969,9 +1021,12 @@ test_journald_restart_warns() {
 test_installed_compose_contract() {
     # M9.2b: install.sh copies compose.yaml verbatim — the installed
     # copy must carry the host-mode/restart contract.
+    #
+    # Runs with --build: the prune assertions below are about cleaning up
+    # after a local build, which the default (pull) path never does.
     fakes_reset
     os_release debian 12 bookworm
-    rc="$(run_install)"
+    rc="$(run_install --build)"
     [ "$rc" = "0" ] || fail "installed compose flow: exit $rc"
     [ "$(grep -c '^    network_mode: host$' "$ROOT/compose.yaml")" = "1" ] \
         && pass "installed compose: awg network_mode: host" \
@@ -1054,7 +1109,7 @@ exit 1
 EOF
     chmod +x "$prune_src"
     restore_prune() { cp -f "$prune_bak" "$prune_src" && chmod +x "$prune_src"; }
-    rc="$(run_install)"
+    rc="$(run_install --build --build)"
     restore_prune
     [ "$rc" = "0" ] || fail "prune soft-fail: exit $rc, want 0"
     grep -q "WARNING: docker prune failed" "$TMP_TEST/out" \
@@ -1065,7 +1120,8 @@ EOF
 test_skip_prune() {
     fakes_reset
     os_release debian 12 bookworm
-    rc="$(AMNEZIA_INSTALL_SKIP_PRUNE=1 run_install)"
+    # --build: the prune step only exists on the build path.
+    rc="$(AMNEZIA_INSTALL_SKIP_PRUNE=1 run_install --build)"
     [ "$rc" = "0" ] || fail "SKIP_PRUNE=1 flow: exit $rc"
     if grep -q "builder prune" "$FAKE_CALLS"; then
         fail "SKIP_PRUNE=1: builder prune was invoked"
@@ -1622,6 +1678,11 @@ test_versions_lock_used
 test_ip_forward_disabled
 test_ip_forward_already_enabled
 test_sysctl_bbr_when_advertised
+test_images_are_pulled_by_default
+test_build_flag_compiles_locally
+test_unreachable_registry_falls_back_to_build
+test_sysctl_host_tuning
+test_sysctl_host_tuning_survives_refusal
 test_sysctl_bbr_loaded_from_module
 test_sysctl_bbr_skipped_when_absent
 test_journald_cap

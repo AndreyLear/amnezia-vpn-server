@@ -59,6 +59,7 @@
 #                   (T-124): self-signed https://<server-ip>:PORT.
 #                   Omitted with a panel domain: TCP 443 as today
 #                   (UDP AWG 443 can coexist).
+#   --build            compile the images here instead of pulling them
 #   --panel-tls-regen  with --panel-port and no panel domain: force a
 #                   fresh self-signed certificate.
 #   --help          usage
@@ -139,7 +140,7 @@ Usage:
   ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
                [--panel-domain FQDN | --domain FQDN]
                [--vpn-domain FQDN | --client-domain FQDN]
-               [--panel-port PORT] [--panel-tls-regen]
+               [--panel-port PORT] [--panel-tls-regen] [--build]
 
 Options:
   --root DIR        deployment root (default: /opt/amnezia-vpn)
@@ -161,6 +162,9 @@ Options:
                     https://PANEL_DOMAIN:PORT (nftables: tcp 80 + tcp
                     PORT). Without a panel domain: self-signed
                     https://<server-ip>:PORT (T-124).
+  --build       compile the images on this server instead of pulling the
+                published ones (slow: it downloads a Go toolchain and
+                builds amneziawg-go, amneziawg-tools and the panel)
   --panel-tls-regen with --panel-port and no panel domain: force a
                     fresh self-signed certificate
   --help            print this message
@@ -234,6 +238,9 @@ CLIENT_DOMAIN="${CLIENT_DOMAIN:-}"
 PANEL_PORT_SET=0
 PANEL_PORT=""
 PANEL_TLS_REGEN=0
+# Published images are the default; --build compiles everything on this
+# host instead (development, or a registry this host cannot reach).
+BUILD_FROM_SOURCE=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -278,6 +285,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --panel-tls-regen)
             PANEL_TLS_REGEN=1
+            shift
+            ;;
+        --build)
+            BUILD_FROM_SOURCE=1
             shift
             ;;
         *)
@@ -1178,15 +1189,38 @@ docker_compose --env-file versions.lock config --quiet \
 
 # --- 13. build and start the stack ------------------------------------
 
-log "building the stack images (pinned versions from versions.lock)"
-docker_compose --env-file versions.lock build \
-    || die_op "docker compose build failed"
-if [ "${AMNEZIA_INSTALL_SKIP_PRUNE:-}" = "1" ]; then
-    log "skipping docker prune (AMNEZIA_INSTALL_SKIP_PRUNE=1)"
+# Pull the images CI published rather than compiling them here: building
+# on a 1-vCPU VPS means downloading an 800 MB Go toolchain, cloning
+# amneziawg-go and amneziawg-tools and compiling four binaries, all to
+# produce ~60 MB that GitHub already built. --build keeps the old path for
+# development, and an unreachable registry falls back to it rather than
+# failing the install.
+IMAGES_BUILT=0
+build_images() {
+    log "building the stack images (pinned versions from versions.lock)"
+    docker_compose --env-file versions.lock build \
+        || die_op "docker compose build failed"
+    IMAGES_BUILT=1
+}
+
+if [ "$BUILD_FROM_SOURCE" = "1" ]; then
+    build_images
 else
-    log "pruning Docker build cache and golang toolchain images"
-    if ! "$ROOT_DIR/docker-prune.sh"; then
-        log "WARNING: docker prune failed; continuing"
+    log "pulling the prebuilt stack images (this replaces a long local build)"
+    if ! docker_compose --env-file versions.lock pull; then
+        log "WARNING: could not pull the prebuilt images; building them here instead"
+        build_images
+    fi
+fi
+
+if [ "$IMAGES_BUILT" = "1" ]; then
+    if [ "${AMNEZIA_INSTALL_SKIP_PRUNE:-}" = "1" ]; then
+        log "skipping docker prune (AMNEZIA_INSTALL_SKIP_PRUNE=1)"
+    else
+        log "pruning Docker build cache and golang toolchain images"
+        if ! "$ROOT_DIR/docker-prune.sh"; then
+            log "WARNING: docker prune failed; continuing"
+        fi
     fi
 fi
 log "starting the stack"

@@ -46,6 +46,8 @@ AWG_PORT=""
 ROOT_DIR=""
 SOURCE_URL=""
 PANEL_PORT_SET=0
+# Published images are the default; --build compiles them on the server.
+BUILD_FROM_SOURCE=0
 DOMAIN_SET=0
 CLIENT_DOMAIN_SET=0
 NONINTERACTIVE=0
@@ -218,6 +220,12 @@ while [ "$#" -gt 0 ]; do
             DOMAIN_SET=1
             NONINTERACTIVE=1
             shift 2
+            ;;
+        --build)
+            # Development / unreachable-registry escape hatch: compile the
+            # images on the server instead of pulling the published ones.
+            BUILD_FROM_SOURCE=1
+            shift
             ;;
         --panel-port)
             [ "$#" -ge 2 ] || die_usage "--panel-port requires a port argument"
@@ -631,6 +639,9 @@ fi
 if [ "$PANEL_PORT_SET" = "1" ] && [ -n "$PANEL_PORT" ]; then
     INSTALL_FLAGS="$INSTALL_FLAGS --panel-port '$PANEL_PORT'"
 fi
+if [ "$BUILD_FROM_SOURCE" = "1" ]; then
+    INSTALL_FLAGS="$INSTALL_FLAGS --build"
+fi
 
 REMOTE_INSTALL=$(cat <<EOF
 set -e
@@ -683,6 +694,8 @@ install_progress() { # stdin: the installer log; also written to $INSTALL_OUT
                 progress_step 5 "Разворачиваю файлы на сервере" ;;
             *"tunnel MTU"*)
                 progress_step 6 "Измеряю канал сервера" ;;
+            *"pulling the prebuilt stack images"*)
+                progress_step 7 "Скачиваю готовые образы" ;;
             *"building the stack images"*)
                 progress_step 7 "Собираю образы — самый долгий шаг, обычно 10–30 минут. Полная загрузка процессора в это время нормальна" ;;
             *"starting the stack"*)

@@ -76,11 +76,19 @@ Optional panel TLS port (Let's Encrypt still uses TCP 80 for HTTP-01):
 ```sh
 ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
              [--panel-domain FQDN] [--vpn-domain FQDN] [--panel-port PORT]
+             [--build]
 ```
 
+The stack images are pulled from GHCR
+(`ghcr.io/andreylear/amnezia-vpn-server`) at the version pinned in
+`versions.lock`, so a fresh install downloads ~60 MB instead of compiling
+amneziawg-go, amneziawg-tools and the panel on the VPS. `--build` compiles
+them locally instead — that is the development path, and the installer
+falls back to it on its own when the registry cannot be reached.
+
 The installer creates the deployment layout (data/config/status/backups),
-installs the host nftables ruleset and the forward-accept unit, builds and
-starts the stack, and keeps the panel loopback-only behind nginx when a
+installs the host nftables ruleset and the forward-accept unit, pulls the
+published images and starts the stack, and keeps the panel loopback-only behind nginx when a
 domain or `--panel-port` is set. Without `bootstrap.sh`,
 application init is still:
 

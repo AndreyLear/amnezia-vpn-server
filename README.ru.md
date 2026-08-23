@@ -78,7 +78,15 @@ TCP 80 для HTTP-01):
 ```sh
 ./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
              [--panel-domain FQDN] [--vpn-domain FQDN] [--panel-port PORT]
+             [--build]
 ```
+
+Образы стека скачиваются готовыми из GHCR
+(`ghcr.io/andreylear/amnezia-vpn-server`), версия закреплена в
+`versions.lock`: чистая установка качает ~60 МБ вместо того, чтобы
+компилировать amneziawg-go, amneziawg-tools и панель прямо на VPS.
+`--build` собирает их на сервере — это путь для разработки, и установщик
+сам переходит на него, если registry недоступен.
 
 Установщик создаёт раскладку (data/config/status/backups), ставит
 nftables и unit forward-accept, собирает и запускает стек, держит панель
