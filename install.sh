@@ -518,6 +518,8 @@ cmd systemctl enable --now docker || die_op "systemctl enable --now docker faile
 
 # --- 5. managed sysctl drop-in (always overwrite) ---------------------
 
+MODULES_DIR="${AMNEZIA_INSTALL_MODULES_DIR:-/etc/modules-load.d}"
+
 ip_forward_value() { cmd sysctl -n net.ipv4.ip_forward 2>/dev/null | tr -d ' '; }
 
 tcp_cc_has_bbr() {
@@ -539,15 +541,56 @@ apply_sysctl_warn() { # apply_sysctl_warn KEY=VALUE — warning, do not abort
 
 log "persisting managed sysctl drop-in $SYSCTL_FILE"
 mkdir -p "$SYSCTL_DIR" || die_op "cannot create sysctl dir $SYSCTL_DIR"
+# ensure_bbr: tcp_available_congestion_control only lists what is loaded.
+# On a clean Ubuntu/Debian tcp_bbr ships as a module and nothing has pulled
+# it in yet, so the list reads "reno cubic" and a check made before the
+# modprobe concludes the kernel has no BBR — which is why this optimisation
+# never actually reached a fresh install. Load it first, then decide.
+ensure_bbr() {
+    tcp_cc_has_bbr && return 0
+    cmd modprobe tcp_bbr 2>/dev/null || return 1
+    tcp_cc_has_bbr || return 1
+    # Keep it across reboots the same way the amneziawg module is kept.
+    if mkdir -p "$MODULES_DIR" 2>/dev/null; then
+        printf 'tcp_bbr\n' > "$MODULES_DIR/amnezia-vpn-bbr.conf" 2>/dev/null \
+            && chmod 0644 "$MODULES_DIR/amnezia-vpn-bbr.conf" 2>/dev/null
+    fi
+    log "loaded the tcp_bbr module (it is not loaded by default)"
+    return 0
+}
+
 HAVE_BBR=0
-if tcp_cc_has_bbr; then
+if ensure_bbr; then
     HAVE_BBR=1
 else
-    log "skipping BBR sysctls: bbr is not in net.ipv4.tcp_available_congestion_control"
+    log "skipping BBR sysctls: this kernel does not provide bbr"
 fi
+# Gateway tuning. Kernel defaults are sized for a desktop; each line
+# below is here for a reason that shows up on a VPN gateway:
+#   rmem/wmem_max     the tunnel is one UDP socket carrying every client,
+#                     and the default 208 KiB ceiling drops packets on
+#                     bursts (a ceiling, not an allocation)
+#   netdev_max_backlog  packets queued for softirq on a single-vCPU host
+#   ip_local_port_range masquerade needs translation ports; the default
+#                     32768-60999 leaves ~28k per destination
+#   tcp_slow_start_after_idle=0  keeps the window after idle gaps, which
+#                     is what long-lived downloads actually see
+#   conntrack established timeout  five days of state on a 2 GiB host is
+#                     memory spent on connections that ended long ago
+TUNING_SYSCTLS='net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.core.netdev_max_backlog=16384
+net.ipv4.ip_local_port_range=10240 65535
+net.ipv4.tcp_slow_start_after_idle=0
+net.netfilter.nf_conntrack_tcp_timeout_established=86400'
+
 {
     printf 'net.ipv4.ip_forward = 1\n'
     printf 'net.netfilter.nf_conntrack_max = 262144\n'
+    printf '%s\n' "$TUNING_SYSCTLS" | while IFS='=' read -r key value; do
+        [ -n "$key" ] || continue
+        printf '%s = %s\n' "$key" "$value"
+    done
     if [ "$HAVE_BBR" = "1" ]; then
         printf 'net.core.default_qdisc = fq\n'
         printf 'net.ipv4.tcp_congestion_control = bbr\n'
@@ -560,6 +603,11 @@ cmd sysctl -w net.ipv4.ip_forward=1 || die_op "sysctl -w net.ipv4.ip_forward=1 f
 
 cmd modprobe nf_conntrack 2>/dev/null || log "WARNING: modprobe nf_conntrack failed; continuing"
 apply_sysctl_warn net.netfilter.nf_conntrack_max=262144 || true
+# Applied one by one: a kernel without a given knob must warn, not abort.
+printf '%s\n' "$TUNING_SYSCTLS" | while IFS= read -r kv; do
+    [ -n "$kv" ] || continue
+    apply_sysctl_warn "$kv" || true
+done
 if [ "$HAVE_BBR" = "1" ]; then
     apply_sysctl_warn net.core.default_qdisc=fq || true
     apply_sysctl_warn net.ipv4.tcp_congestion_control=bbr || true
@@ -577,7 +625,6 @@ fi
 # skip the install; the module auto-loads at boot and DKMS rebuilds it
 # after kernel upgrades.
 
-MODULES_DIR="${AMNEZIA_INSTALL_MODULES_DIR:-/etc/modules-load.d}"
 MODULES_FILE="$MODULES_DIR/amneziawg.conf"
 
 amneziawg_available() {
