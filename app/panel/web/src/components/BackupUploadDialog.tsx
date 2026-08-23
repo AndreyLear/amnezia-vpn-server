@@ -206,6 +206,21 @@ export function BackupUploadDialog({
         onOpenChange(next);
       }}
     >
+      {/* A file dragged anywhere over the window is already accepted (the
+          document listeners above). Only the dashed box used to light up,
+          so the window did not look like a target and people aimed for the
+          rectangle. This says plainly where the file can go. */}
+      {dragOver ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-background/80 backdrop-blur-sm"
+          aria-hidden="true"
+        >
+          <div className="grid gap-2 rounded-xl border-2 border-dashed border-primary px-10 py-8 text-center">
+            <span className="text-base font-medium">Отпустите файл</span>
+            <span className="text-sm text-muted-foreground">Формат: .tar.zst</span>
+          </div>
+        </div>
+      ) : null}
       <DialogContent className="gap-6 overflow-hidden sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Загрузить бэкап</DialogTitle>
