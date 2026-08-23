@@ -72,6 +72,7 @@ APT_LOCK_FILE=/var/lib/dpkg/lock-frontend
 APT_LOCK_ALWAYS=0
 APT_FAIL_MATCH=
 ADD_APT_REPO_RC=0
+ADD_APT_REPO_FAILS=0
 APT_FUSER_BUSY_REMAINING=0
 FAKE_PMTU=1500
 EOF
@@ -436,6 +437,16 @@ cat > "$FAKE_DIR/add-apt-repository" <<'FAKE_EOF'
 #!/bin/bash
 echo "add-apt-repository $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
+# ADD_APT_REPO_FAILS: fail this many times with Launchpad's transient error,
+# then succeed — what a real 500 / GPGKeyTemporarilyNotFoundError looks like.
+n="${ADD_APT_REPO_FAILS:-0}"
+if [ "$n" -gt 0 ] 2>/dev/null; then
+    sed "s|^ADD_APT_REPO_FAILS=.*|ADD_APT_REPO_FAILS=$((n - 1))|" "$FAKE_STATE" \
+        > "$FAKE_STATE.new" && mv "$FAKE_STATE.new" "$FAKE_STATE"
+    printf '%s\n' "status: 500" >&2
+    printf '%s\n' "b'GPGKeyTemporarilyNotFoundError'" >&2
+    exit 1
+fi
 exit "${ADD_APT_REPO_RC:-0}"
 FAKE_EOF
 
@@ -932,6 +943,35 @@ test_failed_apt_install_stops_with_its_own_message() {
 # add-apt-repository takes the apt locks and runs its own update; an
 # unchecked failure here surfaced as "Unable to locate package amneziawg"
 # and finally as a modprobe error pointing at the wrong thing.
+# Launchpad answers 500 with GPGKeyTemporarilyNotFoundError now and then;
+# the key shows up seconds later. Failing the whole install over it leaves
+# the operator with a half-configured server.
+test_ppa_retries_a_transient_launchpad_failure() {
+    fakes_reset
+    state_set ADD_APT_REPO_FAILS 2
+    os_release ubuntu 24.04 noble
+    rc="$(AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1 AMNEZIA_INSTALL_PPA_RETRY_SLEEP=0 run_install)"
+    [ "$rc" = "0" ] || fail "transient PPA failure must not end the install: exit $rc"
+    stdout | grep -qi "retrying" \
+        && pass "the retry is announced" \
+        || fail "the retry must be announced"
+    [ "$(grep -c "^add-apt-repository " "$FAKE_CALLS")" -ge 3 ] \
+        && pass "the command was retried until it worked" \
+        || fail "the command must be retried"
+}
+
+# A repository that stays broken still stops the install, with its own message.
+test_ppa_gives_up_after_retries() {
+    fakes_reset
+    state_set ADD_APT_REPO_FAILS 99
+    os_release ubuntu 24.04 noble
+    rc="$(AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1 AMNEZIA_INSTALL_PPA_RETRY_SLEEP=0 run_install)"
+    [ "$rc" != "0" ] || fail "a permanently failing PPA must end the install"
+    stderr | grep -qi "ppa:amnezia" \
+        && pass "the failure names the repository" \
+        || fail "the failure must name the repository"
+}
+
 test_failed_ppa_stops_with_its_own_message() {
     fakes_reset
     setstate ADD_APT_REPO_RC 1 "$FAKE_STATE"
@@ -1883,6 +1923,8 @@ test_lock_timeout_must_be_numeric
 test_lock_poll_must_be_numeric
 test_apt_retries_on_lists_lock
 test_failed_apt_install_stops_with_its_own_message
+test_ppa_retries_a_transient_launchpad_failure
+test_ppa_gives_up_after_retries
 test_failed_ppa_stops_with_its_own_message
 test_apt_is_never_interactive
 test_images_are_pulled_by_default
