@@ -1,4 +1,4 @@
-# Builds the two runtime images on GitHub's runners and publishes them to
+# Builds the three runtime images on GitHub's runners and publishes them to
 # GHCR, so a user's VPS downloads ~60 MB of finished binaries instead of
 # pulling an 800 MB Go toolchain and compiling amneziawg-go, amneziawg-tools
 # and the panel on a single vCPU.
@@ -88,11 +88,22 @@ jobs:
             AMNEZIAWG_TOOLS_VERSION=${{ env.AMNEZIAWG_TOOLS_VERSION }}
             AMNEZIAWG_TOOLS_COMMIT=${{ env.AMNEZIAWG_TOOLS_COMMIT }}
 
+      - name: Build and push dns
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: app/dns/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REGISTRY }}/dns:${{ env.PUBLISH_VERSION }}
+          build-args: |
+            ALPINE_VERSION=${{ env.ALPINE_VERSION }}
+
       - name: Summary
         run: |
           {
             printf '### Published\n\n'
             printf -- '- `%s/panel:%s`\n' "$IMAGE_REGISTRY" "$PUBLISH_VERSION"
-            printf -- '- `%s/awg:%s`\n\n' "$IMAGE_REGISTRY" "$PUBLISH_VERSION"
-            printf 'Make both packages **public** once, or install.sh will need a token to pull them.\n'
+            printf -- '- `%s/awg:%s`\n' "$IMAGE_REGISTRY" "$PUBLISH_VERSION"
+            printf -- '- `%s/dns:%s`\n\n' "$IMAGE_REGISTRY" "$PUBLISH_VERSION"
+            printf 'Make all three packages **public** once, or install.sh will need a token to pull them.\n'
           } >> "$GITHUB_STEP_SUMMARY"
