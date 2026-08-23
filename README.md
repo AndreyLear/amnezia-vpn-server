@@ -1,191 +1,274 @@
 # AmneziaWG VPN Server
 
-Self-hosted VPN server based on AmneziaWG 2.0+. Released under the MIT
-License (see `LICENSE`).
+Свой VPN на своём сервере: одна команда в терминале — и через несколько минут
+у вас работает VPN с панелью управления в браузере. Клиенты добавляются в
+пару кликов, подключение — по QR-коду.
 
-Русская версия: [README.ru.md](README.ru.md).
+Работает на AmneziaWG: трафик маскируется под обычный, поэтому проходит там,
+где обычный VPN блокируют.
 
-Operator security notes: [SECURITY.md](SECURITY.md).
+English: [README.en.md](README.en.md) · Безопасность: [SECURITY.md](SECURITY.md)
+· Разработка: [DEVELOPMENT.md](DEVELOPMENT.md)
 
-## Architecture
+Частые вопросы: [требования к серверу](#что-понадобится) ·
+[установка](#установка) · [панель](#панель) · [клиенты](#клиенты) ·
+[приложения](#приложения) · [смена пароля](#как-сменить-пароль-панели) ·
+[бэкапы](#бэкап-что-это-и-как-делать) ·
+[переезд на другой сервер](#переезд-на-другой-сервер) ·
+[обновление](#обновление) · [удаление](#удаление)
 
-- Go web panel
-- SQLite as the single source of truth
-- AmneziaWG runtime in a separate container
-- Docker Compose
-- Embedded React SPA (`go:embed` `dist`)
-- Database backups as tar.zst (download / upload in the panel)
-- Client configs route `::/0` into the tunnel as well. The interface has no
-  IPv6 address, so v6 is blackholed on the client and dual-stack services
-  (YouTube, Instagram) go over IPv4 through the VPN instead of bypassing it.
-## Backup and restore (M8)
+## Что понадобится
 
-- In the panel, **Бэкап** is a dropdown: **Скачать** streams a fresh
-  `backup-YYYY-MM-DD.tar.zst` (manifest + SQLite), **Загрузить** restores
-  from an uploaded archive. No passwords or age keys.
-- `panel backup create` / `panel backup list` write and list archives in
-  the backups directory. `panel restore <archive>` prepares a restore
-  that `panel-init` applies on the next restart.
-- Settings that belong to one machine (the address baked into client
-  configs, and the MTU) are not carried over silently when the archive
-  comes from another server: the panel shows both values and asks.
-- A restore keeps the pre-restore database on disk as a recovery copy.
-  The web upload path applies in-process (no restart) when it can.
+**Сервер** с root-доступом по SSH. Требования скромные:
 
-## Install
+| | Минимум | Комментарий |
+| --- | --- | --- |
+| Система | Ubuntu 24.04 или 22.04, Debian 12 | другие дистрибутивы установщик не поддерживает |
+| Процессор | 1 ядро | проверено на 1 ядре: установка 3–5 минут, скорость до 45 МБ/с |
+| Память | 1 ГБ, лучше 2 ГБ | при 2 ГБ остаётся запас на рост числа клиентов |
+| Диск | 10 ГБ | образы и база занимают меньше 1 ГБ |
+| Порты | UDP 443, TCP 443 или 8443 | плюс TCP 80, если берёте сертификат Let's Encrypt |
 
-From the operator machine, run the Russian wizard. Enter accepts the
-default in brackets. Password SSH needs `sshpass` or `expect` on the
-operator host (`brew install sshpass` / `apt install sshpass`).
+Такой сервер стоит 3–5 долларов в месяц у большинства хостингов. Считайте
+трафик: VPN тратит столько же, сколько тратят ваши пользователи.
 
-```sh
-./bootstrap.sh
-```
+**Домен** — по желанию. Без него всё работает по IP-адресу сервера. С доменом
+получите нормальный сертификат вместо самоподписанного и сможете переехать на
+другой сервер, не меняя настройки у пользователей.
 
-The wizard asks for server IP, SSH user (`[root]`), password or key
-(password is the default; a key in `~/.ssh` is not used unless you
-answer `ключ` or `2`), panel domain (empty = panel on the server IP,
-then panel port `[8443]`), panel port `[443]` when a domain is set
-(empty = TLS on 443), and VPN client domain (empty = public IP — never
-copied from the panel hostname). AmneziaWG stays on UDP 443 and the
-deploy root is `/opt/amnezia-vpn`.
-
-The same wizard can be fetched with:
+**Ваш компьютер** — Mac или Linux с терминалом. Если будете входить на сервер
+по паролю, поставьте `sshpass`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh && bash bootstrap.sh
+brew install sshpass          # macOS
+sudo apt install sshpass      # Ubuntu, Debian
 ```
 
-CI / flags: `bootstrap.sh` SSHes to the VPS, runs `install.sh`, creates
-admin, prints panel URL + temporary password. Panel and VPN endpoints
-are independent. Flags: `--ip`, `--panel-domain` (alias `--domain`),
-`--vpn-domain` (alias `--client-domain`), optional `--panel-port`
-(without a panel domain, CI defaults to 8443; do not use 8787 — that
-port is the loopback panel). `--panel-domain` does **not** bind VPN
-clients; only `--vpn-domain` / `--client-domain` does. Restore is an
-upload in the panel (Backups) and does not change the panel user (T-155).
+**Время** — около пяти минут.
+
+## Установка
+
+Скачайте мастер установки и запустите:
 
 ```sh
-./bootstrap.sh --ip HOST --panel-domain panel.example.com --vpn-domain example.com
+curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh
+bash bootstrap.sh
 ```
 
-Optional panel TLS port (Let's Encrypt still uses TCP 80 for HTTP-01):
+Мастер спросит адрес сервера, пароль или ключ, домен. Enter принимает значение
+в квадратных скобках — если сомневаетесь, жмите Enter.
+
+Всё то же самое можно задать сразу:
 
 ```sh
-./bootstrap.sh --ip HOST --panel-domain panel.example.com --vpn-domain example.com --panel-port 8443
+./bootstrap.sh --ip 203.0.113.10 --vpn-domain example.com
 ```
 
-`install.sh` remains the on-server installer (Ubuntu/Debian
-24.04/22.04, Docker Compose v2.24.2+):
+### Что произойдёт
+
+Мастер подключится к серверу и покажет девять шагов:
+
+```
+bootstrap: [1/9] Проверяю систему
+bootstrap: [2/9] Устанавливаю Docker
+bootstrap: [3/9] Настраиваю ядро и сетевые оптимизации
+bootstrap: [4/9] Устанавливаю AmneziaWG
+bootstrap: [5/9] Разворачиваю файлы на сервере
+bootstrap: [6/9] Измеряю канал сервера
+bootstrap: [7/9] Скачиваю готовые образы
+bootstrap: [8/9] Запускаю сервисы
+bootstrap: [9/9] Проверяю установку
+```
+
+В конце он напечатает адрес панели, логин, временный пароль и отпечаток
+сертификата. **Сохраните это** — пароль больше нигде не хранится.
+
+```
+Panel:     https://203.0.113.10:8443
+Login:     admin
+Password:  rZksiVMoEcPXsCQtFowec1+e
+Endpoint:  example.com:443
+```
+
+## После установки
+
+**Откройте панель** по адресу из сводки. Если ставили без домена, браузер
+предупредит о самоподписанном сертификате — это ожидаемо, сверьте отпечаток
+из сводки и продолжайте.
+
+**Смените пароль** — как это сделать, ниже отдельным разделом.
+
+**Добавьте первого клиента** — как это делается, ниже отдельным разделом.
+
+## Панель
+
+Всё управление — в браузере, отдельного приложения не нужно.
+
+**В шапке** — состояние сервера: загрузка процессора, памяти и диска плюс
+состояние туннеля («Интерфейс поднят», «Интерфейс недоступен»). Если сервер
+начал задыхаться, это видно сразу.
+
+**Основная часть** — карточки клиентов. На каждой: имя, выданный адрес,
+включён ли клиент, когда он в последний раз выходил на связь и сколько
+трафика получил и отправил.
+
+**Кнопка «Бэкап»** — скачать или загрузить файл со всеми настройками.
+
+## Клиенты
+
+Клиент — это одно устройство: телефон, ноутбук, роутер. У каждого свои ключи,
+поэтому отключение одного не трогает остальных.
+
+### Как добавить
+
+Нажмите кнопку добавления и введите имя — любое понятное вам: «телефон»,
+«ноутбук жены», «роутер на даче». Панель сама выдаст адрес и создаст ключи.
+
+Дальше устройство подключают одним из двух способов.
+
+**QR-код** — для телефона. Откройте меню клиента → **QR-код** и отсканируйте
+его в приложении. Больше ничего вводить не нужно.
+
+**Файл настроек** — для компьютера и роутера. Меню клиента → **Скачать
+конфиг**, затем импортируйте файл в приложение. Файл создаётся в момент
+скачивания и нигде не хранится.
+
+### Что ещё можно
+
+- **Отключить** — клиент перестаёт подключаться, настройки у него остаются:
+  устройство потеряли или доступ нужно приостановить
+- **Включить обратно** — тем же переключателем, заново раздавать ничего не надо
+- **Удалить** — ключи стираются, старые настройки перестают работать навсегда
+- **Описание** — заметка для себя: кому выдали, когда, зачем
+
+### Сколько клиентов
+
+Ограничения нет: адреса выдаются из подсети `10.8.0.0/24`, это 253 устройства.
+Упрётесь в это — упрётесь в канал сервера гораздо раньше.
+
+## Приложения
+
+Сервер говорит по протоколу AmneziaWG, поэтому подойдёт любой клиент, который
+его понимает.
+
+**AmneziaWG** — приложение под сам протокол, ничего лишнего:
+
+- iOS — [App Store](https://apps.apple.com/app/amneziawg/id6478942365)
+- Android — [Google Play](https://play.google.com/store/apps/details?id=org.amnezia.awg)
+- Windows — [релизы на GitHub](https://github.com/amnezia-vpn/amneziawg-windows-client/releases)
+
+**AmneziaVPN** — общий клиент Amnezia, умеет несколько протоколов сразу.
+Есть под Windows, macOS, Linux, Android и iOS: [amnezia.org/downloads](https://amnezia.org/downloads)
+
+Ставить оба не нужно. Если пользуетесь только этим сервером, берите AmneziaWG:
+он проще и делает ровно одно дело.
+
+**Роутеры.** Подойдёт OpenWrt с пакетом `amneziawg`: настройте роутер как
+обычного клиента, и весь дом пойдёт через VPN без настройки каждого
+устройства.
+
+## Частые ситуации
+
+### Как сменить пароль панели
+
+В панели такой формы нет намеренно: пароль меняется командой на сервере,
+поэтому его нельзя подобрать через браузер.
 
 ```sh
-./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
-             [--panel-domain FQDN] [--vpn-domain FQDN] [--panel-port PORT]
-             [--build]
+ssh root@203.0.113.10 "cd /opt/amnezia-vpn && docker compose --env-file versions.lock \
+  run --rm -T panel-init /app/panel auth set-password admin --password-stdin"
 ```
 
-The stack images are pulled from GHCR
-(`ghcr.io/andreylear/amnezia-vpn-server`) at the version pinned in
-`versions.lock`, so a fresh install downloads ~60 MB instead of compiling
-amneziawg-go, amneziawg-tools and the panel on the VPS. `--build` compiles
-them locally instead — that is the development path, and the installer
-falls back to it on its own when the registry cannot be reached.
+Команда попросит новый пароль и не покажет его на экране. Забыли старый —
+ничего страшного, эта команда его не спрашивает.
 
-The installer creates the deployment layout (data/config/status/backups),
-installs the host nftables ruleset and the forward-accept unit, pulls the
-published images and starts the stack, and keeps the panel loopback-only behind nginx when a
-domain or `--panel-port` is set. Without `bootstrap.sh`,
-application init is still:
+### Бэкап: что это и как делать
+
+Бэкап — это один файл со всем, что вы настроили: список клиентов, их ключи и
+ключи самого сервера. Из него восстанавливается всё — на этом же сервере или
+на новом. Настройки, которые вы раздали людям, после восстановления продолжают
+работать, потому что ключи сервера тоже внутри.
+
+**Как скачать.** В панели кнопка **Бэкап** → **Скачать**. Браузер сохранит
+файл вида `backup-2026-08-23.tar.zst`. Он маленький, несколько килобайт.
+
+**Как часто.** После каждого добавления или удаления клиентов. Отдельно —
+перед переустановкой сервера и перед сменой хостинга.
+
+**Где хранить.** Где угодно, кроме самого сервера: если сервер пропадёт,
+бэкап на нём пропадёт вместе с ним.
+
+**Как восстановить.** В панели **Бэкап** → **Загрузить**, выберите файл.
+Клиенты вернутся сразу, перезапуск не нужен. Пароль панели останется тот,
+который действует сейчас, — бэкап его не подменяет.
+
+Если бэкап снят на другом сервере, панель спросит, какой адрес оставить
+клиентам, — подробности в разделе про переезд.
+
+### Переезд на другой сервер
+
+Ключи сервера едут вместе с бэкапом, поэтому настройки у пользователей
+остаются рабочими.
+
+1. Пока старая панель доступна, скачайте бэкап: кнопка **Бэкап** → **Скачать**
+2. Поставьте систему на новый сервер тем же мастером
+3. Войдите в новую панель и загрузите скачанный файл: **Бэкап** → **Загрузить**
+4. Панель увидит, что бэкап с другого сервера, и спросит, какой адрес
+   использовать:
+   - **оставить адрес из бэкапа** — если пользователи подключаются по домену.
+     Переключите A-запись домена на новый сервер, и все подключатся сами
+   - **использовать адрес этого сервера** — если подключались по IP. Тогда
+     раздайте пользователям новые настройки из панели
+
+### Обновление
 
 ```sh
-docker compose --env-file versions.lock run --rm panel-init \
-  /app/panel server init 10.8.0.1/24 443 --endpoint <public-ip>:443 --dns 1.1.1.1,8.8.8.8
-ssh -L 8787:127.0.0.1:8787 root@<server-ip>
+ssh root@203.0.113.10 "cd /opt/amnezia-vpn && docker compose --env-file versions.lock pull \
+  && docker compose --env-file versions.lock up -d"
 ```
 
-With a panel domain (`--panel-domain` / `--domain`, T-121) the panel
-gets HTTPS (nginx + Let's Encrypt). HTTP-01 stays on TCP 80. TLS
-listens on 443 unless `--panel-port` is set (`https://PANEL_DOMAIN:PORT`).
-`--vpn-domain` / `--client-domain` binds client configs to
-`<fqdn>:<awg-port>` instead of the public IP: clients resolve the domain
-at connect time. The installer pre-flights the DNS record before
-proceeding. On the old host `install.sh` refuses to run when the record
-no longer matches (until the domain is re-pointed back or the new host
-finishes installing).
+Занимает меньше минуты, клиенты не теряются.
 
-To restore an existing database after install, upload the archive in the
-panel (Backups). That restore does not change the panel user. The CLI
-`panel restore <archive>` path remains for operators without the web UI.
-Moving the whole deployment to a new VPS is **Move to another VPS**.
+### Удаление
 
-## Move to another VPS
+```sh
+ssh root@203.0.113.10 "bash /opt/amnezia-vpn/cleanup.sh"
+```
 
-Checklist (test this on a spare host before you need it):
+Сначала покажет, что собирается удалить, и ничего не тронет. Чтобы выполнить,
+добавьте `--yes`. Скрипт удаляет только то, что создал установщик.
 
-1. While the **old** panel is still reachable, download a backup
-   `tar.zst` from Backups.
-2. From a laptop, run `./bootstrap.sh` (wizard) or the same flags onto
-   the **new** IP. Set `--panel-domain` / `--vpn-domain` as they are
-   today.
-3. Log into the **new** panel with the temporary password printed by
-   bootstrap.
-4. Upload the archive under Backups. The panel user and password are
-   **not** replaced (T-155).
-5. The panel notices the archive came from another server and asks which
-   address to use:
-   - **Keep the backup's address** — for clients that connect by domain
-     (`--vpn-domain`). Repoint that domain's A record at the new IP and
-     clients reconnect on their own; existing configs keep working, since
-     the server and client keys travel with the archive.
-   - **Use this server's address** — for clients that connected to the old
-     IP. Their configs have to be reissued: download them again in the
-     panel and hand them out.
-6. The tunnel MTU is not carried over: the installer measures the new
-   uplink and pins its own value.
+### Что-то не работает
 
-## Development
+**Сайты открываются, но видео не грузится.** Обычно это MTU. Установщик
+измеряет канал сам, но если сервер переехал в другую сеть — переустановите
+или задайте значение вручную.
 
-Development is performed locally.
+**Клиент не подключается после переезда.** Проверьте, на какой адрес смотрит
+домен: `dig +short example.com`. Он должен указывать на новый сервер.
 
-Production deployment is performed separately through `install.sh` (see
-Install).
+**Панель не открывается.** Проверьте, что сервисы запущены:
 
-## Testing
+```sh
+ssh root@203.0.113.10 "docker ps"
+```
 
-- Scripted harnesses (no Docker required): `app/panel/test_m123_bootstrap.sh`,
-  `app/panel/test_m91_install.sh`,
-  `app/panel/test_m92b_compose.sh`, `app/panel/test_m92_network.sh`,
-  `app/awg/test_m32.sh`, `app/awg/test_m5.sh` — `test_m5.sh` needs a local Go
-  toolchain.
-- Live harnesses (Docker daemon required): `app/panel/test_m6_live.sh`,
-  `test_m8_live.sh`, `test_m93_live.sh`, `test_m102_env_live.sh`,
-  `app/awg/test_m32_live.sh`, `test_m5_live.sh`.
-- Live harnesses run the real `compose.yaml` in a temp directory and must
-  not collide with a running deployment on the same host: they need the
-  loopback port 8787 free (remap with `M6_PORT`/`M8_PORT` where supported)
-  and, because `awg` uses `network_mode: host`, a free `awg0` interface.
-  On a VPS with a live stack, stop the stack first (`docker compose ...
-  stop panel awg`) or use another host.
+Должны работать `amnezia-vpn-panel-1` и `amnezia-vpn-awg-1`.
 
-## Status
+## Как это устроено
 
-**1.0** — install via `./bootstrap.sh` (wizard) or flags, then
-`install.sh` on the VPS. License: MIT (`LICENSE`). Compose image tags
-and backup `application_version` stay **2.0.0** (stack generation);
-the public product label is 1.0.
+Три контейнера на сервере: панель (она же хранит данные в SQLite),
+AmneziaWG и разовая задача инициализации. Панель доступна только с самого
+сервера, наружу её отдаёт nginx с сертификатом.
 
-In 1.0:
+Данные — в SQLite, всё остальное восстанавливается из неё. Поэтому бэкап
+базы возвращает и клиентов, и ключи сервера.
 
-- Panel TLS for users: nginx + Let's Encrypt when `--panel-domain` is
-  set; without a domain, HTTPS on `--panel-port` (CI default 8443,
-  self-signed). Loopback `8787` stays the compose panel port.
-- Login rate limiting (T-105).
-- Password-only panel login (username + password). TOTP is not a 1.0
-  panel feature.
-- CLI `panel auth set-password` (password reset). Restore (panel
-  upload / `panel restore`) does not replace the panel user.
-- Independent panel vs VPN hostnames (`--panel-domain` /
-  `--vpn-domain`).
+IPv6 у клиента отключается: иначе YouTube, Instagram и другие сайты с
+поддержкой IPv6 шли бы мимо VPN, в обход туннеля.
 
-Out of 1.0: T-104 in-process panel TLS (TLS in the Go process instead
-of nginx) and T-106 RBAC only.
+Подробнее — в [DEVELOPMENT.md](DEVELOPMENT.md).
+
+## Лицензия
+
+MIT, файл [LICENSE](LICENSE)

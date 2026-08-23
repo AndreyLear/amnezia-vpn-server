@@ -1,0 +1,140 @@
+# Разработка
+
+Для пользовательской документации — [README.md](README.md).
+
+## Сборка и тесты
+
+Корень Go-модуля — `app/panel`, SPA живёт в `app/panel/web`.
+
+```sh
+cd app/panel && go test ./...      # юнит-тесты, без Docker и сети
+cd app/panel && go build ./...     # бинарник amnezia-vpn-server (в .gitignore)
+```
+
+SPA (Vite + React 19 + Tailwind v4):
+
+```sh
+cd app/panel/web
+npm ci
+npm run build     # tsc -b && vite build → ../internal/web/dist
+npm test          # vitest
+npm run lint      # oxlint
+npx playwright test
+```
+
+Собранный `internal/web/dist` **коммитится**: Go-бинарник встраивает его через
+`go:embed`, поэтому сборка и тесты Go не требуют Node. Меняли SPA — пересоберите
+и закоммитьте `dist`.
+
+## Харнессы
+
+Гоняют `install.sh` и `bootstrap.sh` против подставных команд на `PATH` и
+подменённых путей через `AMNEZIA_INSTALL_*`, поэтому ничего на машине не
+трогают:
+
+```sh
+bash app/panel/test_m123_bootstrap.sh   # мастер установки
+bash app/panel/test_m91_install.sh      # установщик
+bash app/panel/test_m92b_compose.sh     # топология compose
+bash app/panel/test_m92_network.sh      # сеть и nftables
+bash app/awg/test_m32.sh                # горячая перезагрузка awg
+bash app/awg/test_m5.sh                 # генератор status.json
+```
+
+Харнессы с суффиксом `_live` (`test_m6_live.sh`, `test_m8_live.sh`,
+`test_m93_live.sh`, `test_m102_env_live.sh`, `test_m32_live.sh`,
+`test_m164_cleanup.sh`) поднимают настоящий compose и требуют Docker. Они
+занимают loopback-порт 8787 и интерфейс `awg0`, поэтому на сервере с рабочим
+стеком их запускать нельзя — остановите стек или возьмите другую машину.
+
+## Запуск панели локально
+
+Каждый путь переопределяется переменной окружения, контейнеры не нужны:
+
+```sh
+cd app/panel
+export AMNEZIA_DB_PATH=/tmp/p/amnezia.sqlite AMNEZIA_CONFIG_PATH=/tmp/p/awg0.conf \
+       AMNEZIA_STATUS_PATH=/tmp/p/status.json AMNEZIA_BACKUPS_PATH=/tmp/p/backups
+printf 'some-password\n' | go run . auth add-user admin --password-stdin
+go run . server init 10.8.0.1/24 51820 --endpoint 127.0.0.1:51820
+go run . serve --addr 127.0.0.1:8787
+```
+
+## Флаги установщика
+
+Мастер `bootstrap.sh` вызывает `install.sh` на сервере. Обоим можно задать всё
+флагами и обойтись без вопросов.
+
+```sh
+./bootstrap.sh --ip HOST [--panel-domain FQDN] [--vpn-domain FQDN]
+               [--panel-port PORT] [--password-env VAR] [--build]
+
+./install.sh [--root DIR] [--awg-port PORT] [--vpn-subnet CIDR]
+             [--panel-domain FQDN] [--vpn-domain FQDN] [--panel-port PORT]
+             [--panel-tls-regen] [--build]
+```
+
+Домен панели и домен для клиентов независимы: `--panel-domain` даёт HTTPS для
+панели (nginx + Let's Encrypt, HTTP-01 на TCP 80), `--vpn-domain` подставляет
+`<домен>:<порт>` в настройки клиентов вместо IP. Без домена панель отдаётся по
+`--panel-port` с самоподписанным сертификатом; порт 8787 занят панелью на
+loopback и для этого не годится.
+
+`--build` собирает образы на сервере вместо скачивания из GHCR. Установщик
+переходит на сборку сам, если registry недоступен.
+
+## Образы
+
+Собираются в GitHub Actions по тегу `v*` и публикуются в
+`ghcr.io/andreylear/amnezia-vpn-server`. Версия закреплена в `versions.lock`
+ключом `IMAGE_VERSION`; workflow откажется публиковать тег, который ей не
+соответствует.
+
+Выпуск новой версии:
+
+```sh
+# поднять IMAGE_VERSION в versions.lock, закоммитить
+git tag -a v2.0.3 -m "..."
+git push origin main v2.0.3
+```
+
+## Устройство
+
+SQLite — единственный источник истины, всё остальное восстанавливается из неё.
+
+Три сервиса в `compose.yaml`:
+
+- **panel-init** — разовая задача: миграции базы и генерация `config/awg0.conf`
+- **panel** — веб-панель и API, владеет базой и конфигурацией, слушает
+  `127.0.0.1:8787`
+- **awg** — AmneziaWG в сетевом пространстве хоста, читает конфигурацию,
+  пишет `status/status.json`
+
+HTTP между panel и awg нет: они общаются через два файла — `config/awg0.conf`
+и `status/status.json`. Оба воспроизводимы из базы, удаление их не теряет
+данные.
+
+Пакеты `app/panel/internal/`:
+
+| пакет | отвечает за |
+| --- | --- |
+| `cli` | команды `/app/panel`, коды выхода 0/1/2 |
+| `db` | схема SQLite и идемпотентные миграции |
+| `awgconf` | генерация `awg0.conf` и клиентских настроек |
+| `auth` | пароли Argon2id, сессии, CSRF, лимит попыток входа |
+| `web` | HTTP: встроенная SPA, JSON API, отдача настроек и QR |
+| `backup` | бэкап и восстановление в `tar.zst` |
+| `hostmetrics` | процессор, память и диск хоста из `/host/proc` |
+| `status` | чтение `status.json` |
+| `keys` | генерация ключей |
+
+## Соглашения
+
+- Комментарии объясняют причину, а не пересказывают код
+- Производные файлы пишутся атомарно: временный файл → fsync → переименование
+- У каждого пути есть переменная `AMNEZIA_*_PATH`, чтобы тесты обходились без
+  контейнеров
+- Ошибки HTTP обобщённые: ни ввод, ни содержимое файлов, ни текст ошибки не
+  возвращаются наружу; ключи не попадают в списки, логи и сообщения
+- Тесты лежат рядом с кодом: `*_test.go`, `*.test.tsx`
+- Тексты интерфейса — русские, по правилам скилла `user-docs`
