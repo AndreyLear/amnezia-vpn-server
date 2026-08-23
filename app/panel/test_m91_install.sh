@@ -1076,6 +1076,20 @@ test_sysctl_bbr_when_advertised() {
 # tcp_available_congestion_control reads "reno cubic" and a check made
 # before modprobe concludes the kernel has no BBR — which is how the
 # optimisation ended up never being applied on a real install.
+# A host where something else already loaded tcp_bbr still needs the
+# modules-load entry: without it the module is gone after a reboot and the
+# sysctl asking for bbr silently leaves the host on cubic. Found on the test
+# VPS, where an earlier modprobe had left the module in place.
+test_bbr_persisted_even_when_already_loaded() {
+    fakes_reset          # TCP_CC already advertises bbr
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "bbr already loaded flow: exit $rc"
+    grep -rq "tcp_bbr" "$MODULES_TEST" 2>/dev/null \
+        && pass "tcp_bbr persisted although the module was already loaded" \
+        || fail "tcp_bbr must be persisted regardless of who loaded it"
+}
+
 test_sysctl_bbr_loaded_from_module() {
     fakes_reset
     sed 's|^TCP_CC=.*|TCP_CC="cubic reno"|' "$FAKE_STATE" > "$FAKE_STATE.new" \
@@ -1876,6 +1890,7 @@ test_build_flag_compiles_locally
 test_unreachable_registry_falls_back_to_build
 test_sysctl_host_tuning
 test_sysctl_host_tuning_survives_refusal
+test_bbr_persisted_even_when_already_loaded
 test_sysctl_bbr_loaded_from_module
 test_sysctl_bbr_skipped_when_absent
 test_journald_cap
