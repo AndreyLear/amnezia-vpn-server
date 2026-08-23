@@ -49,6 +49,7 @@ fakes_reset() {
 SSH_RC=0
 INSTALL_RC=0
 INIT_RC=0
+INIT_STDERR=
 UP_RC=0
 ADDUSER_RC=0
 CURL_PANEL_RC=0
@@ -108,6 +109,7 @@ case "$cmd" in
         exit 0
         ;;
     *'server init'*)
+        [ -n "${INIT_STDERR:-}" ] && printf '%s\n' "${INIT_STDERR}" >&2
         exit "${INIT_RC:-0}"
         ;;
     *'up -d'*)
@@ -901,6 +903,51 @@ test_install_progress_is_visible() {
     assert_no_ansi "progress"
 }
 
+# A busy 1-vCPU host can stay silent on the SSH channel for longer than a
+# few seconds while docker creates a container. Cutting the connection at
+# 15 seconds turned a working install into a red error.
+test_ssh_keepalive_tolerates_a_busy_host() {
+    fakes_reset
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" = "0" ] || fail "keepalive flow: exit $rc"
+    interval=$(grep -o "ServerAliveInterval=[0-9]*" "$FAKE_CALLS" | head -1 | cut -d= -f2)
+    count=$(grep -o "ServerAliveCountMax=[0-9]*" "$FAKE_CALLS" | head -1 | cut -d= -f2)
+    budget=$(( ${interval:-0} * ${count:-0} ))
+    if [ "$budget" -ge 240 ]; then
+        pass "silence budget is ${budget}s (interval ${interval}, count ${count})"
+    else
+        fail "silence budget ${budget}s is too tight for a busy host"
+    fi
+}
+
+# After such a cut the server row exists but the wizard exited with an
+# error. Running it again is the first thing anyone tries, and it used to
+# die on "server row (id=1) already exists".
+test_rerun_survives_existing_server_row() {
+    fakes_reset
+    setstate INIT_RC 1 "$FAKE_STATE"
+    setstate INIT_STDERR "panel server init: db: server row (id=1) already exists" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" = "0" ] || fail "rerun with an existing server row: exit $rc, want 0"
+    stderr | grep -qi "already initialized\|уже" \
+        && pass "the rerun explains that the server was already initialized" \
+        || fail "the rerun must say the server row already existed"
+    grep -q "add-user" "$FAKE_CALLS" \
+        && pass "the rerun goes on to create the admin" \
+        || fail "the rerun must continue past init"
+}
+
+# A genuine init failure must still stop the wizard.
+test_real_init_failure_still_aborts() {
+    fakes_reset
+    setstate INIT_RC 1 "$FAKE_STATE"
+    setstate INIT_STDERR "panel server init: db: disk I/O error" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" != "0" ] \
+        && pass "a real init failure still aborts" \
+        || fail "a real init failure must abort"
+}
+
 # --- main ---------------------------------------------------------------
 
 test_bash_syntax
@@ -932,6 +979,9 @@ test_sshpass_missing
 test_invalid_panel_port
 test_default_panel_port_without_domain
 test_install_progress_is_visible
+test_ssh_keepalive_tolerates_a_busy_host
+test_rerun_survives_existing_server_row
+test_real_init_failure_still_aborts
 
 echo
 if [ "$M123_ERRORS" -eq 0 ]; then
