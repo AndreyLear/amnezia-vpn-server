@@ -62,6 +62,7 @@ func (a *app) cmdServerInit(args []string) int {
 		"dns":        true,
 		"awg-params": true,
 		"endpoint":   true,
+		"mtu":        true,
 	})
 	if err != nil {
 		return a.usageError(opServerInit, err.Error())
@@ -108,6 +109,12 @@ func (a *app) cmdServerInit(args []string) int {
 			return a.usageError(opServerInit, err.Error())
 		}
 	}
+	var mtu uint16
+	if raw, ok := parsed.flags["mtu"]; ok {
+		if mtu, err = validateMTUArg(raw); err != nil {
+			return a.usageError(opServerInit, err.Error())
+		}
+	}
 
 	var privateKey, publicKey string
 	keyErr := fault("server-init.keys")
@@ -128,6 +135,9 @@ func (a *app) cmdServerInit(args []string) int {
 	if createErr == nil {
 		createErr = db.CreateServer(handle, privateKey, publicKey, address,
 			int64(listenPort), parsed.flags["dns"], awgParams, endpoint)
+	}
+	if createErr == nil && mtu != 0 {
+		createErr = db.SetSetting(handle, "mtu", strconv.FormatUint(uint64(mtu), 10))
 	}
 	if createErr != nil {
 		if errors.Is(createErr, db.ErrServerExists) {
@@ -152,6 +162,24 @@ func (a *app) cmdServerInit(args []string) int {
 		fmt.Fprintln(a.stderr, "panel server init: warning: --endpoint not set; `client config` will fail until it is set")
 	}
 	return a.ok(opServerInit, "ok")
+}
+
+// validateMTUArg parses and range-checks a --mtu value. An explicit flag
+// must name a usable MTU: silently falling back to the default would hide
+// an operator typo behind large transfers that stall much later.
+func validateMTUArg(raw string) (uint16, error) {
+	parsed, err := strconv.ParseUint(raw, 10, 16)
+	if err != nil {
+		return 0, fmt.Errorf("invalid mtu %q: not an unsigned 16-bit value", raw)
+	}
+	mtu := uint16(parsed)
+	if mtu == 0 {
+		return 0, fmt.Errorf("invalid mtu %q: must be between %d and %d", raw, awgconf.MinMTU, awgconf.MaxMTU)
+	}
+	if err := awgconf.ValidateMTU(mtu); err != nil {
+		return 0, err
+	}
+	return mtu, nil
 }
 
 // validateEndpointArg mirrors the awgconf endpoint rules
@@ -202,6 +230,7 @@ func (a *app) cmdServerUpdate(args []string) int {
 		"dns":        true,
 		"awg-params": true,
 		"endpoint":   true,
+		"mtu":        true,
 	})
 	if err != nil {
 		return a.usageError(opServerUpdate, err.Error())
@@ -213,8 +242,15 @@ func (a *app) cmdServerUpdate(args []string) int {
 	dns, hasDNS := parsed.flags["dns"]
 	awgParams, hasParams := parsed.flags["awg-params"]
 	endpoint, hasEndpoint := parsed.flags["endpoint"]
-	if !hasDNS && !hasParams && !hasEndpoint {
-		return a.usageError(opServerUpdate, "nothing to update: pass --dns, --awg-params and/or --endpoint")
+	rawMTU, hasMTU := parsed.flags["mtu"]
+	if !hasDNS && !hasParams && !hasEndpoint && !hasMTU {
+		return a.usageError(opServerUpdate, "nothing to update: pass --dns, --awg-params, --endpoint and/or --mtu")
+	}
+	var mtu uint16
+	if hasMTU {
+		if mtu, err = validateMTUArg(rawMTU); err != nil {
+			return a.usageError(opServerUpdate, err.Error())
+		}
 	}
 	if hasParams && awgParams == "" {
 		awgParams = "{}"
@@ -254,6 +290,9 @@ func (a *app) cmdServerUpdate(args []string) int {
 			endpointArg = &endpoint
 		}
 		updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg)
+	}
+	if updateErr == nil && hasMTU {
+		updateErr = db.SetSetting(handle, "mtu", strconv.FormatUint(uint64(mtu), 10))
 	}
 	if updateErr != nil {
 		if errors.Is(updateErr, db.ErrServerNotFound) {

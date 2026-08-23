@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -212,7 +213,7 @@ func TestUsageErrors(t *testing.T) {
 		{"server init semantically bad awg-params", []string{"server", "init", "10.8.0.0/24", "51820", "--awg-params", `{"jc":0}`}},
 		{"server init invalid endpoint", []string{"server", "init", "10.8.0.0/24", "51820", "--endpoint", "noport"}},
 		{"server init invalid dns", []string{"server", "init", "10.8.0.0/24", "51820", "--dns", "not-an-ip"}},
-		{"server init unknown flag", []string{"server", "init", "10.8.0.0/24", "51820", "--mtu", "1400"}},
+		{"server init unknown flag", []string{"server", "init", "10.8.0.0/24", "51820", "--keepalive", "25"}},
 		{"server init flag without value", []string{"server", "init", "10.8.0.0/24", "51820", "--endpoint"}},
 		{"add missing name", []string{"client", "add"}},
 		{"add extra positional", []string{"client", "add", "bob", "alice"}},
@@ -876,6 +877,7 @@ func TestClientConfigGolden(t *testing.T) {
 	}
 	line("PrivateKey", client.PrivateKey)
 	line("Address", client.Address)
+	line("MTU", strconv.FormatUint(uint64(awgconf.DefaultMTU), 10))
 	line("DNS", server.DNS)
 	line("Jc", "5")
 	line("S1", "80")
@@ -885,7 +887,7 @@ func TestClientConfigGolden(t *testing.T) {
 	want.WriteString("[Peer]\n")
 	line("PublicKey", server.PublicKey)
 	line("PresharedKey", client.PresharedKey)
-	line("AllowedIPs", "0.0.0.0/0")
+	line("AllowedIPs", "0.0.0.0/0, ::/0")
 	line("Endpoint", testEndpoint)
 	line("PersistentKeepalive", "25")
 	if out != want.String() {

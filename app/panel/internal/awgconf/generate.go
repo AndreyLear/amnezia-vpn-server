@@ -37,11 +37,16 @@ func Generate(handle *sql.DB, path string) error {
 	if server.ListenPort < 0 || server.ListenPort > 65535 {
 		return fmt.Errorf("invalid listen port %d: must be an unsigned 16-bit value", server.ListenPort)
 	}
+	mtu, err := MTUFromSettings(handle)
+	if err != nil {
+		return err
+	}
 	cfg := ServerConfig{
 		PrivateKey: server.PrivateKey,
 		Address:    server.Address,
 		ListenPort: uint16(server.ListenPort),
 		DNS:        server.DNS,
+		MTU:        mtu,
 		Params:     *params,
 	}
 	if err := ValidateServer(cfg); err != nil {
