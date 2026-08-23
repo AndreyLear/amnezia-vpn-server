@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 // Crafted /proc/stat samples. First 8 counters: user nice system idle
@@ -82,27 +80,66 @@ func TestReadRAMUsedTotalBytesFromMeminfo(t *testing.T) {
 	}
 }
 
-func TestReadDiskStatfsUsedTotal(t *testing.T) {
+// The arithmetic is checked against fixed numbers. Comparing against a
+// second statfs of a live filesystem used to fail at random: the two calls
+// see the disk at different moments, and a few kilobytes of drift between
+// them is normal.
+func TestDiskUsageArithmetic(t *testing.T) {
+	const bsize = 4096
+	for _, tc := range []struct {
+		name           string
+		blocks, bavail int64
+		wantUsed       int64
+		wantTotal      int64
+		wantPct        float64
+	}{
+		{"half used", 1000, 500, 500 * bsize, 1000 * bsize, 50},
+		{"full", 1000, 0, 1000 * bsize, 1000 * bsize, 100},
+		{"empty", 1000, 1000, 0, 1000 * bsize, 0},
+		// Reserved blocks count as used: they are not space the panel can
+		// offer, so a filesystem with more reserved than free reads as 100%.
+		{"reserved beyond available", 1000, 0, 1000 * bsize, 1000 * bsize, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pct, used, total := diskUsage(tc.blocks, tc.bavail, bsize)
+			if used == nil || total == nil || pct == nil {
+				t.Fatalf("nil result: pct=%v used=%v total=%v", pct, used, total)
+			}
+			if *used != tc.wantUsed || *total != tc.wantTotal {
+				t.Fatalf("used/total = %d/%d, want %d/%d", *used, *total, tc.wantUsed, tc.wantTotal)
+			}
+			if *pct != tc.wantPct {
+				t.Fatalf("pct = %v, want %v", *pct, tc.wantPct)
+			}
+		})
+	}
+}
+
+// A filesystem reporting no blocks at all yields no figures rather than a
+// division by zero.
+func TestDiskUsageEmptyFilesystem(t *testing.T) {
+	pct, used, total := diskUsage(0, 0, 4096)
+	if pct != nil || used != nil || total != nil {
+		t.Fatalf("a zero-block filesystem must report nothing, got %v/%v/%v", pct, used, total)
+	}
+}
+
+// The live path is still exercised, but only for what cannot drift: real
+// figures come back, and used never exceeds total.
+func TestReadDiskReportsLiveFigures(t *testing.T) {
 	dir := t.TempDir()
 	disk := t.TempDir()
 	writeProc(t, dir, statSample1, meminfoOK)
-
-	var st unix.Statfs_t
-	if err := unix.Statfs(disk, &st); err != nil {
-		t.Fatalf("Statfs: %v", err)
-	}
-	wantTotal := int64(st.Blocks) * int64(st.Bsize)
-	wantUsed := wantTotal - int64(st.Bavail)*int64(st.Bsize)
 
 	snap, _ := Read(dir, disk, CPUSample{})
 	if snap.DiskUsedBytes == nil || snap.DiskTotalBytes == nil {
 		t.Fatalf("disk bytes nil: used=%v total=%v", snap.DiskUsedBytes, snap.DiskTotalBytes)
 	}
-	if *snap.DiskTotalBytes != wantTotal {
-		t.Fatalf("DiskTotalBytes = %d, want %d", *snap.DiskTotalBytes, wantTotal)
+	if *snap.DiskTotalBytes <= 0 {
+		t.Fatalf("DiskTotalBytes = %d, want a positive size", *snap.DiskTotalBytes)
 	}
-	if *snap.DiskUsedBytes != wantUsed {
-		t.Fatalf("DiskUsedBytes = %d, want %d", *snap.DiskUsedBytes, wantUsed)
+	if *snap.DiskUsedBytes < 0 || *snap.DiskUsedBytes > *snap.DiskTotalBytes {
+		t.Fatalf("DiskUsedBytes = %d, out of range for total %d", *snap.DiskUsedBytes, *snap.DiskTotalBytes)
 	}
 }
 

@@ -148,11 +148,23 @@ func readDisk(diskPath string) (pct *float64, used, totalBytes *int64) {
 	if err := unix.Statfs(diskPath, &st); err != nil {
 		return nil, nil, nil
 	}
-	totalB := int64(st.Blocks) * int64(st.Bsize)
+	return diskUsage(int64(st.Blocks), int64(st.Bavail), int64(st.Bsize))
+}
+
+// diskUsage turns a statfs result into the reported figures. Split out from
+// readDisk so the arithmetic can be checked against fixed numbers: taking a
+// second statfs of a live filesystem to compare against drifts between the
+// two calls, which made the test fail at random.
+//
+// "Used" is total minus what is available to this user, not minus free
+// blocks: the reserved blocks a filesystem keeps back are space the panel
+// cannot offer either.
+func diskUsage(blocks, bavail, bsize int64) (pct *float64, used, totalBytes *int64) {
+	totalB := blocks * bsize
 	if totalB == 0 {
 		return nil, nil, nil
 	}
-	availB := int64(st.Bavail) * int64(st.Bsize)
+	availB := bavail * bsize
 	usedB := totalB - availB
 	return clamp((1 - float64(availB)/float64(totalB)) * 100), &usedB, &totalB
 }
