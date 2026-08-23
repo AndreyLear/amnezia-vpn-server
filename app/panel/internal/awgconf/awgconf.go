@@ -24,7 +24,10 @@ type ServerConfig struct {
 	Address    string
 	ListenPort uint16
 	DNS        string // empty = omit
-	Params     Params
+	// MTU pins the tunnel MTU; 0 leaves the line out and lets awg-quick
+	// pick its own (see mtu.go for why that default is unsafe).
+	MTU    uint16
+	Params Params
 }
 
 // PeerConfig is one [Peer] section of awg0.conf (an enabled client).
@@ -369,7 +372,7 @@ func ValidateServer(s ServerConfig) error {
 	if err := validateDNS(s.DNS); err != nil {
 		return err
 	}
-	return nil
+	return ValidateMTU(s.MTU)
 }
 
 // rejectConfControls refuses CR/LF and other ASCII controls so a value
@@ -449,6 +452,9 @@ func Render(server ServerConfig, peers []PeerConfig) string {
 	line("PrivateKey", server.PrivateKey)
 	line("Address", server.Address)
 	line("ListenPort", strconv.FormatUint(uint64(server.ListenPort), 10))
+	if server.MTU != 0 {
+		line("MTU", strconv.FormatUint(uint64(server.MTU), 10))
+	}
 	if server.DNS != "" {
 		line("DNS", server.DNS)
 	}

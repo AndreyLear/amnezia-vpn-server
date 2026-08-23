@@ -41,7 +41,9 @@ type ClientConfig struct {
 	PrivateKey string
 	Address    string
 	DNS        string // empty = omit
-	Params     Params
+	// MTU pins the client tunnel MTU; 0 leaves the line out.
+	MTU    uint16
+	Params Params
 	// ServerPublicKey is the server's public key: the peer the client
 	// connects to.
 	ServerPublicKey string
@@ -116,6 +118,9 @@ func RenderClient(c ClientConfig) string {
 	b.WriteString("[Interface]\n")
 	line("PrivateKey", c.PrivateKey)
 	line("Address", c.Address)
+	if c.MTU != 0 {
+		line("MTU", strconv.FormatUint(uint64(c.MTU), 10))
+	}
 	if c.DNS != "" {
 		line("DNS", c.DNS)
 	}
@@ -169,10 +174,15 @@ func GenerateClient(handle *sql.DB, clientID int64) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("client config: %w", err)
 	}
+	mtu, err := MTUFromSettings(handle)
+	if err != nil {
+		return nil, fmt.Errorf("client config: %w", err)
+	}
 	cfg := ClientConfig{
 		PrivateKey:      client.PrivateKey,
 		Address:         client.Address,
 		DNS:             server.DNS,
+		MTU:             mtu,
 		Params:          *params,
 		ServerPublicKey: server.PublicKey,
 		PresharedKey:    client.PresharedKey,

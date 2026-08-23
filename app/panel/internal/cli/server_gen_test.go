@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -207,6 +208,56 @@ func TestServerGenAWGParamsUsageErrors(t *testing.T) {
 		c := newCtx(t)
 		if code, _, _ := c.run(args...); code != 2 {
 			t.Fatalf("panel %v: exit = %d, want 2", args, code)
+		}
+	}
+}
+
+// The tunnel MTU has to be pinnable from the command line: install.sh
+// measures the uplink path MTU and passes the safe value here, and the
+// generated server and client configs must both carry it.
+func TestServerInitPinsMTU(t *testing.T) {
+	c := newCtx(t)
+	c.mustRun("server", "init", testServerCIDR, "51820", "--endpoint", testEndpoint, "--mtu", "1380")
+
+	h := c.openDB()
+	got, err := awgconf.MTUFromSettings(h)
+	h.Close()
+	if err != nil {
+		t.Fatalf("MTUFromSettings: %v", err)
+	}
+	if got != 1380 {
+		t.Fatalf("stored mtu = %d, want 1380", got)
+	}
+	if conf := c.readConfig(); !strings.Contains(conf, "MTU = 1380\n") {
+		t.Fatalf("awg0.conf must carry the pinned MTU:\n%s", conf)
+	}
+}
+
+func TestServerInitDefaultsMTUWhenFlagAbsent(t *testing.T) {
+	c := newCtx(t)
+	c.mustRun("server", "init", testServerCIDR, "51820", "--endpoint", testEndpoint)
+	want := "MTU = " + strconv.FormatUint(uint64(awgconf.DefaultMTU), 10) + "\n"
+	if conf := c.readConfig(); !strings.Contains(conf, want) {
+		t.Fatalf("awg0.conf must fall back to the default MTU:\n%s", conf)
+	}
+}
+
+func TestServerUpdatePinsMTU(t *testing.T) {
+	c := newCtx(t)
+	c.mustRun("server", "init", testServerCIDR, "51820", "--endpoint", testEndpoint)
+	c.mustRun("server", "update", "--mtu", "1360")
+	if conf := c.readConfig(); !strings.Contains(conf, "MTU = 1360\n") {
+		t.Fatalf("server update --mtu must rewrite the config:\n%s", conf)
+	}
+}
+
+// A typo must not degrade into the default: it is a usage error (exit 2).
+func TestServerInitRejectsUnusableMTU(t *testing.T) {
+	for _, bad := range []string{"0", "500", "9000", "abc", ""} {
+		c := newCtx(t)
+		code, _, _ := c.run("server", "init", testServerCIDR, "51820", "--endpoint", testEndpoint, "--mtu", bad)
+		if code != 2 {
+			t.Fatalf("--mtu %q: exit = %d, want 2 (usage)", bad, code)
 		}
 	}
 }
