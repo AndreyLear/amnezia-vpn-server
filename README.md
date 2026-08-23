@@ -15,7 +15,9 @@ Operator security notes: [SECURITY.md](SECURITY.md).
 - Docker Compose
 - Embedded React SPA (`go:embed` `dist`)
 - Database backups as tar.zst (download / upload in the panel)
-
+- Client configs route `::/0` into the tunnel as well. The interface has no
+  IPv6 address, so v6 is blackholed on the client and dual-stack services
+  (YouTube, Instagram) go over IPv4 through the VPN instead of bypassing it.
 ## Backup and restore (M8)
 
 - In the panel, **Бэкап** is a dropdown: **Скачать** streams a fresh
@@ -24,6 +26,9 @@ Operator security notes: [SECURITY.md](SECURITY.md).
 - `panel backup create` / `panel backup list` write and list archives in
   the backups directory. `panel restore <archive>` prepares a restore
   that `panel-init` applies on the next restart.
+- Settings that belong to one machine (the address baked into client
+  configs, and the MTU) are not carried over silently when the archive
+  comes from another server: the panel shows both values and asks.
 - A restore keeps the pre-restore database on disk as a recovery copy.
   The web upload path applies in-process (no restart) when it can.
 
@@ -124,12 +129,19 @@ Checklist (test this on a spare host before you need it):
    today.
 3. Log into the **new** panel with the temporary password printed by
    bootstrap.
-4. Upload the archive in Backups. The panel user and password do
-   **not** change (T-155).
-5. If clients use `--vpn-domain`, point that A-record at the new IP.
-   Clients reconnect; configs are not re-issued.
-6. If clients used the old IP, they must edit the endpoint in each
-   config.
+4. Upload the archive under Backups. The panel user and password are
+   **not** replaced (T-155).
+5. The panel notices the archive came from another server and asks which
+   address to use:
+   - **Keep the backup's address** — for clients that connect by domain
+     (`--vpn-domain`). Repoint that domain's A record at the new IP and
+     clients reconnect on their own; existing configs keep working, since
+     the server and client keys travel with the archive.
+   - **Use this server's address** — for clients that connected to the old
+     IP. Their configs have to be reissued: download them again in the
+     panel and hand them out.
+6. The tunnel MTU is not carried over: the installer measures the new
+   uplink and pins its own value.
 
 ## Development
 
