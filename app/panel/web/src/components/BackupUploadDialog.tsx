@@ -213,13 +213,6 @@ export function BackupUploadDialog({
                       ? "border-destructive"
                       : "border-border hover:border-input"
                 }`}
-                onClick={(e) => {
-                  if (e.target === inputRef.current) {
-                    return;
-                  }
-                  e.preventDefault();
-                  openPicker();
-                }}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.stopPropagation();

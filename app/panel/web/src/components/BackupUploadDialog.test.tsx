@@ -239,17 +239,24 @@ describe("BackupUploadDialog", () => {
     );
   });
 
+  // The picker must open through the label's own activation of the nested
+  // input, not through a scripted input.click(): browsers treat a
+  // script-issued click during an already-handled event inconsistently and
+  // Safari refuses it, which is how the picker stopped opening at all.
   it("opens the file picker when the desktop dropzone is clicked", async () => {
     const user = userEvent.setup();
-    const clickSpy = vi.spyOn(HTMLInputElement.prototype, "click");
     render(<BackupUploadDialog open onOpenChange={() => {}} />);
+
+    const input = document.querySelector('input[type="file"]')!;
+    const activated = vi.fn();
+    input.addEventListener("click", activated);
 
     const dropzone = screen
       .getByText("Перетащите файл сюда или выберите на диске")
       .closest("label");
     await user.click(dropzone!);
 
-    expect(clickSpy).toHaveBeenCalled();
+    expect(activated).toHaveBeenCalled();
   });
 
   it("does not look clickable when restore is pending", async () => {
