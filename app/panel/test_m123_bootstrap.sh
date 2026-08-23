@@ -337,8 +337,10 @@ test_key_flags_domain_client_domain() {
         || fail "key+domain: login missing"
     grep -q "Password:  TmpP4ssw0rd+/BASE64" "$TMP_TEST/out" && pass "key+domain: temp password in summary" \
         || fail "key+domain: password missing from summary"
-    grep -q "/account" "$TMP_TEST/out" && pass "key+domain: change-password hint" \
-        || fail "key+domain: /account hint missing"
+    # The panel no longer changes passwords; the summary hands over the
+    # server command instead of pointing at a form that does not exist.
+    grep -q "auth set-password" "$TMP_TEST/out" && pass "key+domain: change-password command in summary" \
+        || fail "key+domain: set-password command missing from summary"
     grep -q "Backups" "$TMP_TEST/out" && pass "key+domain: restore-backup hint" \
         || fail "key+domain: Backups hint missing"
     grep -q "Endpoint:  vpn.example.com:51820" "$TMP_TEST/out" && pass "key+domain: endpoint in summary" \
@@ -948,6 +950,20 @@ test_real_init_failure_still_aborts() {
         || fail "a real init failure must abort"
 }
 
+# The panel has no password form any more, so the summary must not send
+# people to /account for it.
+test_summary_points_at_the_server_for_passwords() {
+    fakes_reset
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" = "0" ] || fail "summary flow: exit $rc"
+    stdout | grep -q "Change the password at /account" \
+        && fail "the summary still points at the removed /account form" \
+        || pass "the summary no longer points at /account"
+    stdout | grep -q "auth set-password" \
+        && pass "the summary shows the server command instead" \
+        || fail "the summary must show the set-password command"
+}
+
 # --- main ---------------------------------------------------------------
 
 test_bash_syntax
@@ -979,6 +995,7 @@ test_sshpass_missing
 test_invalid_panel_port
 test_default_panel_port_without_domain
 test_install_progress_is_visible
+test_summary_points_at_the_server_for_passwords
 test_ssh_keepalive_tolerates_a_busy_host
 test_rerun_survives_existing_server_row
 test_real_init_failure_still_aborts
