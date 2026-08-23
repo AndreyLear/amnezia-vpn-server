@@ -39,7 +39,7 @@ func TestGenerateClientMinimal(t *testing.T) {
 		"\n" +
 		"[Peer]\n" +
 		"PublicKey = " + testKey(2) + "\n" +
-		"AllowedIPs = 0.0.0.0/0\n" +
+		"AllowedIPs = 0.0.0.0/0, ::/0\n" +
 		"Endpoint = " + testEndpoint + "\n" +
 		"PersistentKeepalive = 25\n"
 	if got := string(cfg); got != want {
@@ -70,7 +70,7 @@ func TestGenerateClientFull(t *testing.T) {
 		"[Peer]",
 		"PublicKey = " + testKey(2),
 		"PresharedKey = " + testKey(4),
-		"AllowedIPs = 0.0.0.0/0",
+		"AllowedIPs = 0.0.0.0/0, ::/0",
 		"Endpoint = " + testEndpoint,
 		"PersistentKeepalive = 25",
 	}
@@ -104,7 +104,7 @@ func TestGenerateClientFull(t *testing.T) {
 		"[Peer]\n"+
 		"PublicKey = "+testKey(2)+"\n"+
 		"PresharedKey = "+testKey(4)+"\n"+
-		"AllowedIPs = 0.0.0.0/0\n"+
+		"AllowedIPs = 0.0.0.0/0, ::/0\n"+
 		"Endpoint = "+testEndpoint+"\n"+
 		"PersistentKeepalive = 25\n" {
 		t.Fatalf("full config order mismatch:\n%s", got)
@@ -228,7 +228,13 @@ func TestGenerateClientExpiredClient(t *testing.T) {
 	}
 }
 
-func TestGenerateClientAlwaysFullTunnelIPv4(t *testing.T) {
+// The tunnel carries IPv4 only, but the client must not fall back to its
+// own IPv6 for dual-stack destinations: YouTube, Instagram and every other
+// AAAA-capable service would then bypass the VPN entirely (the client's
+// real address is exposed and any block on that route still applies).
+// Routing ::/0 into an interface that has no IPv6 address blackholes v6 on
+// the client, so Happy Eyeballs falls back to IPv4 through the tunnel.
+func TestGenerateClientFullTunnelBlackholesIPv6(t *testing.T) {
 	handle, _ := newTestDB(t)
 	seedServer(t, handle, "", "")
 	seedClient(t, handle, 1, "", true, "10.8.0.2/32")
@@ -239,11 +245,13 @@ func TestGenerateClientAlwaysFullTunnelIPv4(t *testing.T) {
 		t.Fatalf("GenerateClient: %v", err)
 	}
 	got := string(cfg)
-	if !strings.Contains(got, "AllowedIPs = 0.0.0.0/0\n") {
-		t.Fatalf("AllowedIPs must be strictly 0.0.0.0/0 and nothing else:\n%s", got)
+	if !strings.Contains(got, "AllowedIPs = 0.0.0.0/0, ::/0\n") {
+		t.Fatalf("AllowedIPs must route both families so IPv6 cannot bypass the tunnel:\n%s", got)
 	}
-	if strings.Contains(got, "::/0") || strings.Contains(got, "AllowedIPs,") {
-		t.Fatalf("unexpected additional routes:\n%s", got)
+	// The [Interface] Address stays IPv4-only: ::/0 is a blackhole route,
+	// not IPv6 connectivity through the tunnel.
+	if strings.Contains(got, "Address = 10.8.0.2/32, ") {
+		t.Fatalf("client Address must stay IPv4-only:\n%s", got)
 	}
 }
 
@@ -330,7 +338,7 @@ func TestRenderClientDirect(t *testing.T) {
 		"\n" +
 		"[Peer]\n" +
 		"PublicKey = " + testKey(2) + "\n" +
-		"AllowedIPs = 0.0.0.0/0\n" +
+		"AllowedIPs = 0.0.0.0/0, ::/0\n" +
 		"Endpoint = " + testEndpoint + "\n" +
 		"PersistentKeepalive = 25\n"
 	if got := RenderClient(cfg); got != want {

@@ -24,9 +24,16 @@ import (
 // endpoint host:port (M4 criteria; set by `panel server init`).
 const settingsEndpointKey = "endpoint"
 
-// clientAllowedIPs is the full-tunnel IPv4 route of the client config.
-// IPv6 (::/0) is deliberately not added in M4.
-const clientAllowedIPs = "0.0.0.0/0"
+// clientAllowedIPs is the full-tunnel route of the client config.
+//
+// The tunnel itself carries IPv4 only, but ::/0 must be routed into it as
+// well: on a dual-stack client every AAAA-capable destination (YouTube,
+// Instagram and the rest of Google/Meta) is reached over the client's own
+// IPv6 otherwise, bypassing the VPN completely — the real address is
+// exposed and any block on that path still applies. The interface has no
+// IPv6 address, so ::/0 is a blackhole: v6 connections fail immediately and
+// Happy Eyeballs falls back to IPv4 through the tunnel.
+const clientAllowedIPs = "0.0.0.0/0, ::/0"
 
 // ClientConfig is the [Interface] and [Peer] section of the client-side
 // configuration. Params mirrors the server's AWG obfuscation parameters.
@@ -95,7 +102,8 @@ func validateEndpoint(endpoint string) error {
 // [Interface] section (PrivateKey, Address, DNS when set, the server's
 // AWG J/S/H/I parameter lines in the fixed renderParams order), one
 // blank line, then the [Peer] section (server PublicKey, PresharedKey
-// when set, AllowedIPs = 0.0.0.0/0, Endpoint, PersistentKeepalive = 25).
+// when set, AllowedIPs = 0.0.0.0/0, ::/0, Endpoint,
+// PersistentKeepalive = 25).
 // No comments, final newline, CanonicalKeyCasing.
 func RenderClient(c ClientConfig) string {
 	var b strings.Builder

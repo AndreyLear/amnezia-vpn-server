@@ -885,7 +885,7 @@ func TestClientConfigGolden(t *testing.T) {
 	want.WriteString("[Peer]\n")
 	line("PublicKey", server.PublicKey)
 	line("PresharedKey", client.PresharedKey)
-	line("AllowedIPs", "0.0.0.0/0")
+	line("AllowedIPs", "0.0.0.0/0, ::/0")
 	line("Endpoint", testEndpoint)
 	line("PersistentKeepalive", "25")
 	if out != want.String() {
