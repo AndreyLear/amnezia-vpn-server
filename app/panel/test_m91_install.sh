@@ -67,6 +67,7 @@ CERTBOT_RC=0
 APT_LOCK_FAILS=0
 APT_LOCK_ALWAYS=0
 APT_FUSER_BUSY_REMAINING=0
+FAKE_PMTU=1500
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -198,6 +199,26 @@ if [ "$n" -gt 0 ] 2>/dev/null; then
     printf '%s\n' "10849" >&2
     exit 0
 fi
+exit 1
+FAKE_EOF
+
+cat > "$FAKE_DIR/ping" <<'FAKE_EOF'
+#!/bin/bash
+# Fake ping for the tunnel-MTU pre-flight: answers unfragmented probes up
+# to FAKE_PMTU (as a full IP packet), refuses anything larger, and can
+# refuse everything (FAKE_PMTU=0) to emulate a transit that filters ICMP.
+echo "ping $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+limit="${FAKE_PMTU:-1500}"
+[ "$limit" = "0" ] && exit 1
+size=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -s) size="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[ $((size + 28)) -le "$limit" ] && exit 0
 exit 1
 FAKE_EOF
 
@@ -341,7 +362,7 @@ FAKE_EOF
 
 chmod +x "$FAKE_DIR/curl" "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot" "$FAKE_DIR/openssl"
 
-chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/fuser" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl"
+chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/fuser" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl" "$FAKE_DIR/ping"
 
 # M9.2c fakes: the installer probes the AmneziaWG client stack and
 # manages the docker/ufw forward-accept coexistence rules.
@@ -1548,6 +1569,74 @@ test_doctor_failure
 test_ssh_hint
 test_secrets_absent
 test_idempotent_rerun
+test_pmtu_preflight_sizes_tunnel_for_a_tunnelled_uplink
+test_pmtu_preflight_caps_at_the_default
+test_pmtu_preflight_survives_filtered_icmp
+test_pmtu_preflight_clamps_a_tiny_path
+}
+
+# --- tunnel MTU pre-flight (amnezia-vpn-server-6ztc) --------------------
+
+# state_set KEY VALUE — overwrite one knob in the fake state file.
+state_set() {
+    sed "s|^${1}=.*|${1}=${2}|" "$FAKE_STATE" > "$FAKE_STATE.new" \
+        && mv "$FAKE_STATE.new" "$FAKE_STATE"
+}
+
+# The uplink of a provider that tunnels its own traffic carries 1476, not
+# 1500. A full tunnel packet costs MTU + 60, so the tunnel must be sized
+# to 1416 — the operator is never asked to work this out.
+test_pmtu_preflight_sizes_tunnel_for_a_tunnelled_uplink() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1476
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "pmtu flow: exit $rc"
+    grep -q "^TUNNEL_MTU=1416$" "$ROOT/.env" \
+        && pass "1476-byte uplink -> TUNNEL_MTU=1416 in .env" \
+        || fail "1476-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
+}
+
+# A clean 1500-byte path must not push the tunnel above the historical
+# WireGuard default: 1440 would work on this hop and break on the next one.
+test_pmtu_preflight_caps_at_the_default() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1500
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "pmtu cap flow: exit $rc"
+    grep -q "^TUNNEL_MTU=1420$" "$ROOT/.env" \
+        && pass "1500-byte uplink -> TUNNEL_MTU capped at 1420" \
+        || fail "1500-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
+}
+
+# Nothing about a filtered ICMP path should abort an install: the panel
+# has a safe default, and the operator is told the measurement failed.
+test_pmtu_preflight_survives_filtered_icmp() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 0
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "filtered-ICMP flow: exit $rc"
+    grep -q "^TUNNEL_MTU=" "$ROOT/.env" \
+        && fail "filtered ICMP must not write a guessed TUNNEL_MTU" \
+        || pass "filtered ICMP leaves TUNNEL_MTU unset (panel default applies)"
+    stdout | grep -q "could not measure the uplink path MTU" \
+        && pass "filtered ICMP warns the operator" \
+        || fail "filtered ICMP must warn the operator"
+}
+
+# An absurdly small path must clamp at the IPv6 minimum rather than
+# producing a tunnel MTU no stack will accept.
+test_pmtu_preflight_clamps_a_tiny_path() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1300
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "tiny-path flow: exit $rc"
+    grep -q "^TUNNEL_MTU=1280$" "$ROOT/.env" \
+        && pass "1300-byte uplink -> TUNNEL_MTU clamped to 1280" \
+        || fail "1300-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
 }
 
 if [ "$#" -gt 0 ]; then

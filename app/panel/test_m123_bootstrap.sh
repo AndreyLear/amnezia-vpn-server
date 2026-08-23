@@ -308,6 +308,12 @@ test_key_flags_domain_client_domain() {
     grep -q "server init" "$FAKE_CALLS" && grep -q -- "--endpoint 'vpn.example.com:51820'" "$FAKE_CALLS" \
         && pass "key+domain: server init endpoint is the client domain" \
         || fail "key+domain: server init endpoint missing/wrong"
+    # The tunnel MTU install.sh measured must reach `server init`; nobody
+    # running the wizard is expected to know the number, so it travels
+    # through the deployment .env rather than being asked for.
+    grep -q 'TUNNEL_MTU=' "$FAKE_CALLS" && grep -q -- '--mtu' "$FAKE_CALLS" \
+        && pass "server init picks the measured tunnel MTU out of .env" \
+        || fail "server init must pass the measured tunnel MTU"
     grep -q "add-user admin --password-stdin" "$FAKE_CALLS" && pass "key+domain: admin via password-stdin" \
         || fail "key+domain: add-user missing"
     grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "key+domain: panel URL in summary" \

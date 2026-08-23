@@ -47,6 +47,7 @@ COMPOSE_VERSION=2.30.1
 NEW_COMPOSE_VERSION=
 DAEMON=ok
 IP_FORWARD=1
+FAKE_PMTU=1500
 TCP_CC="bbr cubic"
 NFT_CHECK_RC=0
 NFT_APPLY_RC=0
@@ -71,6 +72,26 @@ EOF
 }
 
 # fake binaries: bash shims that log to $FAKE_CALLS and answer from state.
+
+cat > "$FAKE_DIR/ping" <<'FAKE_EOF'
+#!/bin/bash
+# Fake ping for the tunnel-MTU pre-flight: answers unfragmented probes up
+# to FAKE_PMTU (as a full IP packet), refuses anything larger, and can
+# refuse everything (FAKE_PMTU=0) to emulate a transit that filters ICMP.
+echo "ping $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+limit="${FAKE_PMTU:-1500}"
+[ "$limit" = "0" ] && exit 1
+size=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -s) size="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[ $((size + 28)) -le "$limit" ] && exit 0
+exit 1
+FAKE_EOF
 
 cat > "$FAKE_DIR/docker" <<'FAKE_EOF'
 #!/bin/bash
@@ -241,7 +262,7 @@ FAKE_EOF
 
 chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" \
     "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl" \
-    "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot"
+    "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot" "$FAKE_DIR/ping"
 
 cat > "$FAKE_DIR/modprobe" <<'FAKE_EOF'
 #!/bin/bash
