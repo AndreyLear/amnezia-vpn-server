@@ -53,6 +53,7 @@ INSTALL_RC=0
 INIT_RC=0
 INIT_STDERR=
 APPLY_RC=0
+RESTART_RC=0
 CURL_SOURCE_RC=0
 UP_RC=0
 ADDUSER_RC=0
@@ -68,10 +69,15 @@ cat > "$FAKE_DIR/ssh" <<'FAKE_EOF'
 #!/bin/bash
 LOG="${FAKE_CALLS:?}"
 echo "ssh $*" >> "$LOG"
-# Never record stdin: the admin password is piped here.
-if [ ! -t 0 ]; then
-    cat >/dev/null
-fi
+# Never record stdin: the admin password is piped here. Drain only the
+# commands that are actually fed one — draining unconditionally blocks
+# forever whenever stdin is an open pipe nobody closes, which hangs the
+# whole suite depending on how it was launched.
+case "$*" in
+    *add-user*|*set-password*)
+        [ -t 0 ] || cat >/dev/null
+        ;;
+esac
 . "${FAKE_STATE:?}"
 [ "${SSH_RC:-0}" = "0" ] || exit "${SSH_RC}"
 
@@ -118,10 +124,22 @@ case "$cmd" in
         exit "${INIT_RC:-0}"
         ;;
     *'server update'*)
+        # One remote command carries both steps: the update, and then a
+        # restart only when the rendered config changed. Model that order,
+        # or a knob for the second step masks the first.
         if [ "${APPLY_RC:-0}" != "0" ]; then
             printf '%s\n' "panel server update: db: simulated failure" >&2
             exit "${APPLY_RC}"
         fi
+        case "$cmd" in
+            *'restart awg'*)
+                if [ "${RESTART_RC:-0}" != "0" ]; then
+                    printf '%s\n' "restarting awg" 
+                    printf '%s\n' "Error response from daemon: simulated" >&2
+                    exit "${RESTART_RC}"
+                fi
+                ;;
+        esac
         exit 0
         ;;
     *'up -d'*)
@@ -1002,6 +1020,35 @@ test_apply_failure_aborts_instead_of_reporting_success() {
         || pass "a failed apply prints no DONE summary"
 }
 
+# The apply step exists to stop "tunnel down, success reported". A restart
+# that fails leaves the listener on the old port, so swallowing it would
+# recreate the very bug (found by code review, amnezia-vpn-server-akuy).
+test_failed_awg_restart_aborts() {
+    fakes_reset
+    setstate RESTART_RC 1 "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --awg-port 4500 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" != "0" ] \
+        && pass "a failed awg restart aborts the wizard" \
+        || fail "a failed awg restart must not exit 0"
+    stdout | grep -q "DONE" \
+        && fail "a failed awg restart must not print the DONE summary" \
+        || pass "a failed awg restart prints no DONE summary"
+}
+
+# The MTU is re-measured on every install, so it has to reach the database
+# on a rerun too; otherwise an existing deployment keeps a size that was
+# already shown to drop full-size packets.
+test_rerun_applies_the_measured_mtu() {
+    fakes_reset
+    setstate INIT_RC 1 "$FAKE_STATE"
+    setstate INIT_STDERR "panel server init: db: server row (id=1) already exists" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" = "0" ] || fail "rerun: exit $rc"
+    grep -q "server update.*MTU_ARG\|server update.*--mtu" "$FAKE_CALLS" \
+        && pass "the rerun carries the measured MTU into the database" \
+        || fail "the rerun must pass the measured MTU to server update"
+}
+
 # A genuine init failure must still stop the wizard.
 test_real_init_failure_still_aborts() {
     fakes_reset
@@ -1103,6 +1150,7 @@ test_real_adduser_failure_still_aborts() {
 
 # --- main ---------------------------------------------------------------
 
+m123_run_all() {
 test_bash_syntax
 test_help
 test_unknown_argument
@@ -1142,6 +1190,24 @@ test_real_adduser_failure_still_aborts
 test_real_init_failure_still_aborts
 test_rerun_applies_port_and_endpoint
 test_apply_failure_aborts_instead_of_reporting_success
+test_failed_awg_restart_aborts
+test_rerun_applies_the_measured_mtu
+}
+
+# Named tests, like the install harness: a suite that only runs whole is a
+# suite nobody debugs. A mistyped name fails loudly instead of passing
+# vacuously.
+if [ "$#" -gt 0 ]; then
+    for t in "$@"; do
+        if ! declare -F "$t" >/dev/null; then
+            echo "T-123 bootstrap.sh: no such test: $t" >&2
+            exit 2
+        fi
+        "$t"
+    done
+else
+    m123_run_all
+fi
 
 echo
 if [ "$M123_ERRORS" -eq 0 ]; then

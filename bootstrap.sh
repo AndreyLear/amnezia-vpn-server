@@ -821,11 +821,11 @@ log "applying the deployment settings (port, endpoint, DNS)"
 APPLY_CMD="cd '$ROOT_DIR' && $READ_ENV; \
 before=\"\$(grep -E '^(ListenPort|MTU) ' config/awg0.conf 2>/dev/null | sort)\"; \
 docker compose --env-file versions.lock run --rm panel-init /app/panel server update \
-    --dns \"\$DNS\" --endpoint '$ENDPOINT' --listen-port '$AWG_PORT' || exit 1; \
+    --dns \"\$DNS\" --endpoint '$ENDPOINT' --listen-port '$AWG_PORT' \$MTU_ARG || exit 1; \
 after=\"\$(grep -E '^(ListenPort|MTU) ' config/awg0.conf 2>/dev/null | sort)\"; \
 if [ \"\$before\" != \"\$after\" ]; then \
     echo 'tunnel parameters changed; restarting awg'; \
-    docker compose --env-file versions.lock restart awg >/dev/null 2>&1 || true; \
+    docker compose --env-file versions.lock restart awg >/dev/null 2>&1 || exit 1; \
 fi"
 APPLY_OUT="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-apply.XXXXXX")"
 if ! remote_cmd "$APPLY_CMD" >"$APPLY_OUT" 2>&1; then

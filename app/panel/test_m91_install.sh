@@ -1591,7 +1591,10 @@ test_panel_port_loopback_matrix() {
 test_panel_port_invalid_values() {
     fakes_reset
     os_release debian 12 bookworm
-    for bad in 0 65536 abc ""; do
+    # "" is deliberately absent: an explicit empty value is how the panel
+    # leaves IP:port mode (amnezia-vpn-server-35g3), so it is meaningful
+    # input rather than garbage.
+    for bad in 0 65536 abc; do
         rc="$(run_install --panel-port "$bad")"
         [ "$rc" = "2" ] || fail "invalid panel port '$bad': exit $rc, want 2"
     done
@@ -1637,15 +1640,19 @@ test_panel_port_regen_flag() {
 }
 
 test_panel_port_switch_back_to_loopback() {
-    # Mode convergence: a rerun without --panel-port closes the port in
-    # nftables, drops AMNEZIA_SECURE_COOKIES from .env and restores the
-    # SSH hint; the certificate file itself is left on disk (managed
-    # data, not application state).
+    # Leaving the mode closes the port in nftables, drops
+    # AMNEZIA_SECURE_COOKIES from .env and restores the SSH hint; the
+    # certificate file itself is left on disk (managed data, not
+    # application state).
+    #
+    # It takes an explicit empty --panel-port now. This used to happen on
+    # any rerun that omitted the flag, which meant an unrelated rerun
+    # silently took the panel offline (amnezia-vpn-server-35g3).
     fakes_reset
     os_release debian 12 bookworm
     rc="$(run_install --panel-port 8443)"
     [ "$rc" = "0" ] || fail "panel-port switchback: first pass exit $rc"
-    rc="$(run_install)"
+    rc="$(run_install --panel-port "")"
     [ "$rc" = "0" ] || fail "panel-port switchback: second pass exit $rc"
     if grep -qE "^[[:space:]]*tcp dport 8443" "$ROOT/nftables/amnezia-vpn.nft"; then
         fail "panel-port switchback: 8443 still open in nftables"
@@ -1998,6 +2005,11 @@ test_pmtu_preflight_caps_a_clean_uplink_too
 test_pmtu_preflight_lets_a_worse_uplink_win
 test_pmtu_preflight_survives_filtered_icmp
 test_pmtu_preflight_clamps_a_tiny_path
+test_standalone_port_change_warns_about_the_database
+test_matching_port_stays_quiet
+test_bare_rerun_keeps_the_panel_domain
+test_bare_rerun_keeps_the_panel_port
+test_explicit_empty_domain_returns_to_loopback
 test_rerun_applies_a_changed_awg_port_to_env
 test_rerun_without_the_flag_keeps_the_deployed_port
 test_rerun_applies_a_changed_subnet_and_client_domain
@@ -2083,6 +2095,116 @@ test_pmtu_preflight_clamps_a_tiny_path() {
     grep -q "^TUNNEL_MTU=1280$" "$ROOT/.env" \
         && pass "1300-byte uplink -> TUNNEL_MTU clamped to 1280" \
         || fail "1300-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
+}
+
+# --- panel exposure survives a bare rerun (amnezia-vpn-server-35g3) -----
+
+# A rerun for some unrelated reason must not take the panel offline. It
+# used to: omitting --domain meant "no domain", so 80/443 closed, the
+# Secure cookie went, the resolver stopped answering the hostname — and
+# nginx carried on serving that same hostname. Nothing could reach it.
+test_bare_rerun_keeps_the_panel_domain() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "domain first pass: exit $rc"
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "bare rerun: exit $rc"
+    grep -q "^PANEL_DOMAIN=panel.example.com$" "$ROOT/.env" \
+        && pass "bare rerun keeps the panel domain" \
+        || fail "bare rerun dropped PANEL_DOMAIN: $(grep PANEL_DOMAIN "$ROOT/.env" || echo missing)"
+    grep -q "AMNEZIA_SECURE_COOKIES=1" "$ROOT/.env" \
+        && pass "bare rerun keeps the Secure cookie" \
+        || fail "bare rerun dropped AMNEZIA_SECURE_COOKIES"
+    grep -qE "^[[:space:]]*tcp dport 443 accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "bare rerun keeps 443 open" \
+        || fail "bare rerun closed the panel port in nftables"
+    [ -f "$ROOT/nginx/panel.conf" ] \
+        && pass "bare rerun keeps the nginx site" \
+        || fail "bare rerun removed the nginx site while the mode was still on"
+}
+
+test_bare_rerun_keeps_the_panel_port() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "panel-port first pass: exit $rc"
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "bare rerun: exit $rc"
+    grep -q "^PANEL_PORT=8443$" "$ROOT/.env" \
+        && pass "bare rerun keeps the panel port" \
+        || fail "bare rerun dropped PANEL_PORT"
+    grep -qE "^[[:space:]]*tcp dport 8443 accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "bare rerun keeps 8443 open" \
+        || fail "bare rerun closed 8443"
+}
+
+# Leaving a mode stays possible, but has to be said out loud — and then it
+# must be complete, site included.
+test_explicit_empty_domain_returns_to_loopback() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "domain first pass: exit $rc"
+    rc="$(run_install --domain "")"
+    [ "$rc" = "0" ] || fail "explicit clear: exit $rc"
+    if grep -q "^PANEL_DOMAIN=" "$ROOT/.env"; then
+        fail "explicit clear left PANEL_DOMAIN behind"
+    else
+        pass "explicit clear drops the panel domain"
+    fi
+    if grep -q "AMNEZIA_SECURE_COOKIES" "$ROOT/.env"; then
+        fail "explicit clear left the Secure cookie"
+    else
+        pass "explicit clear drops the Secure cookie"
+    fi
+    if grep -qE "^[[:space:]]*tcp dport" "$ROOT/nftables/amnezia-vpn.nft"; then
+        fail "explicit clear left a panel port open"
+    else
+        pass "explicit clear closes the panel port"
+    fi
+    if [ -f "$ROOT/nginx/panel.conf" ]; then
+        fail "explicit clear left the nginx site serving a hostname nothing can reach"
+    else
+        pass "explicit clear retires the nginx site"
+    fi
+}
+
+# install.sh cannot write the database, so a standalone rerun with a new
+# --awg-port genuinely can leave the firewall and the tunnel disagreeing.
+# It must not do that silently: silence is what made the original outage
+# expensive.
+test_standalone_port_change_warns_about_the_database() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 23456)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    mkdir -p "$ROOT/config"
+    printf '[Interface]\nListenPort = 23456\nMTU = 1340\n' > "$ROOT/config/awg0.conf"
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "port change: exit $rc"
+    stdout | grep -q "listening on UDP 23456" \
+        && pass "standalone port change names the port the tunnel is really on" \
+        || fail "standalone port change must warn that the tunnel is elsewhere"
+    stdout | grep -q -- "--listen-port 4500" \
+        && pass "the warning carries the command that fixes it" \
+        || fail "the warning must say how to fix it"
+}
+
+# When they agree, say nothing: a warning that fires on every ordinary
+# rerun is a warning nobody reads.
+test_matching_port_stays_quiet() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    mkdir -p "$ROOT/config"
+    printf '[Interface]\nListenPort = 4500\nMTU = 1340\n' > "$ROOT/config/awg0.conf"
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "second pass: exit $rc"
+    stdout | grep -q "listening on UDP" \
+        && fail "a matching port must not warn" \
+        || pass "a matching port stays quiet"
 }
 
 # --- rerun with changed deployment flags (amnezia-vpn-server-akuy) ------
@@ -2191,11 +2313,16 @@ test_tunnel_dns_can_be_turned_off() {
     grep -q "^TUNNEL_DNS=1.1.1.1,8.8.8.8$" "$ROOT/.env" \
         && pass "--no-tunnel-dns: clients get the public resolvers" \
         || fail "--no-tunnel-dns: TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing)"
-    if grep -q "^PANEL_DOMAIN=" "$ROOT/.env"; then
-        fail "--no-tunnel-dns: PANEL_DOMAIN still written"
-    else
-        pass "--no-tunnel-dns: no hostname override"
-    fi
+    # The resolver stands down through its own switch. PANEL_DOMAIN stays:
+    # it is the panel's exposure mode, which nginx, the firewall and the
+    # Secure cookie all read, and deleting it here used to take the whole
+    # panel offline (amnezia-vpn-server-35g3).
+    grep -q "^TUNNEL_DNS_DISABLED=1$" "$ROOT/.env" \
+        && pass "--no-tunnel-dns: the resolver is told to stand down" \
+        || fail "--no-tunnel-dns: TUNNEL_DNS_DISABLED missing from .env"
+    grep -q "^PANEL_DOMAIN=panel.example.com$" "$ROOT/.env" \
+        && pass "--no-tunnel-dns: the panel keeps its domain" \
+        || fail "--no-tunnel-dns: the panel domain was collateral damage"
 }
 
 # The tunnel address is not a constant: a deployment on another subnet

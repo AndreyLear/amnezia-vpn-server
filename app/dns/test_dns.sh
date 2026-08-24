@@ -64,6 +64,15 @@ exit 0
 FAKE
 chmod +x "${TMP}/bin/dnsmasq"
 
+# `exec sleep infinity` would hang the harness; the fake records the call
+# and returns, which is all the assertions need.
+cat > "${TMP}/bin/sleep" <<'FAKE'
+#!/bin/sh
+echo "[dns] would idle: sleep $*"
+exit 0
+FAKE
+chmod +x "${TMP}/bin/sleep"
+
 # render [VAR=VALUE ...]: the configuration the entrypoint would run with.
 render() {
     env -i PATH="${TMP}/bin:/usr/bin:/bin" "$@" sh ./entrypoint.sh 2>&1
@@ -108,6 +117,20 @@ CONF="$(render)"
 check "defaults to the standard tunnel address" has 'listen-address=10.8.0.1' "$CONF"
 check "defaults to public upstreams" has 'server=1.1.1.1' "$CONF"
 check "starts without a panel domain" lacks 'address=/' "$CONF"
+
+# ---- 5. standing down for --no-tunnel-dns ------------------------------
+# The flag exists because something else already owns port 53. Writing it
+# into .env is not enough: the container has to actually leave the port
+# alone, and it must not exit either, or restart:unless-stopped spins it.
+OUT="$(render TUNNEL_DNS_DISABLED=1 PANEL_DOMAIN=panel.example.com FAKE_SLEEP=1 2>&1)"
+check "disabled: says so plainly" grep -q "not binding port 53" <<<"$OUT"
+check "disabled: renders no listen-address" lacks 'listen-address' "$OUT"
+check "disabled: renders no upstreams" lacks 'server=' "$OUT"
+check "disabled: does not answer the panel hostname" lacks 'address=/' "$OUT"
+
+# 0 is not 1: only an explicit opt-out stands the resolver down.
+OUT="$(render TUNNEL_DNS_DISABLED=0 TUNNEL_ADDRESS=10.8.0.1 UPSTREAM_DNS=1.1.1.1)"
+check "TUNNEL_DNS_DISABLED=0 still serves" has 'listen-address=10.8.0.1' "$OUT"
 
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"

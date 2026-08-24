@@ -17,10 +17,14 @@ const opServerInit = "server init"
 
 const opServerUpdate = "server update"
 
-// cmdServer dispatches the `server` subcommands. listen_port itself is
-// set once at init and is changeable only via a full restart (awg
-// syncconf does not apply ListenPort on hot reload,
-// docs/TECHNICAL_SPEC_v2.0.md §10 M4).
+// cmdServer dispatches the `server` subcommands.
+//
+// listen_port can be changed after init with `server update --listen-port`,
+// but the new value only reaches the interface when it is recreated: awg
+// syncconf does not apply ListenPort on hot reload
+// (docs/TECHNICAL_SPEC_v2.0.md §10 M4). Callers that change it are
+// responsible for restarting the awg service — bootstrap.sh does this by
+// diffing ListenPort/MTU in the rendered config around the update.
 func (a *app) cmdServer(args []string) int {
 	if len(args) == 0 {
 		a.usage()
@@ -78,9 +82,9 @@ func (a *app) cmdServerInit(args []string) int {
 	} else if ip.To4() == nil {
 		return a.usageError(opServerInit, fmt.Sprintf("server address %q is not IPv4 (IPv6 is not supported in M4)", address))
 	}
-	listenPort, err := strconv.ParseUint(parsed.positional[1], 10, 16)
+	listenPort, err := validateListenPortArg(parsed.positional[1])
 	if err != nil {
-		return a.usageError(opServerInit, fmt.Sprintf("invalid listen port %q: must be an unsigned 16-bit value", parsed.positional[1]))
+		return a.usageError(opServerInit, err.Error())
 	}
 	awgParams, hasParams := parsed.flags["awg-params"]
 	if !hasParams {
@@ -134,7 +138,7 @@ func (a *app) cmdServerInit(args []string) int {
 	createErr := fault("server-init.create")
 	if createErr == nil {
 		createErr = db.CreateServer(handle, privateKey, publicKey, address,
-			int64(listenPort), parsed.flags["dns"], awgParams, endpoint)
+			listenPort, parsed.flags["dns"], awgParams, endpoint)
 	}
 	if createErr == nil && mtu != 0 {
 		createErr = db.SetSetting(handle, "mtu", strconv.FormatUint(uint64(mtu), 10))
