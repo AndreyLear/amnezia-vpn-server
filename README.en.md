@@ -187,6 +187,11 @@ ahead. Only what the installer created is removed.
 
 ### When something is wrong
 
+**The panel stopped opening after a reinstall.** That was the behaviour
+before 2.3.0: running the installer without the domain flag returned the
+panel to loopback. Settings are remembered now, so a plain rerun changes
+nothing. On an older version, pass the domain again.
+
 **Pages load but video does not.** Almost always the MTU: small packets get
 through while the large ones carrying video are dropped on the way. The
 installer picks a size that survives mobile networks too, so a reinstall

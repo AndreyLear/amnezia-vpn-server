@@ -4,9 +4,24 @@
 #
 #   PANEL_DOMAIN   the hostname to answer with TUNNEL_ADDRESS (optional:
 #                  without it the service only forwards)
+#   TUNNEL_DNS_DISABLED=1
+#                  stand down: bind nothing and leave port 53 to whatever
+#                  else the host runs there (install.sh --no-tunnel-dns)
 #   TUNNEL_ADDRESS the server's address inside the tunnel (10.8.0.1)
 #   UPSTREAM_DNS   comma-separated resolvers for everything else
 set -eu
+# Alpine's ash supports pipefail, and the upstream list below is built
+# through a pipeline whose failures would otherwise pass unnoticed.
+set -o pipefail
+
+# Standing down has to be a real state, not a comment: --no-tunnel-dns
+# exists because something else on the host already owns port 53, and a
+# resolver that kept binding would restart-loop against it. Exiting is not
+# an option either — the service restarts unless-stopped — so it idles.
+if [ "${TUNNEL_DNS_DISABLED:-0}" = "1" ]; then
+    echo "[dns] disabled by --no-tunnel-dns: not binding port 53"
+    exec sleep infinity
+fi
 
 TUNNEL_ADDRESS="${TUNNEL_ADDRESS:-10.8.0.1}"
 UPSTREAM_DNS="${UPSTREAM_DNS:-1.1.1.1,8.8.8.8}"

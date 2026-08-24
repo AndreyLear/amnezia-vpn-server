@@ -169,9 +169,12 @@ Options:
                     PORT). Without a panel domain: self-signed
                     https://<server-ip>:PORT (T-124).
   --no-tunnel-dns
-                do not run the in-tunnel resolver. Without it the panel
-                hostname stays unreachable from a device connected to
-                this VPN, and clients get the public resolvers directly.
+                stand the in-tunnel resolver down: it binds nothing and
+                leaves port 53 to whatever else this host runs there.
+                Clients then get the public resolvers directly, and the
+                panel hostname stops resolving to the tunnel address —
+                so the panel is no longer reachable from a device
+                connected to this VPN.
   --build       compile the images on this server instead of pulling the
                 published ones (slow: it downloads a Go toolchain and
                 builds amneziawg-go, amneziawg-tools and the panel)
@@ -350,7 +353,11 @@ validate_fqdn() {
     )
 }
 
-if [ "$DOMAIN_SET" = "1" ]; then
+# An explicit empty value is how the operator leaves a mode:
+# `--domain ""` returns the panel to loopback. Omitting the flag keeps
+# whatever the deployment already runs (read back from .env below), so a
+# rerun for some unrelated reason cannot silently take the panel offline.
+if [ "$DOMAIN_SET" = "1" ] && [ -n "$DOMAIN" ]; then
     validate_fqdn "$DOMAIN" || die_usage "--panel-domain/--domain must be a valid FQDN (labels of letters/digits/hyphens; got: $DOMAIN)"
 fi
 
@@ -358,7 +365,7 @@ if [ "$CLIENT_DOMAIN_SET" = "1" ]; then
     validate_fqdn "$CLIENT_DOMAIN" || die_usage "--vpn-domain/--client-domain must be a valid FQDN (labels of letters/digits/hyphens; got: $CLIENT_DOMAIN)"
 fi
 
-if [ "$PANEL_PORT_SET" = "1" ]; then
+if [ "$PANEL_PORT_SET" = "1" ] && [ -n "$PANEL_PORT" ]; then
     validate_port "$PANEL_PORT" || die_usage "--panel-port must be an integer in 1..65535 (got: $PANEL_PORT)"
 fi
 if [ "$PANEL_TLS_REGEN" = "1" ] && [ "$PANEL_PORT_SET" = "0" ]; then
@@ -862,6 +869,25 @@ if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
             validate_fqdn "$CLIENT_DOMAIN" || die_op "CLIENT_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
         fi
     fi
+    # How the panel is exposed is a deployment value like the rest. It used
+    # to be the exception: omitting --domain meant "no domain", so a rerun
+    # for an unrelated reason closed 80/443, dropped the Secure cookie and
+    # stopped the resolver answering the panel hostname — while nginx kept
+    # serving that hostname. The deployment ended up in a state nothing
+    # could reach. Now it is read back, and only an explicit empty value
+    # leaves the mode.
+    if [ "$DOMAIN_SET" = "0" ] && [ -z "$DOMAIN" ]; then
+        DOMAIN="$(env_read PANEL_DOMAIN)"
+        if [ -n "$DOMAIN" ]; then
+            validate_fqdn "$DOMAIN" || die_op "PANEL_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
+        fi
+    fi
+    if [ "$PANEL_PORT_SET" = "0" ] && [ -z "$PANEL_PORT" ]; then
+        PANEL_PORT="$(env_read PANEL_PORT)"
+        if [ -n "$PANEL_PORT" ]; then
+            validate_port "$PANEL_PORT" || die_op "PANEL_PORT in $(basename "$ENV_FILE") is not a valid port"
+        fi
+    fi
     # The other direction: what this run set explicitly becomes the
     # deployment's new memory.
     if [ "$AWG_PORT_SET" = "1" ] && [ "$(env_read AWG_PORT)" != "$AWG_PORT" ]; then
@@ -876,6 +902,14 @@ if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
         env_set CLIENT_DOMAIN "$CLIENT_DOMAIN"
         log "CLIENT_DOMAIN changed to $CLIENT_DOMAIN in $ENV_FILE"
     fi
+    if [ "$DOMAIN_SET" = "1" ] && [ -z "$DOMAIN" ] && [ -n "$(env_read PANEL_DOMAIN)" ]; then
+        env_unset PANEL_DOMAIN
+        log "panel domain cleared in $ENV_FILE: the panel returns to loopback"
+    fi
+    if [ "$PANEL_PORT_SET" = "1" ] && [ -z "$PANEL_PORT" ] && [ -n "$(env_read PANEL_PORT)" ]; then
+        env_unset PANEL_PORT
+        log "panel port cleared in $ENV_FILE: the panel returns to loopback"
+    fi
 else
     cat > "$ROOT_DIR/$ENV_FILE" <<EOF
 # AmneziaWG VPN Server — deployment-specific values (written by install.sh).
@@ -887,6 +921,17 @@ CLIENT_DOMAIN=${CLIENT_DOMAIN}
 EOF
     chmod 0600 "$ROOT_DIR/$ENV_FILE"
     log "$ENV_FILE created with AWG_PORT=${AWG_PORT}, VPN_SUBNET=${VPN_SUBNET} (0600)"
+fi
+
+# The effective panel exposure mode is the deployment's memory from here
+# on: nginx, the firewall, the Secure cookie and the in-tunnel resolver all
+# derive from these two values, so they are stored where a later rerun can
+# read them back.
+if [ -n "$DOMAIN" ]; then
+    env_set PANEL_DOMAIN "$DOMAIN"
+fi
+if [ -n "$PANEL_PORT" ]; then
+    env_set PANEL_PORT "$PANEL_PORT"
 fi
 
 # T-124: the session cookie carries Secure only when the panel is
@@ -903,7 +948,7 @@ elif grep -q '^AMNEZIA_SECURE_COOKIES=' "$ROOT_DIR/$ENV_FILE"; then
     log "AMNEZIA_SECURE_COOKIES removed from $ENV_FILE (loopback panel mode)"
 fi
 
-# --- 11b. split DNS inside the tunnel (T-rnub) -------------------------
+# --- 10d. split DNS inside the tunnel (T-rnub) -------------------------
 # The panel is reachable at the same address the tunnel ends at, so a
 # connected client cannot open it: a packet addressed to the endpoint
 # cannot travel through the endpoint, and iOS installs no bypass route
@@ -942,10 +987,14 @@ tunnel_dns_setup() {
 
     if [ "$TUNNEL_DNS_ENABLED" != "1" ]; then
         env_set TUNNEL_DNS "$TUNNEL_UPSTREAM_DNS"
-        env_unset PANEL_DOMAIN
-        log "tunnel DNS disabled (--no-tunnel-dns): clients get ${TUNNEL_UPSTREAM_DNS}"
+        # The resolver stands down instead of being deleted: the service is
+        # part of the stack, and the entrypoint reads this to leave port 53
+        # alone. Restarting the container back into service is one rerun.
+        env_set TUNNEL_DNS_DISABLED 1
+        log "tunnel DNS disabled (--no-tunnel-dns): clients get ${TUNNEL_UPSTREAM_DNS}, port 53 left alone"
         return 0
     fi
+    env_unset TUNNEL_DNS_DISABLED
 
     env_set TUNNEL_ADDRESS "$gateway"
     env_set UPSTREAM_DNS "$TUNNEL_UPSTREAM_DNS"
@@ -954,10 +1003,8 @@ tunnel_dns_setup() {
     env_set TUNNEL_DNS "${gateway},${TUNNEL_UPSTREAM_DNS%%,*}"
 
     if [ -n "$DOMAIN" ]; then
-        env_set PANEL_DOMAIN "$DOMAIN"
         log "tunnel DNS: ${DOMAIN} -> ${gateway} for connected clients"
     else
-        env_unset PANEL_DOMAIN
         log "tunnel DNS: caching resolver on ${gateway} (no panel domain to answer for)"
     fi
 
@@ -1095,6 +1142,30 @@ tunnel_mtu_preflight() {
 
 tunnel_mtu_preflight
 
+# --- 10e. tunnel port agreement (amnezia-vpn-server-akuy) --------------
+# install.sh owns the firewall and .env; the listening port lives in the
+# database, which only the panel can write. Run standalone with a changed
+# --awg-port, this script therefore builds rules around a port the tunnel
+# is not on. bootstrap.sh resolves that straight after (it applies the
+# deployment to the database), but somebody running install.sh by hand
+# gets no such help — and the failure is silent, which is what made the
+# original outage expensive. So say it, and say what fixes it.
+tunnel_port_agreement_check() {
+    local deployed
+    [ -f "$ROOT_DIR/config/awg0.conf" ] || return 0
+    deployed="$(sed -n 's/^[[:space:]]*ListenPort[[:space:]]*=[[:space:]]*//p' "$ROOT_DIR/config/awg0.conf" | head -1 | tr -d '[:space:]')"
+    [ -n "$deployed" ] || return 0
+    [ "$deployed" != "$AWG_PORT" ] || return 0
+    log "WARNING: the tunnel is listening on UDP ${deployed}, these rules are for ${AWG_PORT}"
+    log "WARNING: clients cannot reach it until the database agrees. Fix it with:"
+    log "WARNING:   docker compose --env-file versions.lock run --rm panel-init \\"
+    log "WARNING:     /app/panel server update --listen-port ${AWG_PORT}"
+    log "WARNING:   docker compose --env-file versions.lock restart awg"
+    log "WARNING: (bootstrap.sh does this for you; install.sh cannot write the database)"
+}
+
+tunnel_port_agreement_check
+
 # --- 11. host networking: managed nftables ruleset (M9.2) --------------
 
 NFT_FRAGMENT="amnezia-vpn.nft"
@@ -1162,10 +1233,12 @@ table ip amnezia {
     chain input {
         type filter hook input priority -100; policy accept;
         udp dport $2 accept
-        # T-rnub: split DNS for tunnel clients. iifname "awg0" is the whole
-        # exposure: the resolver binds 10.8.0.1 only, so it is unreachable
-        # from the internet by construction, and this accept just keeps a
-        # foreign input policy (ufw and friends) from dropping it.
+        # T-rnub: split DNS for tunnel clients. What actually keeps the
+        # resolver off the internet is the bind address — dnsmasq binds
+        # 10.8.0.1 and nothing else — not these rules: this chain's policy
+        # is accept, and an accept here does not stop a foreign chain at
+        # the same hook from dropping the packet. They state the intent
+        # and would carry it if this chain ever gained a drop policy.
         iifname "awg0" udp dport 53 accept
         iifname "awg0" tcp dport 53 accept
 ${input_rules}
@@ -1655,6 +1728,28 @@ panel_port_setup() {
 }
 
 panel_port_setup
+
+# panel_loopback_setup: with neither mode selected the panel is reachable
+# over the SSH tunnel only, and the nginx site has to go with it. Leaving
+# it behind used to produce a deployment nothing could reach: nginx kept
+# serving a hostname whose ports the firewall had just closed, with a
+# certificate that went on renewing. The certificate files stay (managed
+# data, and reissuing costs a rate limit), only the site is retired.
+panel_loopback_setup() {
+    [ -z "$DOMAIN" ] || return 0
+    [ -z "$PANEL_PORT" ] || return 0
+    [ -e "/etc/nginx/sites-enabled/$NGINX_SITE" ] || [ -f "$NGINX_CONF_DIR/panel.conf" ] || return 0
+
+    log "panel returns to loopback: retiring the nginx site (certificates are kept)"
+    rm -f "/etc/nginx/sites-enabled/$NGINX_SITE"
+    rm -f "$NGINX_CONF_DIR/panel.conf"
+    if command -v nginx >/dev/null 2>&1 && cmd nginx -t >/dev/null 2>&1; then
+        cmd systemctl reload nginx >/dev/null 2>&1 \
+            || log "WARNING: nginx reload failed after retiring the panel site"
+    fi
+}
+
+panel_loopback_setup
 
 # --- 14. minimal post-install self-check -------------------------------
 # Reads-only: no application state is mutated. Awaiting `panel server

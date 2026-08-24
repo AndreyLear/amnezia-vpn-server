@@ -395,6 +395,17 @@ func TestServerUpdateListenPort(t *testing.T) {
 	}
 }
 
+// init and update have to agree on what a port is. They used to disagree:
+// init accepted 0 (the kernel then picks one at random, which nothing in
+// the deployment — nftables, client endpoints — could ever agree with)
+// while update rejected it.
+func TestServerInitRejectsPortZeroLikeUpdate(t *testing.T) {
+	c := newCtx(t)
+	if code, _, _ := c.run("server", "init", "10.8.0.1/24", "0"); code == 0 {
+		t.Fatal("server init accepted listen port 0")
+	}
+}
+
 func TestServerUpdateListenPortRejectsGarbage(t *testing.T) {
 	c := newCtx(t)
 	c.seedServer("", "")
