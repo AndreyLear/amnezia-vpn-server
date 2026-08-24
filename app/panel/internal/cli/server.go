@@ -182,6 +182,21 @@ func validateMTUArg(raw string) (uint16, error) {
 	return mtu, nil
 }
 
+// validateListenPortArg accepts the UDP port the tunnel binds. Port 0
+// would let the kernel pick one at random, which nothing else in the
+// deployment (nftables, client endpoints) could then agree on, so it is
+// rejected along with anything outside the 16-bit range.
+func validateListenPortArg(raw string) (int64, error) {
+	parsed, err := strconv.ParseUint(raw, 10, 16)
+	if err != nil {
+		return 0, fmt.Errorf("invalid listen port %q: not an unsigned 16-bit value", raw)
+	}
+	if parsed == 0 {
+		return 0, fmt.Errorf("invalid listen port %q: must be between 1 and 65535", raw)
+	}
+	return int64(parsed), nil
+}
+
 // validateEndpointArg mirrors the awgconf endpoint rules
 // (host:port with a numeric port in [1, 65535]) for the pre-flight
 // check; the authoritive check still runs at `client config` time.
@@ -227,10 +242,11 @@ func validateDNSArg(dns string) error {
 // server row fails with db.ErrServerNotFound.
 func (a *app) cmdServerUpdate(args []string) int {
 	parsed, err := parseArgs(args, map[string]bool{
-		"dns":        true,
-		"awg-params": true,
-		"endpoint":   true,
-		"mtu":        true,
+		"dns":         true,
+		"awg-params":  true,
+		"endpoint":    true,
+		"mtu":         true,
+		"listen-port": true,
 	})
 	if err != nil {
 		return a.usageError(opServerUpdate, err.Error())
@@ -243,8 +259,15 @@ func (a *app) cmdServerUpdate(args []string) int {
 	awgParams, hasParams := parsed.flags["awg-params"]
 	endpoint, hasEndpoint := parsed.flags["endpoint"]
 	rawMTU, hasMTU := parsed.flags["mtu"]
-	if !hasDNS && !hasParams && !hasEndpoint && !hasMTU {
-		return a.usageError(opServerUpdate, "nothing to update: pass --dns, --awg-params, --endpoint and/or --mtu")
+	rawPort, hasPort := parsed.flags["listen-port"]
+	if !hasDNS && !hasParams && !hasEndpoint && !hasMTU && !hasPort {
+		return a.usageError(opServerUpdate, "nothing to update: pass --dns, --awg-params, --endpoint, --mtu and/or --listen-port")
+	}
+	var listenPort int64
+	if hasPort {
+		if listenPort, err = validateListenPortArg(rawPort); err != nil {
+			return a.usageError(opServerUpdate, err.Error())
+		}
 	}
 	var mtu uint16
 	if hasMTU {
@@ -289,7 +312,11 @@ func (a *app) cmdServerUpdate(args []string) int {
 		if hasEndpoint {
 			endpointArg = &endpoint
 		}
-		updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg)
+		var portArg *int64
+		if hasPort {
+			portArg = &listenPort
+		}
+		updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg, portArg)
 	}
 	if updateErr == nil && hasMTU {
 		updateErr = db.SetSetting(handle, "mtu", strconv.FormatUint(uint64(mtu), 10))
@@ -312,6 +339,9 @@ func (a *app) cmdServerUpdate(args []string) int {
 	}
 	if hasEndpoint {
 		message += "; endpoint = " + endpoint
+	}
+	if hasPort {
+		message += "; listen_port = " + strconv.FormatInt(listenPort, 10)
 	}
 	return a.ok(opServerUpdate, message)
 }

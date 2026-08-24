@@ -369,6 +369,42 @@ func TestServerUpdateDNS(t *testing.T) {
 	}
 }
 
+// Moving the tunnel to another UDP port has to be possible after the
+// first install. Without it a rerun that changes --awg-port rebuilds the
+// firewall around the new port while the tunnel keeps listening on the
+// old one, and a working VPN goes down while the installer reports
+// success.
+func TestServerUpdateListenPort(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	out := c.mustRun("server", "update", "--listen-port", "4500")
+	if !strings.Contains(out, "panel server update: ok; listen_port = 4500") {
+		t.Fatalf("stdout = %q", out)
+	}
+	h := c.openDB()
+	defer h.Close()
+	server, err := db.ServerRow(h)
+	if err != nil {
+		t.Fatalf("server row: %v", err)
+	}
+	if server.ListenPort != 4500 {
+		t.Fatalf("listen_port = %d, want 4500", server.ListenPort)
+	}
+	if !strings.Contains(c.readConfig(), "ListenPort = 4500") {
+		t.Fatal("config still carries the old ListenPort after update")
+	}
+}
+
+func TestServerUpdateListenPortRejectsGarbage(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	for _, bad := range []string{"0", "65536", "abc", ""} {
+		if code, _, _ := c.run("server", "update", "--listen-port", bad); code == 0 {
+			t.Fatalf("--listen-port %q was accepted", bad)
+		}
+	}
+}
+
 func TestServerUpdateDNSValid(t *testing.T) {
 	c := newCtx(t)
 	c.seedServer("", "")

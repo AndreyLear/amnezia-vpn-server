@@ -20,7 +20,7 @@ VPN protocols are blocked.
 | CPU | 1 core | measured on one core: 3–5 minutes to install, up to 45 MB/s throughput |
 | Memory | 1 GB, 2 GB is better | 2 GB leaves room as the client count grows |
 | Disk | 10 GB | images and the database take under 1 GB |
-| Ports | UDP 443, TCP 443 or 8443 | plus TCP 80 if you want a Let's Encrypt certificate |
+| Ports | UDP 4500, TCP 443 or 8443 | plus TCP 80 if you want a Let's Encrypt certificate |
 
 Such a server costs 3–5 dollars a month at most hosting providers. Watch the
 traffic allowance: a VPN uses as much as its users do.
@@ -211,6 +211,14 @@ which is why a backup of the database restores both clients and server keys.
 
 IPv6 is disabled on the client: otherwise YouTube, Instagram and other
 dual-stack sites would go around the tunnel instead of through it.
+
+The tunnel runs on UDP 4500. Port 443 would look like the convenient
+choice — it is open almost everywhere — but it is the QUIC port, and
+mobile carriers throttle it to slow video down. A tunnel sitting there
+inherits the whole limit: measured on a live deployment, the same tunnel
+ran at 20 Mbit/s on UDP 443 and 45 Mbit/s on 4500, against 40 with no
+tunnel at all. Port 4500 belongs to IPsec, which corporate VPNs use, so
+carriers let it through.
 
 The in-tunnel resolver exists because the panel lives at the same address the
 tunnel ends at. A packet sent to that address never enters the tunnel, and iOS

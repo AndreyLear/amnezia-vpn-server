@@ -33,7 +33,7 @@ commands:
   serve [--addr <host:port>]    run the web panel
   status                        print the runtime AWG status (status/status.json)
   server init <address> <listen-port> [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>] [--mtu <bytes>]
-  server update [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>] [--mtu <bytes>]
+  server update [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>] [--mtu <bytes>] [--listen-port <port>]
     (--mtu pins the tunnel MTU; without it the safe default applies. A
      full-size packet costs MTU + 60 bytes on the wire, so the value must
      stay below the uplink path MTU)

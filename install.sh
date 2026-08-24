@@ -35,8 +35,14 @@
 # Arguments (only these are supported):
 #   --root DIR      deployment root (default: /opt/amnezia-vpn)
 #   --awg-port PORT external UDP port of the AWG runtime, 1..65535
-#                   (default: 443; not 51820 — that is the well-known
-#                   WireGuard port and is an easy DPI/block target)
+#                   (default: 4500 — the IPsec NAT-T port, which carriers
+#                   pass because corporate VPNs use it. Not 51820: that is
+#                   the well-known WireGuard port and an easy block target.
+#                   Not 443 either: that is the QUIC port, and mobile
+#                   carriers throttle it to slow video down — measured on
+#                   a live deployment, the same tunnel ran at 20 Mbit/s on
+#                   UDP 443 and 45 Mbit/s on 4500, against 40 without any
+#                   tunnel at all)
 #   --vpn-subnet CIDR  IPv4 subnet of the tunnel (default: 10.8.0.0/24).
 #                   Authoritative source is server.address in the
 #                   database: when the deployed config/awg0.conf exists,
@@ -113,7 +119,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-/opt/amnezia-vpn}"
-AWG_PORT=443
+AWG_PORT=4500
 VPN_SUBNET=10.8.0.0/24
 
 OS_RELEASE="${AMNEZIA_INSTALL_OS_RELEASE:-/etc/os-release}"
@@ -145,7 +151,7 @@ Usage:
 Options:
   --root DIR        deployment root (default: /opt/amnezia-vpn)
   --awg-port PORT   external UDP port of the AWG runtime,
-                    1..65535 (default: 443; avoid 51820)
+                    1..65535 (default: 4500; avoid 443 and 51820)
   --vpn-subnet CIDR VPN subnet the server assigns clients from;
                     IPv4 CIDR with prefix 1..32 (default: 10.8.0.0/24)
   --panel-domain FQDN  panel hostname (Let's Encrypt). Alias: --domain.
@@ -830,9 +836,16 @@ env_unset() { # env_unset KEY — remove one line, keep the rest
 }
 
 if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
-    log "$ENV_FILE already exists under $ROOT_DIR: keeping it untouched"
-    # deployment-specific values may live only in .env: the flags of
-    # this run fall back to them so the rules match the deployment.
+    log "$ENV_FILE already exists under $ROOT_DIR: keeping the values this run does not set"
+    # The file is the deployment's memory, and it works both ways.
+    #
+    # A flag this run did NOT set falls back to what is stored, so a plain
+    # rerun keeps the deployment as it was. A flag this run DID set is
+    # written back, or the deployment would end up disagreeing with
+    # itself: nftables was rebuilt around the new port while .env, the
+    # server row and the client endpoints still named the old one, and
+    # the tunnel went down while the installer reported success
+    # (amnezia-vpn-server-akuy).
     if [ "$AWG_PORT_SET" = "0" ]; then
         AWG_PORT="$(env_read AWG_PORT)"
         [ -n "$AWG_PORT" ] || die_op "AWG_PORT unset in $(basename "$ENV_FILE") and not given as an argument"
@@ -848,6 +861,20 @@ if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
         if [ -n "$CLIENT_DOMAIN" ]; then
             validate_fqdn "$CLIENT_DOMAIN" || die_op "CLIENT_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
         fi
+    fi
+    # The other direction: what this run set explicitly becomes the
+    # deployment's new memory.
+    if [ "$AWG_PORT_SET" = "1" ] && [ "$(env_read AWG_PORT)" != "$AWG_PORT" ]; then
+        env_set AWG_PORT "$AWG_PORT"
+        log "AWG_PORT changed to $AWG_PORT in $ENV_FILE"
+    fi
+    if [ "$VPN_SUBNET_SET" = "1" ] && [ "$(env_read VPN_SUBNET)" != "$VPN_SUBNET" ]; then
+        env_set VPN_SUBNET "$VPN_SUBNET"
+        log "VPN_SUBNET changed to $VPN_SUBNET in $ENV_FILE"
+    fi
+    if [ "$CLIENT_DOMAIN_SET" = "1" ] && [ "$(env_read CLIENT_DOMAIN)" != "$CLIENT_DOMAIN" ]; then
+        env_set CLIENT_DOMAIN "$CLIENT_DOMAIN"
+        log "CLIENT_DOMAIN changed to $CLIENT_DOMAIN in $ENV_FILE"
     fi
 else
     cat > "$ROOT_DIR/$ENV_FILE" <<EOF

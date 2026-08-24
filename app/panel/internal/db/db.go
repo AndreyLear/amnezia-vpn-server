@@ -497,11 +497,11 @@ func setSettingTx(tx *sql.Tx, key, value string) error {
 // UpdateServer applies the given settings to the single server row
 // (id = 1). Every argument is optional: a nil pointer leaves the stored
 // value untouched; a non-nil pointer is written verbatim, so an empty
-// string explicitly clears the value. dns and awgParams are written to
-// the row, endpoint to the settings table. It fails with
+// string explicitly clears the value. dns, awgParams and listenPort are
+// written to the row, endpoint to the settings table. It fails with
 // ErrServerNotFound when the row is missing. The callers validate
-// awgParams/endpoint before calling.
-func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string) error {
+// awgParams/endpoint/listenPort before calling.
+func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string, listenPort *int64) error {
 	tx, err := handle.Begin()
 	if err != nil {
 		return fmt.Errorf("db: begin server update: %w", err)
@@ -516,7 +516,7 @@ func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string) error {
 		return ErrServerNotFound
 	}
 
-	if dns != nil || awgParams != nil {
+	if dns != nil || awgParams != nil || listenPort != nil {
 		updates := []string{"updated_at = ?"}
 		args := []any{stamp()}
 		if dns != nil {
@@ -526,6 +526,10 @@ func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string) error {
 		if awgParams != nil {
 			updates = append(updates, "awg_params = ?")
 			args = append(args, *awgParams)
+		}
+		if listenPort != nil {
+			updates = append(updates, "listen_port = ?")
+			args = append(args, *listenPort)
 		}
 		args = append(args, int64(1))
 		if _, err := tx.Exec(
