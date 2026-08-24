@@ -187,9 +187,11 @@ ahead. Only what the installer created is removed.
 
 ### When something is wrong
 
-**Pages load but video does not.** Usually the MTU. The installer measures the
-link itself; if the server moved to another network, reinstall or set the value
-by hand.
+**Pages load but video does not.** Almost always the MTU: small packets get
+through while the large ones carrying video are dropped on the way. The
+installer picks a size that survives mobile networks too, so a reinstall
+usually settles it. If it does not, lower the MTU in the client app itself —
+1280 instead of 1340.
 
 **A client stopped connecting after a move.** Check where the domain points:
 `dig +short example.com`.

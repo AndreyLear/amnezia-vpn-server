@@ -989,7 +989,16 @@ client_domain_setup
 # expected to work that out, so measure the path and store the answer;
 # `panel server init --mtu` picks it up from the deployment .env.
 TUNNEL_ENCAP_OVERHEAD=60
-TUNNEL_MTU_CEILING=1420   # never exceed the historical WireGuard default
+# The measurement above only covers the server's half of the path. The
+# packet still has to cross the client's last mile, and that half is both
+# shorter and unmeasurable from here: it differs per client and changes as
+# a phone moves between mobile, home and someone else's Wi-Fi. A mobile
+# carrier measured on a live deployment carried 1411 bytes against the
+# server's 1476, so sizing the tunnel from the uplink alone leaves
+# full-size packets to be dropped out there — pages load, video stalls.
+# The ceiling therefore is what mobile networks carry, not what this
+# server can reach; the measurement still wins whenever it is worse.
+TUNNEL_MTU_CEILING=1340   # 1400 bytes on the wire: mobile networks carry it
 TUNNEL_MTU_FLOOR=1280     # IPv6 minimum link MTU: every path must carry it
 # ${VAR-default}, not ${VAR:-default}: an explicitly empty value means
 # "do not measure" (the harnesses set it that way for the runs that are
@@ -1049,6 +1058,9 @@ tunnel_mtu_preflight() {
     fi
     if [ "$pmtu" -lt 1500 ]; then
         log "uplink path MTU is $pmtu, not the usual 1500 (this uplink tunnels its own traffic)"
+    fi
+    if [ "$mtu" -eq "$TUNNEL_MTU_CEILING" ] && [ $((pmtu - TUNNEL_ENCAP_OVERHEAD)) -gt "$TUNNEL_MTU_CEILING" ]; then
+        log "uplink would allow $((pmtu - TUNNEL_ENCAP_OVERHEAD)); capping the tunnel at $TUNNEL_MTU_CEILING so full packets also survive a mobile last mile"
     fi
     log "tunnel MTU $mtu (a full packet costs $((mtu + TUNNEL_ENCAP_OVERHEAD)) bytes on a $pmtu-byte path)"
     env_set TUNNEL_MTU "$mtu"
