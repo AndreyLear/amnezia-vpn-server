@@ -3,6 +3,7 @@ package awgconf
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func TestGenerateClientMinimal(t *testing.T) {
 	want := "[Interface]\n" +
 		"PrivateKey = " + testKey(11) + "\n" +
 		"Address = 10.8.0.2/32\n" +
-		"MTU = 1400\n" +
+		"MTU = " + strconv.FormatUint(uint64(DefaultMTU), 10) + "\n" +
 		"\n" +
 		"[Peer]\n" +
 		"PublicKey = " + testKey(2) + "\n" +
@@ -63,7 +64,7 @@ func TestGenerateClientFull(t *testing.T) {
 		"[Interface]",
 		"PrivateKey = " + testKey(11),
 		"Address = 10.8.0.2/32",
-		"MTU = 1400",
+		"MTU = " + strconv.FormatUint(uint64(DefaultMTU), 10),
 		"DNS = 1.1.1.1,9.9.9.9",
 		"Jc = 3", "Jmin = 21", "Jmax = 31",
 		"S1 = 904", "S2 = 737", "S3 = 128", "S4 = 857",
@@ -85,7 +86,7 @@ func TestGenerateClientFull(t *testing.T) {
 	if got != "[Interface]\n"+
 		"PrivateKey = "+testKey(11)+"\n"+
 		"Address = 10.8.0.2/32\n"+
-		"MTU = 1400\n"+
+		"MTU = "+strconv.FormatUint(uint64(DefaultMTU), 10)+"\n"+
 		"DNS = 1.1.1.1,9.9.9.9\n"+
 		"Jc = 3\n"+
 		"Jmin = 21\n"+

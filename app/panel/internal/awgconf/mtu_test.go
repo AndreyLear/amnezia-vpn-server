@@ -21,6 +21,28 @@ func TestDefaultMTULeavesRoomForEncapsulation(t *testing.T) {
 	}
 }
 
+// Fitting the server's own uplink is not enough. The packet also has to
+// cross the client's last mile, and that is the shorter path: a mobile
+// carrier measured on a live deployment carried 1411 bytes while the
+// server's uplink carried 1476. The server cannot probe the client's
+// path — it differs per client and changes as the phone moves between
+// mobile, home and someone else's Wi-Fi — so the default has to be small
+// enough to survive the worst of them.
+//
+// The failure this prevents is not a broken tunnel but a subtly bad one:
+// small packets arrive, full-size ones are dropped or fragmented, and the
+// user sees pages loading while video stalls.
+func TestDefaultMTUSurvivesAMobileLastMile(t *testing.T) {
+	// Mobile networks routinely sit near 1400 because the carrier tunnels
+	// subscriber traffic itself; 1400 on the wire is the value that holds
+	// across the ones seen in practice.
+	const mobileLastMilePMTU = 1400
+	if got := int(DefaultMTU) + EncapsulationOverhead; got > mobileLastMilePMTU {
+		t.Fatalf("a full packet is %d bytes (MTU %d + %d overhead), which a %d-byte mobile path drops",
+			got, DefaultMTU, EncapsulationOverhead, mobileLastMilePMTU)
+	}
+}
+
 func TestRenderServerEmitsMTU(t *testing.T) {
 	got := Render(ServerConfig{
 		PrivateKey: strings.Repeat("A", 43) + "=",

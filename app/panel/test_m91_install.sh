@@ -1991,8 +1991,9 @@ test_doctor_failure
 test_ssh_hint
 test_secrets_absent
 test_idempotent_rerun
-test_pmtu_preflight_sizes_tunnel_for_a_tunnelled_uplink
-test_pmtu_preflight_caps_at_the_default
+test_pmtu_preflight_caps_at_a_mobile_safe_size
+test_pmtu_preflight_caps_a_clean_uplink_too
+test_pmtu_preflight_lets_a_worse_uplink_win
 test_pmtu_preflight_survives_filtered_icmp
 test_pmtu_preflight_clamps_a_tiny_path
 test_tunnel_dns_answers_the_panel_domain
@@ -2009,31 +2010,45 @@ state_set() {
         && mv "$FAKE_STATE.new" "$FAKE_STATE"
 }
 
-# The uplink of a provider that tunnels its own traffic carries 1476, not
-# 1500. A full tunnel packet costs MTU + 60, so the tunnel must be sized
-# to 1416 — the operator is never asked to work this out.
-test_pmtu_preflight_sizes_tunnel_for_a_tunnelled_uplink() {
+# The server's uplink is only half the path. Whatever it measures, the
+# packet still has to cross the client's last mile, which is shorter and
+# which the server cannot probe — so a roomy uplink must not raise the
+# tunnel above what a mobile network carries.
+test_pmtu_preflight_caps_at_a_mobile_safe_size() {
     fakes_reset
     os_release ubuntu 24.04 noble
     state_set FAKE_PMTU 1476
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "pmtu flow: exit $rc"
-    grep -q "^TUNNEL_MTU=1416$" "$ROOT/.env" \
-        && pass "1476-byte uplink -> TUNNEL_MTU=1416 in .env" \
+    grep -q "^TUNNEL_MTU=1340$" "$ROOT/.env" \
+        && pass "1476-byte uplink -> TUNNEL_MTU capped at 1340 (mobile-safe)" \
         || fail "1476-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
 }
 
-# A clean 1500-byte path must not push the tunnel above the historical
-# WireGuard default: 1440 would work on this hop and break on the next one.
-test_pmtu_preflight_caps_at_the_default() {
+# A clean 1500-byte uplink changes nothing: the constraint lives at the
+# other end of the tunnel, not here.
+test_pmtu_preflight_caps_a_clean_uplink_too() {
     fakes_reset
     os_release ubuntu 24.04 noble
     state_set FAKE_PMTU 1500
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "pmtu cap flow: exit $rc"
-    grep -q "^TUNNEL_MTU=1420$" "$ROOT/.env" \
-        && pass "1500-byte uplink -> TUNNEL_MTU capped at 1420" \
+    grep -q "^TUNNEL_MTU=1340$" "$ROOT/.env" \
+        && pass "1500-byte uplink -> TUNNEL_MTU still 1340" \
         || fail "1500-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
+}
+
+# The cap is a ceiling, not a fixed value: an uplink worse than the cap
+# still wins, or the tunnel would be sized for a path it cannot use.
+test_pmtu_preflight_lets_a_worse_uplink_win() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1380
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "narrow-uplink flow: exit $rc"
+    grep -q "^TUNNEL_MTU=1320$" "$ROOT/.env" \
+        && pass "1380-byte uplink -> TUNNEL_MTU=1320 (measurement wins below the cap)" \
+        || fail "1380-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
 }
 
 # Nothing about a filtered ICMP path should abort an install: the panel

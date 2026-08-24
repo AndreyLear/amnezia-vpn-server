@@ -25,13 +25,27 @@ const (
 // DefaultMTU is the tunnel MTU used when the operator has not pinned one.
 //
 // awg-quick derives its own default from the MTU of the interface holding
-// the default route (1500 - 80 = 1420), which is wrong whenever the uplink
-// itself is tunnelled: hosting providers running GRE/VXLAN commonly hand
-// out ens3 with MTU 1500 while the real path MTU is 1476, and a 1420-byte
-// payload then leaves as a 1480-byte packet that the uplink cannot carry.
-// 1400 keeps a 16-byte margin below such a path and still fits clients
-// behind PPPoE (1492) and typical mobile networks.
-const DefaultMTU uint16 = 1400
+// the default route (1500 - 80 = 1420). That is wrong twice over.
+//
+// It is wrong for the server's uplink whenever that uplink is itself
+// tunnelled: hosting providers running GRE/VXLAN commonly hand out ens3
+// with MTU 1500 while the real path MTU is 1476, so a 1420-byte payload
+// leaves as a 1480-byte packet the uplink cannot carry.
+//
+// It is wrong for the client's last mile always, and that is the shorter
+// path. A mobile carrier measured on a live deployment carried 1411 bytes
+// against the server's 1476, and the server cannot probe it: the last mile
+// differs per client and changes as a phone moves between mobile, home and
+// someone else's Wi-Fi. Sizing the tunnel from what the server can see
+// leaves full-size packets to be dropped or fragmented out there, which
+// shows up as pages loading normally while video stalls.
+//
+// 1340 puts a full packet at 1400 bytes on the wire, which the mobile
+// paths seen in practice carry, and still leaves room under PPPoE (1492)
+// and a tunnelled hosting uplink (1476). The cost against 1420 is about
+// 5% of payload per packet — far less than one dropped packet in a video
+// stream costs.
+const DefaultMTU uint16 = 1340
 
 // settingsMTUKey is the settings key holding the tunnel MTU. install.sh
 // measures the uplink path MTU and pins the value; when the key is absent
