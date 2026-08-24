@@ -456,7 +456,7 @@ test_default_rules() {
     assert_in "ip daddr 10.8.0.0/24 accept" "$NFT_SYS_FILE" "forward: vpn subnet daddr accepted"
     assert_in "tcp flags syn tcp option maxseg size set rt mtu" "$NFT_SYS_FILE" "forward: TCP MSS clamped to the route MTU"
     assert_mss_clamp_precedes_accept
-    assert_in "udp dport 443 accept" "$NFT_SYS_FILE" "input: default UDP 443 accepted"
+    assert_in "udp dport 4500 accept" "$NFT_SYS_FILE" "input: default UDP 4500 accepted"
     # T-rnub: the in-tunnel resolver is reachable from the tunnel and
     # from nowhere else — iifname "awg0" is what keeps it off the WAN.
     assert_in 'iifname "awg0" udp dport 53 accept' "$NFT_SYS_FILE" "input: tunnel DNS accepted over UDP"
@@ -709,8 +709,16 @@ test_env_readback_on_rerun() {
     [ "$rc" = "0" ] || fail "read-back third pass: exit $rc"
     assert_in "udp dport 44444 accept" "$NFT_SYS_FILE" "explicit flag overrides the .env AWG_PORT"
     assert_in "ip saddr 10.30.0.0/24 accept" "$NFT_SYS_FILE" "explicit flag overrides the .env VPN_SUBNET"
-    grep -q "AWG_PORT=23456" "$ROOT/.env" && pass ".env itself is never rewritten on rerun" \
-        || fail ".env was modified on rerun"
+    # This used to assert the opposite — that .env is never rewritten —
+    # and that was the bug: the firewall moved to the new port while .env,
+    # the server row and the client endpoints kept naming the old one, so
+    # a live tunnel went down while the installer reported success
+    # (amnezia-vpn-server-akuy). A flag the operator sets is now the
+    # deployment's new memory; a flag left out still reads back.
+    grep -q "AWG_PORT=44444" "$ROOT/.env" && pass "an explicit flag updates .env" \
+        || fail ".env still says $(grep AWG_PORT "$ROOT/.env" || echo missing) after --awg-port 44444"
+    grep -q "VPN_SUBNET=10.30.0.0/24" "$ROOT/.env" && pass "an explicit subnet updates .env" \
+        || fail ".env still says $(grep VPN_SUBNET "$ROOT/.env" || echo missing)"
 }
 
 test_env_vpn_subnet_missing() {
@@ -882,7 +890,7 @@ test_forward_accept_no_docker_user() {
 
 test_nft_panel_domain_with_panel_port() {
     # T-156: panel domain + panel-port opens tcp 80 (ACME) and tcp
-    # PANEL_PORT, not tcp 443. UDP AWG stays on 443. --vpn-domain does
+    # PANEL_PORT, not tcp 443. UDP AWG stays on its own port. --vpn-domain does
     # not open extra TCP ports.
     fakes_reset
     os_release debian 12 bookworm
@@ -891,7 +899,7 @@ test_nft_panel_domain_with_panel_port() {
     assert_in "^[[:space:]]*tcp dport 80 accept" "$NFT_SYS_FILE" "nft domain+port: tcp 80 (ACME)"
     assert_in "^[[:space:]]*tcp dport 8443 accept" "$NFT_SYS_FILE" "nft domain+port: tcp 8443 (panel)"
     assert_not_in "^[[:space:]]*tcp dport 443 accept" "$NFT_SYS_FILE" "nft domain+port: no tcp 443"
-    assert_in "udp dport 443 accept" "$NFT_SYS_FILE" "nft domain+port: UDP AWG 443"
+    assert_in "udp dport 4500 accept" "$NFT_SYS_FILE" "nft domain+port: UDP AWG 4500"
 }
 
 test_nft_panel_domain_default_443() {

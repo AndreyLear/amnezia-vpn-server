@@ -27,7 +27,7 @@ DEFAULT_USER=root
 # Host nginx TLS port for IP:port mode (T-124). Must not be 8787: compose
 # already binds the panel to 127.0.0.1:8787.
 DEFAULT_PANEL_PORT=8443
-DEFAULT_AWG_PORT=443
+DEFAULT_AWG_PORT=4500
 DEFAULT_ROOT=/opt/amnezia-vpn
 SSH_CONNECT_TIMEOUT="${AMNEZIA_BOOTSTRAP_SSH_TIMEOUT:-15}"
 CURL_TIMEOUT=20
@@ -98,7 +98,8 @@ Options:
                        --client-domain. Omitted: public IP. The panel
                        hostname is never copied onto clients.
   --client-domain FQDN alias of --vpn-domain
-  --awg-port PORT      AmneziaWG UDP port (default: 443; avoid 51820)
+  --awg-port PORT      AmneziaWG UDP port (default: 4500; avoid 443,
+                       which mobile carriers throttle as QUIC, and 51820)
   --root DIR           deployment root on the server (default: /opt/amnezia-vpn)
   --source URL         download a release tarball instead of packing the
                        local repository
@@ -806,14 +807,38 @@ if ! remote_cmd "$INIT_CMD" >/dev/null 2>"$INIT_OUT"; then
 fi
 rm -f "$INIT_OUT"
 
-# install.sh decides what clients should use as their resolver and records
-# it in the deployment .env (the in-tunnel resolver first, a public one as
-# fallback). server init only applies it on a fresh database, so a rerun or
-# a migration onto an existing server needs this to pick the value up.
-log "applying the client DNS from the deployment"
-if ! remote_cmd "cd '$ROOT_DIR' && $READ_ENV; docker compose --env-file versions.lock run --rm panel-init /app/panel server update --dns \"\$DNS\"" >/dev/null 2>&1; then
-    log "WARNING: could not apply the client DNS; existing clients keep their current resolver"
+# `server init` only writes its arguments into a fresh database, so on a
+# rerun — a plain one, a migration, or a run that changes a flag — every
+# deployment value has to be applied explicitly. Skipping this is what
+# took a working tunnel down: install.sh rebuilt nftables around a new
+# --awg-port while the tunnel kept listening on the old one, and the
+# wizard still printed DONE (amnezia-vpn-server-akuy).
+#
+# ListenPort and MTU only take effect when the interface is created, so
+# the config is compared before and after: unchanged means no restart and
+# no dropped clients, changed means the tunnel is rebuilt on the spot.
+log "applying the deployment settings (port, endpoint, DNS)"
+APPLY_CMD="cd '$ROOT_DIR' && $READ_ENV; \
+before=\"\$(grep -E '^(ListenPort|MTU) ' config/awg0.conf 2>/dev/null | sort)\"; \
+docker compose --env-file versions.lock run --rm panel-init /app/panel server update \
+    --dns \"\$DNS\" --endpoint '$ENDPOINT' --listen-port '$AWG_PORT' || exit 1; \
+after=\"\$(grep -E '^(ListenPort|MTU) ' config/awg0.conf 2>/dev/null | sort)\"; \
+if [ \"\$before\" != \"\$after\" ]; then \
+    echo 'tunnel parameters changed; restarting awg'; \
+    docker compose --env-file versions.lock restart awg >/dev/null 2>&1 || true; \
+fi"
+APPLY_OUT="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-apply.XXXXXX")"
+if ! remote_cmd "$APPLY_CMD" >"$APPLY_OUT" 2>&1; then
+    cat "$APPLY_OUT" >&2 || true
+    rm -f "$APPLY_OUT"
+    # Not a warning: the deployment now disagrees with itself, and the
+    # firewall has already been rebuilt around the values this run chose.
+    die_op "application bootstrap failed: could not apply the deployment settings (port/endpoint/DNS)"
 fi
+if grep -q "restarting awg" "$APPLY_OUT" 2>/dev/null; then
+    log "tunnel parameters changed: awg restarted (clients reconnect themselves)"
+fi
+rm -f "$APPLY_OUT"
 
 log "starting the compose stack"
 if ! remote_cmd "cd '$ROOT_DIR' && docker compose --env-file versions.lock up -d" >/dev/null; then

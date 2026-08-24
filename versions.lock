@@ -6,7 +6,7 @@
 # GHCR; --build rebuilds the same sources locally instead. The registry
 # path must stay lowercase — GHCR rejects anything else.
 IMAGE_REGISTRY=ghcr.io/andreylear/amnezia-vpn-server
-IMAGE_VERSION=2.1.1
+IMAGE_VERSION=2.2.0
 
 # Go toolchain
 GO_VERSION=1.25.12

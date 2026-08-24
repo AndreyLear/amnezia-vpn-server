@@ -708,8 +708,10 @@ test_default_port() {
     os_release debian 12 bookworm
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "default port flow: exit $rc"
-    grep -q "AWG_PORT=443" "$ROOT/.env" && pass "default AWG_PORT=443 in .env" \
-        || fail "default AWG_PORT=443 in .env"
+    # 4500, not 443: mobile carriers throttle UDP 443 as QUIC, which drags
+    # the whole tunnel down with it (amnezia-vpn-server-akuy).
+    grep -q "AWG_PORT=4500" "$ROOT/.env" && pass "default AWG_PORT=4500 in .env" \
+        || fail "default AWG_PORT=4500 in .env"
 }
 
 test_custom_port() {
@@ -1670,7 +1672,7 @@ test_domain_does_not_bind_clients() {
     os_release debian 12 bookworm
     rc="$(run_install --domain panel.example.com)"
     [ "$rc" = "0" ] || fail "domain-no-vpn-bind: exit $rc"
-    grep -q "endpoint <public-ip>:443" "$TMP_TEST/out" \
+    grep -q "endpoint <public-ip>:4500" "$TMP_TEST/out" \
         && pass "domain-no-vpn-bind: IP endpoint hint kept" \
         || fail "domain-no-vpn-bind: IP endpoint hint missing"
     grep -q "endpoint panel.example.com" "$TMP_TEST/out" \
@@ -1693,7 +1695,7 @@ test_panel_domain_and_vpn_domain_aliases() {
     [ "$rc" = "0" ] || fail "aliases flow: exit $rc"
     grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "aliases: panel URL uses --panel-domain" \
         || fail "aliases: panel URL missing"
-    grep -q "endpoint vpn.example.com:443" "$TMP_TEST/out" \
+    grep -q "endpoint vpn.example.com:4500" "$TMP_TEST/out" \
         && pass "aliases: client endpoint uses --vpn-domain" \
         || fail "aliases: vpn endpoint missing"
     grep -q "CLIENT_DOMAIN=vpn.example.com" "$ROOT/.env" \
@@ -1735,8 +1737,8 @@ test_domain_with_panel_port() {
     grep -q "certbot certonly" "$FAKE_CALLS" && pass "domain+panel-port: certbot invoked" \
         || fail "domain+panel-port: certbot not invoked"
     if grep -q "openssl req" "$FAKE_CALLS"; then fail "domain+panel-port: openssl req (self-signed) invoked"; else pass "domain+panel-port: no self-signed certificate"; fi
-    grep -q "udp dport 443 accept" "$ROOT/nftables/amnezia-vpn.nft" \
-        && pass "domain+panel-port: UDP AWG 443 still open" \
+    grep -q "udp dport 4500 accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "domain+panel-port: UDP AWG 4500 still open" \
         || fail "domain+panel-port: UDP AWG missing"
 }
 
@@ -1748,7 +1750,7 @@ test_client_domain_standalone() {
     os_release debian 12 bookworm
     rc="$(run_install --client-domain vpn.example.com)"
     [ "$rc" = "0" ] || fail "client-domain standalone flow: exit $rc"
-    grep -q "endpoint vpn.example.com:443" "$TMP_TEST/out" \
+    grep -q "endpoint vpn.example.com:4500" "$TMP_TEST/out" \
         && pass "client-domain standalone: hint carries vpn.example.com:443" \
         || fail "client-domain standalone: hint missing endpoint"
     grep -q "A-record change" "$TMP_TEST/out" && pass "client-domain standalone: migration note printed" \
@@ -1771,7 +1773,7 @@ test_client_domain_overrides_domain() {
     os_release debian 12 bookworm
     rc="$(run_install --domain panel.example.com --client-domain vpn.example.com)"
     [ "$rc" = "0" ] || fail "client-domain override flow: exit $rc"
-    grep -q "endpoint vpn.example.com:443" "$TMP_TEST/out" \
+    grep -q "endpoint vpn.example.com:4500" "$TMP_TEST/out" \
         && pass "client-domain override: hint carries vpn.example.com:443" \
         || fail "client-domain override: hint missing the client domain"
     grep -q "endpoint panel.example.com" "$TMP_TEST/out" && fail "client-domain override: panel domain leaked into the endpoint" \
@@ -1819,7 +1821,7 @@ test_client_domain_env_reuse() {
     dig_after_first="$(grep -c "dig " "$FAKE_CALLS")"
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "client-domain reuse: second pass exit $rc"
-    grep -q "endpoint vpn.example.com:443" "$TMP_TEST/out" \
+    grep -q "endpoint vpn.example.com:4500" "$TMP_TEST/out" \
         && pass "client-domain reuse: endpoint from .env in the rerun hint" \
         || fail "client-domain reuse: .env CLIENT_DOMAIN not reused"
     [ "$(grep -c "dig " "$FAKE_CALLS")" -gt "$dig_after_first" ] \
@@ -1844,7 +1846,7 @@ test_no_domain_ip_endpoint_hint() {
     os_release debian 12 bookworm
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "no-domain IP endpoint flow: exit $rc"
-    grep -q "endpoint <public-ip>:443" "$TMP_TEST/out" \
+    grep -q "endpoint <public-ip>:4500" "$TMP_TEST/out" \
         && pass "no-domain: IP endpoint hint kept" \
         || fail "no-domain: IP endpoint hint missing"
     grep -q "A-record change" "$TMP_TEST/out" && fail "no-domain: migration note printed without a domain" \
@@ -1996,6 +1998,9 @@ test_pmtu_preflight_caps_a_clean_uplink_too
 test_pmtu_preflight_lets_a_worse_uplink_win
 test_pmtu_preflight_survives_filtered_icmp
 test_pmtu_preflight_clamps_a_tiny_path
+test_rerun_applies_a_changed_awg_port_to_env
+test_rerun_without_the_flag_keeps_the_deployed_port
+test_rerun_applies_a_changed_subnet_and_client_domain
 test_tunnel_dns_answers_the_panel_domain
 test_tunnel_dns_without_a_panel_domain
 test_tunnel_dns_can_be_turned_off
@@ -2078,6 +2083,61 @@ test_pmtu_preflight_clamps_a_tiny_path() {
     grep -q "^TUNNEL_MTU=1280$" "$ROOT/.env" \
         && pass "1300-byte uplink -> TUNNEL_MTU clamped to 1280" \
         || fail "1300-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
+}
+
+# --- rerun with changed deployment flags (amnezia-vpn-server-akuy) ------
+
+# A rerun that changes --awg-port used to rebuild the firewall around the
+# new port while .env kept the old one. The deployment then disagreed with
+# itself: nftables let 4500 in, everything else still said 443.
+test_rerun_applies_a_changed_awg_port_to_env() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 23456)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    grep -q "^AWG_PORT=23456$" "$ROOT/.env" || fail "first pass: AWG_PORT missing from .env"
+
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "rerun: exit $rc"
+    grep -q "^AWG_PORT=4500$" "$ROOT/.env" \
+        && pass "rerun: changed --awg-port lands in .env" \
+        || fail "rerun: .env still says $(grep AWG_PORT "$ROOT/.env" || echo missing)"
+    grep -q "udp dport 4500 accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "rerun: nftables follows the same port" \
+        || fail "rerun: nftables did not follow the port"
+    grep -q "udp dport 23456 accept" "$ROOT/nftables/amnezia-vpn.nft" \
+        && fail "rerun: the old port is still accepted" \
+        || pass "rerun: the old port is no longer accepted"
+}
+
+# Omitting the flag on a rerun must keep what the deployment chose, or
+# every rerun would silently drag the port back to the default.
+test_rerun_without_the_flag_keeps_the_deployed_port() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 23456)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "rerun: exit $rc"
+    grep -q "^AWG_PORT=23456$" "$ROOT/.env" \
+        && pass "rerun without the flag keeps the deployed port" \
+        || fail "rerun without the flag changed .env to $(grep AWG_PORT "$ROOT/.env" || echo missing)"
+}
+
+# The same hole existed for the other deployment values.
+test_rerun_applies_a_changed_subnet_and_client_domain() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --vpn-subnet 10.8.0.0/24)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    rc="$(run_install --vpn-subnet 10.20.0.0/24 --client-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "rerun: exit $rc"
+    grep -q "^VPN_SUBNET=10.20.0.0/24$" "$ROOT/.env" \
+        && pass "rerun: changed --vpn-subnet lands in .env" \
+        || fail "rerun: .env says $(grep VPN_SUBNET "$ROOT/.env" || echo missing)"
+    grep -q "^CLIENT_DOMAIN=vpn.example.com$" "$ROOT/.env" \
+        && pass "rerun: changed --client-domain lands in .env" \
+        || fail "rerun: .env says $(grep CLIENT_DOMAIN "$ROOT/.env" || echo missing)"
 }
 
 # --- split DNS inside the tunnel (amnezia-vpn-server-rnub) --------------

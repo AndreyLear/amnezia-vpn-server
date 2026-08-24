@@ -52,6 +52,7 @@ SSH_RC=0
 INSTALL_RC=0
 INIT_RC=0
 INIT_STDERR=
+APPLY_RC=0
 CURL_SOURCE_RC=0
 UP_RC=0
 ADDUSER_RC=0
@@ -115,6 +116,13 @@ case "$cmd" in
     *'server init'*)
         [ -n "${INIT_STDERR:-}" ] && printf '%s\n' "${INIT_STDERR}" >&2
         exit "${INIT_RC:-0}"
+        ;;
+    *'server update'*)
+        if [ "${APPLY_RC:-0}" != "0" ]; then
+            printf '%s\n' "panel server update: db: simulated failure" >&2
+            exit "${APPLY_RC}"
+        fi
+        exit 0
         ;;
     *'up -d'*)
         exit "${UP_RC:-0}"
@@ -324,7 +332,7 @@ test_domain_and_panel_port_combined() {
     grep -q "https://panel.example.com:8443" "$TMP_TEST/out" \
         && pass "domain+panel-port: panel URL includes the port" \
         || fail "domain+panel-port: panel URL missing host:port"
-    grep -q "Endpoint:  vpn.example.com:443" "$TMP_TEST/out" \
+    grep -q "Endpoint:  vpn.example.com:4500" "$TMP_TEST/out" \
         && pass "domain+panel-port: endpoint is --vpn-domain" \
         || fail "domain+panel-port: endpoint missing/wrong"
 }
@@ -399,7 +407,7 @@ test_password_env_panel_port() {
         || fail "password-env: IP:port URL missing"
     grep -q "AB:CD:EF:01:23:45:67:89" "$TMP_TEST/out" && pass "password-env: cert fingerprint in summary" \
         || fail "password-env: fingerprint missing from summary"
-    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint '2.26.93.192:4500'" "$FAKE_CALLS" \
         && pass "password-env: server init uses the public IP endpoint" \
         || fail "password-env: IP endpoint missing from server init"
     grep -q "BatchMode=yes" "$FAKE_CALLS" && fail "password-env: BatchMode=yes used with password auth" \
@@ -413,13 +421,13 @@ test_flags_domain_without_vpn_domain_uses_ip_endpoint() {
     rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
         --domain panel.example.com)"
     [ "$rc" = "0" ] || { fail "domain-no-vpn-bind: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
-    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint '2.26.93.192:4500'" "$FAKE_CALLS" \
         && pass "domain-no-vpn-bind: server init endpoint is the public IP" \
         || fail "domain-no-vpn-bind: server init endpoint missing/wrong"
-    grep -q -- "--endpoint 'panel.example.com:443'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint 'panel.example.com:4500'" "$FAKE_CALLS" \
         && fail "domain-no-vpn-bind: panel hostname leaked into server init" \
         || pass "domain-no-vpn-bind: panel hostname not used as endpoint"
-    grep -q "Endpoint:  2.26.93.192:443" "$TMP_TEST/out" \
+    grep -q "Endpoint:  2.26.93.192:4500" "$TMP_TEST/out" \
         && pass "domain-no-vpn-bind: summary endpoint is the public IP" \
         || fail "domain-no-vpn-bind: summary endpoint missing/wrong"
     grep -q -- "--client-domain" "$FAKE_CALLS" && fail "domain-no-vpn-bind: --client-domain passed without --vpn-domain" \
@@ -433,10 +441,10 @@ test_flags_panel_port_uses_ip_endpoint() {
     fakes_reset
     rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" --panel-port 8443)"
     [ "$rc" = "0" ] || { fail "panel-port IP endpoint: exit $rc"; return 0; }
-    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint '2.26.93.192:4500'" "$FAKE_CALLS" \
         && pass "panel-port IP endpoint: server init uses PUBLIC_IP:awg-port" \
         || fail "panel-port IP endpoint: server init endpoint missing/wrong"
-    grep -q "Endpoint:  2.26.93.192:443" "$TMP_TEST/out" \
+    grep -q "Endpoint:  2.26.93.192:4500" "$TMP_TEST/out" \
         && pass "panel-port IP endpoint: summary uses the public IP" \
         || fail "panel-port IP endpoint: summary endpoint missing/wrong"
 }
@@ -577,7 +585,7 @@ ANSWERS
         || fail "interactive domains: --client-domain missing/wrong"
     grep -q -- "--panel-port" "$FAKE_CALLS" && fail "interactive domains: empty panel port still passed --panel-port" \
         || pass "interactive domains: empty panel port omits --panel-port"
-    grep -q "Endpoint:  vpn.example.com:443" "$TMP_TEST/out" \
+    grep -q "Endpoint:  vpn.example.com:4500" "$TMP_TEST/out" \
         && pass "interactive domains: endpoint is the VPN domain" \
         || fail "interactive domains: endpoint missing/wrong"
     grep -q "sshpass" "$FAKE_CALLS" && fail "interactive domains: sshpass invoked despite ключ" \
@@ -604,15 +612,15 @@ ANSWERS
     [ "$rc" = "0" ] || { fail "interactive empty-vpn: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
     grep -q -- "--domain 'panel.example.com'" "$FAKE_CALLS" && pass "interactive empty-vpn: --domain passed" \
         || fail "interactive empty-vpn: --domain missing"
-    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint '2.26.93.192:4500'" "$FAKE_CALLS" \
         && pass "interactive empty-vpn: server init uses PUBLIC_IP:awg-port" \
         || fail "interactive empty-vpn: IP endpoint missing from server init"
-    grep -q "Endpoint:  2.26.93.192:443" "$TMP_TEST/out" \
+    grep -q "Endpoint:  2.26.93.192:4500" "$TMP_TEST/out" \
         && pass "interactive empty-vpn: summary uses the public IP" \
         || fail "interactive empty-vpn: summary endpoint missing/wrong"
     grep -q -- "--client-domain" "$FAKE_CALLS" && fail "interactive empty-vpn: --client-domain passed" \
         || pass "interactive empty-vpn: --client-domain not passed"
-    grep -q -- "--endpoint 'panel.example.com:443'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint 'panel.example.com:4500'" "$FAKE_CALLS" \
         && fail "interactive empty-vpn: panel hostname leaked into endpoint" \
         || pass "interactive empty-vpn: panel hostname not used as endpoint"
 }
@@ -886,7 +894,7 @@ test_default_panel_port_without_domain() {
     [ "$rc" = "0" ] || fail "default panel-port: exit $rc"
     grep -q -- "--panel-port '8443'" "$FAKE_CALLS" && pass "default panel-port: 8443 in IP mode" \
         || fail "default panel-port: 8443 not passed"
-    grep -q -- "--endpoint '2.26.93.192:443'" "$FAKE_CALLS" \
+    grep -q -- "--endpoint '2.26.93.192:4500'" "$FAKE_CALLS" \
         && pass "default panel-port: server init uses the public IP endpoint" \
         || fail "default panel-port: IP endpoint missing"
     assert_no_ansi "default panel-port"
@@ -959,6 +967,39 @@ test_rerun_survives_existing_server_row() {
     grep -q "add-user" "$FAKE_CALLS" \
         && pass "the rerun goes on to create the admin" \
         || fail "the rerun must continue past init"
+}
+
+# Every deployment value has to be applied on a rerun, not only on the
+# first install. Leaving the port to `server init` is what took a live
+# tunnel down: nftables was rebuilt around the new port while the tunnel
+# kept listening on the old one (amnezia-vpn-server-akuy).
+test_rerun_applies_port_and_endpoint() {
+    fakes_reset
+    setstate INIT_RC 1 "$FAKE_STATE"
+    setstate INIT_STDERR "panel server init: db: server row (id=1) already exists" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --awg-port 4500 --vpn-domain vpn.example.com --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" = "0" ] || fail "rerun with a changed port: exit $rc"
+    grep -q "server update.*--listen-port .4500." "$FAKE_CALLS" \
+        && pass "the rerun moves the tunnel to the deployed port" \
+        || { fail "the rerun must pass --listen-port to server update"; grep "server update" "$FAKE_CALLS" | head -1 >&2; }
+    grep -q "server update.*--endpoint .vpn.example.com:4500." "$FAKE_CALLS" \
+        && pass "the rerun rewrites the endpoint clients are issued" \
+        || fail "the rerun must pass the matching --endpoint"
+}
+
+# If the settings cannot be applied, the firewall has already been rebuilt
+# around values the tunnel does not use. Reporting success there is what
+# made the breakage silent, so this must abort.
+test_apply_failure_aborts_instead_of_reporting_success() {
+    fakes_reset
+    setstate APPLY_RC 1 "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" != "0" ] \
+        && pass "a failed apply aborts the wizard" \
+        || fail "a failed apply must not exit 0"
+    stdout | grep -q "DONE" \
+        && fail "a failed apply must not print the DONE summary" \
+        || pass "a failed apply prints no DONE summary"
 }
 
 # A genuine init failure must still stop the wizard.
@@ -1099,6 +1140,8 @@ test_rerun_survives_existing_server_row
 test_rerun_survives_existing_admin
 test_real_adduser_failure_still_aborts
 test_real_init_failure_still_aborts
+test_rerun_applies_port_and_endpoint
+test_apply_failure_aborts_instead_of_reporting_success
 
 echo
 if [ "$M123_ERRORS" -eq 0 ]; then

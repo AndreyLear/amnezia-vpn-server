@@ -988,7 +988,7 @@ func TestUpdateServerFields(t *testing.T) {
 		t.Fatalf("CreateServer: %v", err)
 	}
 	dns, params, ep := "1.1.1.1,8.8.8.8", `{"junk": false}`, "vpn2.example.com:51821"
-	if err := UpdateServer(handle, &dns, &params, &ep); err != nil {
+	if err := UpdateServer(handle, &dns, &params, &ep, nil); err != nil {
 		t.Fatalf("UpdateServer: %v", err)
 	}
 	s, err := ServerRow(handle)
@@ -1006,7 +1006,7 @@ func TestUpdateServerFields(t *testing.T) {
 	}
 	// partial update: nil args leave the stored values untouched
 	ep2 := "vpn3.example.com:51822"
-	if err := UpdateServer(handle, nil, nil, &ep2); err != nil {
+	if err := UpdateServer(handle, nil, nil, &ep2, nil); err != nil {
 		t.Fatalf("UpdateServer partial: %v", err)
 	}
 	s, err = ServerRow(handle)
@@ -1024,7 +1024,7 @@ func TestUpdateServerFields(t *testing.T) {
 	}
 	// an explicit empty pointer clears the value
 	empty := ""
-	if err := UpdateServer(handle, nil, nil, &empty); err != nil {
+	if err := UpdateServer(handle, nil, nil, &empty, nil); err != nil {
 		t.Fatalf("UpdateServer clear: %v", err)
 	}
 	if v, ok, _ := GetSetting(handle, "endpoint"); ok || v != "" {
@@ -1038,7 +1038,7 @@ func TestUpdateServerMissingRow(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 	dns := "1.1.1.1"
-	if err := UpdateServer(handle, &dns, nil, nil); !errors.Is(err, ErrServerNotFound) {
+	if err := UpdateServer(handle, &dns, nil, nil, nil); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("UpdateServer without server row error = %v, want ErrServerNotFound", err)
 	}
 }
@@ -1088,5 +1088,31 @@ func TestOpenFailsWhenDirUnwritable(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(sub, "amnezia.sqlite")); statErr == nil {
 		t.Fatal("database file appeared despite the failure")
+	}
+}
+
+// The listen port has to be changeable after the first install: the
+// deployment moves the tunnel to another UDP port when the current one
+// is throttled or blocked, and the row is the only place that decides
+// what awg0.conf binds.
+func TestUpdateServerChangesListenPort(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := seedServerM4(t, handle, "10.8.0.1/24"); err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+
+	port := int64(4500)
+	if err := UpdateServer(handle, nil, nil, nil, &port); err != nil {
+		t.Fatalf("update listen port: %v", err)
+	}
+	server, err := ServerRow(handle)
+	if err != nil {
+		t.Fatalf("server row: %v", err)
+	}
+	if server.ListenPort != 4500 {
+		t.Fatalf("listen_port = %d, want 4500", server.ListenPort)
 	}
 }
