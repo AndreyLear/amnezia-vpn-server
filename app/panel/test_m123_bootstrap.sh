@@ -1044,7 +1044,18 @@ test_rerun_applies_the_measured_mtu() {
     setstate INIT_STDERR "panel server init: db: server row (id=1) already exists" "$FAKE_STATE"
     rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
     [ "$rc" = "0" ] || fail "rerun: exit $rc"
-    grep -q "server update.*MTU_ARG\|server update.*--mtu" "$FAKE_CALLS" \
+    # The measured MTU reaches the database only if both halves ride in
+    # the same command: the prelude that reads TUNNEL_MTU out of .env, and
+    # the argument that hands it to `server update`. Asserting the argument
+    # alone is not enough — it still matches when the prelude is gone and
+    # $MTU_ARG expands to nothing on the server, which is precisely the
+    # "MTU never reached the database on a rerun" failure this guards.
+    local apply
+    apply="$(grep 'server update' "$FAKE_CALLS" | tail -1)"
+    printf '%s\n' "$apply" | grep -q 'TUNNEL_MTU' \
+        && pass "the rerun reads the measured MTU out of .env" \
+        || fail "the rerun must read TUNNEL_MTU from .env before applying"
+    printf '%s\n' "$apply" | grep -q 'server update.*MTU_ARG' \
         && pass "the rerun carries the measured MTU into the database" \
         || fail "the rerun must pass the measured MTU to server update"
 }
