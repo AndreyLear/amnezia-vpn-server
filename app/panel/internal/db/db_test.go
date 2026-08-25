@@ -988,7 +988,7 @@ func TestUpdateServerFields(t *testing.T) {
 		t.Fatalf("CreateServer: %v", err)
 	}
 	dns, params, ep := "1.1.1.1,8.8.8.8", `{"junk": false}`, "vpn2.example.com:51821"
-	if err := UpdateServer(handle, &dns, &params, &ep, nil); err != nil {
+	if _, err := UpdateServer(handle, &dns, &params, &ep, nil); err != nil {
 		t.Fatalf("UpdateServer: %v", err)
 	}
 	s, err := ServerRow(handle)
@@ -1006,7 +1006,7 @@ func TestUpdateServerFields(t *testing.T) {
 	}
 	// partial update: nil args leave the stored values untouched
 	ep2 := "vpn3.example.com:51822"
-	if err := UpdateServer(handle, nil, nil, &ep2, nil); err != nil {
+	if _, err := UpdateServer(handle, nil, nil, &ep2, nil); err != nil {
 		t.Fatalf("UpdateServer partial: %v", err)
 	}
 	s, err = ServerRow(handle)
@@ -1024,7 +1024,7 @@ func TestUpdateServerFields(t *testing.T) {
 	}
 	// an explicit empty pointer clears the value
 	empty := ""
-	if err := UpdateServer(handle, nil, nil, &empty, nil); err != nil {
+	if _, err := UpdateServer(handle, nil, nil, &empty, nil); err != nil {
 		t.Fatalf("UpdateServer clear: %v", err)
 	}
 	if v, ok, _ := GetSetting(handle, "endpoint"); ok || v != "" {
@@ -1038,7 +1038,7 @@ func TestUpdateServerMissingRow(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 	dns := "1.1.1.1"
-	if err := UpdateServer(handle, &dns, nil, nil, nil); !errors.Is(err, ErrServerNotFound) {
+	if _, err := UpdateServer(handle, &dns, nil, nil, nil); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("UpdateServer without server row error = %v, want ErrServerNotFound", err)
 	}
 }
@@ -1105,7 +1105,7 @@ func TestUpdateServerChangesListenPort(t *testing.T) {
 	}
 
 	port := int64(4500)
-	if err := UpdateServer(handle, nil, nil, nil, &port); err != nil {
+	if _, err := UpdateServer(handle, nil, nil, nil, &port); err != nil {
 		t.Fatalf("update listen port: %v", err)
 	}
 	server, err := ServerRow(handle)
@@ -1116,3 +1116,93 @@ func TestUpdateServerChangesListenPort(t *testing.T) {
 		t.Fatalf("listen_port = %d, want 4500", server.ListenPort)
 	}
 }
+
+// The endpoint's port and the listen port are the same fact in a normal
+// deployment, and moving one without the other is what took a working
+// tunnel down (amnezia-vpn-server-akuy). A deployment that deliberately
+// runs them apart is the one case where they must not be joined up.
+func TestUpdateServerCarriesEndpointPort(t *testing.T) {
+	tests := []struct {
+		name         string
+		endpoint     string
+		explicit     *string
+		newPort      int64
+		wantEndpoint string
+		wantCarried  string
+	}{
+		{
+			name:         "listen port change carries the endpoint",
+			endpoint:     "vpn.example.com:51820",
+			newPort:      4500,
+			wantEndpoint: "vpn.example.com:4500",
+			wantCarried:  "vpn.example.com:4500",
+		},
+		{
+			name:         "an endpoint that already disagrees is left alone",
+			endpoint:     "vpn.example.com:443",
+			newPort:      4500,
+			wantEndpoint: "vpn.example.com:443",
+		},
+		{
+			name:         "an explicit endpoint wins over the carry",
+			endpoint:     "vpn.example.com:51820",
+			explicit:     ptr("other.example.com:9999"),
+			newPort:      4500,
+			wantEndpoint: "other.example.com:9999",
+		},
+		{
+			name:         "the same port carries nothing",
+			endpoint:     "vpn.example.com:51820",
+			newPort:      51820,
+			wantEndpoint: "vpn.example.com:51820",
+		},
+		{
+			name:         "an IPv6 endpoint keeps its brackets",
+			endpoint:     "[2001:db8::1]:51820",
+			newPort:      4500,
+			wantEndpoint: "[2001:db8::1]:4500",
+			wantCarried:  "[2001:db8::1]:4500",
+		},
+		{
+			name:         "no endpoint at all is not an error",
+			endpoint:     "",
+			newPort:      4500,
+			wantEndpoint: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handle, _ := openTest(t, "amnezia.sqlite")
+			if err := Migrate(handle); err != nil {
+				t.Fatalf("Migrate: %v", err)
+			}
+			if err := CreateServer(handle, testPriv, testPub, "10.8.0.1/24", 51820,
+				"1.1.1.1", "{}", tt.endpoint); err != nil {
+				t.Fatalf("CreateServer: %v", err)
+			}
+			carried, err := UpdateServer(handle, nil, nil, tt.explicit, &tt.newPort)
+			if err != nil {
+				t.Fatalf("UpdateServer: %v", err)
+			}
+			if carried != tt.wantCarried {
+				t.Errorf("carried = %q, want %q", carried, tt.wantCarried)
+			}
+			got, _, err := GetSetting(handle, "endpoint")
+			if err != nil {
+				t.Fatalf("GetSetting(endpoint): %v", err)
+			}
+			if got != tt.wantEndpoint {
+				t.Errorf("endpoint = %q, want %q", got, tt.wantEndpoint)
+			}
+			row, err := ServerRow(handle)
+			if err != nil {
+				t.Fatalf("ServerRow: %v", err)
+			}
+			if row.ListenPort != tt.newPort {
+				t.Errorf("listen_port = %d, want %d", row.ListenPort, tt.newPort)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

@@ -400,9 +400,15 @@ func TestServerUpdateListenPort(t *testing.T) {
 // the deployment — nftables, client endpoints — could ever agree with)
 // while update rejected it.
 func TestServerInitRejectsPortZeroLikeUpdate(t *testing.T) {
-	c := newCtx(t)
-	if code, _, _ := c.run("server", "init", "10.8.0.1/24", "0"); code == 0 {
-		t.Fatal("server init accepted listen port 0")
+	// The same set update rejects, asserted against init: "they agree" is
+	// the property, so a divergence at any value has to fail here.
+	for _, bad := range []string{"0", "65536", "abc", ""} {
+		t.Run(bad, func(t *testing.T) {
+			c := newCtx(t)
+			if code, _, _ := c.run("server", "init", "10.8.0.1/24", bad); code == 0 {
+				t.Fatalf("server init accepted listen port %q", bad)
+			}
+		})
 	}
 }
 

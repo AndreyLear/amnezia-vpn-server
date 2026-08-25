@@ -294,7 +294,7 @@ export function ClientInfoDialog({
                     <div className="grid gap-0.5">
                       <dt className="text-muted-foreground">Трафик</dt>
                       <dd>
-                        ↓ {formatBytes(client.rx_bytes)} · ↑ {formatBytes(client.tx_bytes)}
+                        ↓ {formatBytes(client.tx_bytes)} · ↑ {formatBytes(client.rx_bytes)}
                       </dd>
                     </div>
                   </PropertyRow>

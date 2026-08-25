@@ -40,7 +40,9 @@ fakes_reset() {
     : > "$FAKE_CALLS"
     mkdir -p "$FAKE_FS"
     rm -rf "$ROOT" "$SYSCTL_TEST" "$MODULES_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
-        "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST"
+        "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST" \
+        "$NGINX_SITES_TEST"
+    mkdir -p "$NGINX_SITES_TEST"
     rm -f "$NFTABLES_CONF_TEST"
     cat > "$FAKE_STATE" <<EOF
 COMPOSE_VERSION=${1:-2.30.1}
@@ -56,6 +58,8 @@ MODPROBE_BBR_OK=yes
 DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
 UP_RC=0
+COMPOSE_RUN_RC=0
+RESTART_RC=0
 COMPOSE_PULL_RC=0
 BUILDER_PRUNE_RC=0
 SYSCTL_IP_FORWARD_W_RC=0
@@ -97,11 +101,12 @@ if [ "${1:-}" = "info" ]; then
 fi
 if [ "${1:-}" = "compose" ]; then
     shift
+    COMPOSE_ARGS="$*"
     verb=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --env-file) shift 2 ;;
-            version | config | build | pull | up | ps | logs) verb="$1"; break ;;
+            version | config | build | pull | up | ps | logs | run | restart) verb="$1"; break ;;
             *) shift ;;
         esac
     done
@@ -125,6 +130,26 @@ if [ "${1:-}" = "compose" ]; then
         build) exit 0 ;;
         pull) exit "${COMPOSE_PULL_RC:-0}" ;;
         up) exit "${UP_RC:-0}" ;;
+        restart) exit "${RESTART_RC:-0}" ;;
+        run)
+            # `server update` regenerates awg0.conf, exactly like the real
+            # panel-init. install.sh compares that file around the call to
+            # decide whether awg has to be restarted, so a fake that never
+            # writes it would make the restart path untestable.
+            [ "${COMPOSE_RUN_RC:-0}" = "0" ] || exit "${COMPOSE_RUN_RC}"
+            case "$COMPOSE_ARGS" in
+                *"server update"*)
+                    port="$(printf '%s\n' "$COMPOSE_ARGS" | sed -n 's/.*--listen-port \([0-9][0-9]*\).*/\1/p')"
+                    mtu="$(printf '%s\n' "$COMPOSE_ARGS" | sed -n 's/.*--mtu \([0-9][0-9]*\).*/\1/p')"
+                    if [ -n "$port" ]; then
+                        mkdir -p config
+                        printf '[Interface]\nListenPort = %s\nMTU = %s\n' \
+                            "$port" "${mtu:-1340}" > config/awg0.conf
+                    fi
+                    ;;
+            esac
+            exit 0
+            ;;
     esac
     exit 0
 fi
@@ -505,6 +530,7 @@ SOURCES_TEST="$TMP_TEST/apt/sources.list.d"
 NFTABLES_DIR_TEST="$TMP_TEST/nftables.d"
 NFTABLES_CONF_TEST="$TMP_TEST/nftables.conf"
 SYSTEMD_DIR_TEST="$TMP_TEST/systemd"
+NGINX_SITES_TEST="$TMP_TEST/nginx-sites-enabled"
 
 run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_TEST=1 \
@@ -518,6 +544,7 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_NFTABLES_DIR="$NFTABLES_DIR_TEST" \
     AMNEZIA_INSTALL_NFTABLES_CONF="$NFTABLES_CONF_TEST" \
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
+    AMNEZIA_INSTALL_NGINX_SITES_DIR="$NGINX_SITES_TEST" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
     PATH="$FAKE_DIR:$PATH" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
@@ -742,6 +769,19 @@ test_help_examples() {
         || fail "install --help: --panel-domain missing"
     grep -q -- "--vpn-domain" "$TMP_TEST/help.out" && pass "install --help: --vpn-domain" \
         || fail "install --help: --vpn-domain missing"
+    # The panel mode is the one place where omitting a flag and passing it
+    # empty mean opposite things, and the way out of a mode exists only as
+    # an empty value. Help that does not say so leaves the operator with
+    # no way to find it (amnezia-vpn-server-8eo1).
+    grep -q -- '--panel-domain ""' "$TMP_TEST/help.out" \
+        && pass "install --help: shows how to leave the panel domain" \
+        || fail "install --help: the empty value that leaves domain mode is undocumented"
+    grep -q -- '--panel-port ""' "$TMP_TEST/help.out" \
+        && pass "install --help: shows how to leave the panel port" \
+        || fail "install --help: the empty value that leaves port mode is undocumented"
+    grep -qi "read back from .env\|KEEPS the" "$TMP_TEST/help.out" \
+        && pass "install --help: says an omitted mode flag keeps the deployment" \
+        || fail "install --help: still implies that omitting the flag drops the mode"
 }
 
 test_panel_loopback_and_no_sock() {
@@ -2005,11 +2045,20 @@ test_pmtu_preflight_caps_a_clean_uplink_too
 test_pmtu_preflight_lets_a_worse_uplink_win
 test_pmtu_preflight_survives_filtered_icmp
 test_pmtu_preflight_clamps_a_tiny_path
-test_standalone_port_change_warns_about_the_database
-test_matching_port_stays_quiet
+test_rerun_applies_the_deployment_values_to_the_database
+    test_changed_tunnel_parameters_restart_awg
+    test_unchanged_tunnel_parameters_leave_awg_alone
+    test_failed_apply_aborts_instead_of_reporting_success
+    test_failed_awg_restart_aborts
+    test_fresh_install_skips_the_apply
 test_bare_rerun_keeps_the_panel_domain
 test_bare_rerun_keeps_the_panel_port
 test_explicit_empty_domain_returns_to_loopback
+    test_domain_mode_links_the_site_into_sites_enabled
+    test_panel_port_80_rejected_on_a_remembered_domain
+    test_tls_regen_rejected_on_a_remembered_domain
+    test_tls_regen_uses_the_remembered_panel_port
+    test_tls_regen_without_any_panel_port_is_refused
 test_rerun_applies_a_changed_awg_port_to_env
 test_rerun_without_the_flag_keeps_the_deployed_port
 test_rerun_applies_a_changed_subnet_and_client_domain
@@ -2141,6 +2190,66 @@ test_bare_rerun_keeps_the_panel_port() {
 
 # Leaving a mode stays possible, but has to be said out loud — and then it
 # must be complete, site included.
+# Since the panel mode became a deployment value, a rerun that does not
+# pass --domain still runs with one: it comes back from .env. The checks
+# that judge the flags against each other therefore have to see the
+# remembered values, or the deployment can be talked into a state that
+# breaks its own certificate renewal.
+test_panel_port_80_rejected_on_a_remembered_domain() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "domain first pass: exit $rc"
+    rc="$(run_install --panel-port 80)"
+    [ "$rc" != "0" ] \
+        && pass "panel port 80 is refused while a domain is remembered" \
+        || fail "panel port 80 took TCP 80 away from ACME renewal for the remembered domain"
+    grep -q "ACME HTTP-01" "$TMP_TEST/err" \
+        && pass "the refusal names the renewal it would have broken" \
+        || fail "the refusal must explain that ACME HTTP-01 needs TCP 80"
+}
+
+test_tls_regen_rejected_on_a_remembered_domain() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "domain first pass: exit $rc"
+    rc="$(run_install --panel-tls-regen)"
+    [ "$rc" != "0" ] \
+        && pass "a self-signed regeneration is refused while a domain is remembered" \
+        || fail "--panel-tls-regen must not overwrite a Let's Encrypt deployment"
+    # Refused for the right reason: the old code stopped on the missing
+    # --panel-port and never noticed the domain at all, so the exit code
+    # alone does not tell the two apart.
+    grep -q "panel.example.com" "$TMP_TEST/err" \
+        && pass "the refusal names the domain it protected" \
+        || fail "the refusal must name the domain, not the missing port (got: $(stderr | tail -1))"
+}
+
+# The other direction of the same rule: the port is remembered too, so
+# requiring the operator to repeat it would be asking for a value the
+# deployment already knows.
+test_tls_regen_uses_the_remembered_panel_port() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "panel-port first pass: exit $rc"
+    rc="$(run_install --panel-tls-regen)"
+    [ "$rc" = "0" ] \
+        && pass "--panel-tls-regen works off the remembered panel port" \
+        || fail "--panel-tls-regen: exit $rc (stderr: $(stderr | tail -1))"
+}
+
+# A deployment with no panel mode at all still has nothing to regenerate.
+test_tls_regen_without_any_panel_port_is_refused() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --panel-tls-regen)"
+    [ "$rc" != "0" ] \
+        && pass "--panel-tls-regen is refused on a loopback-only deployment" \
+        || fail "--panel-tls-regen must not pretend to regenerate a certificate that does not exist"
+}
+
 test_explicit_empty_domain_returns_to_loopback() {
     fakes_reset
     os_release ubuntu 24.04 noble
@@ -2168,46 +2277,124 @@ test_explicit_empty_domain_returns_to_loopback() {
     else
         pass "explicit clear retires the nginx site"
     fi
+    # Retiring the site means unlinking it too: nginx serves what is in
+    # sites-enabled, so a leftover symlink keeps the hostname answering on
+    # ports this run has just closed.
+    #
+    # -L, not -e: panel.conf is gone by now, so -e follows a dangling link
+    # into nothing and would report success with the link still in place.
+    if [ -L "$NGINX_SITES_TEST/amnezia-panel" ] || [ -e "$NGINX_SITES_TEST/amnezia-panel" ]; then
+        fail "explicit clear left the site linked into sites-enabled"
+    else
+        pass "explicit clear unlinks the site from sites-enabled"
+    fi
 }
 
-# install.sh cannot write the database, so a standalone rerun with a new
-# --awg-port genuinely can leave the firewall and the tunnel disagreeing.
-# It must not do that silently: silence is what made the original outage
-# expensive.
-test_standalone_port_change_warns_about_the_database() {
+# The other half of the same hook: the link has to be made in the first
+# place, or nothing the installer renders is ever served.
+test_domain_mode_links_the_site_into_sites_enabled() {
     fakes_reset
     os_release ubuntu 24.04 noble
-    rc="$(run_install --awg-port 23456)"
-    [ "$rc" = "0" ] || fail "first pass: exit $rc"
-    mkdir -p "$ROOT/config"
-    printf '[Interface]\nListenPort = 23456\nMTU = 1340\n' > "$ROOT/config/awg0.conf"
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "domain pass: exit $rc"
+    if [ -L "$NGINX_SITES_TEST/amnezia-panel" ]; then
+        pass "domain mode links the panel site into sites-enabled"
+    else
+        fail "domain mode left the rendered site unlinked, so nginx serves nothing"
+    fi
+}
+
+# install.sh computes the port, the MTU and the resolver list and builds
+# the firewall around them; `server init` only writes its arguments into a
+# fresh database. Applying them here is what stops the rerun that rebuilt
+# nftables around a new port while the tunnel kept listening on the old one
+# and still printed DONE (amnezia-vpn-server-akuy).
+test_rerun_applies_the_deployment_values_to_the_database() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
     rc="$(run_install --awg-port 4500)"
     [ "$rc" = "0" ] || fail "port change: exit $rc"
-    stdout | grep -q "listening on UDP 23456" \
-        && pass "standalone port change names the port the tunnel is really on" \
-        || fail "standalone port change must warn that the tunnel is elsewhere"
-    stdout | grep -q -- "--listen-port 4500" \
-        && pass "the warning carries the command that fixes it" \
-        || fail "the warning must say how to fix it"
+    local apply
+    apply="$(grep 'server update' "$FAKE_CALLS" | tail -1)"
+    [ -n "$apply" ] \
+        && pass "the installer applies the deployment values itself" \
+        || fail "the installer must apply the deployment values; nothing else can"
+    printf '%s\n' "$apply" | grep -q -- "--listen-port 4500" \
+        && pass "the applied listen port is the one the firewall was built for" \
+        || fail "the apply must carry --listen-port 4500 (got: $apply)"
+    # The MTU is re-measured on every install, so it has to reach the
+    # database too, or an existing deployment keeps a size already shown
+    # to drop full-size packets.
+    printf '%s\n' "$apply" | grep -q -- "--mtu" \
+        && pass "the measured MTU reaches the database" \
+        || fail "the apply must carry the measured MTU (got: $apply)"
+    printf '%s\n' "$apply" | grep -q -- "--dns" \
+        && pass "the in-tunnel resolver list reaches the database" \
+        || fail "the apply must carry --dns (got: $apply)"
 }
 
-# When they agree, say nothing: a warning that fires on every ordinary
-# rerun is a warning nobody reads.
-test_matching_port_stays_quiet() {
+# The tunnel only picks up a new port or MTU when the interface is rebuilt.
+# A restart that fails leaves the listener where it was, so swallowing the
+# failure recreates the very outage the apply exists to prevent.
+test_changed_tunnel_parameters_restart_awg() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "port change: exit $rc"
+    grep -q "compose --env-file versions.lock restart awg" "$FAKE_CALLS" \
+        && pass "a changed tunnel parameter restarts awg" \
+        || fail "awg must be restarted when the rendered config changes"
+}
+
+test_unchanged_tunnel_parameters_leave_awg_alone() {
     fakes_reset
     os_release ubuntu 24.04 noble
     rc="$(run_install --awg-port 4500)"
     [ "$rc" = "0" ] || fail "first pass: exit $rc"
-    mkdir -p "$ROOT/config"
-    printf '[Interface]\nListenPort = 4500\nMTU = 1340\n' > "$ROOT/config/awg0.conf"
+    : > "$FAKE_CALLS"
     rc="$(run_install --awg-port 4500)"
     [ "$rc" = "0" ] || fail "second pass: exit $rc"
-    stdout | grep -q "listening on UDP" \
-        && fail "a matching port must not warn" \
-        || pass "a matching port stays quiet"
+    grep -q "restart awg" "$FAKE_CALLS" \
+        && fail "an unchanged config must not drop every connected client" \
+        || pass "an unchanged config leaves the tunnel up"
 }
 
-# --- rerun with changed deployment flags (amnezia-vpn-server-akuy) ------
+test_failed_apply_aborts_instead_of_reporting_success() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set COMPOSE_RUN_RC 1
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" != "0" ] \
+        && pass "a failed apply aborts the installer" \
+        || fail "a failed apply must not exit 0: the firewall is already on the new port"
+    stdout | grep -q "DONE" \
+        && fail "a failed apply must not print the DONE summary" \
+        || pass "a failed apply prints no DONE summary"
+}
+
+test_failed_awg_restart_aborts() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set RESTART_RC 1
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" != "0" ] \
+        && pass "a failed awg restart aborts the installer" \
+        || fail "a failed awg restart must not exit 0: the tunnel is down"
+}
+
+# A fresh install has no server row yet: `server init` creates it with
+# these very values, so there is nothing to reconcile and `server update`
+# would only fail.
+test_fresh_install_skips_the_apply() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    setstate UP_RC 1 "$FAKE_STATE"
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "fresh install: exit $rc"
+    grep -q "server update" "$FAKE_CALLS" \
+        && fail "a fresh install must not run server update; there is no server row" \
+        || pass "a fresh install leaves the values to server init"
+}
 
 # A rerun that changes --awg-port used to rebuild the firewall around the
 # new port while .env kept the old one. The deployment then disagreed with

@@ -22,7 +22,7 @@ function combinedTrafficText() {
     (_content, el) =>
       el instanceof HTMLElement &&
       el.classList.contains("tabular-nums") &&
-      el.textContent === "0 Б / 0,1 Гб",
+      el.textContent === "0,1 Гб / 0 Б",
   );
 }
 
@@ -280,19 +280,24 @@ describe("ClientCard", () => {
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Последний handshake");
   });
 
-  it("shows Входящий трафик on rx metric hover", async () => {
+  // rx_bytes и tx_bytes приходят с точки зрения СЕРВЕРА: rx — принято им
+  // от клиента (отдача клиента), tx — отправлено клиенту (его скачивание).
+  // Подписи в карточке про клиента, поэтому «Входящий» обязан показывать
+  // tx_bytes. Фикстура держит их различимыми (0,1 Гб против 0 Б), иначе
+  // подмена снова пройдёт незамеченной (amnezia-vpn-server-9l30).
+  it("shows Входящий трафик on the bytes the server sent to the client", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    render(<ClientCard client={base} />);
+    render(<ClientCard client={{ ...base, rx_bytes: 1024 ** 3, tx_bytes: 5 * 1024 ** 3 }} />);
 
-    await user.hover(screen.getByText("0,1 Гб"));
+    await user.hover(screen.getByText("5,0 Гб"));
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Входящий трафик");
   });
 
-  it("shows Исходящий трафик on tx metric hover", async () => {
+  it("shows Исходящий трафик on the bytes the server received", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    render(<ClientCard client={base} />);
+    render(<ClientCard client={{ ...base, rx_bytes: 1024 ** 3, tx_bytes: 5 * 1024 ** 3 }} />);
 
-    await user.hover(screen.getByText("0 Б"));
+    await user.hover(screen.getByText("1,0 Гб"));
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Исходящий трафик");
   });
 

@@ -52,6 +52,13 @@ const InterfaceDumpFieldsExtended = 29
 //
 //	public_key preshared_key endpoint allowed_ips last_handshake
 //	rx_bytes tx_bytes persistent_keepalive
+//
+// PERSPECTIVE: rx and tx are the interface's, i.e. the SERVER's, exactly as
+// wg(8) prints them ("transfer: X received, Y sent"). So rx_bytes is what
+// the server received from that peer — the client's upload — and tx_bytes
+// is what it sent — the client's download. Anything presenting these to a
+// person has to turn them around, and the panel did not
+// (amnezia-vpn-server-9l30).
 const PeerDumpFields = 8
 
 // Status is one runtime snapshot. SECURITY: the model deliberately has no

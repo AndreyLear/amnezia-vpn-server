@@ -64,7 +64,10 @@
 #                   opens tcp 80 + tcp PORT). Without a panel domain
 #                   (T-124): self-signed https://<server-ip>:PORT.
 #                   Omitted with a panel domain: TCP 443 as today
-#                   (UDP AWG 443 can coexist).
+#                   (UDP AWG 443 can coexist). Both this and the panel
+#                   hostname are deployment values: omitted on a rerun
+#                   they are read back from .env, and only an explicit
+#                   empty value leaves the mode (amnezia-vpn-server-35g3).
 #   --build            compile the images here instead of pulling them
 #   --panel-tls-regen  with --panel-port and no panel domain: force a
 #                   fresh self-signed certificate.
@@ -97,6 +100,9 @@
 #   AMNEZIA_INSTALL_MODULES_DIR=DIR    modules-load dir for the
 #                                      amneziawg auto-load entry
 #                                      (default /etc/modules-load.d)
+#   AMNEZIA_INSTALL_NGINX_SITES_DIR=DIR  nginx sites-enabled dir where the
+#                                      panel site is linked in and out
+#                                      (default /etc/nginx/sites-enabled)
 #   AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1  run the AmneziaWG client-stack
 #                                      install even when already present
 #                                      (testability)
@@ -156,18 +162,30 @@ Options:
                     IPv4 CIDR with prefix 1..32 (default: 10.8.0.0/24)
   --panel-domain FQDN  panel hostname (Let's Encrypt). Alias: --domain.
                     HTTP-01 on TCP 80. TLS on 443 unless --panel-port
-                    is set. Without it the panel stays loopback-only
-                    (SSH tunnel hint) unless --panel-port is used.
+                    is set. Omitting the flag on a rerun KEEPS the
+                    hostname the deployment already runs; to leave
+                    domain mode pass an explicit empty value,
+                    --panel-domain "".
   --domain FQDN     alias of --panel-domain
   --vpn-domain FQDN client endpoint host (<fqdn>:<awg-port>). Alias:
                     --client-domain. Omitted: public IP. The panel
                     hostname is never copied onto clients. DNS is
                     verified before the install proceeds.
   --client-domain FQDN  alias of --vpn-domain
-  --panel-port PORT nginx TLS listen port. With --panel-domain:
+  --panel-port PORT nginx TLS listen port. With a panel domain:
                     https://PANEL_DOMAIN:PORT (nftables: tcp 80 + tcp
                     PORT). Without a panel domain: self-signed
-                    https://<server-ip>:PORT (T-124).
+                    https://<server-ip>:PORT (T-124). Remembered like
+                    the hostname, so a port set once also applies to a
+                    domain added later; --panel-port "" returns the
+                    panel to 443 with a domain, or to loopback without
+                    one.
+
+                    How the panel is exposed is a deployment value, not
+                    a per-run choice: a rerun for some unrelated reason
+                    must not take the panel offline by omission. Both
+                    flags therefore read back from .env when left out,
+                    and only an explicit empty value leaves a mode.
   --no-tunnel-dns
                 stand the in-tunnel resolver down: it binds nothing and
                 leaves port 53 to whatever else this host runs there.
@@ -187,6 +205,8 @@ Examples:
   ./install.sh --panel-domain panel.example.com --panel-port 8443 --vpn-domain example.com
   ./install.sh --panel-port 8443
   ./install.sh --domain panel.example.com --client-domain vpn.example.com
+  ./install.sh --panel-domain ""     # leave domain mode, back to loopback
+  ./install.sh --panel-port ""       # with a domain: back to TLS on 443
 
 Installs only supported OSes (Debian 12, Ubuntu 22.04, Ubuntu 24.04),
 Docker Engine + Compose plugin (>= 2.24.2) from the official Docker Inc.
@@ -368,15 +388,13 @@ fi
 if [ "$PANEL_PORT_SET" = "1" ] && [ -n "$PANEL_PORT" ]; then
     validate_port "$PANEL_PORT" || die_usage "--panel-port must be an integer in 1..65535 (got: $PANEL_PORT)"
 fi
-if [ "$PANEL_TLS_REGEN" = "1" ] && [ "$PANEL_PORT_SET" = "0" ]; then
-    die_usage "--panel-tls-regen requires --panel-port"
-fi
-if [ "$PANEL_TLS_REGEN" = "1" ] && [ -n "$DOMAIN" ]; then
-    die_usage "--panel-tls-regen cannot be used with --panel-domain/--domain (Let's Encrypt, not a self-signed certificate)"
-fi
-if [ -n "$DOMAIN" ] && [ "$PANEL_PORT_SET" = "1" ] && [ "$PANEL_PORT" = "80" ]; then
-    die_usage "--panel-port 80 conflicts with ACME HTTP-01 (TCP 80). Use 443 (default) or another port such as 8443"
-fi
+# How the flags combine cannot be judged here: since the panel mode became
+# a deployment value, DOMAIN and PANEL_PORT are still empty at this point on
+# any rerun that did not pass them, and their real values only arrive from
+# .env below. Checking them here let `--panel-port 80` through on a
+# deployment whose domain was remembered, taking TCP 80 away from ACME
+# HTTP-01 renewal. The combination checks therefore run once the effective
+# mode is known — see check_panel_mode_conflicts below.
 
 # --- root requirement (skipped in test mode only) ---------------------
 
@@ -842,6 +860,36 @@ env_unset() { # env_unset KEY — remove one line, keep the rest
     chmod 0600 "$file"
 }
 
+# The deployment's memory is read and written in one shape, five values
+# over: recall what this run did not set, remember what it did, forget
+# what it cleared. Spelling that out per value is how the two halves
+# drifted apart before — the panel mode was read back nowhere while the
+# port was (amnezia-vpn-server-35g3).
+#
+# env_recall prints the stored value and fails instead of dying: die_op
+# inside a command substitution would only kill the subshell, and the
+# caller would carry on with an empty value. The caller dies, so the
+# message can name the value it was reading.
+env_recall() { # env_recall KEY VALIDATOR — stored value, refusing a corrupt one
+    local value
+    value="$(env_read "$1")"
+    [ -n "$value" ] || return 0
+    "$2" "$value" >/dev/null 2>&1 || return 1
+    printf '%s\n' "$value"
+}
+
+env_remember() { # env_remember KEY VALUE — store it when it differs, and say so
+    [ "$(env_read "$1")" != "$2" ] || return 0
+    env_set "$1" "$2"
+    log "$1 changed to $2 in $ENV_FILE"
+}
+
+env_forget() { # env_forget KEY MESSAGE — drop a value the operator cleared
+    [ -n "$(env_read "$1")" ] || return 0
+    env_unset "$1"
+    log "$2"
+}
+
 if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
     log "$ENV_FILE already exists under $ROOT_DIR: keeping the values this run does not set"
     # The file is the deployment's memory, and it works both ways.
@@ -854,20 +902,18 @@ if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
     # the tunnel went down while the installer reported success
     # (amnezia-vpn-server-akuy).
     if [ "$AWG_PORT_SET" = "0" ]; then
-        AWG_PORT="$(env_read AWG_PORT)"
+        AWG_PORT="$(env_recall AWG_PORT validate_port)" \
+            || die_op "AWG_PORT in $(basename "$ENV_FILE") is out of range"
         [ -n "$AWG_PORT" ] || die_op "AWG_PORT unset in $(basename "$ENV_FILE") and not given as an argument"
-        validate_port "$AWG_PORT" || die_op "AWG_PORT in $(basename "$ENV_FILE") is out of range"
     fi
     if [ "$VPN_SUBNET_SET" = "0" ]; then
-        VPN_SUBNET="$(env_read VPN_SUBNET)"
+        VPN_SUBNET="$(env_recall VPN_SUBNET validate_cidr)" \
+            || die_op "VPN_SUBNET in $(basename "$ENV_FILE") is not a valid CIDR"
         [ -n "$VPN_SUBNET" ] || VPN_SUBNET=10.8.0.0/24
-        validate_cidr "$VPN_SUBNET" || die_op "VPN_SUBNET in $(basename "$ENV_FILE") is not a valid CIDR"
     fi
     if [ "$CLIENT_DOMAIN_SET" = "0" ] && [ -z "$CLIENT_DOMAIN" ]; then
-        CLIENT_DOMAIN="$(env_read CLIENT_DOMAIN)"
-        if [ -n "$CLIENT_DOMAIN" ]; then
-            validate_fqdn "$CLIENT_DOMAIN" || die_op "CLIENT_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
-        fi
+        CLIENT_DOMAIN="$(env_recall CLIENT_DOMAIN validate_fqdn)" \
+            || die_op "CLIENT_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
     fi
     # How the panel is exposed is a deployment value like the rest. It used
     # to be the exception: omitting --domain meant "no domain", so a rerun
@@ -877,38 +923,29 @@ if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
     # could reach. Now it is read back, and only an explicit empty value
     # leaves the mode.
     if [ "$DOMAIN_SET" = "0" ] && [ -z "$DOMAIN" ]; then
-        DOMAIN="$(env_read PANEL_DOMAIN)"
-        if [ -n "$DOMAIN" ]; then
-            validate_fqdn "$DOMAIN" || die_op "PANEL_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
-        fi
+        DOMAIN="$(env_recall PANEL_DOMAIN validate_fqdn)" \
+            || die_op "PANEL_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
     fi
     if [ "$PANEL_PORT_SET" = "0" ] && [ -z "$PANEL_PORT" ]; then
-        PANEL_PORT="$(env_read PANEL_PORT)"
-        if [ -n "$PANEL_PORT" ]; then
-            validate_port "$PANEL_PORT" || die_op "PANEL_PORT in $(basename "$ENV_FILE") is not a valid port"
-        fi
+        PANEL_PORT="$(env_recall PANEL_PORT validate_port)" \
+            || die_op "PANEL_PORT in $(basename "$ENV_FILE") is not a valid port"
     fi
     # The other direction: what this run set explicitly becomes the
     # deployment's new memory.
-    if [ "$AWG_PORT_SET" = "1" ] && [ "$(env_read AWG_PORT)" != "$AWG_PORT" ]; then
-        env_set AWG_PORT "$AWG_PORT"
-        log "AWG_PORT changed to $AWG_PORT in $ENV_FILE"
+    if [ "$AWG_PORT_SET" = "1" ]; then
+        env_remember AWG_PORT "$AWG_PORT"
     fi
-    if [ "$VPN_SUBNET_SET" = "1" ] && [ "$(env_read VPN_SUBNET)" != "$VPN_SUBNET" ]; then
-        env_set VPN_SUBNET "$VPN_SUBNET"
-        log "VPN_SUBNET changed to $VPN_SUBNET in $ENV_FILE"
+    if [ "$VPN_SUBNET_SET" = "1" ]; then
+        env_remember VPN_SUBNET "$VPN_SUBNET"
     fi
-    if [ "$CLIENT_DOMAIN_SET" = "1" ] && [ "$(env_read CLIENT_DOMAIN)" != "$CLIENT_DOMAIN" ]; then
-        env_set CLIENT_DOMAIN "$CLIENT_DOMAIN"
-        log "CLIENT_DOMAIN changed to $CLIENT_DOMAIN in $ENV_FILE"
+    if [ "$CLIENT_DOMAIN_SET" = "1" ]; then
+        env_remember CLIENT_DOMAIN "$CLIENT_DOMAIN"
     fi
-    if [ "$DOMAIN_SET" = "1" ] && [ -z "$DOMAIN" ] && [ -n "$(env_read PANEL_DOMAIN)" ]; then
-        env_unset PANEL_DOMAIN
-        log "panel domain cleared in $ENV_FILE: the panel returns to loopback"
+    if [ "$DOMAIN_SET" = "1" ] && [ -z "$DOMAIN" ]; then
+        env_forget PANEL_DOMAIN "panel domain cleared in $ENV_FILE: the panel returns to loopback"
     fi
-    if [ "$PANEL_PORT_SET" = "1" ] && [ -z "$PANEL_PORT" ] && [ -n "$(env_read PANEL_PORT)" ]; then
-        env_unset PANEL_PORT
-        log "panel port cleared in $ENV_FILE: the panel returns to loopback"
+    if [ "$PANEL_PORT_SET" = "1" ] && [ -z "$PANEL_PORT" ]; then
+        env_forget PANEL_PORT "panel port cleared in $ENV_FILE: the panel returns to loopback"
     fi
 else
     cat > "$ROOT_DIR/$ENV_FILE" <<EOF
@@ -922,6 +959,27 @@ EOF
     chmod 0600 "$ROOT_DIR/$ENV_FILE"
     log "$ENV_FILE created with AWG_PORT=${AWG_PORT}, VPN_SUBNET=${VPN_SUBNET} (0600)"
 fi
+
+# The effective mode is known only now, so this is where the flags are
+# judged against each other. Values are read, not flags: a domain the
+# deployment remembers conflicts with TCP 80 exactly as a domain typed on
+# this command line does.
+check_panel_mode_conflicts() {
+    # The domain comes first: on a Let's Encrypt deployment there is no
+    # panel port either, and reporting the missing port would send the
+    # operator to add one instead of telling them what actually stands in
+    # the way.
+    if [ "$PANEL_TLS_REGEN" = "1" ] && [ -n "$DOMAIN" ]; then
+        die_usage "--panel-tls-regen cannot be used with a panel domain ($DOMAIN serves a Let's Encrypt certificate, not a self-signed one). Leave the domain with --domain \"\" first"
+    fi
+    if [ "$PANEL_TLS_REGEN" = "1" ] && [ -z "$PANEL_PORT" ]; then
+        die_usage "--panel-tls-regen needs a panel port; this deployment has none. Pass --panel-port"
+    fi
+    if [ -n "$DOMAIN" ] && [ "$PANEL_PORT" = "80" ]; then
+        die_usage "panel port 80 conflicts with ACME HTTP-01 (TCP 80) for $DOMAIN. Use 443 (default) or another port such as 8443"
+    fi
+}
+check_panel_mode_conflicts
 
 # The effective panel exposure mode is the deployment's memory from here
 # on: nginx, the firewall, the Secure cookie and the in-tunnel resolver all
@@ -1142,29 +1200,6 @@ tunnel_mtu_preflight() {
 
 tunnel_mtu_preflight
 
-# --- 10e. tunnel port agreement (amnezia-vpn-server-akuy) --------------
-# install.sh owns the firewall and .env; the listening port lives in the
-# database, which only the panel can write. Run standalone with a changed
-# --awg-port, this script therefore builds rules around a port the tunnel
-# is not on. bootstrap.sh resolves that straight after (it applies the
-# deployment to the database), but somebody running install.sh by hand
-# gets no such help — and the failure is silent, which is what made the
-# original outage expensive. So say it, and say what fixes it.
-tunnel_port_agreement_check() {
-    local deployed
-    [ -f "$ROOT_DIR/config/awg0.conf" ] || return 0
-    deployed="$(sed -n 's/^[[:space:]]*ListenPort[[:space:]]*=[[:space:]]*//p' "$ROOT_DIR/config/awg0.conf" | head -1 | tr -d '[:space:]')"
-    [ -n "$deployed" ] || return 0
-    [ "$deployed" != "$AWG_PORT" ] || return 0
-    log "WARNING: the tunnel is listening on UDP ${deployed}, these rules are for ${AWG_PORT}"
-    log "WARNING: clients cannot reach it until the database agrees. Fix it with:"
-    log "WARNING:   docker compose --env-file versions.lock run --rm panel-init \\"
-    log "WARNING:     /app/panel server update --listen-port ${AWG_PORT}"
-    log "WARNING:   docker compose --env-file versions.lock restart awg"
-    log "WARNING: (bootstrap.sh does this for you; install.sh cannot write the database)"
-}
-
-tunnel_port_agreement_check
 
 # --- 11. host networking: managed nftables ruleset (M9.2) --------------
 
@@ -1491,6 +1526,7 @@ if [ "$IMAGES_BUILT" = "1" ]; then
     fi
 fi
 log "starting the stack"
+NO_SERVER_ROW=0
 if ! docker_compose --env-file versions.lock up -d; then
     # M3.1 contract: on a fresh install there is no server row yet, so
     # panel-init exits 1 and `up` fails through depends_on
@@ -1506,6 +1542,7 @@ if ! docker_compose --env-file versions.lock up -d; then
     # real data-loss case as a fresh install (T-111 rework).
     if printf '%s\n' "$PI_LOG" | grep -q "no server row (id=1)"; then
         log "fresh-install state: panel-init exited 1 (M3.1, no server row yet); stack created-but-not-running"
+        NO_SERVER_ROW=1
     else
         printf '%s\n' \
             "install: ERROR: docker compose up -d failed (panel-init exited 1 but not the M3.1 no-server-row state)" \
@@ -1513,6 +1550,54 @@ if ! docker_compose --env-file versions.lock up -d; then
         exit "$FAIL_STYLE_OP"
     fi
 fi
+
+# --- 13a. deployment values reach the database ------------------------
+# install.sh computes the tunnel port, the MTU and the resolver list,
+# writes them into .env and builds the firewall around them. `server init`
+# only writes its arguments into a *fresh* database, so on a rerun none of
+# that reached the server row: nftables opened the new port while the
+# tunnel kept listening on the old one, every client config still handed
+# out the old one, and the installer printed DONE over a tunnel nothing
+# could reach (amnezia-vpn-server-akuy).
+#
+# So the values are applied here, from the one place that already knows
+# them. This used to be a warning telling the operator to run these very
+# commands by hand — install.sh can run them: it just started the stack.
+apply_deployment_values() {
+    local mtu dns before after
+    if [ "$NO_SERVER_ROW" = "1" ]; then
+        log "fresh install: no server row yet; server init writes these values"
+        return 0
+    fi
+    mtu="$(env_read TUNNEL_MTU)"
+    dns="$(env_read TUNNEL_DNS)"
+    set -- --listen-port "$AWG_PORT"
+    [ -n "$mtu" ] && set -- "$@" --mtu "$mtu"
+    [ -n "$dns" ] && set -- "$@" --dns "$dns"
+
+    # ListenPort and MTU only take effect when the interface is created,
+    # so the rendered config is compared around the update: unchanged
+    # means no restart and no dropped clients, changed means the tunnel
+    # is rebuilt on the spot.
+    before="$(awg_tunnel_params)"
+    log "applying the deployment settings to the database (port, MTU, DNS)"
+    docker_compose --env-file versions.lock run --rm panel-init \
+        /app/panel server update "$@" \
+        || die_op "applying the deployment settings failed; the firewall is already open on UDP $AWG_PORT while the tunnel is not listening there"
+    after="$(awg_tunnel_params)"
+    if [ "$before" != "$after" ]; then
+        log "tunnel parameters changed; restarting awg"
+        docker_compose --env-file versions.lock restart awg >/dev/null 2>&1 \
+            || die_op "awg restart failed after changing the tunnel parameters; the tunnel is down"
+    fi
+}
+
+awg_tunnel_params() {
+    sed -n -E 's/^[[:space:]]*(ListenPort|MTU)[[:space:]]*=[[:space:]]*/\1=/p' \
+        "$ROOT_DIR/config/awg0.conf" 2>/dev/null | sort
+}
+
+apply_deployment_values
 
 # Enable the weekly prune timer only after compose up (and after this
 # install's own docker-prune.sh). Persistent=true would otherwise fire a
@@ -1532,6 +1617,11 @@ log "weekly docker-prune timer enabled (ExecStart=$ROOT_DIR/docker-prune.sh)"
 
 NGINX_CONF_DIR="$ROOT_DIR/nginx"
 NGINX_SITE="amnezia-panel"
+# Linking the site in and out is a host write like any other, so it goes
+# through a hook: without one the harness cannot see whether leaving a
+# panel mode actually retires the site, which is the half of that job that
+# stops nginx serving a hostname whose ports have just been closed.
+NGINX_SITES_DIR="${AMNEZIA_INSTALL_NGINX_SITES_DIR:-/etc/nginx/sites-enabled}"
 ACME_ROOT="${AMNEZIA_INSTALL_ACME_ROOT:-/var/www/certbot}"
 
 render_nginx_conf() { # render_nginx_conf DOMAIN PHASE [TLS_PORT]
@@ -1598,8 +1688,8 @@ domain_setup() {
     chmod 0750 "$NGINX_CONF_DIR"
     render_nginx_conf "$DOMAIN" "phase1" "$tls_port" > "$NGINX_CONF_DIR/panel.conf"
     chmod 0644 "$NGINX_CONF_DIR/panel.conf"
-    ln -sf "$NGINX_CONF_DIR/panel.conf" "/etc/nginx/sites-enabled/$NGINX_SITE"
-    rm -f /etc/nginx/sites-enabled/default
+    ln -sf "$NGINX_CONF_DIR/panel.conf" "$NGINX_SITES_DIR/$NGINX_SITE"
+    rm -f "$NGINX_SITES_DIR/default"
     cmd nginx -t >/dev/null 2>&1 || die_op "nginx configuration test failed"
     cmd systemctl enable nginx >/dev/null 2>&1 || die_op "systemctl enable nginx failed"
     if ! cmd systemctl is-active --quiet nginx; then
@@ -1712,8 +1802,8 @@ panel_port_setup() {
     chmod 0750 "$NGINX_CONF_DIR"
     render_nginx_ip_conf "$PANEL_PORT" "$PANEL_TLS_CERT" "$PANEL_TLS_KEY" > "$NGINX_CONF_DIR/panel.conf"
     chmod 0644 "$NGINX_CONF_DIR/panel.conf"
-    ln -sf "$NGINX_CONF_DIR/panel.conf" "/etc/nginx/sites-enabled/$NGINX_SITE"
-    rm -f /etc/nginx/sites-enabled/default
+    ln -sf "$NGINX_CONF_DIR/panel.conf" "$NGINX_SITES_DIR/$NGINX_SITE"
+    rm -f "$NGINX_SITES_DIR/default"
     cmd nginx -t >/dev/null 2>&1 || die_op "nginx configuration test failed"
     cmd systemctl enable nginx >/dev/null 2>&1 || die_op "systemctl enable nginx failed"
     if ! cmd systemctl is-active --quiet nginx; then
@@ -1738,10 +1828,15 @@ panel_port_setup
 panel_loopback_setup() {
     [ -z "$DOMAIN" ] || return 0
     [ -z "$PANEL_PORT" ] || return 0
-    [ -e "/etc/nginx/sites-enabled/$NGINX_SITE" ] || [ -f "$NGINX_CONF_DIR/panel.conf" ] || return 0
+    # -L before -e: once panel.conf is gone the link is dangling, and -e
+    # follows the link, so -e alone reports "nothing to do" on exactly the
+    # leftover this function exists to clear. nginx refuses to start on a
+    # broken symlink in sites-enabled, so leaving one is not harmless.
+    [ -L "$NGINX_SITES_DIR/$NGINX_SITE" ] || [ -e "$NGINX_SITES_DIR/$NGINX_SITE" ] \
+        || [ -f "$NGINX_CONF_DIR/panel.conf" ] || return 0
 
     log "panel returns to loopback: retiring the nginx site (certificates are kept)"
-    rm -f "/etc/nginx/sites-enabled/$NGINX_SITE"
+    rm -f "$NGINX_SITES_DIR/$NGINX_SITE"
     rm -f "$NGINX_CONF_DIR/panel.conf"
     if command -v nginx >/dev/null 2>&1 && cmd nginx -t >/dev/null 2>&1; then
         cmd systemctl reload nginx >/dev/null 2>&1 \
