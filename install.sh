@@ -1164,29 +1164,6 @@ tunnel_mtu_preflight() {
 
 tunnel_mtu_preflight
 
-# --- 10e. tunnel port agreement (amnezia-vpn-server-akuy) --------------
-# install.sh owns the firewall and .env; the listening port lives in the
-# database, which only the panel can write. Run standalone with a changed
-# --awg-port, this script therefore builds rules around a port the tunnel
-# is not on. bootstrap.sh resolves that straight after (it applies the
-# deployment to the database), but somebody running install.sh by hand
-# gets no such help — and the failure is silent, which is what made the
-# original outage expensive. So say it, and say what fixes it.
-tunnel_port_agreement_check() {
-    local deployed
-    [ -f "$ROOT_DIR/config/awg0.conf" ] || return 0
-    deployed="$(sed -n 's/^[[:space:]]*ListenPort[[:space:]]*=[[:space:]]*//p' "$ROOT_DIR/config/awg0.conf" | head -1 | tr -d '[:space:]')"
-    [ -n "$deployed" ] || return 0
-    [ "$deployed" != "$AWG_PORT" ] || return 0
-    log "WARNING: the tunnel is listening on UDP ${deployed}, these rules are for ${AWG_PORT}"
-    log "WARNING: clients cannot reach it until the database agrees. Fix it with:"
-    log "WARNING:   docker compose --env-file versions.lock run --rm panel-init \\"
-    log "WARNING:     /app/panel server update --listen-port ${AWG_PORT}"
-    log "WARNING:   docker compose --env-file versions.lock restart awg"
-    log "WARNING: (bootstrap.sh does this for you; install.sh cannot write the database)"
-}
-
-tunnel_port_agreement_check
 
 # --- 11. host networking: managed nftables ruleset (M9.2) --------------
 
@@ -1513,6 +1490,7 @@ if [ "$IMAGES_BUILT" = "1" ]; then
     fi
 fi
 log "starting the stack"
+NO_SERVER_ROW=0
 if ! docker_compose --env-file versions.lock up -d; then
     # M3.1 contract: on a fresh install there is no server row yet, so
     # panel-init exits 1 and `up` fails through depends_on
@@ -1528,6 +1506,7 @@ if ! docker_compose --env-file versions.lock up -d; then
     # real data-loss case as a fresh install (T-111 rework).
     if printf '%s\n' "$PI_LOG" | grep -q "no server row (id=1)"; then
         log "fresh-install state: panel-init exited 1 (M3.1, no server row yet); stack created-but-not-running"
+        NO_SERVER_ROW=1
     else
         printf '%s\n' \
             "install: ERROR: docker compose up -d failed (panel-init exited 1 but not the M3.1 no-server-row state)" \
@@ -1535,6 +1514,54 @@ if ! docker_compose --env-file versions.lock up -d; then
         exit "$FAIL_STYLE_OP"
     fi
 fi
+
+# --- 13a. deployment values reach the database ------------------------
+# install.sh computes the tunnel port, the MTU and the resolver list,
+# writes them into .env and builds the firewall around them. `server init`
+# only writes its arguments into a *fresh* database, so on a rerun none of
+# that reached the server row: nftables opened the new port while the
+# tunnel kept listening on the old one, every client config still handed
+# out the old one, and the installer printed DONE over a tunnel nothing
+# could reach (amnezia-vpn-server-akuy).
+#
+# So the values are applied here, from the one place that already knows
+# them. This used to be a warning telling the operator to run these very
+# commands by hand — install.sh can run them: it just started the stack.
+apply_deployment_values() {
+    local mtu dns before after
+    if [ "$NO_SERVER_ROW" = "1" ]; then
+        log "fresh install: no server row yet; server init writes these values"
+        return 0
+    fi
+    mtu="$(env_read TUNNEL_MTU)"
+    dns="$(env_read TUNNEL_DNS)"
+    set -- --listen-port "$AWG_PORT"
+    [ -n "$mtu" ] && set -- "$@" --mtu "$mtu"
+    [ -n "$dns" ] && set -- "$@" --dns "$dns"
+
+    # ListenPort and MTU only take effect when the interface is created,
+    # so the rendered config is compared around the update: unchanged
+    # means no restart and no dropped clients, changed means the tunnel
+    # is rebuilt on the spot.
+    before="$(awg_tunnel_params)"
+    log "applying the deployment settings to the database (port, MTU, DNS)"
+    docker_compose --env-file versions.lock run --rm panel-init \
+        /app/panel server update "$@" \
+        || die_op "applying the deployment settings failed; the firewall is already open on UDP $AWG_PORT while the tunnel is not listening there"
+    after="$(awg_tunnel_params)"
+    if [ "$before" != "$after" ]; then
+        log "tunnel parameters changed; restarting awg"
+        docker_compose --env-file versions.lock restart awg >/dev/null 2>&1 \
+            || die_op "awg restart failed after changing the tunnel parameters; the tunnel is down"
+    fi
+}
+
+awg_tunnel_params() {
+    sed -n -E 's/^[[:space:]]*(ListenPort|MTU)[[:space:]]*=[[:space:]]*/\1=/p' \
+        "$ROOT_DIR/config/awg0.conf" 2>/dev/null | sort
+}
+
+apply_deployment_values
 
 # Enable the weekly prune timer only after compose up (and after this
 # install's own docker-prune.sh). Persistent=true would otherwise fire a

@@ -807,36 +807,29 @@ if ! remote_cmd "$INIT_CMD" >/dev/null 2>"$INIT_OUT"; then
 fi
 rm -f "$INIT_OUT"
 
-# `server init` only writes its arguments into a fresh database, so on a
-# rerun — a plain one, a migration, or a run that changes a flag — every
-# deployment value has to be applied explicitly. Skipping this is what
-# took a working tunnel down: install.sh rebuilt nftables around a new
-# --awg-port while the tunnel kept listening on the old one, and the
-# wizard still printed DONE (amnezia-vpn-server-akuy).
+# The endpoint is the one deployment value install.sh cannot know: it is
+# the address clients dial, and only the wizard has it — from --ip, or
+# from the public address it looked up. Everything else install.sh
+# computes and now applies itself, right after it starts the stack
+# (amnezia-vpn-server-akuy); duplicating it here is what let the two
+# drift, since only one of the two paths ever ran on a standalone
+# install.
 #
-# ListenPort and MTU only take effect when the interface is created, so
-# the config is compared before and after: unchanged means no restart and
-# no dropped clients, changed means the tunnel is rebuilt on the spot.
-log "applying the deployment settings (port, endpoint, DNS)"
-APPLY_CMD="cd '$ROOT_DIR' && $READ_ENV; \
-before=\"\$(grep -E '^(ListenPort|MTU) ' config/awg0.conf 2>/dev/null | sort)\"; \
-docker compose --env-file versions.lock run --rm panel-init /app/panel server update \
-    --dns \"\$DNS\" --endpoint '$ENDPOINT' --listen-port '$AWG_PORT' \$MTU_ARG || exit 1; \
-after=\"\$(grep -E '^(ListenPort|MTU) ' config/awg0.conf 2>/dev/null | sort)\"; \
-if [ \"\$before\" != \"\$after\" ]; then \
-    echo 'tunnel parameters changed; restarting awg'; \
-    docker compose --env-file versions.lock restart awg >/dev/null 2>&1 || exit 1; \
-fi"
+# The endpoint lives in settings, not in awg0.conf, so writing it does
+# not touch the interface and no restart follows. A listen-port change
+# carries the endpoint's port along inside the database, so this call
+# does not have to know the port at all.
+log "applying the client endpoint"
+APPLY_CMD="cd '$ROOT_DIR' && \
+docker compose --env-file versions.lock run --rm panel-init \
+    /app/panel server update --endpoint '$ENDPOINT' || exit 1"
 APPLY_OUT="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-apply.XXXXXX")"
 if ! remote_cmd "$APPLY_CMD" >"$APPLY_OUT" 2>&1; then
     cat "$APPLY_OUT" >&2 || true
     rm -f "$APPLY_OUT"
-    # Not a warning: the deployment now disagrees with itself, and the
-    # firewall has already been rebuilt around the values this run chose.
-    die_op "application bootstrap failed: could not apply the deployment settings (port/endpoint/DNS)"
-fi
-if grep -q "restarting awg" "$APPLY_OUT" 2>/dev/null; then
-    log "tunnel parameters changed: awg restarted (clients reconnect themselves)"
+    # Not a warning: clients would be handed an endpoint that does not
+    # match the deployment this run just built.
+    die_op "application bootstrap failed: could not apply the client endpoint"
 fi
 rm -f "$APPLY_OUT"
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -501,19 +502,39 @@ func setSettingTx(tx *sql.Tx, key, value string) error {
 // written to the row, endpoint to the settings table. It fails with
 // ErrServerNotFound when the row is missing. The callers validate
 // awgParams/endpoint/listenPort before calling.
-func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string, listenPort *int64) error {
+// A listen-port change carries the endpoint's port with it and reports the
+// endpoint it wrote, or "" when it left one alone. The two are the same
+// fact in a normal deployment — clients dial the port the tunnel listens
+// on — and moving one without the other is what took a working tunnel
+// down: nftables and .env went to the new port while every client config
+// still named the old one (amnezia-vpn-server-akuy). The exception is an
+// endpoint whose port already disagrees with the listen port: an operator
+// running the tunnel behind a provider-side forward meant them to differ,
+// and undoing that is not this function's business.
+func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string, listenPort *int64) (string, error) {
 	tx, err := handle.Begin()
 	if err != nil {
-		return fmt.Errorf("db: begin server update: %w", err)
+		return "", fmt.Errorf("db: begin server update: %w", err)
 	}
 	defer tx.Rollback()
 
 	var exists int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM server WHERE id = 1`).Scan(&exists); err != nil {
-		return fmt.Errorf("db: check server row: %w", err)
+		return "", fmt.Errorf("db: check server row: %w", err)
 	}
 	if exists == 0 {
-		return ErrServerNotFound
+		return "", ErrServerNotFound
+	}
+
+	// Read before writing: carrying the endpoint needs the port it is
+	// moving away from, and an explicit --endpoint on the same command
+	// wins outright, so there is nothing to carry then.
+	var oldPort int64
+	carry := listenPort != nil && endpoint == nil
+	if carry {
+		if err := tx.QueryRow(`SELECT listen_port FROM server WHERE id = 1`).Scan(&oldPort); err != nil {
+			return "", fmt.Errorf("db: read listen_port: %w", err)
+		}
 	}
 
 	if dns != nil || awgParams != nil || listenPort != nil {
@@ -536,24 +557,45 @@ func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string, listenPort *
 			`UPDATE server SET `+strings.Join(updates, ", ")+` WHERE id = ?`,
 			args...,
 		); err != nil {
-			return fmt.Errorf("db: update server row: %w", err)
+			return "", fmt.Errorf("db: update server row: %w", err)
 		}
 	}
 	if endpoint != nil {
 		if *endpoint == "" {
 			if _, err := tx.Exec(`DELETE FROM settings WHERE key = 'endpoint'`); err != nil {
-				return fmt.Errorf("db: clear endpoint setting: %w", err)
+				return "", fmt.Errorf("db: clear endpoint setting: %w", err)
 			}
 		} else {
 			if err := setSettingTx(tx, "endpoint", *endpoint); err != nil {
-				return err
+				return "", err
 			}
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("db: commit server update: %w", err)
+	var carried string
+	if carry && oldPort != *listenPort {
+		var current string
+		switch err := tx.QueryRow(
+			`SELECT value FROM settings WHERE key = 'endpoint'`,
+		).Scan(&current); {
+		case errors.Is(err, sql.ErrNoRows):
+			// No endpoint yet — `server init` warns about that already.
+		case err != nil:
+			return "", fmt.Errorf("db: read endpoint setting: %w", err)
+		default:
+			host, port, splitErr := net.SplitHostPort(current)
+			if splitErr == nil && port == strconv.FormatInt(oldPort, 10) {
+				carried = net.JoinHostPort(host, strconv.FormatInt(*listenPort, 10))
+				if err := setSettingTx(tx, "endpoint", carried); err != nil {
+					return "", err
+				}
+			}
+		}
 	}
-	return nil
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("db: commit server update: %w", err)
+	}
+	return carried, nil
 }
 
 // ClientRecord is the full client row (§3, table clients), including the

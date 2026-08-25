@@ -58,6 +58,8 @@ MODPROBE_BBR_OK=yes
 DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
 UP_RC=0
+COMPOSE_RUN_RC=0
+RESTART_RC=0
 COMPOSE_PULL_RC=0
 BUILDER_PRUNE_RC=0
 SYSCTL_IP_FORWARD_W_RC=0
@@ -99,11 +101,12 @@ if [ "${1:-}" = "info" ]; then
 fi
 if [ "${1:-}" = "compose" ]; then
     shift
+    COMPOSE_ARGS="$*"
     verb=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --env-file) shift 2 ;;
-            version | config | build | pull | up | ps | logs) verb="$1"; break ;;
+            version | config | build | pull | up | ps | logs | run | restart) verb="$1"; break ;;
             *) shift ;;
         esac
     done
@@ -127,6 +130,26 @@ if [ "${1:-}" = "compose" ]; then
         build) exit 0 ;;
         pull) exit "${COMPOSE_PULL_RC:-0}" ;;
         up) exit "${UP_RC:-0}" ;;
+        restart) exit "${RESTART_RC:-0}" ;;
+        run)
+            # `server update` regenerates awg0.conf, exactly like the real
+            # panel-init. install.sh compares that file around the call to
+            # decide whether awg has to be restarted, so a fake that never
+            # writes it would make the restart path untestable.
+            [ "${COMPOSE_RUN_RC:-0}" = "0" ] || exit "${COMPOSE_RUN_RC}"
+            case "$COMPOSE_ARGS" in
+                *"server update"*)
+                    port="$(printf '%s\n' "$COMPOSE_ARGS" | sed -n 's/.*--listen-port \([0-9][0-9]*\).*/\1/p')"
+                    mtu="$(printf '%s\n' "$COMPOSE_ARGS" | sed -n 's/.*--mtu \([0-9][0-9]*\).*/\1/p')"
+                    if [ -n "$port" ]; then
+                        mkdir -p config
+                        printf '[Interface]\nListenPort = %s\nMTU = %s\n' \
+                            "$port" "${mtu:-1340}" > config/awg0.conf
+                    fi
+                    ;;
+            esac
+            exit 0
+            ;;
     esac
     exit 0
 fi
@@ -2009,8 +2032,12 @@ test_pmtu_preflight_caps_a_clean_uplink_too
 test_pmtu_preflight_lets_a_worse_uplink_win
 test_pmtu_preflight_survives_filtered_icmp
 test_pmtu_preflight_clamps_a_tiny_path
-test_standalone_port_change_warns_about_the_database
-test_matching_port_stays_quiet
+test_rerun_applies_the_deployment_values_to_the_database
+    test_changed_tunnel_parameters_restart_awg
+    test_unchanged_tunnel_parameters_leave_awg_alone
+    test_failed_apply_aborts_instead_of_reporting_success
+    test_failed_awg_restart_aborts
+    test_fresh_install_skips_the_apply
 test_bare_rerun_keeps_the_panel_domain
 test_bare_rerun_keeps_the_panel_port
 test_explicit_empty_domain_returns_to_loopback
@@ -2264,44 +2291,97 @@ test_domain_mode_links_the_site_into_sites_enabled() {
     fi
 }
 
-# install.sh cannot write the database, so a standalone rerun with a new
-# --awg-port genuinely can leave the firewall and the tunnel disagreeing.
-# It must not do that silently: silence is what made the original outage
-# expensive.
-test_standalone_port_change_warns_about_the_database() {
+# install.sh computes the port, the MTU and the resolver list and builds
+# the firewall around them; `server init` only writes its arguments into a
+# fresh database. Applying them here is what stops the rerun that rebuilt
+# nftables around a new port while the tunnel kept listening on the old one
+# and still printed DONE (amnezia-vpn-server-akuy).
+test_rerun_applies_the_deployment_values_to_the_database() {
     fakes_reset
     os_release ubuntu 24.04 noble
-    rc="$(run_install --awg-port 23456)"
-    [ "$rc" = "0" ] || fail "first pass: exit $rc"
-    mkdir -p "$ROOT/config"
-    printf '[Interface]\nListenPort = 23456\nMTU = 1340\n' > "$ROOT/config/awg0.conf"
     rc="$(run_install --awg-port 4500)"
     [ "$rc" = "0" ] || fail "port change: exit $rc"
-    stdout | grep -q "listening on UDP 23456" \
-        && pass "standalone port change names the port the tunnel is really on" \
-        || fail "standalone port change must warn that the tunnel is elsewhere"
-    stdout | grep -q -- "--listen-port 4500" \
-        && pass "the warning carries the command that fixes it" \
-        || fail "the warning must say how to fix it"
+    local apply
+    apply="$(grep 'server update' "$FAKE_CALLS" | tail -1)"
+    [ -n "$apply" ] \
+        && pass "the installer applies the deployment values itself" \
+        || fail "the installer must apply the deployment values; nothing else can"
+    printf '%s\n' "$apply" | grep -q -- "--listen-port 4500" \
+        && pass "the applied listen port is the one the firewall was built for" \
+        || fail "the apply must carry --listen-port 4500 (got: $apply)"
+    # The MTU is re-measured on every install, so it has to reach the
+    # database too, or an existing deployment keeps a size already shown
+    # to drop full-size packets.
+    printf '%s\n' "$apply" | grep -q -- "--mtu" \
+        && pass "the measured MTU reaches the database" \
+        || fail "the apply must carry the measured MTU (got: $apply)"
+    printf '%s\n' "$apply" | grep -q -- "--dns" \
+        && pass "the in-tunnel resolver list reaches the database" \
+        || fail "the apply must carry --dns (got: $apply)"
 }
 
-# When they agree, say nothing: a warning that fires on every ordinary
-# rerun is a warning nobody reads.
-test_matching_port_stays_quiet() {
+# The tunnel only picks up a new port or MTU when the interface is rebuilt.
+# A restart that fails leaves the listener where it was, so swallowing the
+# failure recreates the very outage the apply exists to prevent.
+test_changed_tunnel_parameters_restart_awg() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "port change: exit $rc"
+    grep -q "compose --env-file versions.lock restart awg" "$FAKE_CALLS" \
+        && pass "a changed tunnel parameter restarts awg" \
+        || fail "awg must be restarted when the rendered config changes"
+}
+
+test_unchanged_tunnel_parameters_leave_awg_alone() {
     fakes_reset
     os_release ubuntu 24.04 noble
     rc="$(run_install --awg-port 4500)"
     [ "$rc" = "0" ] || fail "first pass: exit $rc"
-    mkdir -p "$ROOT/config"
-    printf '[Interface]\nListenPort = 4500\nMTU = 1340\n' > "$ROOT/config/awg0.conf"
+    : > "$FAKE_CALLS"
     rc="$(run_install --awg-port 4500)"
     [ "$rc" = "0" ] || fail "second pass: exit $rc"
-    stdout | grep -q "listening on UDP" \
-        && fail "a matching port must not warn" \
-        || pass "a matching port stays quiet"
+    grep -q "restart awg" "$FAKE_CALLS" \
+        && fail "an unchanged config must not drop every connected client" \
+        || pass "an unchanged config leaves the tunnel up"
 }
 
-# --- rerun with changed deployment flags (amnezia-vpn-server-akuy) ------
+test_failed_apply_aborts_instead_of_reporting_success() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set COMPOSE_RUN_RC 1
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" != "0" ] \
+        && pass "a failed apply aborts the installer" \
+        || fail "a failed apply must not exit 0: the firewall is already on the new port"
+    stdout | grep -q "DONE" \
+        && fail "a failed apply must not print the DONE summary" \
+        || pass "a failed apply prints no DONE summary"
+}
+
+test_failed_awg_restart_aborts() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set RESTART_RC 1
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" != "0" ] \
+        && pass "a failed awg restart aborts the installer" \
+        || fail "a failed awg restart must not exit 0: the tunnel is down"
+}
+
+# A fresh install has no server row yet: `server init` creates it with
+# these very values, so there is nothing to reconcile and `server update`
+# would only fail.
+test_fresh_install_skips_the_apply() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    setstate UP_RC 1 "$FAKE_STATE"
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "fresh install: exit $rc"
+    grep -q "server update" "$FAKE_CALLS" \
+        && fail "a fresh install must not run server update; there is no server row" \
+        || pass "a fresh install leaves the values to server init"
+}
 
 # A rerun that changes --awg-port used to rebuild the firewall around the
 # new port while .env kept the old one. The deployment then disagreed with

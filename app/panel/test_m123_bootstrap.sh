@@ -987,22 +987,30 @@ test_rerun_survives_existing_server_row() {
         || fail "the rerun must continue past init"
 }
 
-# Every deployment value has to be applied on a rerun, not only on the
-# first install. Leaving the port to `server init` is what took a live
-# tunnel down: nftables was rebuilt around the new port while the tunnel
-# kept listening on the old one (amnezia-vpn-server-akuy).
-test_rerun_applies_port_and_endpoint() {
+# The wizard applies exactly one deployment value: the endpoint. Everything
+# else install.sh computes and applies itself, right after it starts the
+# stack. Two paths applying the same values is what let them drift, since
+# only one of the two ever ran on a standalone install
+# (amnezia-vpn-server-akuy).
+test_rerun_applies_the_endpoint_only() {
     fakes_reset
     setstate INIT_RC 1 "$FAKE_STATE"
     setstate INIT_STDERR "panel server init: db: server row (id=1) already exists" "$FAKE_STATE"
     rc="$(run_bootstrap --ip 2.26.93.192 --awg-port 4500 --vpn-domain vpn.example.com --key "$FAKE_HOME/.ssh/id_ed25519")"
     [ "$rc" = "0" ] || fail "rerun with a changed port: exit $rc"
-    grep -q "server update.*--listen-port .4500." "$FAKE_CALLS" \
-        && pass "the rerun moves the tunnel to the deployed port" \
-        || { fail "the rerun must pass --listen-port to server update"; grep "server update" "$FAKE_CALLS" | head -1 >&2; }
-    grep -q "server update.*--endpoint .vpn.example.com:4500." "$FAKE_CALLS" \
+    local apply
+    apply="$(grep 'server update' "$FAKE_CALLS" | tail -1)"
+    printf '%s\n' "$apply" | grep -q -- "--endpoint .vpn.example.com:4500." \
         && pass "the rerun rewrites the endpoint clients are issued" \
-        || fail "the rerun must pass the matching --endpoint"
+        || { fail "the rerun must pass the matching --endpoint"; printf '%s\n' "$apply" >&2; }
+    # The anti-duplication half: install.sh owns these now, and a second
+    # writer is exactly what this bead removed.
+    printf '%s\n' "$apply" | grep -q -- "--listen-port" \
+        && fail "the wizard must not apply the listen port; install.sh does" \
+        || pass "the wizard leaves the listen port to install.sh"
+    printf '%s\n' "$apply" | grep -q -- "--mtu\|MTU_ARG" \
+        && fail "the wizard must not apply the MTU; install.sh does" \
+        || pass "the wizard leaves the MTU to install.sh"
 }
 
 # If the settings cannot be applied, the firewall has already been rebuilt
@@ -1018,46 +1026,6 @@ test_apply_failure_aborts_instead_of_reporting_success() {
     stdout | grep -q "DONE" \
         && fail "a failed apply must not print the DONE summary" \
         || pass "a failed apply prints no DONE summary"
-}
-
-# The apply step exists to stop "tunnel down, success reported". A restart
-# that fails leaves the listener on the old port, so swallowing it would
-# recreate the very bug (found by code review, amnezia-vpn-server-akuy).
-test_failed_awg_restart_aborts() {
-    fakes_reset
-    setstate RESTART_RC 1 "$FAKE_STATE"
-    rc="$(run_bootstrap --ip 2.26.93.192 --awg-port 4500 --key "$FAKE_HOME/.ssh/id_ed25519")"
-    [ "$rc" != "0" ] \
-        && pass "a failed awg restart aborts the wizard" \
-        || fail "a failed awg restart must not exit 0"
-    stdout | grep -q "DONE" \
-        && fail "a failed awg restart must not print the DONE summary" \
-        || pass "a failed awg restart prints no DONE summary"
-}
-
-# The MTU is re-measured on every install, so it has to reach the database
-# on a rerun too; otherwise an existing deployment keeps a size that was
-# already shown to drop full-size packets.
-test_rerun_applies_the_measured_mtu() {
-    fakes_reset
-    setstate INIT_RC 1 "$FAKE_STATE"
-    setstate INIT_STDERR "panel server init: db: server row (id=1) already exists" "$FAKE_STATE"
-    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519")"
-    [ "$rc" = "0" ] || fail "rerun: exit $rc"
-    # The measured MTU reaches the database only if both halves ride in
-    # the same command: the prelude that reads TUNNEL_MTU out of .env, and
-    # the argument that hands it to `server update`. Asserting the argument
-    # alone is not enough — it still matches when the prelude is gone and
-    # $MTU_ARG expands to nothing on the server, which is precisely the
-    # "MTU never reached the database on a rerun" failure this guards.
-    local apply
-    apply="$(grep 'server update' "$FAKE_CALLS" | tail -1)"
-    printf '%s\n' "$apply" | grep -q 'TUNNEL_MTU' \
-        && pass "the rerun reads the measured MTU out of .env" \
-        || fail "the rerun must read TUNNEL_MTU from .env before applying"
-    printf '%s\n' "$apply" | grep -q 'server update.*MTU_ARG' \
-        && pass "the rerun carries the measured MTU into the database" \
-        || fail "the rerun must pass the measured MTU to server update"
 }
 
 # A genuine init failure must still stop the wizard.
@@ -1199,10 +1167,8 @@ test_rerun_survives_existing_server_row
 test_rerun_survives_existing_admin
 test_real_adduser_failure_still_aborts
 test_real_init_failure_still_aborts
-test_rerun_applies_port_and_endpoint
+test_rerun_applies_the_endpoint_only
 test_apply_failure_aborts_instead_of_reporting_success
-test_failed_awg_restart_aborts
-test_rerun_applies_the_measured_mtu
 }
 
 # Named tests, like the install harness: a suite that only runs whole is a

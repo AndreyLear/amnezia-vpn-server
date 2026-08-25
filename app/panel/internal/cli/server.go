@@ -305,6 +305,7 @@ func (a *app) cmdServerUpdate(args []string) int {
 	defer handle.Close()
 
 	updateErr := fault("server-update.apply")
+	var carriedEndpoint string
 	if updateErr == nil {
 		var dnsArg, paramsArg, endpointArg *string
 		if hasDNS {
@@ -320,7 +321,7 @@ func (a *app) cmdServerUpdate(args []string) int {
 		if hasPort {
 			portArg = &listenPort
 		}
-		updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg, portArg)
+		carriedEndpoint, updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg, portArg)
 	}
 	if updateErr == nil && hasMTU {
 		updateErr = db.SetSetting(handle, "mtu", strconv.FormatUint(uint64(mtu), 10))
@@ -346,6 +347,10 @@ func (a *app) cmdServerUpdate(args []string) int {
 	}
 	if hasPort {
 		message += "; listen_port = " + strconv.FormatInt(listenPort, 10)
+	}
+	if carriedEndpoint != "" {
+		// Not decoration: the operator changed one thing and two moved.
+		message += "; endpoint follows the listen port = " + carriedEndpoint
 	}
 	return a.ok(opServerUpdate, message)
 }
