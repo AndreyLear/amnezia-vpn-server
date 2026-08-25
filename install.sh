@@ -860,6 +860,36 @@ env_unset() { # env_unset KEY — remove one line, keep the rest
     chmod 0600 "$file"
 }
 
+# The deployment's memory is read and written in one shape, five values
+# over: recall what this run did not set, remember what it did, forget
+# what it cleared. Spelling that out per value is how the two halves
+# drifted apart before — the panel mode was read back nowhere while the
+# port was (amnezia-vpn-server-35g3).
+#
+# env_recall prints the stored value and fails instead of dying: die_op
+# inside a command substitution would only kill the subshell, and the
+# caller would carry on with an empty value. The caller dies, so the
+# message can name the value it was reading.
+env_recall() { # env_recall KEY VALIDATOR — stored value, refusing a corrupt one
+    local value
+    value="$(env_read "$1")"
+    [ -n "$value" ] || return 0
+    "$2" "$value" >/dev/null 2>&1 || return 1
+    printf '%s\n' "$value"
+}
+
+env_remember() { # env_remember KEY VALUE — store it when it differs, and say so
+    [ "$(env_read "$1")" != "$2" ] || return 0
+    env_set "$1" "$2"
+    log "$1 changed to $2 in $ENV_FILE"
+}
+
+env_forget() { # env_forget KEY MESSAGE — drop a value the operator cleared
+    [ -n "$(env_read "$1")" ] || return 0
+    env_unset "$1"
+    log "$2"
+}
+
 if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
     log "$ENV_FILE already exists under $ROOT_DIR: keeping the values this run does not set"
     # The file is the deployment's memory, and it works both ways.
@@ -872,20 +902,18 @@ if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
     # the tunnel went down while the installer reported success
     # (amnezia-vpn-server-akuy).
     if [ "$AWG_PORT_SET" = "0" ]; then
-        AWG_PORT="$(env_read AWG_PORT)"
+        AWG_PORT="$(env_recall AWG_PORT validate_port)" \
+            || die_op "AWG_PORT in $(basename "$ENV_FILE") is out of range"
         [ -n "$AWG_PORT" ] || die_op "AWG_PORT unset in $(basename "$ENV_FILE") and not given as an argument"
-        validate_port "$AWG_PORT" || die_op "AWG_PORT in $(basename "$ENV_FILE") is out of range"
     fi
     if [ "$VPN_SUBNET_SET" = "0" ]; then
-        VPN_SUBNET="$(env_read VPN_SUBNET)"
+        VPN_SUBNET="$(env_recall VPN_SUBNET validate_cidr)" \
+            || die_op "VPN_SUBNET in $(basename "$ENV_FILE") is not a valid CIDR"
         [ -n "$VPN_SUBNET" ] || VPN_SUBNET=10.8.0.0/24
-        validate_cidr "$VPN_SUBNET" || die_op "VPN_SUBNET in $(basename "$ENV_FILE") is not a valid CIDR"
     fi
     if [ "$CLIENT_DOMAIN_SET" = "0" ] && [ -z "$CLIENT_DOMAIN" ]; then
-        CLIENT_DOMAIN="$(env_read CLIENT_DOMAIN)"
-        if [ -n "$CLIENT_DOMAIN" ]; then
-            validate_fqdn "$CLIENT_DOMAIN" || die_op "CLIENT_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
-        fi
+        CLIENT_DOMAIN="$(env_recall CLIENT_DOMAIN validate_fqdn)" \
+            || die_op "CLIENT_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
     fi
     # How the panel is exposed is a deployment value like the rest. It used
     # to be the exception: omitting --domain meant "no domain", so a rerun
@@ -895,38 +923,29 @@ if [ -f "$ROOT_DIR/$ENV_FILE" ]; then
     # could reach. Now it is read back, and only an explicit empty value
     # leaves the mode.
     if [ "$DOMAIN_SET" = "0" ] && [ -z "$DOMAIN" ]; then
-        DOMAIN="$(env_read PANEL_DOMAIN)"
-        if [ -n "$DOMAIN" ]; then
-            validate_fqdn "$DOMAIN" || die_op "PANEL_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
-        fi
+        DOMAIN="$(env_recall PANEL_DOMAIN validate_fqdn)" \
+            || die_op "PANEL_DOMAIN in $(basename "$ENV_FILE") is not a valid FQDN"
     fi
     if [ "$PANEL_PORT_SET" = "0" ] && [ -z "$PANEL_PORT" ]; then
-        PANEL_PORT="$(env_read PANEL_PORT)"
-        if [ -n "$PANEL_PORT" ]; then
-            validate_port "$PANEL_PORT" || die_op "PANEL_PORT in $(basename "$ENV_FILE") is not a valid port"
-        fi
+        PANEL_PORT="$(env_recall PANEL_PORT validate_port)" \
+            || die_op "PANEL_PORT in $(basename "$ENV_FILE") is not a valid port"
     fi
     # The other direction: what this run set explicitly becomes the
     # deployment's new memory.
-    if [ "$AWG_PORT_SET" = "1" ] && [ "$(env_read AWG_PORT)" != "$AWG_PORT" ]; then
-        env_set AWG_PORT "$AWG_PORT"
-        log "AWG_PORT changed to $AWG_PORT in $ENV_FILE"
+    if [ "$AWG_PORT_SET" = "1" ]; then
+        env_remember AWG_PORT "$AWG_PORT"
     fi
-    if [ "$VPN_SUBNET_SET" = "1" ] && [ "$(env_read VPN_SUBNET)" != "$VPN_SUBNET" ]; then
-        env_set VPN_SUBNET "$VPN_SUBNET"
-        log "VPN_SUBNET changed to $VPN_SUBNET in $ENV_FILE"
+    if [ "$VPN_SUBNET_SET" = "1" ]; then
+        env_remember VPN_SUBNET "$VPN_SUBNET"
     fi
-    if [ "$CLIENT_DOMAIN_SET" = "1" ] && [ "$(env_read CLIENT_DOMAIN)" != "$CLIENT_DOMAIN" ]; then
-        env_set CLIENT_DOMAIN "$CLIENT_DOMAIN"
-        log "CLIENT_DOMAIN changed to $CLIENT_DOMAIN in $ENV_FILE"
+    if [ "$CLIENT_DOMAIN_SET" = "1" ]; then
+        env_remember CLIENT_DOMAIN "$CLIENT_DOMAIN"
     fi
-    if [ "$DOMAIN_SET" = "1" ] && [ -z "$DOMAIN" ] && [ -n "$(env_read PANEL_DOMAIN)" ]; then
-        env_unset PANEL_DOMAIN
-        log "panel domain cleared in $ENV_FILE: the panel returns to loopback"
+    if [ "$DOMAIN_SET" = "1" ] && [ -z "$DOMAIN" ]; then
+        env_forget PANEL_DOMAIN "panel domain cleared in $ENV_FILE: the panel returns to loopback"
     fi
-    if [ "$PANEL_PORT_SET" = "1" ] && [ -z "$PANEL_PORT" ] && [ -n "$(env_read PANEL_PORT)" ]; then
-        env_unset PANEL_PORT
-        log "panel port cleared in $ENV_FILE: the panel returns to loopback"
+    if [ "$PANEL_PORT_SET" = "1" ] && [ -z "$PANEL_PORT" ]; then
+        env_forget PANEL_PORT "panel port cleared in $ENV_FILE: the panel returns to loopback"
     fi
 else
     cat > "$ROOT_DIR/$ENV_FILE" <<EOF

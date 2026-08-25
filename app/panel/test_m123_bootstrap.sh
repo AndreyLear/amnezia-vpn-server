@@ -53,7 +53,6 @@ INSTALL_RC=0
 INIT_RC=0
 INIT_STDERR=
 APPLY_RC=0
-RESTART_RC=0
 CURL_SOURCE_RC=0
 UP_RC=0
 ADDUSER_RC=0
@@ -124,22 +123,13 @@ case "$cmd" in
         exit "${INIT_RC:-0}"
         ;;
     *'server update'*)
-        # One remote command carries both steps: the update, and then a
-        # restart only when the rendered config changed. Model that order,
-        # or a knob for the second step masks the first.
+        # The wizard applies the endpoint and nothing else; restarting awg
+        # moved to install.sh with the values that need it
+        # (amnezia-vpn-server-akuy).
         if [ "${APPLY_RC:-0}" != "0" ]; then
             printf '%s\n' "panel server update: db: simulated failure" >&2
             exit "${APPLY_RC}"
         fi
-        case "$cmd" in
-            *'restart awg'*)
-                if [ "${RESTART_RC:-0}" != "0" ]; then
-                    printf '%s\n' "restarting awg" 
-                    printf '%s\n' "Error response from daemon: simulated" >&2
-                    exit "${RESTART_RC}"
-                fi
-                ;;
-        esac
         exit 0
         ;;
     *'up -d'*)

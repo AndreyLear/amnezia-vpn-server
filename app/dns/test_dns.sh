@@ -161,7 +161,7 @@ check "starts without a panel domain" lacks 'address=/' "$CONF"
 # The flag exists because something else already owns port 53. Writing it
 # into .env is not enough: the container has to actually leave the port
 # alone, and it must not exit either, or restart:unless-stopped spins it.
-OUT="$(render TUNNEL_DNS_DISABLED=1 PANEL_DOMAIN=panel.example.com FAKE_SLEEP=1 2>&1)"
+OUT="$(render TUNNEL_DNS_DISABLED=1 PANEL_DOMAIN=panel.example.com 2>&1)"
 check "disabled: says so plainly" grep -q "not binding port 53" <<<"$OUT"
 check "disabled: renders no listen-address" lacks 'listen-address' "$OUT"
 check "disabled: renders no upstreams" lacks 'server=' "$OUT"
