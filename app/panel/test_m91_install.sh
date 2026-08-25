@@ -2010,6 +2010,10 @@ test_matching_port_stays_quiet
 test_bare_rerun_keeps_the_panel_domain
 test_bare_rerun_keeps_the_panel_port
 test_explicit_empty_domain_returns_to_loopback
+    test_panel_port_80_rejected_on_a_remembered_domain
+    test_tls_regen_rejected_on_a_remembered_domain
+    test_tls_regen_uses_the_remembered_panel_port
+    test_tls_regen_without_any_panel_port_is_refused
 test_rerun_applies_a_changed_awg_port_to_env
 test_rerun_without_the_flag_keeps_the_deployed_port
 test_rerun_applies_a_changed_subnet_and_client_domain
@@ -2141,6 +2145,66 @@ test_bare_rerun_keeps_the_panel_port() {
 
 # Leaving a mode stays possible, but has to be said out loud — and then it
 # must be complete, site included.
+# Since the panel mode became a deployment value, a rerun that does not
+# pass --domain still runs with one: it comes back from .env. The checks
+# that judge the flags against each other therefore have to see the
+# remembered values, or the deployment can be talked into a state that
+# breaks its own certificate renewal.
+test_panel_port_80_rejected_on_a_remembered_domain() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "domain first pass: exit $rc"
+    rc="$(run_install --panel-port 80)"
+    [ "$rc" != "0" ] \
+        && pass "panel port 80 is refused while a domain is remembered" \
+        || fail "panel port 80 took TCP 80 away from ACME renewal for the remembered domain"
+    grep -q "ACME HTTP-01" "$TMP_TEST/err" \
+        && pass "the refusal names the renewal it would have broken" \
+        || fail "the refusal must explain that ACME HTTP-01 needs TCP 80"
+}
+
+test_tls_regen_rejected_on_a_remembered_domain() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "domain first pass: exit $rc"
+    rc="$(run_install --panel-tls-regen)"
+    [ "$rc" != "0" ] \
+        && pass "a self-signed regeneration is refused while a domain is remembered" \
+        || fail "--panel-tls-regen must not overwrite a Let's Encrypt deployment"
+    # Refused for the right reason: the old code stopped on the missing
+    # --panel-port and never noticed the domain at all, so the exit code
+    # alone does not tell the two apart.
+    grep -q "panel.example.com" "$TMP_TEST/err" \
+        && pass "the refusal names the domain it protected" \
+        || fail "the refusal must name the domain, not the missing port (got: $(stderr | tail -1))"
+}
+
+# The other direction of the same rule: the port is remembered too, so
+# requiring the operator to repeat it would be asking for a value the
+# deployment already knows.
+test_tls_regen_uses_the_remembered_panel_port() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "panel-port first pass: exit $rc"
+    rc="$(run_install --panel-tls-regen)"
+    [ "$rc" = "0" ] \
+        && pass "--panel-tls-regen works off the remembered panel port" \
+        || fail "--panel-tls-regen: exit $rc (stderr: $(stderr | tail -1))"
+}
+
+# A deployment with no panel mode at all still has nothing to regenerate.
+test_tls_regen_without_any_panel_port_is_refused() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --panel-tls-regen)"
+    [ "$rc" != "0" ] \
+        && pass "--panel-tls-regen is refused on a loopback-only deployment" \
+        || fail "--panel-tls-regen must not pretend to regenerate a certificate that does not exist"
+}
+
 test_explicit_empty_domain_returns_to_loopback() {
     fakes_reset
     os_release ubuntu 24.04 noble

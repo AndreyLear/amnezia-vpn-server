@@ -368,15 +368,13 @@ fi
 if [ "$PANEL_PORT_SET" = "1" ] && [ -n "$PANEL_PORT" ]; then
     validate_port "$PANEL_PORT" || die_usage "--panel-port must be an integer in 1..65535 (got: $PANEL_PORT)"
 fi
-if [ "$PANEL_TLS_REGEN" = "1" ] && [ "$PANEL_PORT_SET" = "0" ]; then
-    die_usage "--panel-tls-regen requires --panel-port"
-fi
-if [ "$PANEL_TLS_REGEN" = "1" ] && [ -n "$DOMAIN" ]; then
-    die_usage "--panel-tls-regen cannot be used with --panel-domain/--domain (Let's Encrypt, not a self-signed certificate)"
-fi
-if [ -n "$DOMAIN" ] && [ "$PANEL_PORT_SET" = "1" ] && [ "$PANEL_PORT" = "80" ]; then
-    die_usage "--panel-port 80 conflicts with ACME HTTP-01 (TCP 80). Use 443 (default) or another port such as 8443"
-fi
+# How the flags combine cannot be judged here: since the panel mode became
+# a deployment value, DOMAIN and PANEL_PORT are still empty at this point on
+# any rerun that did not pass them, and their real values only arrive from
+# .env below. Checking them here let `--panel-port 80` through on a
+# deployment whose domain was remembered, taking TCP 80 away from ACME
+# HTTP-01 renewal. The combination checks therefore run once the effective
+# mode is known — see check_panel_mode_conflicts below.
 
 # --- root requirement (skipped in test mode only) ---------------------
 
@@ -922,6 +920,27 @@ EOF
     chmod 0600 "$ROOT_DIR/$ENV_FILE"
     log "$ENV_FILE created with AWG_PORT=${AWG_PORT}, VPN_SUBNET=${VPN_SUBNET} (0600)"
 fi
+
+# The effective mode is known only now, so this is where the flags are
+# judged against each other. Values are read, not flags: a domain the
+# deployment remembers conflicts with TCP 80 exactly as a domain typed on
+# this command line does.
+check_panel_mode_conflicts() {
+    # The domain comes first: on a Let's Encrypt deployment there is no
+    # panel port either, and reporting the missing port would send the
+    # operator to add one instead of telling them what actually stands in
+    # the way.
+    if [ "$PANEL_TLS_REGEN" = "1" ] && [ -n "$DOMAIN" ]; then
+        die_usage "--panel-tls-regen cannot be used with a panel domain ($DOMAIN serves a Let's Encrypt certificate, not a self-signed one). Leave the domain with --domain \"\" first"
+    fi
+    if [ "$PANEL_TLS_REGEN" = "1" ] && [ -z "$PANEL_PORT" ]; then
+        die_usage "--panel-tls-regen needs a panel port; this deployment has none. Pass --panel-port"
+    fi
+    if [ -n "$DOMAIN" ] && [ "$PANEL_PORT" = "80" ]; then
+        die_usage "panel port 80 conflicts with ACME HTTP-01 (TCP 80) for $DOMAIN. Use 443 (default) or another port such as 8443"
+    fi
+}
+check_panel_mode_conflicts
 
 # The effective panel exposure mode is the deployment's memory from here
 # on: nginx, the firewall, the Secure cookie and the in-tunnel resolver all
