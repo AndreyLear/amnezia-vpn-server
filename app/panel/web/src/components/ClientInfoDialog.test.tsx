@@ -44,6 +44,21 @@ describe("ClientInfoDialog", () => {
     expect(document.querySelector('[data-slot="badge"]')).toBeNull();
   });
 
+  // The counters arrive from the server's point of view: rx is what it
+  // received from the client (the client's upload), tx is what it sent
+  // (the client's download). The arrows here describe the client, so ↓
+  // must carry tx (amnezia-vpn-server-9l30).
+  it("points the download arrow at the bytes the server sent", () => {
+    render(
+      <ClientInfoDialog
+        client={{ ...client, rx_bytes: 1024 ** 3, tx_bytes: 5 * 1024 ** 3 }}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("↓ 5,0 Гб · ↑ 1,0 Гб")).toBeInTheDocument();
+  });
+
   it("keeps handshake as a timestamp in Russian writing", () => {
     render(
       <ClientInfoDialog

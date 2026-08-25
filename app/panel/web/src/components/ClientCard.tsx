@@ -173,13 +173,18 @@ export function ClientCard({
               </TooltipTrigger>
               <TooltipContent>Последний handshake</TooltipContent>
             </Tooltip>
+            {/* rx_bytes и tx_bytes приходят из дампа wg с точки зрения
+                СЕРВЕРА: rx — принято сервером, то есть отдача клиента;
+                tx — отправлено сервером, то есть его скачивание. Подписи
+                здесь про клиента, поэтому стрелки смотрят наоборот
+                (amnezia-vpn-server-9l30). */}
             {!isSmUp ? (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="inline-flex items-center gap-[0.25rem] whitespace-nowrap">
                     <ArrowUpDownIcon className="size-4" aria-hidden />
                     <span className="tabular-nums">
-                      {formatBytes(client.tx_bytes)} / {formatBytes(client.rx_bytes)}
+                      {formatBytes(client.rx_bytes)} / {formatBytes(client.tx_bytes)}
                     </span>
                   </span>
                 </TooltipTrigger>
@@ -191,7 +196,7 @@ export function ClientCard({
                   <TooltipTrigger asChild>
                     <span className="inline-flex items-center gap-[0.25rem]">
                       <ArrowDownIcon className="size-4" aria-hidden />
-                      <span className="tabular-nums">{formatBytes(client.rx_bytes)}</span>
+                      <span className="tabular-nums">{formatBytes(client.tx_bytes)}</span>
                     </span>
                   </TooltipTrigger>
                   <TooltipContent>Входящий трафик</TooltipContent>
@@ -200,7 +205,7 @@ export function ClientCard({
                   <TooltipTrigger asChild>
                     <span className="inline-flex items-center gap-[0.25rem]">
                       <ArrowUpIcon className="size-4" aria-hidden />
-                      <span className="tabular-nums">{formatBytes(client.tx_bytes)}</span>
+                      <span className="tabular-nums">{formatBytes(client.rx_bytes)}</span>
                     </span>
                   </TooltipTrigger>
                   <TooltipContent>Исходящий трафик</TooltipContent>

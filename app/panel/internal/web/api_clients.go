@@ -19,8 +19,13 @@ type clientJSON struct {
 	Enabled          bool       `json:"enabled"`
 	Online           bool       `json:"online"`
 	LastHandshakeUTC *time.Time `json:"last_handshake_utc"`
-	RxBytes          uint64     `json:"rx_bytes"`
-	TxBytes          uint64     `json:"tx_bytes"`
+	// Straight from the wg dump, in the server's perspective: RxBytes is
+	// what the server received from this peer (the client's upload) and
+	// TxBytes what it sent (the client's download). The names are kept
+	// because they mirror the dump; a client-facing view must swap them
+	// (amnezia-vpn-server-9l30).
+	RxBytes uint64 `json:"rx_bytes"`
+	TxBytes uint64 `json:"tx_bytes"`
 }
 
 type clientCreateReq struct {
