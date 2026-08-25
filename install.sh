@@ -64,7 +64,10 @@
 #                   opens tcp 80 + tcp PORT). Without a panel domain
 #                   (T-124): self-signed https://<server-ip>:PORT.
 #                   Omitted with a panel domain: TCP 443 as today
-#                   (UDP AWG 443 can coexist).
+#                   (UDP AWG 443 can coexist). Both this and the panel
+#                   hostname are deployment values: omitted on a rerun
+#                   they are read back from .env, and only an explicit
+#                   empty value leaves the mode (amnezia-vpn-server-35g3).
 #   --build            compile the images here instead of pulling them
 #   --panel-tls-regen  with --panel-port and no panel domain: force a
 #                   fresh self-signed certificate.
@@ -159,18 +162,30 @@ Options:
                     IPv4 CIDR with prefix 1..32 (default: 10.8.0.0/24)
   --panel-domain FQDN  panel hostname (Let's Encrypt). Alias: --domain.
                     HTTP-01 on TCP 80. TLS on 443 unless --panel-port
-                    is set. Without it the panel stays loopback-only
-                    (SSH tunnel hint) unless --panel-port is used.
+                    is set. Omitting the flag on a rerun KEEPS the
+                    hostname the deployment already runs; to leave
+                    domain mode pass an explicit empty value,
+                    --panel-domain "".
   --domain FQDN     alias of --panel-domain
   --vpn-domain FQDN client endpoint host (<fqdn>:<awg-port>). Alias:
                     --client-domain. Omitted: public IP. The panel
                     hostname is never copied onto clients. DNS is
                     verified before the install proceeds.
   --client-domain FQDN  alias of --vpn-domain
-  --panel-port PORT nginx TLS listen port. With --panel-domain:
+  --panel-port PORT nginx TLS listen port. With a panel domain:
                     https://PANEL_DOMAIN:PORT (nftables: tcp 80 + tcp
                     PORT). Without a panel domain: self-signed
-                    https://<server-ip>:PORT (T-124).
+                    https://<server-ip>:PORT (T-124). Remembered like
+                    the hostname, so a port set once also applies to a
+                    domain added later; --panel-port "" returns the
+                    panel to 443 with a domain, or to loopback without
+                    one.
+
+                    How the panel is exposed is a deployment value, not
+                    a per-run choice: a rerun for some unrelated reason
+                    must not take the panel offline by omission. Both
+                    flags therefore read back from .env when left out,
+                    and only an explicit empty value leaves a mode.
   --no-tunnel-dns
                 stand the in-tunnel resolver down: it binds nothing and
                 leaves port 53 to whatever else this host runs there.
@@ -190,6 +205,8 @@ Examples:
   ./install.sh --panel-domain panel.example.com --panel-port 8443 --vpn-domain example.com
   ./install.sh --panel-port 8443
   ./install.sh --domain panel.example.com --client-domain vpn.example.com
+  ./install.sh --panel-domain ""     # leave domain mode, back to loopback
+  ./install.sh --panel-port ""       # with a domain: back to TLS on 443
 
 Installs only supported OSes (Debian 12, Ubuntu 22.04, Ubuntu 24.04),
 Docker Engine + Compose plugin (>= 2.24.2) from the official Docker Inc.

@@ -769,6 +769,19 @@ test_help_examples() {
         || fail "install --help: --panel-domain missing"
     grep -q -- "--vpn-domain" "$TMP_TEST/help.out" && pass "install --help: --vpn-domain" \
         || fail "install --help: --vpn-domain missing"
+    # The panel mode is the one place where omitting a flag and passing it
+    # empty mean opposite things, and the way out of a mode exists only as
+    # an empty value. Help that does not say so leaves the operator with
+    # no way to find it (amnezia-vpn-server-8eo1).
+    grep -q -- '--panel-domain ""' "$TMP_TEST/help.out" \
+        && pass "install --help: shows how to leave the panel domain" \
+        || fail "install --help: the empty value that leaves domain mode is undocumented"
+    grep -q -- '--panel-port ""' "$TMP_TEST/help.out" \
+        && pass "install --help: shows how to leave the panel port" \
+        || fail "install --help: the empty value that leaves port mode is undocumented"
+    grep -qi "read back from .env\|KEEPS the" "$TMP_TEST/help.out" \
+        && pass "install --help: says an omitted mode flag keeps the deployment" \
+        || fail "install --help: still implies that omitting the flag drops the mode"
 }
 
 test_panel_loopback_and_no_sock() {
