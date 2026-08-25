@@ -16,6 +16,8 @@
 #     is inherited from the host (no-resolv).
 #
 # Runs on plain bash (macOS or Linux); no root, no Docker, no network.
+# The entrypoint itself runs under a shell with the image's semantics,
+# not the host's /bin/sh — see pick_entrypoint_shell below.
 set -u
 
 cd "$(dirname "$0")"
@@ -73,9 +75,46 @@ exit 0
 FAKE
 chmod +x "${TMP}/bin/sleep"
 
+# The entrypoint is #!/bin/sh, but the shell that actually runs it is
+# Alpine's busybox ash — never the host's /bin/sh. On Debian and Ubuntu
+# /bin/sh is dash, which rejects the entrypoint's `set -o pipefail` and
+# failed this whole harness on a script the image runs fine.
+#
+# busybox cannot be the runner either: distributions build it as a
+# standalone shell, so its built-in `sleep` applet wins over the fake on
+# PATH and the standing-down test idles forever. bash honours the fakes
+# and is a superset of everything the entrypoint uses, so bash runs the
+# script — and busybox, where the host has it, still parses it, which is
+# what keeps the assertions honest about ash.
+pick_entrypoint_shell() {
+    local candidate
+    if candidate="$(command -v bash 2>/dev/null)" &&
+       "${candidate}" -c 'set -o pipefail' 2>/dev/null; then
+        ENTRYPOINT_SHELL="${candidate}"
+        return
+    fi
+    echo "no shell that supports 'set -o pipefail' (need bash)" >&2
+    exit 1
+}
+pick_entrypoint_shell
+
+# ---- 0. the image's shell accepts the entrypoint at all -----------------
+# Cheap fidelity: parsing and option support are exactly what running it
+# under the host's /bin/sh got wrong, and neither needs the script to run.
+BUSYBOX="$(command -v busybox 2>/dev/null || true)"
+if [ -n "${BUSYBOX}" ]; then
+    check "the image's shell parses the entrypoint" \
+        "${BUSYBOX}" sh -n ./entrypoint.sh
+    check "the image's shell supports the entrypoint's shell options" \
+        "${BUSYBOX}" sh -c 'set -o pipefail'
+else
+    echo "SKIP: busybox absent, ash fidelity unchecked on this host"
+fi
+
 # render [VAR=VALUE ...]: the configuration the entrypoint would run with.
 render() {
-    env -i PATH="${TMP}/bin:/usr/bin:/bin" "$@" sh ./entrypoint.sh 2>&1
+    env -i PATH="${TMP}/bin:/usr/bin:/bin" "$@" \
+        "${ENTRYPOINT_SHELL}" ./entrypoint.sh 2>&1
 }
 
 has() { printf '%s\n' "$2" | grep -qx -- "$1"; }
