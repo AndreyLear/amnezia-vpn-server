@@ -67,13 +67,17 @@ CHANGELOG.md
 .claude/
 .codex/
 .cursor/
-# Local CI config stays local, with one deliberate exception: the release
-# workflow has to live in the repository for GitHub to run it, and without
-# it there are no published images to pull.
+# Local CI config stays local, with two deliberate exceptions: GitHub only
+# runs what lives in the repository, and both of these have to run there.
+# The release workflow, or there are no published images to pull — and the
+# test workflow, because the harnesses have to run on Linux. A harness that
+# only breaks where /bin/sh is dash stays green forever on a macOS laptop,
+# which is exactly how one of them shipped broken.
 .github/*
 !.github/workflows/
 .github/workflows/*
 !.github/workflows/release.yml
+!.github/workflows/ci.yml
 AGENTS.md
 CLAUDE.md
 
