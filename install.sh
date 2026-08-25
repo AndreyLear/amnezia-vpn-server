@@ -97,6 +97,9 @@
 #   AMNEZIA_INSTALL_MODULES_DIR=DIR    modules-load dir for the
 #                                      amneziawg auto-load entry
 #                                      (default /etc/modules-load.d)
+#   AMNEZIA_INSTALL_NGINX_SITES_DIR=DIR  nginx sites-enabled dir where the
+#                                      panel site is linked in and out
+#                                      (default /etc/nginx/sites-enabled)
 #   AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1  run the AmneziaWG client-stack
 #                                      install even when already present
 #                                      (testability)
@@ -1551,6 +1554,11 @@ log "weekly docker-prune timer enabled (ExecStart=$ROOT_DIR/docker-prune.sh)"
 
 NGINX_CONF_DIR="$ROOT_DIR/nginx"
 NGINX_SITE="amnezia-panel"
+# Linking the site in and out is a host write like any other, so it goes
+# through a hook: without one the harness cannot see whether leaving a
+# panel mode actually retires the site, which is the half of that job that
+# stops nginx serving a hostname whose ports have just been closed.
+NGINX_SITES_DIR="${AMNEZIA_INSTALL_NGINX_SITES_DIR:-/etc/nginx/sites-enabled}"
 ACME_ROOT="${AMNEZIA_INSTALL_ACME_ROOT:-/var/www/certbot}"
 
 render_nginx_conf() { # render_nginx_conf DOMAIN PHASE [TLS_PORT]
@@ -1617,8 +1625,8 @@ domain_setup() {
     chmod 0750 "$NGINX_CONF_DIR"
     render_nginx_conf "$DOMAIN" "phase1" "$tls_port" > "$NGINX_CONF_DIR/panel.conf"
     chmod 0644 "$NGINX_CONF_DIR/panel.conf"
-    ln -sf "$NGINX_CONF_DIR/panel.conf" "/etc/nginx/sites-enabled/$NGINX_SITE"
-    rm -f /etc/nginx/sites-enabled/default
+    ln -sf "$NGINX_CONF_DIR/panel.conf" "$NGINX_SITES_DIR/$NGINX_SITE"
+    rm -f "$NGINX_SITES_DIR/default"
     cmd nginx -t >/dev/null 2>&1 || die_op "nginx configuration test failed"
     cmd systemctl enable nginx >/dev/null 2>&1 || die_op "systemctl enable nginx failed"
     if ! cmd systemctl is-active --quiet nginx; then
@@ -1731,8 +1739,8 @@ panel_port_setup() {
     chmod 0750 "$NGINX_CONF_DIR"
     render_nginx_ip_conf "$PANEL_PORT" "$PANEL_TLS_CERT" "$PANEL_TLS_KEY" > "$NGINX_CONF_DIR/panel.conf"
     chmod 0644 "$NGINX_CONF_DIR/panel.conf"
-    ln -sf "$NGINX_CONF_DIR/panel.conf" "/etc/nginx/sites-enabled/$NGINX_SITE"
-    rm -f /etc/nginx/sites-enabled/default
+    ln -sf "$NGINX_CONF_DIR/panel.conf" "$NGINX_SITES_DIR/$NGINX_SITE"
+    rm -f "$NGINX_SITES_DIR/default"
     cmd nginx -t >/dev/null 2>&1 || die_op "nginx configuration test failed"
     cmd systemctl enable nginx >/dev/null 2>&1 || die_op "systemctl enable nginx failed"
     if ! cmd systemctl is-active --quiet nginx; then
@@ -1757,10 +1765,15 @@ panel_port_setup
 panel_loopback_setup() {
     [ -z "$DOMAIN" ] || return 0
     [ -z "$PANEL_PORT" ] || return 0
-    [ -e "/etc/nginx/sites-enabled/$NGINX_SITE" ] || [ -f "$NGINX_CONF_DIR/panel.conf" ] || return 0
+    # -L before -e: once panel.conf is gone the link is dangling, and -e
+    # follows the link, so -e alone reports "nothing to do" on exactly the
+    # leftover this function exists to clear. nginx refuses to start on a
+    # broken symlink in sites-enabled, so leaving one is not harmless.
+    [ -L "$NGINX_SITES_DIR/$NGINX_SITE" ] || [ -e "$NGINX_SITES_DIR/$NGINX_SITE" ] \
+        || [ -f "$NGINX_CONF_DIR/panel.conf" ] || return 0
 
     log "panel returns to loopback: retiring the nginx site (certificates are kept)"
-    rm -f "/etc/nginx/sites-enabled/$NGINX_SITE"
+    rm -f "$NGINX_SITES_DIR/$NGINX_SITE"
     rm -f "$NGINX_CONF_DIR/panel.conf"
     if command -v nginx >/dev/null 2>&1 && cmd nginx -t >/dev/null 2>&1; then
         cmd systemctl reload nginx >/dev/null 2>&1 \

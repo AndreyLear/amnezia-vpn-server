@@ -40,7 +40,9 @@ fakes_reset() {
     : > "$FAKE_CALLS"
     mkdir -p "$FAKE_FS"
     rm -rf "$ROOT" "$SYSCTL_TEST" "$MODULES_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
-        "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST"
+        "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST" \
+        "$NGINX_SITES_TEST"
+    mkdir -p "$NGINX_SITES_TEST"
     rm -f "$NFTABLES_CONF_TEST"
     cat > "$FAKE_STATE" <<EOF
 COMPOSE_VERSION=${1:-2.30.1}
@@ -505,6 +507,7 @@ SOURCES_TEST="$TMP_TEST/apt/sources.list.d"
 NFTABLES_DIR_TEST="$TMP_TEST/nftables.d"
 NFTABLES_CONF_TEST="$TMP_TEST/nftables.conf"
 SYSTEMD_DIR_TEST="$TMP_TEST/systemd"
+NGINX_SITES_TEST="$TMP_TEST/nginx-sites-enabled"
 
 run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_TEST=1 \
@@ -518,6 +521,7 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_NFTABLES_DIR="$NFTABLES_DIR_TEST" \
     AMNEZIA_INSTALL_NFTABLES_CONF="$NFTABLES_CONF_TEST" \
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
+    AMNEZIA_INSTALL_NGINX_SITES_DIR="$NGINX_SITES_TEST" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
     PATH="$FAKE_DIR:$PATH" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
@@ -2010,6 +2014,7 @@ test_matching_port_stays_quiet
 test_bare_rerun_keeps_the_panel_domain
 test_bare_rerun_keeps_the_panel_port
 test_explicit_empty_domain_returns_to_loopback
+    test_domain_mode_links_the_site_into_sites_enabled
     test_panel_port_80_rejected_on_a_remembered_domain
     test_tls_regen_rejected_on_a_remembered_domain
     test_tls_regen_uses_the_remembered_panel_port
@@ -2231,6 +2236,31 @@ test_explicit_empty_domain_returns_to_loopback() {
         fail "explicit clear left the nginx site serving a hostname nothing can reach"
     else
         pass "explicit clear retires the nginx site"
+    fi
+    # Retiring the site means unlinking it too: nginx serves what is in
+    # sites-enabled, so a leftover symlink keeps the hostname answering on
+    # ports this run has just closed.
+    #
+    # -L, not -e: panel.conf is gone by now, so -e follows a dangling link
+    # into nothing and would report success with the link still in place.
+    if [ -L "$NGINX_SITES_TEST/amnezia-panel" ] || [ -e "$NGINX_SITES_TEST/amnezia-panel" ]; then
+        fail "explicit clear left the site linked into sites-enabled"
+    else
+        pass "explicit clear unlinks the site from sites-enabled"
+    fi
+}
+
+# The other half of the same hook: the link has to be made in the first
+# place, or nothing the installer renders is ever served.
+test_domain_mode_links_the_site_into_sites_enabled() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "domain pass: exit $rc"
+    if [ -L "$NGINX_SITES_TEST/amnezia-panel" ]; then
+        pass "domain mode links the panel site into sites-enabled"
+    else
+        fail "domain mode left the rendered site unlinked, so nginx serves nothing"
     fi
 }
 
