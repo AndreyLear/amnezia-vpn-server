@@ -943,6 +943,37 @@ test_install_progress_is_visible() {
     assert_no_ansi "progress"
 }
 
+# The nine progress steps are a summary of a few hundred installer lines.
+# Deleting the rest on the way out left "what did the installer actually
+# decide" answerable only by rerunning the whole thing against a live
+# server (amnezia-vpn-server-exiq).
+test_install_log_survives_the_run() {
+    fakes_reset
+    rm -f "$FAKE_HOME/.ssh/id_ed25519" "$FAKE_HOME/.ssh/id_rsa"
+    SSH_TEST_PW='s3cret-NOT-on-argv'
+    export SSH_TEST_PW
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" SSH_TEST_PW="$SSH_TEST_PW" \
+        TMPDIR="$TMP_TEST" \
+        bash "$BOOTSTRAP_SH" --ip 2.26.93.192 --password-env SSH_TEST_PW \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+        echo $?
+    )"
+    unset SSH_TEST_PW
+    [ "$rc" = "0" ] || { fail "install log: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    local kept
+    kept="$(sed -n 's/^bootstrap: installer log kept at \(.*\) (.*$/\1/p' "$TMP_TEST/err" | head -1)"
+    [ -n "$kept" ] \
+        && pass "the wizard says where the installer log is" \
+        || { fail "a log nobody is told about is a log nobody reads"; return 0; }
+    [ -s "$kept" ] \
+        && pass "the installer log outlives a successful run" \
+        || fail "the full installer log must survive the run: $kept"
+    grep -q "install:" "$kept" \
+        && pass "the kept log holds the installer's own lines, not just the summary" \
+        || fail "the kept log must contain the raw installer output"
+}
+
 # A busy 1-vCPU host can stay silent on the SSH channel for longer than a
 # few seconds while docker creates a container. Cutting the connection at
 # 15 seconds turned a working install into a red error.
@@ -1149,6 +1180,7 @@ test_sshpass_missing
 test_invalid_panel_port
 test_default_panel_port_without_domain
 test_install_progress_is_visible
+test_install_log_survives_the_run
 test_standalone_downloads_the_project
 test_failed_pack_explains_itself
 test_summary_points_at_the_server_for_passwords

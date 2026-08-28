@@ -60,6 +60,7 @@ DU_OUT_ACCEPT=0
 UP_RC=0
 COMPOSE_RUN_RC=0
 RESTART_RC=0
+CONFIG_REGEN=1
 COMPOSE_PULL_RC=0
 BUILDER_PRUNE_RC=0
 SYSCTL_IP_FORWARD_W_RC=0
@@ -139,6 +140,11 @@ if [ "${1:-}" = "compose" ]; then
             [ "${COMPOSE_RUN_RC:-0}" = "0" ] || exit "${COMPOSE_RUN_RC}"
             case "$COMPOSE_ARGS" in
                 *"server update"*)
+                    # CONFIG_REGEN=0 stands for the update that reports
+                    # success without the rendered config coming back —
+                    # the state in which "nothing changed" and "nothing
+                    # could be read" look the same.
+                    [ "${CONFIG_REGEN:-1}" = "1" ] || exit 0
                     port="$(printf '%s\n' "$COMPOSE_ARGS" | sed -n 's/.*--listen-port \([0-9][0-9]*\).*/\1/p')"
                     mtu="$(printf '%s\n' "$COMPOSE_ARGS" | sed -n 's/.*--mtu \([0-9][0-9]*\).*/\1/p')"
                     if [ -n "$port" ]; then
@@ -2047,6 +2053,7 @@ test_pmtu_preflight_survives_filtered_icmp
 test_pmtu_preflight_clamps_a_tiny_path
 test_rerun_applies_the_deployment_values_to_the_database
     test_changed_tunnel_parameters_restart_awg
+    test_unreadable_tunnel_parameters_restart_awg
     test_unchanged_tunnel_parameters_leave_awg_alone
     test_failed_apply_aborts_instead_of_reporting_success
     test_failed_awg_restart_aborts
@@ -2357,6 +2364,35 @@ test_unchanged_tunnel_parameters_leave_awg_alone() {
     grep -q "restart awg" "$FAKE_CALLS" \
         && fail "an unchanged config must not drop every connected client" \
         || pass "an unchanged config leaves the tunnel up"
+    # Deciding not to restart has to be as loud as deciding to: through
+    # the wizard the installer log is condensed and then deleted, so a
+    # silent decision was read as a guard that never ran, and the whole
+    # question had to be settled on a live server (amnezia-vpn-server-exiq).
+    stdout | grep -q "tunnel parameters unchanged" \
+        && pass "the installer says it left the tunnel alone on purpose" \
+        || fail "a guard that stays silent when it does nothing cannot be told from one that never ran"
+    stdout | grep -q "tunnel parameters unchanged (ListenPort=4500" \
+        && pass "the unchanged parameters are named, so the log carries the evidence" \
+        || fail "the unchanged line must name the parameters it compared"
+}
+
+# `server update` reporting success is not proof that the rendered config
+# came back: with nothing to compare, "unchanged" is a guess. The listen
+# port only reaches the interface through a restart (app/awg/syncconf.sh
+# strips ListenPort and MTU before syncconf), so the unreadable case must
+# restart rather than assume.
+test_unreadable_tunnel_parameters_restart_awg() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set CONFIG_REGEN 0
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "unreadable config: exit $rc"
+    grep -q "compose --env-file versions.lock restart awg" "$FAKE_CALLS" \
+        && pass "an unreadable config restarts awg instead of assuming nothing changed" \
+        || fail "with no parameters to compare the installer must restart, not guess"
+    stdout | grep -q "WARNING: cannot read the tunnel parameters back" \
+        && pass "the operator is told the comparison could not be made" \
+        || fail "a comparison that could not be made must be reported"
 }
 
 test_failed_apply_aborts_instead_of_reporting_success() {

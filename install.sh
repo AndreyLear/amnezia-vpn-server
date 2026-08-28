@@ -1575,21 +1575,41 @@ apply_deployment_values() {
     [ -n "$mtu" ] && set -- "$@" --mtu "$mtu"
     [ -n "$dns" ] && set -- "$@" --dns "$dns"
 
-    # ListenPort and MTU only take effect when the interface is created,
-    # so the rendered config is compared around the update: unchanged
-    # means no restart and no dropped clients, changed means the tunnel
-    # is rebuilt on the spot.
+    # ListenPort and MTU only take effect when the interface is created:
+    # the awg entrypoint strips both keys before handing the config to
+    # `awg syncconf` (app/awg/syncconf.sh), so a hot reload can never
+    # move the listener. Restarting awg is not a safety net here, it is
+    # the only thing that applies a new port — hence the comparison of
+    # the rendered config around the update.
     before="$(awg_tunnel_params)"
     log "applying the deployment settings to the database (port, MTU, DNS)"
     docker_compose --env-file versions.lock run --rm panel-init \
         /app/panel server update "$@" \
         || die_op "applying the deployment settings failed; the firewall is already open on UDP $AWG_PORT while the tunnel is not listening there"
     after="$(awg_tunnel_params)"
-    if [ "$before" != "$after" ]; then
+    # Every branch says what it decided. Through bootstrap.sh only nine
+    # milestones and the WARNING/ERROR lines reach the terminal, so a guard
+    # that deliberately kept awg running looked exactly like a guard that
+    # never ran at all, and telling them apart took a run against a live
+    # server (amnezia-vpn-server-exiq).
+    if [ -z "$after" ]; then
+        # No parameters to compare means the verdict "nothing changed"
+        # would be indistinguishable from "the file could not be read" —
+        # the one reading that must never silently skip the restart. A
+        # WARNING also travels through the wizard's progress filter.
+        log "WARNING: cannot read the tunnel parameters back from config/awg0.conf; restarting awg to be sure"
+        restart_awg
+    elif [ "$before" != "$after" ]; then
         log "tunnel parameters changed; restarting awg"
-        docker_compose --env-file versions.lock restart awg >/dev/null 2>&1 \
-            || die_op "awg restart failed after changing the tunnel parameters; the tunnel is down"
+        restart_awg
+    else
+        log "tunnel parameters unchanged ($(printf '%s' "$after" | tr '\n' ' ')); awg keeps running"
     fi
+}
+
+restart_awg() { # the only way a new ListenPort or MTU reaches the interface
+    docker_compose --env-file versions.lock restart awg >/dev/null 2>&1 \
+        || die_op "awg restart failed; the tunnel is not listening on UDP $AWG_PORT the firewall was opened for"
 }
 
 awg_tunnel_params() {
