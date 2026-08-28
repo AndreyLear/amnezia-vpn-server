@@ -740,23 +740,25 @@ INSTALL_OUT="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-install.XXXXXX")"
 # who just pasted a curl command can see what the machine is doing.
 remote_cmd "$REMOTE_INSTALL" 2>&1 | install_progress
 INSTALL_RC=${PIPESTATUS[0]}
+# The log outlives the run, successful or not. Condensing nine steps out of
+# a few hundred installer lines and then deleting the rest left every
+# question about what the installer decided answerable only by rerunning it
+# against a live server (amnezia-vpn-server-exiq).
+log "installer log kept at $INSTALL_OUT (полный лог установщика)"
 if [ "$INSTALL_RC" -ne 0 ]; then
     if grep -q "Create an A record" "$INSTALL_OUT" 2>/dev/null; then
         printf 'bootstrap: ERROR: install.sh failed: DNS record does not match this server.\n' >&2
         grep "Create an A record" "$INSTALL_OUT" >&2 || true
-        rm -f "$INSTALL_OUT"
         die_op "fix the A/AAAA record and rerun bootstrap.sh"
     fi
     printf 'bootstrap: ERROR: install.sh failed on the server (exit %s).\n' "$INSTALL_RC" >&2
     tail -n 20 "$INSTALL_OUT" >&2 || true
-    rm -f "$INSTALL_OUT"
     die_op "install.sh failed on the server"
 fi
 
 if grep -q "TLS fingerprint (SHA256):" "$INSTALL_OUT"; then
     FINGERPRINT="$(sed -n 's/.*TLS fingerprint (SHA256):[[:space:]]*//p' "$INSTALL_OUT" | head -1 | tr -d '[:space:]')"
 fi
-rm -f "$INSTALL_OUT"
 
 # --- public IP / endpoint ----------------------------------------------
 

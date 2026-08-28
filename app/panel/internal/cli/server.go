@@ -23,8 +23,9 @@ const opServerUpdate = "server update"
 // but the new value only reaches the interface when it is recreated: awg
 // syncconf does not apply ListenPort on hot reload
 // (docs/TECHNICAL_SPEC_v2.0.md §10 M4). Callers that change it are
-// responsible for restarting the awg service — bootstrap.sh does this by
-// diffing ListenPort/MTU in the rendered config around the update.
+// responsible for restarting the awg service — install.sh does this by
+// diffing ListenPort/MTU in the rendered config around the update
+// (section 13a; bootstrap.sh only runs install.sh).
 func (a *app) cmdServer(args []string) int {
 	if len(args) == 0 {
 		a.usage()
