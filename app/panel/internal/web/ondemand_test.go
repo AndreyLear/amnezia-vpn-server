@@ -282,6 +282,37 @@ func TestQRPayloadMatchesClientConfig(t *testing.T) {
 	}
 }
 
+// TestQRRenderContract pins what the handler promises about the picture
+// people actually scan. Nothing else does: TestQRPayloadMatchesClientConfig
+// survives a drop to Low error correction and a smaller canvas alike,
+// because both still decode — they only cost the phone camera its margin
+// on a bad angle, a reflection or a dirty lens (T-fksh).
+//
+// Both facts are read back out of the served symbol rather than compared
+// against another qrcode.Encode call, which would restate the
+// implementation instead of testing it.
+func TestQRRenderContract(t *testing.T) {
+	f := newFixture(t)
+	c, _, _ := f.addClient("mallory")
+	qr := f.get(fmt.Sprintf("/clients/%d/qr", c.ID)).Body.Bytes()
+
+	img, _, err := image.Decode(bytes.NewReader(qr))
+	if err != nil {
+		t.Fatalf("decode png: %v", err)
+	}
+	if b := img.Bounds(); b.Dx() != 256 || b.Dy() != 256 {
+		t.Errorf("canvas = %dx%d, want 256x256", b.Dx(), b.Dy())
+	}
+
+	res, err := decoder.NewDecoder().Decode(qrModules(t, qr), nil)
+	if err != nil {
+		t.Fatalf("QR decode: %v", err)
+	}
+	if got := res.GetECLevel(); got != "M" {
+		t.Errorf("error correction = %q, want M: a lower level quarters what a camera can recover from", got)
+	}
+}
+
 func TestQRUnknownIDGenericError(t *testing.T) {
 	f := newFixture(t)
 	rec := f.get("/clients/777/qr")
