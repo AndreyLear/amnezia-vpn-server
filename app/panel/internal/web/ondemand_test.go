@@ -20,7 +20,7 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/makiuchi-d/gozxing"
-	"github.com/makiuchi-d/gozxing/qrcode"
+	"github.com/makiuchi-d/gozxing/qrcode/decoder"
 )
 
 // TestConfigDownloadMatchesGenerateClient is the byte-parity assertion:
@@ -149,49 +149,124 @@ func TestQRValidPNG(t *testing.T) {
 	}
 }
 
-// decodeQR reads the text encoded in a QR PNG. The gozxing R12 detector
-// occasionally misses a finder pattern when the 256px render puts module
-// centers on fractional coordinates; retrying on a nearest-neighbour
-// upscale (pixel-perfect QR content, integer module grid) makes the
-// decode deterministic.
-func decodeQR(t *testing.T, png []byte) string {
+// qrFinder is the 7x7 position-detection pattern that opens three of a
+// QR symbol's corners; qrGridMatches checks the grid against it.
+var qrFinder = [7][7]bool{
+	{true, true, true, true, true, true, true},
+	{true, false, false, false, false, false, true},
+	{true, false, true, true, true, false, true},
+	{true, false, true, true, true, false, true},
+	{true, false, true, true, true, false, true},
+	{true, false, false, false, false, false, true},
+	{true, true, true, true, true, true, true},
+}
+
+// qrModules recovers the module grid of a PNG produced by go-qrcode.
+//
+// Why not gozxing's QRCodeReader (T-g37j): it is built for photographs,
+// so it locates the symbol and estimates a uniform module pitch. Our
+// render is not uniform. go-qrcode paints a fixed-size canvas by mapping
+// every pixel to a module with module = int(pixel*realSize/size)
+// (qrcode.Image), and 256 px over a 77-module symbol leaves modules 3
+// and 4 pixels wide side by side. The estimated pitch then drifts and
+// eventually samples a neighbouring module, which decodes or not
+// depending on the client's random keys: 21 failures in 400 payloads.
+// The multi-scale retry this replaced never once helped — every one of
+// the 384 successes decoded at scale 1, because an integer upscale
+// preserves the very unevenness that misleads the detector.
+//
+// Rendering uniform modules instead made the reader worse (34 failures
+// in 300), so the weak part is the detection, not the image: Apple's
+// Vision framework — what an iPhone camera actually runs — read 60 of
+// 60 served PNGs with byte-exact payloads. Inverting go-qrcode's own
+// mapping is exact rather than estimated, and qrGridMatches confirms
+// the grid before anything is decoded, so the payload still goes
+// through a real QR decoder (format info, mask, Reed-Solomon).
+func qrModules(t *testing.T, png []byte) *gozxing.BitMatrix {
 	t.Helper()
 	img, _, err := image.Decode(bytes.NewReader(png))
 	if err != nil {
 		t.Fatalf("decode png: %v", err)
 	}
-	var lastErr error
-	for _, scale := range []int{1, 3, 4} {
-		src := img
-		if scale > 1 {
-			b := src.Bounds()
-			up := image.NewNRGBA(image.Rect(0, 0, b.Dx()*scale, b.Dy()*scale))
-			for y := b.Min.Y; y < b.Max.Y; y++ {
-				for x := b.Min.X; x < b.Max.X; x++ {
-					c := src.At(x, y)
-					for dy := 0; dy < scale; dy++ {
-						for dx := 0; dx < scale; dx++ {
-							up.Set(x*scale+dx, y*scale+dy, c)
-						}
-					}
+	b := img.Bounds()
+	size := b.Dx()
+	black := func(x, y int) bool {
+		r, g, bl, _ := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
+		return r+g+bl < 3*0x8000
+	}
+	// First pixel of module m, inverting int(pixel*realSize/size).
+	// realSize counts the 4-module quiet zone go-qrcode adds each side.
+	first := func(m, realSize int) int { return (m*size + realSize - 1) / realSize }
+
+	for dim := 21; dim <= 177; dim += 4 {
+		realSize := dim + 8
+		if realSize > size {
+			break
+		}
+		centers := make([]int, dim)
+		usable := true
+		for m := 0; m < dim; m++ {
+			lo, hi := first(m+4, realSize), first(m+5, realSize)-1
+			if hi < lo {
+				usable = false
+				break
+			}
+			centers[m] = (lo + hi) / 2
+		}
+		if !usable || !qrGridMatches(black, centers, dim) {
+			continue
+		}
+		bits, err := gozxing.NewBitMatrix(dim, dim)
+		if err != nil {
+			t.Fatalf("bit matrix %dx%d: %v", dim, dim, err)
+		}
+		for y := 0; y < dim; y++ {
+			for x := 0; x < dim; x++ {
+				if black(centers[x], centers[y]) {
+					bits.Set(x, y)
 				}
 			}
-			src = up
 		}
-		bin, err := gozxing.NewBinaryBitmapFromImage(src)
-		if err != nil {
-			lastErr = fmt.Errorf("binarize: %w", err)
-			continue
-		}
-		res, err := qrcode.NewQRCodeReader().Decode(bin, nil)
-		if err != nil {
-			lastErr = fmt.Errorf("decode: %w", err)
-			continue
-		}
-		return res.GetText()
+		return bits
 	}
-	t.Fatalf("QR decode failed at all scales: %v", lastErr)
-	return ""
+	t.Fatalf("no QR module grid in a %dx%d image", size, size)
+	return nil
+}
+
+// qrGridMatches checks a candidate dimension against the two landmarks
+// every QR symbol carries. The finder patterns alone do not pin it down:
+// they are seven modules wide and anchored at the corners, so a
+// dimension four modules short still lines them up and then decodes into
+// a format-information error (versions 15, 24 and 27 did exactly that).
+// The timing patterns run the full width and height, alternating every
+// module, so any drift shows up long before the far end.
+func qrGridMatches(black func(x, y int) bool, centers []int, dim int) bool {
+	for _, corner := range [][2]int{{0, 0}, {dim - 7, 0}, {0, dim - 7}} {
+		for dy := 0; dy < 7; dy++ {
+			for dx := 0; dx < 7; dx++ {
+				if black(centers[corner[0]+dx], centers[corner[1]+dy]) != qrFinder[dy][dx] {
+					return false
+				}
+			}
+		}
+	}
+	for i := 8; i <= dim-9; i++ {
+		even := i%2 == 0
+		if black(centers[i], centers[6]) != even || black(centers[6], centers[i]) != even {
+			return false
+		}
+	}
+	return true
+}
+
+// decodeQR reads the text encoded in a QR PNG.
+func decodeQR(t *testing.T, png []byte) string {
+	t.Helper()
+	res, err := decoder.NewDecoder().Decode(qrModules(t, png), nil)
+	if err != nil {
+		t.Fatalf("QR decode: %v", err)
+	}
+	return res.GetText()
 }
 
 func TestQRPayloadMatchesClientConfig(t *testing.T) {
