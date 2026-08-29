@@ -1572,6 +1572,14 @@ test_domain_mode_flow() {
     grep -q "AMNEZIA_SECURE_COOKIES=1" "$ROOT/.env" && pass "domain: AMNEZIA_SECURE_COOKIES=1 in .env" \
         || fail "domain: AMNEZIA_SECURE_COOKIES missing from .env"
     if grep -q "openssl" "$FAKE_CALLS"; then fail "domain: openssl was invoked (LE must win)"; else pass "domain: no self-signed certificate"; fi
+    # Where port 80 sends people is the whole of what they experience
+    # when they type the bare hostname, and nothing else here looks at it
+    # (amnezia-vpn-server-a2af). On the default port the redirect must
+    # carry no port at all, or switching back from a custom one would
+    # leave every visitor pinned to an explicit :443.
+    grep -qF 'return 301 https://$host$request_uri;' "$ROOT/nginx/panel.conf" \
+        && pass "domain: port 80 redirects to https on the default port" \
+        || fail "domain: the 301 from port 80 must name no port ($(grep -F "return 301" "$ROOT/nginx/panel.conf" || echo "no redirect at all"))"
 }
 
 test_domain_dns_mismatch() {
@@ -1853,6 +1861,15 @@ test_domain_with_panel_port() {
     grep -q "udp dport 4500 accept" "$ROOT/nftables/amnezia-vpn.nft" \
         && pass "domain+panel-port: UDP AWG 4500 still open" \
         || fail "domain+panel-port: UDP AWG missing"
+    # Moving the panel off 443 is pointless if port 80 still sends people
+    # there. That is not hypothetical: the owner's report that "https does
+    # not open, and neither does http" was port 80 arriving, answering
+    # 301, and the redirect landing on the port the carrier was dropping
+    # (amnezia-vpn-server-hwbb). Nothing else in this suite reads the
+    # redirect (amnezia-vpn-server-a2af).
+    grep -qF 'return 301 https://$host:8443$request_uri;' "$ROOT/nginx/panel.conf" \
+        && pass "domain+panel-port: port 80 redirects to the port the panel is on" \
+        || fail "domain+panel-port: the 301 from port 80 must carry :8443 ($(grep -F "return 301" "$ROOT/nginx/panel.conf" || echo "no redirect at all"))"
 }
 
 test_client_domain_standalone() {
