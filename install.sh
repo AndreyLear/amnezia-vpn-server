@@ -113,6 +113,11 @@
 #                                      dpkg lock-frontend (default 600)
 #   AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC poll/sleep interval while waiting
 #                                      (default 5; tests use 0)
+#   AMNEZIA_INSTALL_STATUS_WAIT_SEC    how long to wait for the awg
+#                                      container's first status snapshot
+#                                      before the restart guard treats
+#                                      the listening port as unknown
+#                                      (default 10; tests use 0)
 #
 # Security contract: no secrets are ever accepted, logged or printed;
 # .env is created only when absent, with 0600; the panel stays
@@ -1564,7 +1569,7 @@ fi
 # them. This used to be a warning telling the operator to run these very
 # commands by hand — install.sh can run them: it just started the stack.
 apply_deployment_values() {
-    local mtu dns before after
+    local mtu dns before after live
     if [ "$NO_SERVER_ROW" = "1" ]; then
         log "fresh install: no server row yet; server init writes these values"
         return 0
@@ -1580,7 +1585,8 @@ apply_deployment_values() {
     # `awg syncconf` (app/awg/syncconf.sh), so a hot reload can never
     # move the listener. Restarting awg is not a safety net here, it is
     # the only thing that applies a new port — hence the comparison of
-    # the rendered config around the update.
+    # the rendered config around the update, and, when that comparison
+    # comes out empty-handed, the question put to the daemon itself.
     before="$(awg_tunnel_params)"
     log "applying the deployment settings to the database (port, MTU, DNS)"
     docker_compose --env-file versions.lock run --rm panel-init \
@@ -1599,12 +1605,68 @@ apply_deployment_values() {
         # WARNING also travels through the wizard's progress filter.
         log "WARNING: cannot read the tunnel parameters back from config/awg0.conf; restarting awg to be sure"
         restart_awg
-    elif [ "$before" != "$after" ]; then
+        return 0
+    fi
+    if [ "$before" != "$after" ]; then
         log "tunnel parameters changed; restarting awg"
         restart_awg
-    else
-        log "tunnel parameters unchanged ($(printf '%s' "$after" | tr '\n' ' ')); awg keeps running"
+        return 0
     fi
+    # An unchanged config only means the file already agreed with the
+    # database — it is no evidence about the interface, which is a
+    # separate thing that only picks the port up when it is created. A
+    # run that wrote the new port and then died on the restart leaves
+    # exactly that state behind: rerun the installer and the file diff
+    # is empty while the tunnel still listens where it always did
+    # (amnezia-vpn-server-8w6t). So the last word belongs to the daemon.
+    live="$(awg_live_listen_port)"
+    if [ -z "$live" ]; then
+        log "WARNING: cannot read the listening port from status/status.json; restarting awg to be sure"
+        restart_awg
+    elif [ "$live" != "$AWG_PORT" ]; then
+        log "the tunnel is listening on UDP $live, not the UDP $AWG_PORT the firewall was built for; restarting awg"
+        restart_awg
+    else
+        log "tunnel parameters unchanged ($(printf '%s' "$after" | tr '\n' ' ')), tunnel listening on UDP $live; awg keeps running"
+    fi
+}
+
+# awg_live_listen_port: the UDP port the tunnel is actually listening on,
+# printed empty when that cannot be established.
+#
+# status/status.json is the answer the runtime gives about itself: the
+# awg container writes it from the live UAPI dump when the interface
+# comes up and then every AWG_CHECK_INTERVAL (app/awg/entrypoint.sh, 5s
+# by default), and it is the same file the panel reads. A snapshot can
+# only ever name a port the interface really had, so a stale reading is
+# the old port, which restarts — the safe direction.
+#
+# The port is the whole test. listen_port lives only inside the snapshot's
+# interface object, and awgstatus writes that object as null whenever it
+# found no interface (internal/status: has_interface is true whenever the
+# object exists at all). So "no port in the file" already means "there is
+# no tunnel to ask", and a missing file means the same — no separate flag
+# to consult, and no reading in which silence could pass for agreement.
+#
+# `up -d` recreates the awg container whenever the image or the compose
+# definition moved, and a container that has just started may not have
+# written its first snapshot yet. Waiting a few seconds for it costs
+# nothing and avoids restarting a tunnel that came up moments ago; the
+# wait is a hook so the harness does not pay for it.
+awg_live_listen_port() {
+    local file="$ROOT_DIR/status/status.json" waited=0 limit port
+    limit="${AMNEZIA_INSTALL_STATUS_WAIT_SEC:-10}"
+    while :; do
+        port="$(sed -n -E 's/.*"listen_port"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' \
+            "$file" 2>/dev/null | head -1)"
+        if [ -n "$port" ]; then
+            printf '%s\n' "$port"
+            return 0
+        fi
+        [ "$waited" -lt "$limit" ] || return 0
+        sleep 1
+        waited=$((waited + 1))
+    done
 }
 
 restart_awg() { # the only way a new ListenPort or MTU reaches the interface
