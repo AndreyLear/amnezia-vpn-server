@@ -61,6 +61,9 @@ UP_RC=0
 COMPOSE_RUN_RC=0
 RESTART_RC=0
 CONFIG_REGEN=1
+NO_STATUS=0
+NO_IFACE=0
+LIVE_PORT=
 COMPOSE_PULL_RC=0
 BUILDER_PRUNE_RC=0
 SYSCTL_IP_FORWARD_W_RC=0
@@ -95,6 +98,33 @@ cat > "$FAKE_DIR/docker" <<'FAKE_EOF'
 LOG="${FAKE_CALLS:?}"
 echo "docker $*" >> "$LOG"
 . "${FAKE_STATE:?}"
+# fake_awg_status [port]: the snapshot the awg container writes from the
+# live UAPI dump. Without an argument the interface follows the rendered
+# config, which is what a real restart does. NO_STATUS=1 stands for the
+# container that has published nothing yet — the state in which the
+# listening port cannot be established at all.
+fake_awg_status() {
+    local port="${1:-}"
+    mkdir -p status
+    if [ "${NO_STATUS:-0}" = "1" ]; then
+        rm -f status/status.json
+        return 0
+    fi
+    # The container is up and publishing, but the interface was never
+    # created — awgstatus writes a null interface, so the snapshot
+    # carries no listen_port at all. A published file is not an answer.
+    if [ "${NO_IFACE:-0}" = "1" ]; then
+        printf '{"schema":"v1","interface":null,"peers":[]}\n' > status/status.json
+        return 0
+    fi
+    if [ -z "$port" ]; then
+        port="$(sed -n -E 's/^[[:space:]]*ListenPort[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' \
+            config/awg0.conf 2>/dev/null | head -1)"
+    fi
+    [ -n "$port" ] || return 0
+    printf '{"schema":"v1","interface":{"iface":"awg0","has_interface":true,"listen_port":%s},"peers":[]}\n' \
+        "$port" > status/status.json
+}
 if [ "${1:-}" = "info" ]; then
     [ "$DAEMON" = "ok" ] || exit 1
     echo "Server: FAKE 27.0.0"
@@ -130,8 +160,23 @@ if [ "${1:-}" = "compose" ]; then
             ;;
         build) exit 0 ;;
         pull) exit "${COMPOSE_PULL_RC:-0}" ;;
-        up) exit "${UP_RC:-0}" ;;
-        restart) exit "${RESTART_RC:-0}" ;;
+        up)
+            # A running awg container publishes what the interface really
+            # is — status/status.json, written from the live UAPI dump.
+            # The restart guard asks that file instead of trusting the
+            # rendered config (amnezia-vpn-server-8w6t), so a fake that
+            # never wrote it would make the guard untestable and, worse,
+            # would make every run look like "port unknown".
+            fake_awg_status "${LIVE_PORT:-}"
+            exit "${UP_RC:-0}"
+            ;;
+        restart)
+            [ "${RESTART_RC:-0}" = "0" ] || exit "${RESTART_RC}"
+            # Restarting is what moves the listener onto the port the
+            # config names; LIVE_PORT describes the interface before that.
+            fake_awg_status
+            exit 0
+            ;;
         run)
             # `server update` regenerates awg0.conf, exactly like the real
             # panel-init. install.sh compares that file around the call to
@@ -552,6 +597,7 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
     AMNEZIA_INSTALL_NGINX_SITES_DIR="$NGINX_SITES_TEST" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
+    AMNEZIA_INSTALL_STATUS_WAIT_SEC=0 \
     PATH="$FAKE_DIR:$PATH" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
@@ -2055,6 +2101,9 @@ test_rerun_applies_the_deployment_values_to_the_database
     test_changed_tunnel_parameters_restart_awg
     test_unreadable_tunnel_parameters_restart_awg
     test_unchanged_tunnel_parameters_leave_awg_alone
+    test_stale_interface_restarts_awg
+    test_unknown_listen_port_restarts_awg
+    test_interface_absent_restarts_awg
     test_failed_apply_aborts_instead_of_reporting_success
     test_failed_awg_restart_aborts
     test_fresh_install_skips_the_apply
@@ -2374,6 +2423,76 @@ test_unchanged_tunnel_parameters_leave_awg_alone() {
     stdout | grep -q "tunnel parameters unchanged (ListenPort=4500" \
         && pass "the unchanged parameters are named, so the log carries the evidence" \
         || fail "the unchanged line must name the parameters it compared"
+    # Leaving the tunnel alone is only defensible once the daemon has
+    # been asked; the line has to show that it was (amnezia-vpn-server-8w6t).
+    stdout | grep -q "tunnel listening on UDP 4500" \
+        && pass "the decision to keep awg running names the port it verified" \
+        || fail "keeping awg running must record the listening port it checked"
+}
+
+# The rendered config agreeing with the database says nothing about the
+# interface: ListenPort reaches it only when it is created. A run that
+# wrote the new port and then died on the restart leaves the file right
+# and the tunnel wrong, and the next run sees an empty diff — the exact
+# outage akuy was written to prevent, walked back in through the guard
+# (amnezia-vpn-server-8w6t).
+test_stale_interface_restarts_awg() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 4501)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    # the interface never followed: it still listens where it always did
+    state_set LIVE_PORT 4500
+    : > "$FAKE_CALLS"
+    rc="$(run_install --awg-port 4501)"
+    [ "$rc" = "0" ] || fail "second pass: exit $rc"
+    grep -q "compose --env-file versions.lock restart awg" "$FAKE_CALLS" \
+        && pass "a tunnel listening on the old port is restarted even though the config is right" \
+        || fail "the guard must follow the interface, not the file: config 4501, tunnel 4500, no restart"
+    stdout | grep -q "listening on UDP 4500, not the UDP 4501" \
+        && pass "the operator is told which port the tunnel was really on" \
+        || fail "the divergence must be named, not fixed silently"
+}
+
+# Not being able to ask is not the same as nothing having changed. The
+# firewall is already open on the new port at this point, so a guard that
+# reads "unknown" as "unchanged" ends the install over a dead tunnel.
+# A published snapshot is not an answer by itself: awgstatus writes a
+# null interface when `awg show` finds none, so the file exists and names
+# no port. A guard that stops at "the file is there" reads that silence
+# as agreement.
+test_interface_absent_restarts_awg() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    state_set NO_IFACE 1
+    : > "$FAKE_CALLS"
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "second pass: exit $rc"
+    grep -q "compose --env-file versions.lock restart awg" "$FAKE_CALLS" \
+        && pass "a snapshot reporting no interface restarts awg" \
+        || fail "has_interface=false must not read as a tunnel that is fine"
+    stdout | grep -q "WARNING: cannot read the listening port" \
+        && pass "the operator is told no listening port was published" \
+        || fail "an absent interface must be reported, not passed over"
+}
+
+test_unknown_listen_port_restarts_awg() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    state_set NO_STATUS 1
+    : > "$FAKE_CALLS"
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "second pass: exit $rc"
+    grep -q "compose --env-file versions.lock restart awg" "$FAKE_CALLS" \
+        && pass "an unknown listening port restarts awg instead of assuming nothing changed" \
+        || fail "with no answer from the daemon the installer must restart, not guess"
+    stdout | grep -q "WARNING: cannot read the listening port" \
+        && pass "the operator is told the port could not be established" \
+        || fail "a question that could not be answered must be reported"
 }
 
 # `server update` reporting success is not proof that the rendered config
