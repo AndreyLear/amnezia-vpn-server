@@ -118,6 +118,10 @@
 #                                      before the restart guard treats
 #                                      the listening port as unknown
 #                                      (default 10; tests use 0)
+#   AMNEZIA_INSTALL_RESTART_VERIFY_SEC how long to wait after restarting
+#                                      awg for the tunnel to report the
+#                                      port the firewall was built for
+#                                      (default 30; tests use 0)
 #
 # Security contract: no secrets are ever accepted, logged or printed;
 # .env is created only when absent, with 0600; the panel stays
@@ -1653,17 +1657,23 @@ apply_deployment_values() {
 # written its first snapshot yet. Waiting a few seconds for it costs
 # nothing and avoids restarting a tunnel that came up moments ago; the
 # wait is a hook so the harness does not pay for it.
+# awg_live_listen_port [wait-seconds] [expected-port]
+#
+# With an expected port it waits for the snapshot to name that port and
+# gives up with whatever it last saw — so the caller can tell "came back
+# somewhere else" from "never said anything", which are different
+# failures deserving different endings (amnezia-vpn-server-na6a).
 awg_live_listen_port() {
-    local file="$ROOT_DIR/status/status.json" waited=0 limit port
-    limit="${AMNEZIA_INSTALL_STATUS_WAIT_SEC:-10}"
+    local limit="${1:-${AMNEZIA_INSTALL_STATUS_WAIT_SEC:-10}}" want="${2:-}"
+    local file="$ROOT_DIR/status/status.json" waited=0 port
     while :; do
         port="$(sed -n -E 's/.*"listen_port"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' \
             "$file" 2>/dev/null | head -1)"
-        if [ -n "$port" ]; then
+        if [ -n "$port" ] && { [ -z "$want" ] || [ "$port" = "$want" ]; }; then
             printf '%s\n' "$port"
             return 0
         fi
-        [ "$waited" -lt "$limit" ] || return 0
+        [ "$waited" -lt "$limit" ] || { printf '%s\n' "$port"; return 0; }
         sleep 1
         waited=$((waited + 1))
     done
@@ -1672,6 +1682,38 @@ awg_live_listen_port() {
 restart_awg() { # the only way a new ListenPort or MTU reaches the interface
     docker_compose --env-file versions.lock restart awg >/dev/null 2>&1 \
         || die_op "awg restart failed; the tunnel is not listening on UDP $AWG_PORT the firewall was opened for"
+    verify_awg_listen_port
+}
+
+# verify_awg_listen_port: a restart that exits 0 says the container came
+# back, not that the interface came up on the port the firewall was built
+# for. It can come back on the old port (a config the panel could not
+# render) or on none at all (a port already taken, a rejected key), and
+# until now that ended in DONE printed over a tunnel no client can reach
+# — the outage amnezia-vpn-server-akuy is about (amnezia-vpn-server-na6a).
+#
+# The two ways this can go wrong are not the same and do not end the same:
+#
+#   * the snapshot names a different port — the tunnel is provably in the
+#     wrong place, nothing later in the install can fix it, and reporting
+#     success would be a lie. That ends the run.
+#   * the snapshot names no port, or never arrives — we did not establish
+#     anything. Aborting an install over an unanswered question would
+#     turn a slow container into a failed deployment, so it warns and the
+#     operator is pointed at the logs.
+#
+# Only the port is verified: status.json carries no MTU, so a restart
+# that failed to apply a new MTU still passes here.
+verify_awg_listen_port() {
+    local live
+    live="$(awg_live_listen_port "${AMNEZIA_INSTALL_RESTART_VERIFY_SEC:-30}" "$AWG_PORT")"
+    if [ -z "$live" ]; then
+        log "WARNING: cannot confirm the tunnel came back on UDP $AWG_PORT; status/status.json names no port (check: docker compose logs awg)"
+        return 0
+    fi
+    [ "$live" = "$AWG_PORT" ] \
+        || die_op "awg came back listening on UDP $live, not the UDP $AWG_PORT the firewall was opened for; clients cannot reach the tunnel"
+    log "awg restarted; tunnel confirmed listening on UDP $live"
 }
 
 awg_tunnel_params() {
