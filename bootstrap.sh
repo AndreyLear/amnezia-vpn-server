@@ -785,6 +785,27 @@ else
     PANEL_URL="https://${PUBLIC_IP}:${PANEL_PORT}"
 fi
 
+# The lines above are a guess, and on a rerun they are wrong. install.sh
+# remembers the deployment values it was given before: leave --panel-port
+# off and it keeps the port the previous run chose, which is the right
+# behaviour and the same one CLIENT_DOMAIN and the rest already have. The
+# wizard's own flags cannot know that, so it built the URL without a port
+# while the panel stayed on 8443 — and then failed its own health check
+# and printed ERROR over a deployment that was working
+# (amnezia-vpn-server-rix1).
+#
+# install.sh is the authority: it prints the address it actually applied.
+# Take it from there and only fall back to the guess when the installer
+# printed none.
+INSTALLED_PANEL_URL="$(sed -n 's|^install:[[:space:]]*Panel:[[:space:]]*\(https://[^[:space:]]*\).*|\1|p' \
+    "$INSTALL_OUT" 2>/dev/null | tail -1)"
+if [ -n "$INSTALLED_PANEL_URL" ] && validate_safe "$INSTALLED_PANEL_URL"; then
+    if [ "$INSTALLED_PANEL_URL" != "$PANEL_URL" ]; then
+        log "panel address from the installer: $INSTALLED_PANEL_URL (the wizard expected $PANEL_URL)"
+    fi
+    PANEL_URL="$INSTALLED_PANEL_URL"
+fi
+
 # --- application bootstrap ---------------------------------------------
 
 log "initializing the server row"

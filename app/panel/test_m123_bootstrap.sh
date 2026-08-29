@@ -59,6 +59,8 @@ ADDUSER_RC=0
 ADDUSER_STDERR=
 CURL_PANEL_RC=0
 CURL_PANEL_CODE=200
+INSTALL_PANEL_URL=
+INSTALL_NO_PANEL_LINE=0
 PUBLIC_IP=2.26.93.192
 SOURCE_BODY=fake-tarball
 EOF
@@ -108,7 +110,28 @@ case "$cmd" in
             "install: building the stack images (pinned versions from versions.lock)" \
             "install: starting the stack" \
             "install: self-check: Docker daemon reachable (docker info)"
-        if printf '%s' "$cmd" | grep -q -- "--panel-port"; then
+        if [ "${INSTALL_NO_PANEL_LINE:-0}" = "1" ]; then
+            # an installer that reports no address at all: the wizard has
+            # to fall back to its own guess rather than check nothing
+            printf '%s\n' "install: DONE — the AmneziaWG VPN Server stack is deployed."
+        elif [ -n "${INSTALL_PANEL_URL:-}" ]; then
+            # install.sh applies the values it remembers, so the address it
+            # reports can differ from anything the wizard's own flags imply
+            # — that is the whole of amnezia-vpn-server-rix1.
+            printf '%s\n' \
+                "install: DONE — the AmneziaWG VPN Server stack is deployed." \
+                "install: Panel: ${INSTALL_PANEL_URL} (Let's Encrypt, auto-renewed by certbot.timer)"
+        elif printf '%s' "$cmd" | grep -q -- "--domain"; then
+            # mirrors install.sh: a domain deployment reports the domain
+            # address and carries the port only when it is not 443
+            d="$(printf '%s' "$cmd" | sed -n "s/.*--domain '\([^']*\)'.*/\1/p")"
+            p="$(printf '%s' "$cmd" | sed -n "s/.*--panel-port '\([^']*\)'.*/\1/p")"
+            u="https://${d}"
+            if [ -n "$p" ] && [ "$p" != "443" ]; then u="https://${d}:${p}"; fi
+            printf '%s\n' \
+                "install: DONE — the AmneziaWG VPN Server stack is deployed." \
+                "install: Panel: ${u} (Let's Encrypt, auto-renewed by certbot.timer)"
+        elif printf '%s' "$cmd" | grep -q -- "--panel-port"; then
             printf '%s\n' \
                 "install: DONE — the AmneziaWG VPN Server stack is deployed." \
                 "install: Panel: https://2.26.93.192:8443 (self-signed TLS certificate)" \
@@ -324,6 +347,49 @@ test_unknown_argument() {
     rc="$(run_bootstrap --bogus)"
     [ "$rc" = "2" ] || fail "unknown argument: exit $rc, want 2"
     pass "unknown arguments rejected (exit 2)"
+}
+
+# install.sh keeps the deployment values it was given before: leave
+# --panel-port off on a rerun and the panel stays on the port the previous
+# run chose. That is the right behaviour and the one CLIENT_DOMAIN and the
+# rest already have — but the wizard cannot know it from its own flags. It
+# used to build the URL without a port, check that, and print ERROR over a
+# deployment that was answering perfectly well (amnezia-vpn-server-rix1).
+test_panel_url_comes_from_the_installer() {
+    fakes_reset
+    # the installer reports a port the wizard was never told about
+    setstate INSTALL_PANEL_URL "https://panel.example.com:8443" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
+        --panel-domain panel.example.com)"
+    [ "$rc" = "0" ] || { fail "remembered port: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q "https://panel.example.com:8443/" "$FAKE_CALLS" \
+        && pass "the health check asks the address the installer applied" \
+        || fail "the health check must follow the installer, not the wizard's guess"
+    grep -q "https://panel.example.com/ " "$FAKE_CALLS" \
+        && fail "the wizard still checks the address it guessed" \
+        || pass "the guessed address is not checked"
+    stdout | grep -q "Panel:     https://panel.example.com:8443" \
+        && pass "the summary prints the address that actually answers" \
+        || fail "the summary must not hand out an address the panel does not serve"
+    stderr | grep -q "panel address from the installer" \
+        && pass "the disagreement is reported rather than swallowed" \
+        || fail "when the two disagree the operator has to be told which won"
+}
+
+# The wizard's own guess is still right whenever it knows the port, and it
+# has to stay the fallback for an installer that reports no address at all.
+test_panel_url_falls_back_to_the_wizard() {
+    fakes_reset
+    setstate INSTALL_NO_PANEL_LINE 1 "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
+        --panel-domain panel.example.com --panel-port 8443)"
+    [ "$rc" = "0" ] || { fail "fallback: exit $rc"; cat "$TMP_TEST/err" >&2; return 0; }
+    grep -q "https://panel.example.com:8443/" "$FAKE_CALLS" \
+        && pass "with no address from the installer the wizard uses its own" \
+        || fail "the fallback must still check the port the wizard was given"
+    stderr | grep -q "panel address from the installer" \
+        && fail "the installer said nothing, so there is nothing to report" \
+        || pass "no noise when the installer reports no address"
 }
 
 test_domain_and_panel_port_combined() {
@@ -1155,6 +1221,8 @@ test_bash_syntax
 test_help
 test_unknown_argument
 test_domain_and_panel_port_combined
+test_panel_url_comes_from_the_installer
+test_panel_url_falls_back_to_the_wizard
 test_key_flags_domain_client_domain
 test_password_env_panel_port
 test_flags_domain_without_vpn_domain_uses_ip_endpoint
