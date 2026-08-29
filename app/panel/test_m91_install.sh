@@ -64,6 +64,8 @@ CONFIG_REGEN=1
 NO_STATUS=0
 NO_IFACE=0
 LIVE_PORT=
+RESTART_PORT=
+SLOW_PORT=
 COMPOSE_PULL_RC=0
 BUILDER_PRUNE_RC=0
 SYSCTL_IP_FORWARD_W_RC=0
@@ -174,7 +176,18 @@ if [ "${1:-}" = "compose" ]; then
             [ "${RESTART_RC:-0}" = "0" ] || exit "${RESTART_RC}"
             # Restarting is what moves the listener onto the port the
             # config names; LIVE_PORT describes the interface before that.
-            fake_awg_status
+            # RESTART_PORT is the container that comes back somewhere
+            # else entirely — the restart exits 0 and the tunnel is still
+            # in the wrong place (amnezia-vpn-server-na6a).
+            fake_awg_status "${RESTART_PORT:-}"
+            # SLOW_PORT: the interface takes a moment to come back, so
+            # the first snapshot after the restart still names the old
+            # port. Nothing about that is a failure, and a confirmation
+            # that read it as one would abort a healthy install.
+            if [ -n "${SLOW_PORT:-}" ]; then
+                fake_awg_status "$SLOW_PORT"
+                ( sleep 0.2; fake_awg_status ) &
+            fi
             exit 0
             ;;
         run)
@@ -598,6 +611,7 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_NGINX_SITES_DIR="$NGINX_SITES_TEST" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
     AMNEZIA_INSTALL_STATUS_WAIT_SEC=0 \
+    AMNEZIA_INSTALL_RESTART_VERIFY_SEC="${VERIFY_WAIT:-0}" \
     PATH="$FAKE_DIR:$PATH" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
@@ -2104,6 +2118,10 @@ test_rerun_applies_the_deployment_values_to_the_database
     test_stale_interface_restarts_awg
     test_unknown_listen_port_restarts_awg
     test_interface_absent_restarts_awg
+    test_restart_landing_on_the_wrong_port_fails_the_install
+    test_unconfirmable_restart_warns_but_finishes
+    test_confirmed_restart_is_logged
+    test_restart_confirmation_waits_for_the_interface
     test_failed_apply_aborts_instead_of_reporting_success
     test_failed_awg_restart_aborts
     test_fresh_install_skips_the_apply
@@ -2512,6 +2530,78 @@ test_unreadable_tunnel_parameters_restart_awg() {
     stdout | grep -q "WARNING: cannot read the tunnel parameters back" \
         && pass "the operator is told the comparison could not be made" \
         || fail "a comparison that could not be made must be reported"
+}
+
+# `docker compose restart awg` exiting 0 says the container came back,
+# not that the interface came up where the firewall is open. A container
+# that comes back on the old port used to end in DONE printed over a
+# tunnel no client can reach — the akuy outage, reached through the fix
+# for it (amnezia-vpn-server-na6a).
+test_restart_landing_on_the_wrong_port_fails_the_install() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    # the port moves, and the restarted container comes back where it was
+    state_set LIVE_PORT 4500
+    state_set RESTART_PORT 4500
+    rc="$(run_install --awg-port 4501)"
+    [ "$rc" != "0" ] \
+        && pass "a tunnel that came back on the wrong port fails the install" \
+        || fail "DONE over a tunnel on UDP 4500 while the firewall opened 4501 (exit $rc)"
+    stderr | grep -q "listening on UDP 4500, not the UDP 4501" \
+        && pass "the failure names both ports" \
+        || fail "the abort must say where the tunnel actually came back"
+}
+
+# Not being able to confirm is not the same as knowing it is wrong. A
+# slow container must not turn into a failed deployment, so the
+# unconfirmed case warns and the install finishes.
+test_unconfirmable_restart_warns_but_finishes() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set NO_STATUS 1
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] \
+        && pass "an unconfirmed restart does not abort the install" \
+        || fail "a snapshot that never arrived must not fail a deployment (exit $rc)"
+    stdout | grep -q "WARNING: cannot confirm the tunnel came back on UDP 4500" \
+        && pass "the operator is told the restart could not be confirmed" \
+        || fail "an unconfirmed restart must be reported, not passed over in silence"
+}
+
+# The confirmation is only worth having if it is visible: through
+# bootstrap.sh the log is condensed, and a restart that was verified must
+# read differently from one that was merely issued (amnezia-vpn-server-exiq).
+test_confirmed_restart_is_logged() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "install: exit $rc"
+    stdout | grep -q "tunnel confirmed listening on UDP 4500" \
+        && pass "a verified restart says what it verified" \
+        || fail "the restart must record the port it confirmed"
+}
+
+# The snapshot lags the interface by up to one check interval, so the
+# first read after a restart can still name the old port. Treating that
+# as the answer would fail an install that worked; the confirmation waits
+# for the port it asked about (amnezia-vpn-server-na6a).
+test_restart_confirmation_waits_for_the_interface() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --awg-port 4500)"
+    [ "$rc" = "0" ] || fail "first pass: exit $rc"
+    state_set LIVE_PORT 4500
+    state_set SLOW_PORT 4500
+    # 3s of budget against a snapshot that lands in 0.2s
+    rc="$(VERIFY_WAIT=3 run_install --awg-port 4501)"
+    [ "$rc" = "0" ] \
+        && pass "a snapshot that lags the restart does not fail the install" \
+        || fail "the confirmation must wait for the interface, not read the stale port (exit $rc)"
+    stdout | grep -q "tunnel confirmed listening on UDP 4501" \
+        && pass "the confirmation reports the port the tunnel ended up on" \
+        || fail "the wait must end on the new port, not the one it started from"
 }
 
 test_failed_apply_aborts_instead_of_reporting_success() {
