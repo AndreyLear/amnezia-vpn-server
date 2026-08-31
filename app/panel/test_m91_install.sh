@@ -715,8 +715,7 @@ test_apt_retries_after_dpkg_lock() {
     fakes_reset
     setstate APT_LOCK_FAILS 1 "$FAKE_STATE"
     os_release debian 12 bookworm
-    rm -f "$FAKE_DIR/nginx"
-    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=8 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
+    rc="$(AMNEZIA_INSTALL_FORCE_NGINX_INSTALL=1 AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=8 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
     [ "$rc" = "0" ] || fail "dpkg lock retry: exit $rc, want 0"
     if grep -q "apt-get install nginx failed" "$TMP_TEST/err"; then
         fail "dpkg lock retry: died with nginx apt-get failure"
@@ -725,12 +724,6 @@ test_apt_retries_after_dpkg_lock() {
     fi
     grep -q "apt-get install -y nginx" "$FAKE_CALLS" && pass "dpkg lock retry: apt-get install nginx ran" \
         || fail "dpkg lock retry: apt-get install nginx was not invoked"
-    cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
-#!/bin/bash
-echo "nginx $*" >> "${FAKE_CALLS:?}"
-exit 0
-FAKE_EOF
-    chmod +x "$FAKE_DIR/nginx"
 }
 
 test_apt_dpkg_lock_timeout() {
@@ -948,18 +941,11 @@ test_waits_while_dpkg_lock_is_held() {
     fakes_reset
     setstate APT_FUSER_BUSY_REMAINING 2 "$FAKE_STATE"
     os_release debian 12 bookworm
-    rm -f "$FAKE_DIR/nginx"   # forces an apt install, i.e. a lock wait
-    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=30 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
+    rc="$(AMNEZIA_INSTALL_FORCE_NGINX_INSTALL=1 AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=30 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
     [ "$rc" = "0" ] || fail "held-lock wait: exit $rc, want 0"
     stdout | grep -q "waiting for /var/lib/dpkg/lock-frontend" \
         && pass "the installer says it is waiting for the lock" \
         || fail "waiting for the lock must be visible"
-    cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
-#!/bin/bash
-echo "nginx $*" >> "${FAKE_CALLS:?}"
-exit 0
-FAKE_EOF
-    chmod +x "$FAKE_DIR/nginx"
 }
 
 # A lock that never frees must end with the deadline message naming the
@@ -968,8 +954,7 @@ test_dpkg_lock_deadline_reports_the_holder() {
     fakes_reset
     setstate APT_FUSER_BUSY_REMAINING 9999 "$FAKE_STATE"
     os_release debian 12 bookworm
-    rm -f "$FAKE_DIR/nginx"
-    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=0 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
+    rc="$(AMNEZIA_INSTALL_FORCE_NGINX_INSTALL=1 AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=0 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
     [ "$rc" != "0" ] || fail "a lock held past the deadline must fail the install"
     stderr | grep -q "timed out waiting for /var/lib/dpkg/lock-frontend" \
         && pass "the deadline message names the lock" \
@@ -977,12 +962,6 @@ test_dpkg_lock_deadline_reports_the_holder() {
     stderr | grep -q "held by process 10849" \
         && pass "the deadline message names the holder" \
         || fail "the deadline message must name the holding process"
-    cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
-#!/bin/bash
-echo "nginx $*" >> "${FAKE_CALLS:?}"
-exit 0
-FAKE_EOF
-    chmod +x "$FAKE_DIR/nginx"
 }
 
 test_lock_timeout_must_be_numeric() {
@@ -1017,18 +996,11 @@ test_apt_retries_on_lists_lock() {
     setstate APT_LOCK_FAILS 1 "$FAKE_STATE"
     setstate APT_LOCK_FILE /var/lib/apt/lists/lock "$FAKE_STATE"
     os_release debian 12 bookworm
-    rm -f "$FAKE_DIR/nginx"   # forces the nginx install, i.e. a real apt call
-    rc="$(AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=8 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
+    rc="$(AMNEZIA_INSTALL_FORCE_NGINX_INSTALL=1 AMNEZIA_INSTALL_DPKG_LOCK_TIMEOUT_SEC=8 AMNEZIA_INSTALL_DPKG_LOCK_POLL_SEC=0 run_install --domain panel.example.com)"
     [ "$rc" = "0" ] || fail "lists-lock retry: exit $rc, want 0"
     stdout | grep -q "busy; retrying" \
         && pass "a lists-lock message is retried like a frontend lock" \
         || fail "lists lock must be retried too"
-    cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
-#!/bin/bash
-echo "nginx $*" >> "${FAKE_CALLS:?}"
-exit 0
-FAKE_EOF
-    chmod +x "$FAKE_DIR/nginx"
 }
 
 # A failed package install has to stop the install where it happened. It
