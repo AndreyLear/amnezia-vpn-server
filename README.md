@@ -49,13 +49,38 @@ Debian 12 установщик примет, но мы его не провер�
 получите нормальный сертификат вместо самоподписанного и сможете переехать на
 другой сервер, не меняя настройки у пользователей.
 
-**Ваш компьютер** — Mac или Linux с терминалом. Если будете входить на сервер
-по паролю, поставьте `sshpass`:
+**Ваш компьютер** — Mac, Linux или Windows.
+
+На Mac и Linux откройте терминал. Для входа на сервер по паролю поставьте
+`sshpass`:
 
 ```sh
 brew install sshpass          # macOS
 sudo apt install sshpass      # Ubuntu, Debian
 ```
+
+На Windows установщик не запустится ни в PowerShell, ни в командной строке: он
+написан для оболочки Unix. Поставьте WSL — это Ubuntu внутри Windows, вторая
+машина не нужна. Откройте PowerShell от имени администратора:
+
+```powershell
+wsl --install
+```
+
+Команда поставит Ubuntu и попросит перезагрузить компьютер. После перезагрузки
+Ubuntu запустится сама и спросит имя пользователя и пароль — придумайте любые,
+они живут только внутри неё. Затем поставьте `sshpass`:
+
+```sh
+sudo apt install sshpass
+```
+
+Дальше открывайте Ubuntu из меню «Пуск» и вводите там все команды из этой
+инструкции. В PowerShell они не работают: перенос строки и кавычки там
+разбираются по-другому.
+
+WSL работает на Windows 11 и на Windows 10 версии 2004 и новее. Ставится он
+один раз: дальше Windows ничем не отличается от Mac или Linux.
 
 **Время** — около пяти минут.
 
@@ -173,7 +198,9 @@ Endpoint:  example.com:4500
 
 - iOS — [App Store](https://apps.apple.com/app/amneziawg/id6478942365)
 - Android — [Google Play](https://play.google.com/store/apps/details?id=org.amnezia.awg)
-- Windows — [релизы на GitHub](https://github.com/amnezia-vpn/amneziawg-windows-client/releases)
+- Windows — [релизы на GitHub](https://github.com/amnezia-vpn/amneziawg-windows-client/releases).
+  Берите файл `amneziawg-amd64-<версия>.msi`. Вариант `arm64` — для ноутбуков
+  на процессорах ARM, вариант `windows7` — для Windows 7 и 8
 
 **AmneziaVPN** — общий клиент Amnezia, умеет несколько протоколов сразу.
 Есть под Windows, macOS, Linux, Android и iOS: [amnezia.org/downloads](https://amnezia.org/downloads)

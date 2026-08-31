@@ -43,13 +43,38 @@ host's uplink and core count, not from the OS.
 address. With one you get a real certificate instead of a self-signed one, and
 you can move to another server without touching anyone's settings.
 
-**Your computer** — a Mac or Linux machine with a terminal. Install `sshpass`
-if you will log into the server with a password:
+**Your computer** — a Mac, a Linux machine, or Windows.
+
+On a Mac or Linux open the terminal. Install `sshpass` if you will log into the
+server with a password:
 
 ```sh
 brew install sshpass          # macOS
 sudo apt install sshpass      # Ubuntu, Debian
 ```
+
+On Windows the installer runs in neither PowerShell nor the command prompt: it
+is written for a Unix shell. Install WSL — Ubuntu inside Windows, no second
+machine needed. Open PowerShell as administrator:
+
+```powershell
+wsl --install
+```
+
+The command installs Ubuntu and asks you to restart the computer. After the
+restart Ubuntu opens on its own and asks for a username and a password — pick
+any, they exist only inside it. Then install `sshpass`:
+
+```sh
+sudo apt install sshpass
+```
+
+From there open Ubuntu from the Start menu and type every command in this guide
+there. They do not work in PowerShell, which reads line breaks and quotes
+differently.
+
+WSL runs on Windows 11 and on Windows 10 version 2004 and later. You set it up
+once: after that Windows works the same as a Mac or Linux.
 
 **Time** — about five minutes.
 
@@ -119,7 +144,9 @@ The server speaks AmneziaWG, so any client that understands the protocol works.
 
 - iOS — [App Store](https://apps.apple.com/app/amneziawg/id6478942365)
 - Android — [Google Play](https://play.google.com/store/apps/details?id=org.amnezia.awg)
-- Windows — [GitHub releases](https://github.com/amnezia-vpn/amneziawg-windows-client/releases)
+- Windows — [GitHub releases](https://github.com/amnezia-vpn/amneziawg-windows-client/releases).
+  Take `amneziawg-amd64-<version>.msi`. The `arm64` build is for laptops on ARM
+  processors, the `windows7` one for Windows 7 and 8
 
 **AmneziaVPN** — Amnezia's general client, several protocols at once, for
 Windows, macOS, Linux, Android and iOS: [amnezia.org/downloads](https://amnezia.org/downloads)
