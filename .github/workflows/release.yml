@@ -62,6 +62,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A version number has to mean exactly one thing, and nothing here
+      # made it so: republishing an existing number with different content
+      # was allowed, and it happened. 2.3.0 carried two different builds
+      # within a week, so a production server and a test server ran
+      # different code under the same version — the panel's traffic-direction
+      # fix was live on one and missing on the other, and answering "what is
+      # actually on this server" took comparing image digests instead of
+      # reading a version (amnezia-vpn-server-g68l).
+      #
+      # Refused here rather than detected afterwards: once published, a
+      # version is immutable, and a release that means to change something
+      # bumps IMAGE_VERSION in versions.lock. That also means a run which
+      # published some images and then failed cannot be retried on the same
+      # number — bump it, the cost of a spare version number is nothing next
+      # to two servers disagreeing about what 2.3.0 is.
+      - name: Refuse to overwrite a published version
+        run: |
+          set -euo pipefail
+          taken=""
+          for image in panel awg dns; do
+            ref="${IMAGE_REGISTRY}/${image}:${PUBLISH_VERSION}"
+            if docker manifest inspect "$ref" >/dev/null 2>&1; then
+              taken="${taken} ${ref}"
+            fi
+          done
+          if [ -n "$taken" ]; then
+            echo "::error::already published:${taken}. A published version is never rebuilt: raise IMAGE_VERSION in versions.lock and tag the new number."
+            exit 1
+          fi
+          echo "version ${PUBLISH_VERSION} is free in ${IMAGE_REGISTRY}"
+
       - name: Build and push panel
         uses: docker/build-push-action@v6
         with:
