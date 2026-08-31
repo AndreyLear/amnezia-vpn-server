@@ -106,6 +106,8 @@
 #   AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1  run the AmneziaWG client-stack
 #                                      install even when already present
 #                                      (testability)
+#   AMNEZIA_INSTALL_FORCE_NGINX_INSTALL=1  install nginx even when the host
+#                                      already has it (testability)
 #   AMNEZIA_INSTALL_SKIP_PRUNE=1       skip docker-prune.sh after compose
 #                                      build (keep golang toolchain /
 #                                      builder cache; testability)
@@ -1746,6 +1748,18 @@ NGINX_SITE="amnezia-panel"
 # panel mode actually retires the site, which is the half of that job that
 # stops nginx serving a hostname whose ports have just been closed.
 NGINX_SITES_DIR="${AMNEZIA_INSTALL_NGINX_SITES_DIR:-/etc/nginx/sites-enabled}"
+
+# nginx_present: whether the host already carries nginx, so the install can
+# be skipped. Hookable for the same reason the AmneziaWG check is, and for a
+# concrete one: the apt path is the only route into the dpkg-lock wait, and
+# the harness could reach it only by deleting its fake nginx — which does
+# nothing on a host that has a real one. GitHub's ubuntu runner ships nginx,
+# so those six assertions failed on every CI run while passing on a Mac
+# (amnezia-vpn-server-hcqq).
+nginx_present() {
+    [ -z "${AMNEZIA_INSTALL_FORCE_NGINX_INSTALL:-}" ] || return 1
+    command -v nginx >/dev/null 2>&1
+}
 ACME_ROOT="${AMNEZIA_INSTALL_ACME_ROOT:-/var/www/certbot}"
 
 render_nginx_conf() { # render_nginx_conf DOMAIN PHASE [TLS_PORT]
@@ -1805,7 +1819,7 @@ domain_setup() {
     log "panel domain $DOMAIN: DNS pre-flight before any certificate attempt"
     dns_preflight "$DOMAIN"
 
-    if ! command -v nginx >/dev/null 2>&1; then
+    if ! nginx_present; then
         run_apt_get install -y nginx || die_op "apt-get install nginx failed"
     fi
     mkdir -p "$NGINX_CONF_DIR" "$ACME_ROOT" || die_op "cannot create nginx/acme dirs"
@@ -1919,7 +1933,7 @@ panel_port_setup() {
         log "TLS certificate already present under $PANEL_TLS_DIR: keeping it"
     fi
 
-    if ! command -v nginx >/dev/null 2>&1; then
+    if ! nginx_present; then
         run_apt_get install -y nginx || die_op "apt-get install nginx failed"
     fi
     mkdir -p "$NGINX_CONF_DIR" || die_op "cannot create nginx conf dir"
