@@ -85,6 +85,8 @@ ADD_APT_REPO_RC=0
 ADD_APT_REPO_FAILS=0
 APT_FUSER_BUSY_REMAINING=0
 FAKE_PMTU=1500
+DEFAULT_IFACE=ens3
+TC_RC=0
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -315,6 +317,30 @@ fi
 exit 1
 FAKE_EOF
 
+# Shadows host ip/tc: apply_default_qdisc_now reads the default route and
+# then CHANGES the queue on it. Without these two the harness would rewrite
+# the queue of whatever machine it runs on — CI included.
+cat > "$FAKE_DIR/ip" <<'FAKE_EOF'
+#!/bin/bash
+echo "ip $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "route" ] && [ "${2:-}" = "show" ] && [ "${3:-}" = "default" ]; then
+    # DEFAULT_IFACE empty stands for a host with no default route at all.
+    [ -n "${DEFAULT_IFACE:-}" ] || exit 0
+    printf 'default via 10.0.0.1 dev %s onlink
+' "$DEFAULT_IFACE"
+    exit 0
+fi
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/tc" <<'FAKE_EOF'
+#!/bin/bash
+echo "tc $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+exit "${TC_RC:-0}"
+FAKE_EOF
+
 cat > "$FAKE_DIR/ping" <<'FAKE_EOF'
 #!/bin/bash
 # Fake ping for the tunnel-MTU pre-flight: answers unfragmented probes up
@@ -481,7 +507,7 @@ FAKE_EOF
 
 chmod +x "$FAKE_DIR/curl" "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot" "$FAKE_DIR/openssl"
 
-chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/fuser" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl" "$FAKE_DIR/ping"
+chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/fuser" "$FAKE_DIR/systemctl" "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl" "$FAKE_DIR/ping" "$FAKE_DIR/ip" "$FAKE_DIR/tc"
 
 # M9.2c fakes: the installer probes the AmneziaWG client stack and
 # manages the docker/ufw forward-accept coexistence rules.
@@ -887,6 +913,57 @@ test_versions_lock_used() {
     grep -q -- "--env-file" "$FAKE_CALLS" && grep -q "versions.lock" "$FAKE_CALLS" \
         && pass "compose invoked with --env-file versions.lock" \
         || fail "compose not invoked with --env-file versions.lock"
+}
+
+# net.core.default_qdisc only governs interfaces created after it is set,
+# and the uplink already exists — so the sysctl alone left the box on the
+# distribution's queue now and on fq only after a reboot, with neither
+# state measured. Measured on a 1-vCPU gateway at 450 Mbit/s, fq beat
+# fq_codel on average latency, jitter and worst case in three rounds each
+# (amnezia-vpn-server-z8ui), so the live uplink is moved to match.
+test_uplink_queue_is_applied_now() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "uplink queue: exit $rc"
+    grep -qE "tc qdisc replace dev ens3 root fq\$" "$FAKE_CALLS" \
+        && pass "the uplink queue is set on the live interface, not only in sysctl" \
+        || fail "the queue must reach the interface that exists now, not just the next reboot"
+    stdout | grep -q "uplink queue: ens3 set to fq" \
+        && pass "the installer says which interface it moved" \
+        || fail "moving the uplink queue must be visible in the log"
+    grep -q "sysctl -w net.core.default_qdisc=fq" "$FAKE_CALLS" \
+        && pass "the persisted setting and the live one agree" \
+        || fail "the sysctl must still be set, so a reboot keeps the same queue"
+}
+
+# A host with no default route has no uplink to tune. That is not a failure
+# and must not read like one.
+test_uplink_queue_without_default_route() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set DEFAULT_IFACE ""
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "no default route: exit $rc, want 0"
+    grep -q "tc qdisc replace" "$FAKE_CALLS" \
+        && fail "no default route means there is no interface to touch" \
+        || pass "with no default route no queue is changed"
+    stdout | grep -q "WARNING: no default route found" \
+        && pass "the operator is told why the queue was left alone" \
+        || fail "skipping the queue must say why"
+}
+
+# The tunnel does not depend on the queue, so a tc that fails warns and the
+# install carries on rather than dying over a tuning knob.
+test_uplink_queue_failure_is_not_fatal() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set TC_RC 1
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "tc failure: exit $rc, want 0 (tuning must not abort an install)"
+    stdout | grep -q "WARNING: could not set the fq queue on ens3" \
+        && pass "a queue that could not be set is reported, not swallowed" \
+        || fail "a failed queue change must be visible"
 }
 
 test_ip_forward_disabled() {
@@ -2037,6 +2114,9 @@ test_skip_prune
 test_layout_and_permissions
 test_versions_lock_used
 test_ip_forward_disabled
+test_uplink_queue_is_applied_now
+test_uplink_queue_without_default_route
+test_uplink_queue_failure_is_not_fatal
 test_ip_forward_already_enabled
 test_sysctl_bbr_when_advertised
 test_apt_output_is_not_swallowed

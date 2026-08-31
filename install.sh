@@ -629,6 +629,44 @@ tcp_cc_has_bbr() {
     return 1
 }
 
+# apply_default_qdisc_now: net.core.default_qdisc only decides what queue
+# a NEWLY created interface gets. The uplink already exists by the time the
+# installer runs, so the sysctl leaves it on whatever the distribution
+# handed out — Ubuntu gives fq_codel — and the box then behaves one way now
+# and another after the first reboot, with neither state ever measured.
+#
+# Which one is better is not a matter of taste here. On a 1-vCPU gateway
+# under 450 Mbit/s of real load, three rounds each (amnezia-vpn-server-z8ui):
+#
+#   fq        7.09-7.25 ms average, 0.18-0.41 ms jitter, 7.6-8.5 ms worst
+#   fq_codel  7.49-7.75 ms average, 0.80-1.65 ms jitter, 10.2-12.9 ms worst
+#   cake      7.51 ms average, 1.35 ms jitter, 12.5 ms worst
+#
+# Throughput was identical (~450 Mbit/s); cake lost because its own cost
+# outweighs the better queueing when there is a single core to spend. So fq
+# — what the sysctl already asks for — is applied to the live uplink too,
+# which is all this function does.
+#
+# Never fatal: a host without tc, or without a default route, keeps the
+# queue it has and is told so. The tunnel does not depend on this.
+apply_default_qdisc_now() {
+    local iface
+    iface="$(cmd ip route show default 2>/dev/null | awk '{print $5; exit}')"
+    if [ -z "$iface" ]; then
+        log "WARNING: no default route found; the uplink queue is left as it is"
+        return 0
+    fi
+    if ! command -v tc >/dev/null 2>&1; then
+        log "WARNING: tc is not installed; $iface keeps its queue until a reboot"
+        return 0
+    fi
+    if cmd tc qdisc replace dev "$iface" root fq >/dev/null 2>&1; then
+        log "uplink queue: $iface set to fq now, matching net.core.default_qdisc"
+    else
+        log "WARNING: could not set the fq queue on $iface; it keeps the one it had"
+    fi
+}
+
 apply_sysctl_warn() { # apply_sysctl_warn KEY=VALUE — warning, do not abort
     if ! cmd sysctl -w "$1"; then
         log "WARNING: sysctl -w $1 failed; continuing"
@@ -713,6 +751,7 @@ done
 if [ "$HAVE_BBR" = "1" ]; then
     apply_sysctl_warn net.core.default_qdisc=fq || true
     apply_sysctl_warn net.ipv4.tcp_congestion_control=bbr || true
+    apply_default_qdisc_now
 fi
 
 # --- 6. AmneziaWG client stack (amneziawg + amneziawg-tools) ----------
