@@ -49,6 +49,7 @@ fakes_reset() {
     fi
     cat > "$FAKE_STATE" <<EOF
 SSH_RC=0
+SSH_STDERR=
 INSTALL_RC=0
 INIT_RC=0
 INIT_STDERR=
@@ -80,7 +81,13 @@ case "$*" in
         ;;
 esac
 . "${FAKE_STATE:?}"
-[ "${SSH_RC:-0}" = "0" ] || exit "${SSH_RC}"
+if [ "${SSH_RC:-0}" != "0" ]; then
+    # Real ssh says on stderr which of several different failures happened;
+    # a fake that stays silent would let the wizard's message claim any
+    # cause it liked (amnezia-vpn-server-4nva).
+    [ -z "${SSH_STDERR:-}" ] || printf '%s\n' "${SSH_STDERR}" >&2
+    exit "${SSH_RC}"
+fi
 
 cmd="$*"
 case "$cmd" in
@@ -763,6 +770,51 @@ test_ssh_failure() {
         || fail "SSH fail: message missing"
 }
 
+# Four different things break an SSH connection and each needs a different
+# action from the operator. The message used to name three of them as
+# equally likely and omit the fourth — a reinstalled server whose host key
+# no longer matches — which is the one that actually happened
+# (amnezia-vpn-server-4nva). ssh knows which it was; the wizard has to pass
+# that on instead of listing guesses.
+test_ssh_failure_names_the_cause() {
+    ssh_case() { # ssh_case "текст от ssh" "что должно быть в сообщении"
+        fakes_reset
+        setstate SSH_RC 255 "$FAKE_STATE"
+        setstate SSH_STDERR "$1" "$FAKE_STATE"
+        rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" --panel-port 8443)"
+        [ "$rc" = "1" ] || fail "ssh '$1': exit $rc, want 1"
+        if grep -qi "$2" "$TMP_TEST/err"; then
+            pass "ssh failure named: $2"
+        else
+            fail "'$1' must be reported as '$2', got: $(grep -i 'SSH failed' "$TMP_TEST/err" | head -1)"
+        fi
+        grep -qF "$1" "$TMP_TEST/err" \
+            && pass "ssh's own line is kept as the evidence: $1" \
+            || fail "the wizard must not swallow what ssh said ($1)"
+    }
+    ssh_case "Host key verification failed." "ssh-keygen -R"
+    ssh_case "Permission denied (publickey,password)." "rejected the credentials"
+    ssh_case "ssh: connect to host 2.26.93.192 port 22: Connection refused" "sshd is not listening"
+    ssh_case "ssh: connect to host 2.26.93.192 port 22: Connection timed out" "did not answer at all"
+    ssh_case "ssh: Could not resolve hostname nowhere: Name or service not known" "does not resolve"
+}
+
+# An unrecognised failure still has to end in a usable message rather than
+# in silence, and must not claim a cause it cannot know.
+test_ssh_failure_unknown_cause_stays_general() {
+    fakes_reset
+    setstate SSH_RC 255 "$FAKE_STATE"
+    setstate SSH_STDERR "ssh: something entirely new went wrong" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" --panel-port 8443)"
+    [ "$rc" = "1" ] || fail "unknown ssh failure: exit $rc, want 1"
+    grep -q "Check --ip/--user/--key or --password-env" "$TMP_TEST/err" \
+        && pass "an unknown failure falls back to the general advice" \
+        || fail "an unknown failure must still tell the operator where to look"
+    grep -q "ssh-keygen -R\|rejected the credentials\|sshd is not listening" "$TMP_TEST/err" \
+        && fail "an unknown failure must not claim a cause ssh never reported" \
+        || pass "no cause is invented when ssh did not name one"
+}
+
 test_install_failure() {
     fakes_reset
     setstate INSTALL_RC 1 "$FAKE_STATE"
@@ -1237,6 +1289,8 @@ test_interactive_empty_vpn_domain_uses_ip_endpoint
 test_interactive_no_domain_panel_port
 test_interactive_password_with_keys_present
 test_ssh_failure
+test_ssh_failure_names_the_cause
+test_ssh_failure_unknown_cause_stays_general
 test_install_failure
 test_dns_mismatch
 test_admin_password_not_in_call_log

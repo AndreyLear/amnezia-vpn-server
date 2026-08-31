@@ -580,9 +580,44 @@ remote_copy() { # remote_copy local remote-path
     run_expect_ssh
 }
 
+# ssh_probe_failed: ssh already knows which of several different things
+# went wrong and says so on its own stderr. The message this replaced named
+# three of them as equally likely — timeout, refused, authentication — and
+# left out the fourth, which is the one that actually cost an operator an
+# evening: a reinstalled server whose host key no longer matches the record
+# on the machine running the wizard (amnezia-vpn-server-4nva). Each cause
+# needs a different action, and guessing between them is work the operator
+# should not be doing when ssh has already answered.
+#
+# The password never appears here: sshpass and expect both read it from the
+# environment, so ssh's stderr carries no credential to leak.
+ssh_probe_failed() {
+    local err hint
+    err="$(cat "$SSH_PROBE_ERR" 2>/dev/null)"
+    rm -f "$SSH_PROBE_ERR"
+    case "$err" in
+        *"Host key verification failed"* | *"REMOTE HOST IDENTIFICATION HAS CHANGED"*)
+            hint="the host key of ${SSH_HOST} is not the one remembered here, so the server was reinstalled or replaced. Forget the old key and rerun: ssh-keygen -R ${SSH_HOST}" ;;
+        *"Permission denied"*)
+            hint="${SSH_HOST} rejected the credentials. Check the password behind --password-env, or --key and --user" ;;
+        *"Connection refused"*)
+            hint="nothing accepts SSH on ${SSH_HOST}. The host is up but sshd is not listening on that port" ;;
+        *"Connection timed out"* | *"Operation timed out"* | *"No route to host"*)
+            hint="${SSH_HOST} did not answer at all. Check the address behind --ip and whether a firewall drops SSH" ;;
+        *"Could not resolve hostname"* | *"Name or service not known"* | *"nodename nor servname"*)
+            hint="the name ${SSH_HOST} does not resolve. Check the value behind --ip" ;;
+        *)
+            hint="cannot connect to ${SSH_USER}@${SSH_HOST}. Check --ip/--user/--key or --password-env" ;;
+    esac
+    [ -n "$err" ] && printf '%s\n' "$err" >&2
+    die_op "SSH failed: $hint"
+}
+
 log "connecting to ${SSH_USER}@${SSH_HOST} (${AUTH_MODE} auth)"
-REMOTE_TMP="$(remote_cmd 'mktemp -d /tmp/amnezia-bootstrap.XXXXXX')" || \
-    die_op "SSH failed: cannot connect to ${SSH_USER}@${SSH_HOST} (timeout, refused, or authentication failure). Check --ip/--user/--key or --password-env"
+SSH_PROBE_ERR="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-ssh.XXXXXX")"
+REMOTE_TMP="$(remote_cmd 'mktemp -d /tmp/amnezia-bootstrap.XXXXXX' 2>"$SSH_PROBE_ERR")" \
+    || ssh_probe_failed
+rm -f "$SSH_PROBE_ERR"
 REMOTE_TMP="$(printf '%s' "$REMOTE_TMP" | tr -d '[:space:]')"
 [ -n "$REMOTE_TMP" ] || die_op "SSH failed: the server did not return a temporary directory"
 validate_safe "$REMOTE_TMP" || die_op "SSH failed: unexpected mktemp path from the server"
