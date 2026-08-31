@@ -39,14 +39,19 @@ fakes_reset() {
     printf 'FAKE-ED25519-KEY\n' > "$FAKE_HOME/.ssh/id_ed25519"
     printf 'FAKE-RSA-KEY\n' > "$FAKE_HOME/.ssh/id_rsa"
     rm -f "$FAKE_DIR/install.err" "$FAKE_DIR/last-bundle"
-    if [ -f "$FAKE_DIR/tar.orig" ]; then
-        cp -f "$FAKE_DIR/tar.orig" "$FAKE_DIR/tar"
-        chmod +x "$FAKE_DIR/tar"
-    fi
-    if [ -f "$FAKE_DIR/git.orig" ]; then
-        cp -f "$FAKE_DIR/git.orig" "$FAKE_DIR/git"
-        chmod +x "$FAKE_DIR/git"
-    fi
+    # Every fake comes back, not a hand-kept list of the ones somebody
+    # remembered. tar and git were restored here and sshpass was not, so
+    # test_sshpass_missing deleted it and every later password run fell
+    # through to whatever the host happened to carry: invisible on a
+    # machine with a real sshpass, two failures on one without
+    # (amnezia-vpn-server-0boo). Restoring all of them means the next test
+    # that removes a fake needs no one to notice.
+    for orig in "$FAKE_DIR"/*.orig; do
+        [ -e "$orig" ] || continue
+        target="${orig%.orig}"
+        cp -f "$orig" "$target"
+        chmod +x "$target"
+    done
     cat > "$FAKE_STATE" <<EOF
 SSH_RC=0
 SSH_STDERR=
@@ -304,8 +309,14 @@ FAKE_EOF
 
 chmod +x "$FAKE_DIR/ssh" "$FAKE_DIR/scp" "$FAKE_DIR/sshpass" \
     "$FAKE_DIR/tar" "$FAKE_DIR/curl" "$FAKE_DIR/openssl" "$FAKE_DIR/git"
-cp -f "$FAKE_DIR/tar" "$FAKE_DIR/tar.orig"
-cp -f "$FAKE_DIR/git" "$FAKE_DIR/git.orig"
+# Snapshot every fake while the directory holds nothing else: fakes_reset
+# writes the state file and the logs later, so what is executable here is
+# exactly the set of fakes a test may delete (amnezia-vpn-server-0boo).
+for fake in "$FAKE_DIR"/*; do
+    [ -f "$fake" ] && [ -x "$fake" ] || continue
+    case "$fake" in *.orig) continue ;; esac
+    cp -f "$fake" "$fake.orig"
+done
 
 run_bootstrap() {
     HOME="$FAKE_HOME" \
@@ -993,6 +1004,24 @@ test_source_url() {
         || fail "source URL: scp missing"
 }
 
+# A test that removes a fake must not leave the next one without it. The
+# suite had exactly that hole and it hid behind the host: test_sshpass_missing
+# deleted the sshpass fake, nothing put it back, and every later password run
+# used whatever the machine happened to carry. On a host with a real sshpass
+# nothing looked wrong; on one without it, two tests failed and passed again
+# when run alone — the signature of state leaking between tests
+# (amnezia-vpn-server-0boo).
+test_fakes_are_restored_between_tests() {
+    fakes_reset
+    rm -f "$FAKE_DIR/sshpass" "$FAKE_DIR/tar" "$FAKE_DIR/git" "$FAKE_DIR/ssh"
+    fakes_reset
+    for f in sshpass tar git ssh scp curl openssl; do
+        [ -x "$FAKE_DIR/$f" ] \
+            && pass "fakes_reset brings back $f" \
+            || fail "$f stayed deleted: the next test would use the host's own"
+    done
+}
+
 test_sshpass_missing() {
     fakes_reset
     rm -f "$FAKE_HOME/.ssh/id_ed25519" "$FAKE_HOME/.ssh/id_rsa" "$FAKE_DIR/sshpass"
@@ -1298,6 +1327,7 @@ test_tar_excludes_git_and_beads
 test_pack_skips_worktrees_contents
 test_pack_tar_fallback_excludes_worktrees
 test_source_url
+test_fakes_are_restored_between_tests
 test_sshpass_missing
 test_invalid_panel_port
 test_default_panel_port_without_domain
