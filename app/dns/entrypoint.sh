@@ -41,6 +41,22 @@ CONF=/tmp/dnsmasq.conf
     printf 'domain-needed\n'
     printf 'bogus-priv\n'
     printf 'cache-size=1000\n'
+    # The tunnel carries IPv4 only: awg0 has no IPv6 address, forwarding for
+    # it is off, and the server accepts nothing but the peer's IPv4. Handing
+    # a client AAAA records therefore points it at addresses nothing can
+    # reach — and the client dutifully routes them into the tunnel, because
+    # ::/0 sits in AllowedIPs to stop those packets escaping around the VPN.
+    #
+    # An owner saw this as YouTube loading its page while every video card
+    # came back "no internet connection": opening the feed fires dozens of
+    # parallel requests to i.ytimg.com, yt3.ggpht.com and the API, and every
+    # one of them is offered an address that leads nowhere first. Dropping
+    # ::/0 from the client cured it and reopened the leak it was added to
+    # close, so the answer is to stop offering the addresses instead.
+    #
+    # Remove this line when the tunnel gains real IPv6; until then an AAAA
+    # answer can only cost time.
+    printf 'filter-AAAA\n'
     printf '%s\n' "$UPSTREAM_DNS" | tr ',' '\n' | while read -r server; do
         [ -n "$server" ] && printf 'server=%s\n' "$server"
     done
