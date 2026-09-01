@@ -13,7 +13,8 @@
 #   - the panel hostname resolves to the tunnel address, and only when
 #     a hostname was configured;
 #   - every upstream from UPSTREAM_DNS is forwarded to, and no resolver
-#     is inherited from the host (no-resolv).
+#     is inherited from the host (no-resolv);
+#   - AAAA answers are filtered out while the tunnel carries IPv4 only.
 #
 # Runs on plain bash (macOS or Linux); no root, no Docker, no network.
 # The entrypoint itself runs under a shell with the image's semantics,
@@ -133,6 +134,12 @@ check "forwards to the second upstream" has 'server=8.8.8.8' "$CONF"
 check "ignores the host resolver" has 'no-resolv' "$CONF"
 check "ignores the host hosts file" has 'no-hosts' "$CONF"
 check "caches answers" has 'cache-size=1000' "$CONF"
+# The tunnel is IPv4-only, so an AAAA answer sends the client at an address
+# nothing can reach — and ::/0 in AllowedIPs then swallows the packet. An
+# owner met this as YouTube serving its page while every video card read
+# "no internet connection". Answer with A records only until the tunnel
+# carries IPv6 for real.
+check "hides IPv6 addresses the tunnel cannot reach" has 'filter-AAAA' "$CONF"
 check "reports the mapping it installed" \
     grep -q 'panel.example.com -> 10.8.0.1' <<<"$CONF"
 
