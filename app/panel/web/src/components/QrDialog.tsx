@@ -22,10 +22,13 @@ export function QrDialog({ clientId, clientName, onOpenChange }: QrDialogProps) 
           </p>
         </DialogHeader>
         {clientId !== null ? (
+          // The symbol fills the dialog instead of sitting in a fixed 256 px
+          // box: a client config needs 89 modules, and a camera reading them
+          // off a screen needs every pixel of pitch it can get (T-ky6l). The
+          // PNG is rendered far larger than shown, so the browser only ever
+          // scales it down.
           <img
-            className="mx-auto size-64"
-            width={256}
-            height={256}
+            className="mx-auto aspect-square w-full"
             alt={`QR-код клиента ${clientName}`}
             src={`/clients/${clientId}/qr`}
           />

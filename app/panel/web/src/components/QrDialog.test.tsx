@@ -31,6 +31,23 @@ describe("QrDialog", () => {
     expect(header).toContainElement(hint);
   });
 
+  // A fixed 256 px box was what the dialog shipped with, and 256 px over
+  // the 89 modules of a client config is under 3 px of pitch — too little
+  // for a camera photographing a screen (T-ky6l).
+  it("shows the symbol at the full dialog width, square and unconstrained", () => {
+    render(
+      <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
+    );
+
+    const qr = screen.getByRole("img", { name: "QR-код клиента Alice" });
+
+    expect(qr).toHaveClass("w-full");
+    expect(qr).toHaveClass("aspect-square");
+    expect(qr.className).not.toMatch(/\b(size|w|max-w)-\d/);
+    expect(qr).not.toHaveAttribute("width");
+    expect(qr).not.toHaveAttribute("height");
+  });
+
   it("does not autofocus the close button when opened", async () => {
     render(
       <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,

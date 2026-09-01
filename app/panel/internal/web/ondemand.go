@@ -59,6 +59,12 @@ func (s *Server) clientConfigDownload(w http.ResponseWriter, r *http.Request) {
 	w.Write(cfg)
 }
 
+// qrModulePixels is the side of one QR module in the served PNG. Eight
+// pixels keep the symbol readable after the browser scales it down into
+// the dialog, and on a 1x display still leave a module wider than the
+// blur of a hand-held camera.
+const qrModulePixels = 8
+
 // clientQR handles GET /clients/{id}/qr: the QR encodes exactly the
 // same client config bytes as the config download. Nothing is written
 // to disk; the PNG is produced in memory.
@@ -78,9 +84,19 @@ func (s *Server) clientQR(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, http.StatusInternalServerError)
 		return
 	}
-	// QRCodeMedium balances density and robustness; 256 px is readable
-	// by phone cameras while keeping the PNG small (fixed payload).
-	png, err := qrcode.Encode(string(cfg), qrcode.Medium, 256)
+	// Medium error correction balances density and robustness.
+	//
+	// The size is negative on purpose: go-qrcode then reads it as pixels
+	// per module instead of a canvas width (qrcode.Image). A fixed canvas
+	// is mapped with module = int(pixel*realSize/size), which only comes
+	// out even when the module count divides it — over the 89 modules of a
+	// real client config, 256 px left 78 columns 3 px wide next to 11
+	// columns 2 px wide. Cameras sample module centres, and a grid whose
+	// pitch drifts every ninth module gives them nothing to lock onto
+	// (T-ky6l). qrModulePixels also puts the symbol well above the
+	// resolution a phone needs to photograph it off a screen; the PNG stays
+	// a few kilobytes because a QR is two colours.
+	png, err := qrcode.Encode(string(cfg), qrcode.Medium, -qrModulePixels)
 	if err != nil {
 		s.cfg.Logger.Printf("client qr: encode: %v", err)
 		s.errorPage(w, http.StatusInternalServerError)

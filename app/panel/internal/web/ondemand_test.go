@@ -300,17 +300,76 @@ func TestQRRenderContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode png: %v", err)
 	}
-	if b := img.Bounds(); b.Dx() != 256 || b.Dy() != 256 {
-		t.Errorf("canvas = %dx%d, want 256x256", b.Dx(), b.Dy())
+	size := img.Bounds().Dx()
+	if size != img.Bounds().Dy() {
+		t.Fatalf("canvas = %dx%d, want a square", size, img.Bounds().Dy())
 	}
 
-	res, err := decoder.NewDecoder().Decode(qrModules(t, qr), nil)
+	bits := qrModules(t, qr)
+	// realSize counts the 4-module quiet zone go-qrcode adds each side.
+	realSize := bits.GetWidth() + 8
+
+	// go-qrcode maps pixels to modules with module = int(pixel*realSize/size),
+	// so the modules come out evenly wide only when realSize divides the
+	// canvas. A fixed 256 px canvas over the 89 modules of a real client
+	// config left 78 columns 3 px wide and 11 columns 2 px wide: every ninth
+	// module half again narrower than its neighbours, which costs a camera
+	// the margin it needs to sample module centres (T-ky6l).
+	if size%realSize != 0 {
+		t.Errorf("canvas %d px over %d modules leaves modules of uneven width (%.2f px each); want a whole number of pixels per module",
+			size, realSize, float64(size)/float64(realSize))
+	}
+	// Below this a phone camera photographing a screen cannot resolve one
+	// module from the next; the symbol decodes on a monitor and fails on a
+	// laptop panel or at a slight angle.
+	const minModulePx = 8
+	if px := size / realSize; px < minModulePx {
+		t.Errorf("module = %d px, want at least %d", px, minModulePx)
+	}
+
+	// Measured in pixels rather than derived: the top edge of the top-left
+	// finder is exactly seven modules of black.
+	x0, y0, run := firstBlackRun(t, img)
+	if run%7 != 0 {
+		t.Fatalf("finder top edge at (%d,%d) is %d px wide, not a multiple of 7 modules", x0, y0, run)
+	}
+	if got, want := run/7, size/realSize; got != want {
+		t.Errorf("finder measures %d px per module, canvas arithmetic says %d", got, want)
+	}
+
+	res, err := decoder.NewDecoder().Decode(bits, nil)
 	if err != nil {
 		t.Fatalf("QR decode: %v", err)
 	}
 	if got := res.GetECLevel(); got != "M" {
 		t.Errorf("error correction = %q, want M: a lower level quarters what a camera can recover from", got)
 	}
+}
+
+// firstBlackRun returns the start and length of the leftmost horizontal
+// black run in the topmost row that has one: in a QR that is the top edge
+// of the top-left position-detection pattern, seven modules wide.
+func firstBlackRun(t *testing.T, img image.Image) (x0, y0, run int) {
+	t.Helper()
+	b := img.Bounds()
+	black := func(x, y int) bool {
+		r, g, bl, _ := img.At(x, y).RGBA()
+		return r+g+bl < 3*0x8000
+	}
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if !black(x, y) {
+				continue
+			}
+			run = 0
+			for x+run < b.Max.X && black(x+run, y) {
+				run++
+			}
+			return x - b.Min.X, y - b.Min.Y, run
+		}
+	}
+	t.Fatalf("no black pixel in the QR image")
+	return 0, 0, 0
 }
 
 func TestQRUnknownIDGenericError(t *testing.T) {
