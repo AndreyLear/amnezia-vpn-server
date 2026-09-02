@@ -465,6 +465,37 @@ test_default_rules() {
     assert_in 'ip saddr 10.8.0.0/24 oifname != "awg0" masquerade' "$NFT_SYS_FILE" "postrouting: NAT for subnet, never into the tunnel"
 }
 
+# T-mhj4: a client is free to put any resolver in its settings, and a
+# person who does gets none of the tunnel's DNS — no AAAA filter, no
+# protection from a tampered answer — while believing otherwise, because
+# the config came from us. The redirect makes that setting irrelevant for
+# anything that enters the tunnel.
+test_dns_interception() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "dns interception flow: exit $rc"
+    assert_in "chain prerouting {" "$NFT_SYS_FILE" "prerouting: chain present"
+    assert_in "type nat hook prerouting priority dstnat" "$NFT_SYS_FILE" "prerouting: nat hook at dstnat priority"
+    assert_in 'iifname "awg0" udp dport 53 redirect to :53' "$NFT_SYS_FILE" "prerouting: UDP DNS from the tunnel redirected to the resolver"
+    assert_in 'iifname "awg0" tcp dport 53 redirect to :53' "$NFT_SYS_FILE" "prerouting: TCP DNS from the tunnel redirected to the resolver"
+    # The whole point of iifname: a redirect that also caught the WAN
+    # would turn the server into an open resolver for the internet.
+    assert_not_in_rules '^[[:space:]]*(udp|tcp) dport 53 redirect' "$NFT_SYS_FILE" "prerouting: nothing redirected off the tunnel"
+}
+
+# With --no-tunnel-dns the resolver stands down and port 53 is left alone,
+# so a redirect would point every client at a dead port and take their
+# DNS with it.
+test_dns_interception_absent_when_resolver_stands_down() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --no-tunnel-dns)"
+    [ "$rc" = "0" ] || fail "no-tunnel-dns flow: exit $rc"
+    assert_not_in "chain prerouting" "$NFT_SYS_FILE" "no-tunnel-dns: no prerouting chain"
+    assert_not_in "redirect to :53" "$NFT_SYS_FILE" "no-tunnel-dns: nothing redirected"
+}
+
 test_atomic_replace_on_rerun() {
     fakes_reset
     os_release debian 12 bookworm
@@ -918,6 +949,8 @@ test_help_lists_m92
 test_invalid_subnets
 test_host_cidr_normalized
 test_default_rules
+test_dns_interception
+test_dns_interception_absent_when_resolver_stands_down
 test_atomic_replace_on_rerun
 test_custom_values
 test_no_flush_no_drop
