@@ -138,7 +138,10 @@ func (a *app) cmdServerInit(args []string) int {
 
 	createErr := fault("server-init.create")
 	if createErr == nil {
-		createErr = db.CreateServer(handle, privateKey, publicKey, address,
+		// address6 stays empty here: which tunnels carry IPv6 is a
+		// deployment decision install.sh makes, and the flag that
+		// carries it lands with amnezia-vpn-server-29fc.
+		createErr = db.CreateServer(handle, privateKey, publicKey, address, "",
 			listenPort, parsed.flags["dns"], awgParams, endpoint)
 	}
 	if createErr == nil && mtu != 0 {
@@ -322,7 +325,7 @@ func (a *app) cmdServerUpdate(args []string) int {
 		if hasPort {
 			portArg = &listenPort
 		}
-		carriedEndpoint, updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg, portArg)
+		carriedEndpoint, updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg, nil, portArg)
 	}
 	if updateErr == nil && hasMTU {
 		updateErr = db.SetSetting(handle, "mtu", strconv.FormatUint(uint64(mtu), 10))

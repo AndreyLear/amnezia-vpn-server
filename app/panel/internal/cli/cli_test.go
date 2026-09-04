@@ -93,7 +93,7 @@ func (c *ctx) seedServer(dns, awgParams string) {
 	}
 	h := c.openDB()
 	defer h.Close()
-	if err := db.CreateServer(h, priv, pub, testServerCIDR, 51820, dns, awgParams, testEndpoint); err != nil {
+	if err := db.CreateServer(h, priv, pub, testServerCIDR, "", 51820, dns, awgParams, testEndpoint); err != nil {
 		c.t.Fatalf("create server: %v", err)
 	}
 	if err := awgconf.Generate(h, c.cfgPath); err != nil {
@@ -972,7 +972,7 @@ func TestClientConfigNoEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := c.openDB()
-	if err := db.CreateServer(h, priv, pub, testServerCIDR, 51820, "", "{}", ""); err != nil {
+	if err := db.CreateServer(h, priv, pub, testServerCIDR, "", 51820, "", "{}", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := awgconf.Generate(h, c.cfgPath); err != nil {

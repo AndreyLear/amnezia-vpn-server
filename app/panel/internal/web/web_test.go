@@ -78,7 +78,7 @@ func newFixtureWithStore(t *testing.T, logSink io.Writer, ttl time.Duration) *fi
 	if err != nil {
 		t.Fatalf("server keys: %v", err)
 	}
-	if err := db.CreateServer(h, priv, pub, webTestServerCIDR, 51820, "", "{}", webTestEndpoint); err != nil {
+	if err := db.CreateServer(h, priv, pub, webTestServerCIDR, "", 51820, "", "{}", webTestEndpoint); err != nil {
 		t.Fatalf("db.CreateServer: %v", err)
 	}
 	statusPath := filepath.Join(t.TempDir(), "status.json")

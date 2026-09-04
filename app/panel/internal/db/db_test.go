@@ -224,8 +224,11 @@ func TestMigrateAddsClientDescription(t *testing.T) {
 	if got, err := SchemaVersionStored(handle); err != nil || got != SchemaVersion {
 		t.Fatalf("schema version = %q (err %v), want %q", got, err, SchemaVersion)
 	}
-	if SchemaVersion != "6" {
-		t.Fatalf("SchemaVersion = %q, want 6", SchemaVersion)
+	// The literal is a deliberate tripwire: a schema change that forgets
+	// to bump the version fails here. Raised to 7 by
+	// amnezia-vpn-server-xy6j (server.address6).
+	if SchemaVersion != "7" {
+		t.Fatalf("SchemaVersion = %q, want 7", SchemaVersion)
 	}
 	if err := Migrate(handle); err != nil {
 		t.Fatalf("second Migrate legacy v5: %v", err)
@@ -304,7 +307,7 @@ const (
 
 func seedServerM4(t *testing.T, handle *sql.DB, address string) error {
 	t.Helper()
-	return CreateServer(handle, testPriv, testPub, address, 51820, "", "{}", "vpn.example.com:51820")
+	return CreateServer(handle, testPriv, testPub, address, "", 51820, "", "{}", "vpn.example.com:51820")
 }
 
 func containsPeerAddr(handle *sql.DB, addr string) bool {
@@ -381,7 +384,7 @@ func TestCreateServerTwiceRejected(t *testing.T) {
 	if err := seedServerM4(t, handle, "10.8.0.1/24"); err != nil {
 		t.Fatalf("CreateServer #1: %v", err)
 	}
-	err := CreateServer(handle, testPriv, testPub, "10.9.0.1/24", 51820, "", "{}", "")
+	err := CreateServer(handle, testPriv, testPub, "10.9.0.1/24", "", 51820, "", "{}", "")
 	if !errors.Is(err, ErrServerExists) {
 		t.Fatalf("CreateServer #2 error = %v, want ErrServerExists", err)
 	}
@@ -400,7 +403,7 @@ func TestCreateServerIPv6Rejected(t *testing.T) {
 	if err := Migrate(handle); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	err := CreateServer(handle, testPriv, testPub, "fd00::1/64", 51820, "", "{}", "")
+	err := CreateServer(handle, testPriv, testPub, "fd00::1/64", "", 51820, "", "{}", "")
 	if err == nil {
 		t.Fatal("CreateServer accepted IPv6 address")
 	}
@@ -420,7 +423,7 @@ func TestCreateServerInvalidInputs(t *testing.T) {
 		{testPriv, testPub, "not-a-cidr", 51820},
 		{testPriv, testPub, "10.8.0.1/24", 70000},
 	} {
-		if err := CreateServer(handle, tc.priv, tc.pub, tc.addr, tc.port, "", "{}", ""); err == nil {
+		if err := CreateServer(handle, tc.priv, tc.pub, tc.addr, "", tc.port, "", "{}", ""); err == nil {
 			t.Errorf("CreateServer(%q,%q,%q,%d) accepted invalid input", tc.priv, tc.pub, tc.addr, tc.port)
 		}
 	}
@@ -988,7 +991,7 @@ func TestUpdateServerFields(t *testing.T) {
 		t.Fatalf("CreateServer: %v", err)
 	}
 	dns, params, ep := "1.1.1.1,8.8.8.8", `{"junk": false}`, "vpn2.example.com:51821"
-	if _, err := UpdateServer(handle, &dns, &params, &ep, nil); err != nil {
+	if _, err := UpdateServer(handle, &dns, &params, &ep, nil, nil); err != nil {
 		t.Fatalf("UpdateServer: %v", err)
 	}
 	s, err := ServerRow(handle)
@@ -1006,7 +1009,7 @@ func TestUpdateServerFields(t *testing.T) {
 	}
 	// partial update: nil args leave the stored values untouched
 	ep2 := "vpn3.example.com:51822"
-	if _, err := UpdateServer(handle, nil, nil, &ep2, nil); err != nil {
+	if _, err := UpdateServer(handle, nil, nil, &ep2, nil, nil); err != nil {
 		t.Fatalf("UpdateServer partial: %v", err)
 	}
 	s, err = ServerRow(handle)
@@ -1024,7 +1027,7 @@ func TestUpdateServerFields(t *testing.T) {
 	}
 	// an explicit empty pointer clears the value
 	empty := ""
-	if _, err := UpdateServer(handle, nil, nil, &empty, nil); err != nil {
+	if _, err := UpdateServer(handle, nil, nil, &empty, nil, nil); err != nil {
 		t.Fatalf("UpdateServer clear: %v", err)
 	}
 	if v, ok, _ := GetSetting(handle, "endpoint"); ok || v != "" {
@@ -1038,7 +1041,7 @@ func TestUpdateServerMissingRow(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 	dns := "1.1.1.1"
-	if _, err := UpdateServer(handle, &dns, nil, nil, nil); !errors.Is(err, ErrServerNotFound) {
+	if _, err := UpdateServer(handle, &dns, nil, nil, nil, nil); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("UpdateServer without server row error = %v, want ErrServerNotFound", err)
 	}
 }
@@ -1105,7 +1108,7 @@ func TestUpdateServerChangesListenPort(t *testing.T) {
 	}
 
 	port := int64(4500)
-	if _, err := UpdateServer(handle, nil, nil, nil, &port); err != nil {
+	if _, err := UpdateServer(handle, nil, nil, nil, nil, &port); err != nil {
 		t.Fatalf("update listen port: %v", err)
 	}
 	server, err := ServerRow(handle)
@@ -1176,11 +1179,11 @@ func TestUpdateServerCarriesEndpointPort(t *testing.T) {
 			if err := Migrate(handle); err != nil {
 				t.Fatalf("Migrate: %v", err)
 			}
-			if err := CreateServer(handle, testPriv, testPub, "10.8.0.1/24", 51820,
+			if err := CreateServer(handle, testPriv, testPub, "10.8.0.1/24", "", 51820,
 				"1.1.1.1", "{}", tt.endpoint); err != nil {
 				t.Fatalf("CreateServer: %v", err)
 			}
-			carried, err := UpdateServer(handle, nil, nil, tt.explicit, &tt.newPort)
+			carried, err := UpdateServer(handle, nil, nil, tt.explicit, nil, &tt.newPort)
 			if err != nil {
 				t.Fatalf("UpdateServer: %v", err)
 			}
@@ -1206,3 +1209,212 @@ func TestUpdateServerCarriesEndpointPort(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// --- amnezia-vpn-server-xy6j: the tunnel's IPv6 prefix -------------------
+
+// newTestDBv6 opens a migrated database for the amnezia-vpn-server-xy6j
+// tests.
+func newTestDBv6(t *testing.T) *sql.DB {
+	t.Helper()
+	handle, _ := openTest(t, "xy6j.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	return handle
+}
+
+// TestServerAddress6RoundTrip covers the ordinary path: a tunnel created
+// with an IPv6 prefix reports it back, and one created without reports
+// the empty string rather than an error. Empty is the normal state — a
+// host with no working IPv6 must keep behaving exactly as before.
+func TestServerAddress6RoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		address6 string
+	}{
+		{"без IPv6", ""},
+		{"с IPv6", "fd42:a11e:c0de::1/64"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handle := newTestDBv6(t)
+			if err := CreateServer(handle, testPriv, testPub, "10.8.0.1/24", tc.address6,
+				51820, "", "{}", ""); err != nil {
+				t.Fatalf("CreateServer: %v", err)
+			}
+			rec, err := ServerRow(handle)
+			if err != nil {
+				t.Fatalf("ServerRow: %v", err)
+			}
+			if rec.Address6 != tc.address6 {
+				t.Fatalf("Address6 = %q, want %q", rec.Address6, tc.address6)
+			}
+			if rec.Address != "10.8.0.1/24" {
+				t.Fatalf("Address = %q, want the IPv4 address untouched", rec.Address)
+			}
+		})
+	}
+}
+
+// TestCreateServerRejectsBadAddress6 pins that a non-IPv6 value cannot
+// reach the column. Storing an IPv4 CIDR there would make the generated
+// config advertise IPv6 the tunnel cannot carry, which is the defect
+// amnezia-vpn-server-mhea exists to fix.
+func TestCreateServerRejectsBadAddress6(t *testing.T) {
+	for _, bad := range []string{"10.8.0.1/24", "fd42::1", "not a cidr", "fd42:::/64"} {
+		handle := newTestDBv6(t)
+		if err := CreateServer(handle, testPriv, testPub, "10.8.0.1/24", bad,
+			51820, "", "{}", ""); err == nil {
+			t.Errorf("CreateServer accepted address6 %q", bad)
+		}
+	}
+}
+
+// TestUpdateServerAddress6 covers switching IPv6 on and back off. Off is
+// an explicit empty string, not an omission: omitting the argument means
+// "leave it alone", which is what every rerun of install.sh does.
+func TestUpdateServerAddress6(t *testing.T) {
+	handle := newTestDBv6(t)
+	if err := CreateServer(handle, testPriv, testPub, "10.8.0.1/24", "",
+		51820, "", "{}", ""); err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+
+	on := "fd42:a11e:c0de::1/64"
+	if _, err := UpdateServer(handle, nil, nil, nil, &on, nil); err != nil {
+		t.Fatalf("UpdateServer(on): %v", err)
+	}
+	rec, err := ServerRow(handle)
+	if err != nil {
+		t.Fatalf("ServerRow: %v", err)
+	}
+	if rec.Address6 != on {
+		t.Fatalf("after switching on: Address6 = %q, want %q", rec.Address6, on)
+	}
+
+	// Omitted must leave it alone.
+	if _, err := UpdateServer(handle, nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("UpdateServer(omitted): %v", err)
+	}
+	if rec, err = ServerRow(handle); err != nil {
+		t.Fatalf("ServerRow: %v", err)
+	}
+	if rec.Address6 != on {
+		t.Fatalf("an omitted address6 changed the row to %q", rec.Address6)
+	}
+
+	off := ""
+	if _, err := UpdateServer(handle, nil, nil, nil, &off, nil); err != nil {
+		t.Fatalf("UpdateServer(off): %v", err)
+	}
+	if rec, err = ServerRow(handle); err != nil {
+		t.Fatalf("ServerRow: %v", err)
+	}
+	if rec.Address6 != "" {
+		t.Fatalf("after switching off: Address6 = %q, want empty", rec.Address6)
+	}
+
+	if _, err := UpdateServer(handle, nil, nil, nil, strptr("10.0.0.1/24"), nil); err == nil {
+		t.Fatal("UpdateServer accepted an IPv4 CIDR as address6")
+	}
+}
+
+func strptr(s string) *string { return &s }
+
+// TestClientAddress6 pins the derivation. The offset is taken from the
+// IPv4 network base, so the addresses read the same way in both families
+// — 10.8.0.2 becomes ...::2 — which is what an operator comparing them
+// by eye expects.
+func TestClientAddress6(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		srv4    string
+		srv6    string
+		client  string
+		want    string
+		wantErr bool
+	}{
+		{name: "туннель без IPv6", srv4: "10.8.0.1/24", srv6: "", client: "10.8.0.2/32", want: ""},
+		{name: "первый клиент", srv4: "10.8.0.1/24", srv6: "fd42:a11e:c0de::1/64",
+			client: "10.8.0.2/32", want: "fd42:a11e:c0de::2/128"},
+		{name: "десятый клиент", srv4: "10.8.0.1/24", srv6: "fd42:a11e:c0de::1/64",
+			client: "10.8.0.10/32", want: "fd42:a11e:c0de::a/128"},
+		{name: "другая подсеть IPv4", srv4: "10.9.0.1/24", srv6: "fd42:a11e:c0de::1/64",
+			client: "10.9.0.7/32", want: "fd42:a11e:c0de::7/128"},
+		{name: "за пределами первого октета", srv4: "10.8.0.1/16", srv6: "fd42:a11e:c0de::1/64",
+			client: "10.8.1.1/32", want: "fd42:a11e:c0de::101/128"},
+		{name: "клиент не IPv4", srv4: "10.8.0.1/24", srv6: "fd42:a11e:c0de::1/64",
+			client: "fd00::2/128", wantErr: true},
+		{name: "префикс не IPv6", srv4: "10.8.0.1/24", srv6: "10.8.0.1/24",
+			client: "10.8.0.2/32", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ClientAddress6(tc.srv4, tc.srv6, tc.client)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ClientAddress6 = %q, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ClientAddress6: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ClientAddress6 = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClientAddress6MatchesServerOwnAddress is the property that makes the
+// derivation safe to trust: feeding the server's own IPv4 address back in
+// reproduces the server's own IPv6 address. If that ever stops holding,
+// the server and its clients are numbering from different bases.
+func TestClientAddress6MatchesServerOwnAddress(t *testing.T) {
+	const srv4, srv6 = "10.8.0.1/24", "fd42:a11e:c0de::1/64"
+	got, err := ClientAddress6(srv4, srv6, "10.8.0.1/32")
+	if err != nil {
+		t.Fatalf("ClientAddress6: %v", err)
+	}
+	if want := "fd42:a11e:c0de::1/128"; got != want {
+		t.Fatalf("ClientAddress6 = %q, want %q (same host number as the IPv4 side)", got, want)
+	}
+}
+
+// TestMigrateAddsAddress6 covers an upgrade from a database written before
+// v7: the column is added, the existing row survives untouched, and the
+// migration is safe to run again.
+func TestMigrateAddsAddress6(t *testing.T) {
+	handle := newTestDBv6(t)
+	if _, err := handle.Exec(`ALTER TABLE server DROP COLUMN address6`); err != nil {
+		t.Skipf("this SQLite build cannot DROP COLUMN: %v", err)
+	}
+	if _, err := handle.Exec(
+		`INSERT INTO server (id, private_key, public_key, address, listen_port, awg_params, created_at, updated_at)
+		 VALUES (1, ?, ?, '10.8.0.1/24', 51820, '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+		testPriv, testPub); err != nil {
+		t.Fatalf("seed a pre-v7 row: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := Migrate(handle); err != nil {
+			t.Fatalf("Migrate (pass %d): %v", i+1, err)
+		}
+	}
+	rec, err := ServerRow(handle)
+	if err != nil {
+		t.Fatalf("ServerRow after migrate: %v", err)
+	}
+	if rec.Address6 != "" {
+		t.Fatalf("an upgraded database gained IPv6 by itself: %q", rec.Address6)
+	}
+	if rec.Address != "10.8.0.1/24" {
+		t.Fatalf("the migration disturbed the IPv4 address: %q", rec.Address)
+	}
+	stored, err := SchemaVersionStored(handle)
+	if err != nil {
+		t.Fatalf("SchemaVersionStored: %v", err)
+	}
+	if stored != SchemaVersion {
+		t.Fatalf("schema_version = %q, want %q", stored, SchemaVersion)
+	}
+}

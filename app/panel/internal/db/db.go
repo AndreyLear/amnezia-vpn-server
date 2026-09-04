@@ -43,10 +43,12 @@ func mapNameConstraint(err error) error {
 // SchemaVersion matches manifest.schema_version in §5. Bumped to 4 when
 // client names became unique (M10.1): v4 adds the dedup migration plus
 // the unique name index. Bumped to 6 when clients.description was
-// added. Archives written by older releases are still accepted by
-// restore and migrated here at apply time (T-110 backward
-// compatibility).
-const SchemaVersion = "6"
+// added. Bumped to 7 when server.address6 was added: the tunnel can
+// carry IPv6, and the prefix it carries is the one thing about that
+// which cannot be derived (amnezia-vpn-server-xy6j). Archives written
+// by older releases are still accepted by restore and migrated here at
+// apply time (T-110 backward compatibility).
+const SchemaVersion = "7"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS server (
@@ -54,6 +56,7 @@ var schemaStatements = []string{
 		private_key TEXT NOT NULL,
 		public_key TEXT NOT NULL,
 		address TEXT NOT NULL,
+		address6 TEXT NOT NULL DEFAULT '',
 		listen_port INTEGER NOT NULL,
 		dns TEXT,
 		awg_params TEXT NOT NULL DEFAULT '{}',
@@ -150,6 +153,9 @@ func Migrate(handle *sql.DB) error {
 	if err := migrateClientDescription(handle); err != nil {
 		return err
 	}
+	if err := migrateServerAddress6(handle); err != nil {
+		return err
+	}
 	if _, err := handle.Exec(
 		`INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)
 		 ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
@@ -215,6 +221,42 @@ func migrateClientDescription(handle *sql.DB) error {
 	if !found {
 		if _, err := handle.Exec(`ALTER TABLE clients ADD COLUMN description TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("db: add clients description: %w", err)
+		}
+	}
+	return nil
+}
+
+// migrateServerAddress6 (schema v7) adds server.address6, the IPv6 CIDR
+// the tunnel carries. Empty is the normal state and means the tunnel is
+// IPv4-only: plenty of hosts have no working IPv6 at all, and a
+// deployment that never had it must keep behaving exactly as before
+// (amnezia-vpn-server-xy6j). Idempotent like its neighbours: the column
+// is added only when PRAGMA table_info does not already list it.
+func migrateServerAddress6(handle *sql.DB) error {
+	rows, err := handle.Query(`PRAGMA table_info(server)`)
+	if err != nil {
+		return fmt.Errorf("db: inspect server schema: %w", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("db: inspect server schema: %w", err)
+		}
+		if name == "address6" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("db: inspect server schema: %w", err)
+	}
+	if !found {
+		if _, err := handle.Exec(`ALTER TABLE server ADD COLUMN address6 TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("db: add server address6: %w", err)
 		}
 	}
 	return nil
@@ -289,6 +331,11 @@ type ServerRecord struct {
 	PrivateKey string
 	PublicKey  string
 	Address    string
+	// Address6 is the tunnel's IPv6 CIDR, empty when the tunnel carries
+	// IPv4 only. Client IPv6 addresses are not stored: they are derived
+	// from this prefix and the client's IPv4 address by ClientAddress6,
+	// so the two families cannot drift apart (amnezia-vpn-server-xy6j).
+	Address6   string
 	ListenPort int64
 	DNS        string
 	AWGParams  string
@@ -298,14 +345,15 @@ type ServerRecord struct {
 // reported as ErrServerNotFound.
 func ServerRow(handle *sql.DB) (*ServerRecord, error) {
 	row := handle.QueryRow(
-		`SELECT private_key, public_key, address, listen_port, dns, awg_params
+		`SELECT private_key, public_key, address, address6, listen_port, dns, awg_params
 		   FROM server WHERE id = 1`,
 	)
 	var (
-		s   ServerRecord
-		dns sql.NullString
+		s        ServerRecord
+		dns      sql.NullString
+		address6 sql.NullString
 	)
-	err := row.Scan(&s.PrivateKey, &s.PublicKey, &s.Address, &s.ListenPort, &dns, &s.AWGParams)
+	err := row.Scan(&s.PrivateKey, &s.PublicKey, &s.Address, &address6, &s.ListenPort, &dns, &s.AWGParams)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrServerNotFound
 	}
@@ -313,6 +361,7 @@ func ServerRow(handle *sql.DB) (*ServerRecord, error) {
 		return nil, fmt.Errorf("db: read server row: %w", err)
 	}
 	s.DNS = dns.String
+	s.Address6 = address6.String
 	return &s, nil
 }
 
@@ -403,7 +452,7 @@ var ErrClientNameExists = errors.New("db: a client with this name already exists
 // written in one transaction. It fails with ErrServerExists when the row
 // is already present. address must be an IPv4 CIDR (M4 contract: the
 // client address allocator is IPv4-only); listenPort must fit uint16.
-func CreateServer(handle *sql.DB, privateKey, publicKey, address string, listenPort int64, dns, awgParams, endpoint string) error {
+func CreateServer(handle *sql.DB, privateKey, publicKey, address, address6 string, listenPort int64, dns, awgParams, endpoint string) error {
 	if !keys.ValidKey(privateKey) {
 		return fmt.Errorf("db: invalid server private key: not a 32-byte base64 key")
 	}
@@ -415,7 +464,10 @@ func CreateServer(handle *sql.DB, privateKey, publicKey, address string, listenP
 		return fmt.Errorf("db: invalid server address %q: not a CIDR network", address)
 	}
 	if ip.To4() == nil {
-		return fmt.Errorf("db: server address %q is not IPv4 (IPv6 is not supported in M4)", address)
+		return fmt.Errorf("db: server address %q is not IPv4 (the tunnel's IPv4 address is mandatory; IPv6 goes in address6)", address)
+	}
+	if err := validateAddress6(address6); err != nil {
+		return err
 	}
 	if listenPort < 0 || listenPort > 65535 {
 		return fmt.Errorf("db: invalid listen port %d: must be an unsigned 16-bit value", listenPort)
@@ -437,9 +489,9 @@ func CreateServer(handle *sql.DB, privateKey, publicKey, address string, listenP
 
 	now := stamp()
 	if _, err := tx.Exec(
-		`INSERT INTO server (id, private_key, public_key, address, listen_port, dns, awg_params, created_at, updated_at)
-		 VALUES (1, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
-		privateKey, publicKey, address, listenPort, dns, awgParams, now, now,
+		`INSERT INTO server (id, private_key, public_key, address, address6, listen_port, dns, awg_params, created_at, updated_at)
+		 VALUES (1, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
+		privateKey, publicKey, address, address6, listenPort, dns, awgParams, now, now,
 	); err != nil {
 		return fmt.Errorf("db: insert server row: %w", err)
 	}
@@ -511,7 +563,12 @@ func setSettingTx(tx *sql.Tx, key, value string) error {
 // endpoint whose port already disagrees with the listen port: an operator
 // running the tunnel behind a provider-side forward meant them to differ,
 // and undoing that is not this function's business.
-func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string, listenPort *int64) (string, error) {
+func UpdateServer(handle *sql.DB, dns, awgParams, endpoint, address6 *string, listenPort *int64) (string, error) {
+	if address6 != nil {
+		if err := validateAddress6(*address6); err != nil {
+			return "", err
+		}
+	}
 	tx, err := handle.Begin()
 	if err != nil {
 		return "", fmt.Errorf("db: begin server update: %w", err)
@@ -537,7 +594,7 @@ func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string, listenPort *
 		}
 	}
 
-	if dns != nil || awgParams != nil || listenPort != nil {
+	if dns != nil || awgParams != nil || listenPort != nil || address6 != nil {
 		updates := []string{"updated_at = ?"}
 		args := []any{stamp()}
 		if dns != nil {
@@ -551,6 +608,12 @@ func UpdateServer(handle *sql.DB, dns, awgParams, endpoint *string, listenPort *
 		if listenPort != nil {
 			updates = append(updates, "listen_port = ?")
 			args = append(args, *listenPort)
+		}
+		// An explicit empty string is how IPv6 is switched back off, so
+		// this writes whatever it is given rather than skipping blanks.
+		if address6 != nil {
+			updates = append(updates, "address6 = ?")
+			args = append(args, *address6)
 		}
 		args = append(args, int64(1))
 		if _, err := tx.Exec(
@@ -742,7 +805,7 @@ func allocClientAddress(serverCIDR string, used []string) (string, error) {
 	}
 	ip4 := ip.To4()
 	if ip4 == nil {
-		return "", fmt.Errorf("db: server address %q is not IPv4 (IPv6 is not supported in M4)", serverCIDR)
+		return "", fmt.Errorf("db: server address %q is not IPv4 (client addresses are allocated from the IPv4 network)", serverCIDR)
 	}
 	if len(ipnet.Mask) != net.IPv4len {
 		return "", fmt.Errorf("db: server address %q has a non-IPv4 mask", serverCIDR)
@@ -772,6 +835,81 @@ func allocClientAddress(serverCIDR string, used []string) (string, error) {
 		return fmt.Sprintf("%d.%d.%d.%d/32", byte(cand>>24), byte(cand>>16), byte(cand>>8), byte(cand)), nil
 	}
 	return "", ErrNoFreeAddress
+}
+
+// validateAddress6 accepts the empty string (the tunnel carries IPv4
+// only) or an IPv6 CIDR. An IPv4 CIDR is rejected outright: silently
+// storing one here would make the generated config claim IPv6 support
+// the tunnel does not have, which is the defect amnezia-vpn-server-mhea
+// exists to fix.
+func validateAddress6(address6 string) error {
+	if address6 == "" {
+		return nil
+	}
+	ip, ipnet, err := net.ParseCIDR(address6)
+	if err != nil {
+		return fmt.Errorf("db: invalid server address6 %q: not a CIDR network", address6)
+	}
+	if ip.To4() != nil {
+		return fmt.Errorf("db: server address6 %q is not IPv6", address6)
+	}
+	if len(ipnet.Mask) != net.IPv6len {
+		return fmt.Errorf("db: server address6 %q has a non-IPv6 mask", address6)
+	}
+	return nil
+}
+
+// ClientAddress6 derives a client's IPv6 address from the tunnel's IPv6
+// prefix and the client's already-allocated IPv4 address. It returns ""
+// when the tunnel carries IPv4 only.
+//
+// Derivation rather than a second stored column, and rather than a second
+// allocator: the client's IPv4 address is already unique and already
+// allocated, so reusing its offset within the IPv4 network gives a unique
+// IPv6 address for free. A stored column would need its own uniqueness
+// rule and could drift out of step with the IPv4 one after a restore or a
+// hand-edited database; a derived address cannot (amnezia-vpn-server-xy6j).
+//
+// The offset is taken from the network base, so the server's own
+// 10.8.0.1 in 10.8.0.0/24 lands on ...::1 — the two families read the
+// same way, which matters when an operator is comparing them by eye.
+func ClientAddress6(serverAddress, serverAddress6, clientAddress string) (string, error) {
+	if serverAddress6 == "" {
+		return "", nil
+	}
+	if err := validateAddress6(serverAddress6); err != nil {
+		return "", err
+	}
+	_, ipnet, err := net.ParseCIDR(serverAddress)
+	if err != nil {
+		return "", fmt.Errorf("db: server address %q: not a CIDR network", serverAddress)
+	}
+	base4 := ipnet.IP.To4()
+	if base4 == nil {
+		return "", fmt.Errorf("db: server address %q is not IPv4", serverAddress)
+	}
+	cip, _, err := net.ParseCIDR(clientAddress)
+	if err != nil {
+		return "", fmt.Errorf("db: client address %q: not a CIDR network", clientAddress)
+	}
+	c4 := cip.To4()
+	if c4 == nil {
+		return "", fmt.Errorf("db: client address %q is not IPv4", clientAddress)
+	}
+	offset := binary.BigEndian.Uint32(c4) - binary.BigEndian.Uint32(base4)
+
+	_, net6, err := net.ParseCIDR(serverAddress6)
+	if err != nil {
+		return "", fmt.Errorf("db: server address6 %q: not a CIDR network", serverAddress6)
+	}
+	addr := make(net.IP, net.IPv6len)
+	copy(addr, net6.IP.To16())
+	// The offset is at most 2^32-1 and the low 32 bits of the prefix base
+	// are zero for any prefix of /96 or shorter, which every sane tunnel
+	// prefix is; adding into the last four bytes is therefore exact.
+	tail := binary.BigEndian.Uint32(addr[12:16]) + offset
+	binary.BigEndian.PutUint32(addr[12:16], tail)
+	return addr.String() + "/128", nil
 }
 
 // ClientByID loads the full client record. A missing row is reported as
