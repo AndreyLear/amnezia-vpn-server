@@ -942,6 +942,91 @@ test_nft_panel_domain_default_443() {
     assert_in "^[[:space:]]*tcp dport 443 accept" "$NFT_SYS_FILE" "nft domain: tcp 443"
 }
 
+
+# --- amnezia-vpn-server-nxp2: the IPv6 half of the ruleset ---------------
+
+# IPv6 lives in its own table, ip6 amnezia, rather than in an inet table
+# shared with IPv4. That is what makes "off" mean something checkable:
+# the table is deleted, not merely left unwritten.
+test_ipv6_absent_by_default() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 default flow: exit $rc"
+    assert_not_in "^table ip6 amnezia {" "$NFT_SYS_FILE" "default: no ip6 table is defined"
+    assert_not_in "ip6 saddr .* masquerade" "$NFT_SYS_FILE" "default: no IPv6 masquerade rule exists"
+    # The delete must still be emitted: a server that once had IPv6 has a
+    # live ip6 table, and silence would leave its masquerade running.
+    assert_in "^delete table ip6 amnezia$" "$NFT_SYS_FILE" "default: the ip6 table is explicitly deleted"
+    assert_in "^table ip amnezia {" "$NFT_SYS_FILE" "default: the IPv4 table is untouched"
+}
+
+test_ipv6_rules_when_enabled() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(TUNNEL_SUBNET6=fd42:a11e:c0de::/64 run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 enabled flow: exit $rc"
+    assert_in "^table ip6 amnezia {" "$NFT_SYS_FILE" "ipv6: the ip6 table is defined"
+    assert_in "^flush table ip6 amnezia$" "$NFT_SYS_FILE" "ipv6: own table flushed before rebuild"
+    assert_not_in "^delete table ip6 amnezia$" "$NFT_SYS_FILE" "ipv6: the table is not deleted while enabled"
+    assert_in "ip6 saddr fd42:a11e:c0de::/64 accept" "$NFT_SYS_FILE" "ipv6 forward: subnet saddr accepted"
+    assert_in "ip6 daddr fd42:a11e:c0de::/64 accept" "$NFT_SYS_FILE" "ipv6 forward: subnet daddr accepted"
+    assert_in 'ip6 saddr fd42:a11e:c0de::/64 oifname != "awg0" masquerade' "$NFT_SYS_FILE" \
+        "ipv6 postrouting: NAT66 for the subnet, never into the tunnel"
+    # Without this the tunnel would have no PMTU signalling at all, and
+    # amnezia-vpn-server-kz8n would become permanent rather than a bug.
+    assert_in "icmpv6 type {" "$NFT_SYS_FILE" "ipv6 input: ICMPv6 accepted (PMTU and neighbour discovery)"
+    assert_in "packet-too-big" "$NFT_SYS_FILE" "ipv6 input: packet-too-big accepted by name"
+}
+
+# The IPv4 clamp lives in a table of the ip family and cannot reach IPv6.
+# Assert the ip6 chain carries its own, and that it precedes the accepts
+# that would terminate the chain.
+test_ipv6_mss_clamp_in_its_own_table() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(TUNNEL_SUBNET6=fd42:a11e:c0de::/64 run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 clamp flow: exit $rc"
+    local body clamp accept
+    body="$(sed -n '/^table ip6 amnezia {/,$p' "$NFT_SYS_FILE")"
+    clamp="$(printf '%s\n' "$body" | grep -n "maxseg size set rt mtu" | head -1 | cut -d: -f1)"
+    accept="$(printf '%s\n' "$body" | grep -n "ip6 saddr .* accept" | head -1 | cut -d: -f1)"
+    if [ -n "$clamp" ] && [ -n "$accept" ] && [ "$clamp" -lt "$accept" ]; then
+        pass "ipv6 forward: own MSS clamp precedes the subnet accepts"
+    else
+        fail "ipv6 forward: MSS clamp missing or after the accepts (clamp=${clamp:-none} accept=${accept:-none})"
+    fi
+}
+
+# The project invariant: not one drop rule in anything we manage. It
+# carries into IPv6 without exception.
+test_ipv6_no_drop_rules() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(TUNNEL_SUBNET6=fd42:a11e:c0de::/64 run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 no-drop flow: exit $rc"
+    if grep -v "^[[:space:]]*#" "$NFT_SYS_FILE" | grep -qE "\\bdrop\\b|policy drop"; then
+        fail "ipv6: a drop rule reached the managed ruleset"
+    else
+        pass "ipv6: no drop rules anywhere in the managed ruleset"
+    fi
+}
+
+# The rollback the owner actually cares about: a deployment that had IPv6
+# and no longer does must not keep the old table alive.
+test_ipv6_switch_off_after_on() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(TUNNEL_SUBNET6=fd42:a11e:c0de::/64 run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 switch-off: first run exit $rc"
+    assert_in "^table ip6 amnezia {" "$NFT_SYS_FILE" "switch-off: IPv6 was on for the first run"
+    rc="$(TUNNEL_SUBNET6="" run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 switch-off: second run exit $rc"
+    assert_not_in "^table ip6 amnezia {" "$NFT_SYS_FILE" "switch-off: the ip6 table definition is gone"
+    assert_in "^delete table ip6 amnezia$" "$NFT_SYS_FILE" "switch-off: the ip6 table is explicitly deleted"
+    assert_in "^table ip amnezia {" "$NFT_SYS_FILE" "switch-off: the IPv4 table survived untouched"
+}
+
 # --- main ---------------------------------------------------------------
 
 test_bash_syntax
@@ -949,6 +1034,11 @@ test_help_lists_m92
 test_invalid_subnets
 test_host_cidr_normalized
 test_default_rules
+test_ipv6_absent_by_default
+test_ipv6_rules_when_enabled
+test_ipv6_mss_clamp_in_its_own_table
+test_ipv6_no_drop_rules
+test_ipv6_switch_off_after_on
 test_dns_interception
 test_dns_interception_absent_when_resolver_stands_down
 test_atomic_replace_on_rerun

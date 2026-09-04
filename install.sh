@@ -289,6 +289,14 @@ BUILD_FROM_SOURCE=0
 # tunnel address for connected clients. On by default; --no-tunnel-dns
 # turns it off for deployments that run their own resolver on port 53.
 TUNNEL_DNS_ENABLED=1
+# TUNNEL_SUBNET6 is the tunnel's IPv6 CIDR; empty means the tunnel carries
+# IPv4 only, which is what every existing deployment does and what a host
+# without working IPv6 must keep doing. Deciding the value — probing the
+# uplink, honouring an operator's flag, writing it to .env — belongs to
+# amnezia-vpn-server-29fc; until that lands this reads back whatever .env
+# already holds, so a rerun of the installer never changes the answer by
+# itself.
+TUNNEL_SUBNET6="${TUNNEL_SUBNET6:-}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1292,9 +1300,19 @@ vpn_subnet_effective() {
 # $4 = 1 adds the DNS redirect (T-mhj4). It is omitted when the resolver
 # stands down (--no-tunnel-dns): redirecting to a port nobody listens on
 # would take every client's DNS with it.
+#
+# $5 is the tunnel's IPv6 CIDR, empty when the tunnel carries IPv4 only
+# (amnezia-vpn-server-nxp2). It renders a SECOND table, ip6 amnezia,
+# rather than converting this one to the inet family. The reason is
+# rollback: with a separate table, "IPv6 off" means literally "the ip6
+# table does not exist", and the IPv4 ruleset stays the same bytes it
+# has always been. Folding both families into one inet table would make
+# switching off a matter of conditionals inside a ruleset that is also
+# carrying every existing deployment.
 render_nftables() {
     local input_rules="${3:-}"
     local dns_intercept="${4:-0}"
+    local subnet6="${5:-}"
     local prerouting=""
     if [ "$dns_intercept" = "1" ]; then
         # A client is free to name any resolver in its settings, and one
@@ -1365,6 +1383,46 @@ ${prerouting}
     }
 }
 EOF
+    [ -n "$subnet6" ] || return 0
+    cat <<EOF
+
+table ip6 amnezia {
+    chain forward {
+        type filter hook forward priority -100; policy accept;
+        # The IPv4 table's clamp cannot reach here: that table is of the
+        # ip family, so every rule in it is IPv4-only. Without this line
+        # IPv6 would have no segment-size protection at all, which is
+        # worse than the IPv4 case rather than equal to it — see below.
+        tcp flags syn tcp option maxseg size set rt mtu
+        ip6 saddr $subnet6 accept
+        ip6 daddr $subnet6 accept
+    }
+
+    chain input {
+        type filter hook input priority -100; policy accept;
+        # ICMPv6 is not optional the way ICMP is. IPv6 routers do not
+        # fragment: a sender learns the path size only from "packet too
+        # big", so silencing ICMPv6 turns amnezia-vpn-server-kz8n from a
+        # bug into a permanent condition. Neighbour discovery rides the
+        # same protocol — without it IPv6 does not work at all.
+        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request, echo-reply, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+        iifname "awg0" udp dport 53 accept
+        iifname "awg0" tcp dport 53 accept
+    }
+
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        # NAT66. The hoster hands this server a /64 on the link and
+        # routes nothing behind it, which is the common case rather than
+        # a quirk, so clients cannot be given globally routed addresses
+        # without the hoster's cooperation. Measured working on the test
+        # server (amnezia-vpn-server-d9vm): a client behind this rule
+        # reaches YouTube over IPv6 and is seen from outside as the
+        # server, never as its own inside address.
+        ip6 saddr $subnet6 oifname != "awg0" masquerade
+    }
+}
+EOF
 }
 
 # render_nftables_deploy: the same core ruleset, made idempotent in one
@@ -1378,7 +1436,21 @@ render_nftables_deploy() {
     {
         printf 'table ip amnezia\n'
         printf 'flush table ip amnezia\n'
-        render_nftables "$1" "$2" "${3:-}" "${4:-0}"
+        # Both branches name the table first, because nft cannot flush or
+        # delete one that does not exist yet and the whole batch would
+        # fail. Switching IPv6 off must DELETE the table, not merely stop
+        # writing it: a server that once had IPv6 would otherwise keep a
+        # live masquerade rule from the previous run, and the promise that
+        # "off" equals today's behaviour would be false on exactly the
+        # server where the rollback is needed (amnezia-vpn-server-nxp2).
+        if [ -n "${5:-}" ]; then
+            printf 'table ip6 amnezia\n'
+            printf 'flush table ip6 amnezia\n'
+        else
+            printf 'table ip6 amnezia\n'
+            printf 'delete table ip6 amnezia\n'
+        fi
+        render_nftables "$1" "$2" "${3:-}" "${4:-0}" "${5:-}"
     }
 }
 
@@ -1428,6 +1500,33 @@ nftables_persist() {
     cmd nft list table ip amnezia >/dev/null 2>&1 \
         || die_op "nftables was applied but the amnezia table is not present after reload"
 
+    # IPv6 forwarding is switched here, AFTER the ruleset is loaded and
+    # verified — never in the sysctl step, which runs hundreds of lines
+    # earlier. Turning a server into an IPv6 router first and giving it
+    # rules afterwards leaves a window with neither NAT nor the tunnel's
+    # accepts in place; doing it in this order leaves none
+    # (amnezia-vpn-server-nxp2).
+    #
+    # The persisted value lives in its own drop-in rather than in the
+    # managed sysctl file, for the same reason the ip6 rules live in
+    # their own table: switching IPv6 off then means the file is gone,
+    # not that a line inside a shared file changed meaning.
+    if [ -n "$TUNNEL_SUBNET6" ]; then
+        cmd nft list table ip6 amnezia >/dev/null 2>&1 \
+            || die_op "the tunnel asks for IPv6 but the ip6 amnezia table is not present after reload"
+        printf '# amnezia-vpn managed (amnezia-vpn-server-nxp2): the tunnel carries IPv6.\nnet.ipv6.conf.all.forwarding = 1\n' \
+            > "$SYSCTL_DIR/amnezia-vpn-ipv6.conf"
+        chmod 0644 "$SYSCTL_DIR/amnezia-vpn-ipv6.conf"
+        apply_sysctl_warn net.ipv6.conf.all.forwarding=1 || true
+        log "IPv6 forwarding enabled for tunnel subnet $TUNNEL_SUBNET6 (rules were already in place)"
+    else
+        # Unconditional on every run, not only at the moment of switching
+        # off: otherwise the state would depend on the order in which the
+        # operator happened to toggle things.
+        rm -f "$SYSCTL_DIR/amnezia-vpn-ipv6.conf"
+        apply_sysctl_warn net.ipv6.conf.all.forwarding=0 || true
+    fi
+
     mkdir -p "$SYSTEMD_DIR/docker.service.d" || die_op "cannot create systemd drop-in dir"
     cat > "$SYSTEMD_DIR/docker.service.d/amnezia-vpn-nftables.conf" <<EOF
 # amnezia-vpn managed (M9.2): the NAT/forward rules must exist before
@@ -1471,7 +1570,10 @@ RULES
 
     mkdir -p "$NFT_DEPLOY_DIR" || die_op "cannot create $NFT_DEPLOY_DIR"
     chmod 0750 "$NFT_DEPLOY_DIR"
-    render_nftables_deploy "$subnet" "$port" "$input_rules" "$TUNNEL_DNS_ENABLED" > "$NFT_DEPLOY_FILE"
+    # Read back rather than assume: a rerun for an unrelated reason must
+    # not silently drop IPv6 from a deployment that has it.
+    TUNNEL_SUBNET6="${TUNNEL_SUBNET6:-$(env_read TUNNEL_SUBNET6)}"
+    render_nftables_deploy "$subnet" "$port" "$input_rules" "$TUNNEL_DNS_ENABLED" "$TUNNEL_SUBNET6" > "$NFT_DEPLOY_FILE"
     chmod 0644 "$NFT_DEPLOY_FILE"
 
     mkdir -p "$NFTABLES_DIR" || die_op "cannot create $NFTABLES_DIR"
