@@ -38,6 +38,13 @@ setstate() { # portable in-place update: sed(1) -i differs on BSD/GNU
 fakes_reset() {
     unset AMNEZIA_INSTALL_SKIP_PRUNE
     : > "$FAKE_CALLS"
+    # A host that already has fail2ban, which is the ordinary case on a
+    # rerun. Without this every run would install the package and the
+    # assertions about apt-get not being invoked would be measuring this
+    # harness rather than the installer (amnezia-vpn-server-rswn). The
+    # missing-package path has its own test, which removes this stub.
+    printf '#!/bin/sh\nexit 0\n' > "$FAKE_DIR/fail2ban-server"
+    chmod +x "$FAKE_DIR/fail2ban-server"
     mkdir -p "$FAKE_FS"
     rm -rf "$ROOT" "$SYSCTL_TEST" "$MODULES_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
         "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST" \
@@ -2205,6 +2212,58 @@ test_ipv6_prefix_is_stable_across_reruns() {
         || fail "the prefix changed on a rerun: $first -> $(env_value TUNNEL_SUBNET6)"
 }
 
+
+# --- amnezia-vpn-server-rswn: SSH brute-force protection ----------------
+
+test_fail2ban_configured_by_default() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$TMP_TEST/f2b/amnezia-vpn-sshd.conf" \
+          AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "fail2ban default: exit $rc"
+    local jail="$TMP_TEST/f2b/amnezia-vpn-sshd.conf"
+    [ -f "$jail" ] && pass "fail2ban jail written by default" || fail "no fail2ban jail"
+    grep -q "^enabled = true" "$jail" && pass "the sshd jail is enabled" || fail "jail not enabled"
+    # Without this the jail reads a file that Ubuntu 24.04 and Debian 12 do
+    # not create, and guards nothing while reporting itself healthy.
+    grep -q "^backend = systemd" "$jail" \
+        && pass "the jail reads the journal, not a file that does not exist" \
+        || fail "the jail would read a non-existent auth.log"
+    grep -q "^banaction = nftables" "$jail" \
+        && pass "bans go through nftables, like the rest of this host" \
+        || fail "bans would use a different firewall from ours"
+    # A ban on the tunnel port would cut off a real client: UDP, no
+    # passwords, nothing to guess.
+    grep -q "4500" "$jail" && fail "the tunnel port appears in the jail" \
+        || pass "the tunnel port is never banned"
+}
+
+# The other half: a host without the package gets it installed.
+test_fail2ban_installs_the_package_when_missing() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rm -f "$FAKE_DIR/fail2ban-server"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$TMP_TEST/f2b-new/amnezia-vpn-sshd.conf" \
+          AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "fail2ban install: exit $rc"
+    grep -q "apt-get install -y fail2ban" "$FAKE_CALLS" \
+        && pass "a host without fail2ban gets the package" \
+        || fail "fail2ban was never installed on a host lacking it"
+    [ -f "$TMP_TEST/f2b-new/amnezia-vpn-sshd.conf" ] \
+        && pass "and the jail is written after installing it" \
+        || fail "package installed but no jail written"
+}
+
+test_fail2ban_can_be_declined() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$TMP_TEST/f2b-off/amnezia-vpn-sshd.conf" \
+          AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-fail2ban)"
+    [ "$rc" = "0" ] || fail "--no-fail2ban: exit $rc"
+    [ -f "$TMP_TEST/f2b-off/amnezia-vpn-sshd.conf" ] \
+        && fail "--no-fail2ban still wrote a jail" \
+        || pass "--no-fail2ban writes no jail"
+    grep -q "fail2ban skipped" "$TMP_TEST/out" "$TMP_TEST/err" \
+        && pass "--no-fail2ban says it skipped" || fail "--no-fail2ban was silent"
+}
+
 # --- main ---------------------------------------------------------------
 
 m91_run_all() {
@@ -2230,6 +2289,9 @@ test_ipv6_upgrade_never_decides
 test_ipv6_upgrade_opts_in
 test_ipv6_switch_off_clears_everything
 test_ipv6_prefix_is_stable_across_reruns
+test_fail2ban_configured_by_default
+test_fail2ban_installs_the_package_when_missing
+test_fail2ban_can_be_declined
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
 test_prune_soft_fail

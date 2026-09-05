@@ -199,6 +199,11 @@ Options:
                     must not take the panel offline by omission. Both
                     flags therefore read back from .env when left out,
                     and only an explicit empty value leaves a mode.
+  --no-fail2ban do not install or configure fail2ban. By default the
+                installer protects SSH from password guessing, which every
+                server with a public address gets around the clock. The
+                tunnel port is never touched by it: there are no passwords
+                there, and a ban would cut off a real client.
   --ipv6        carry IPv6 inside the tunnel (NAT66 to the uplink). A
                 fresh install turns this on by itself when the host has a
                 working IPv6 uplink; an existing deployment never changes
@@ -315,6 +320,11 @@ TUNNEL_SUBNET6="${TUNNEL_SUBNET6:-}"
 # on    — --ipv6: включить, даже если проверка молчит (оператор знает лучше)
 # off   — --no-ipv6: выключить и убрать за собой
 TUNNEL_IPV6_MODE=auto
+# Brute-force protection for SSH. On by default because the product hands
+# a newcomer a server with a public address and an open SSH port, and that
+# port is guessed at around the clock (amnezia-vpn-server-rswn). Anyone
+# who already runs their own protection passes --no-fail2ban.
+FAIL2BAN_ENABLED=1
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -363,6 +373,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --build)
             BUILD_FROM_SOURCE=1
+            shift
+            ;;
+        --no-fail2ban)
+            FAIL2BAN_ENABLED=0
             shift
             ;;
         --ipv6)
@@ -1407,6 +1421,62 @@ tunnel_address6() {
 }
 
 tunnel_ipv6_preflight
+
+# --- 10e. SSH brute-force protection (amnezia-vpn-server-rswn) --------
+#
+# The installer measures the path MTU and picks a congestion algorithm so
+# the owner does not have to think about them. Leaving them to remember
+# fail2ban, which guards against something actively happening to their
+# server right now, would be a strange place to stop.
+FAIL2BAN_JAIL="${AMNEZIA_INSTALL_FAIL2BAN_JAIL:-/etc/fail2ban/jail.d/amnezia-vpn-sshd.conf}"
+
+fail2ban_setup() {
+    if [ "$FAIL2BAN_ENABLED" != "1" ]; then
+        log "fail2ban skipped (--no-fail2ban)"
+        return 0
+    fi
+    if ! cmd command -v fail2ban-server >/dev/null 2>&1; then
+        run_apt_get install -y fail2ban || {
+            log "WARNING: could not install fail2ban; SSH is left unguarded"
+            return 0
+        }
+    fi
+    mkdir -p "$(dirname "$FAIL2BAN_JAIL")" || {
+        log "WARNING: cannot create the fail2ban jail directory; SSH is left unguarded"
+        return 0
+    }
+    # backend = systemd is not a preference. Ubuntu 24.04 and Debian 12
+    # ship no /var/log/auth.log, so the stock file backend finds nothing
+    # to read and the jail runs forever without ever seeing an attempt —
+    # protection that reports itself healthy and does nothing.
+    #
+    # banaction = nftables because this host is an nftables host; the
+    # iptables default would work through the compatibility layer and put
+    # our rules and fail2ban's in two different worlds.
+    #
+    # Only sshd. The tunnel port carries UDP with no passwords to guess,
+    # and a ban there would cut off a real client instead of an attacker.
+    cat > "$FAIL2BAN_JAIL" <<'JAIL'
+# amnezia-vpn managed (amnezia-vpn-server-rswn). Rerun install.sh to
+# regenerate; delete this file and restart fail2ban to opt out by hand.
+[sshd]
+enabled = true
+backend = systemd
+banaction = nftables[type=multiport]
+maxretry = 5
+findtime = 10m
+bantime = 1h
+JAIL
+    chmod 0644 "$FAIL2BAN_JAIL"
+    cmd systemctl enable fail2ban >/dev/null 2>&1 || true
+    if ! cmd systemctl restart fail2ban; then
+        log "WARNING: fail2ban did not start; SSH is left unguarded"
+        return 0
+    fi
+    log "fail2ban guards SSH (5 attempts in 10 minutes, banned for an hour); the tunnel port is untouched"
+}
+
+fail2ban_setup
 
 
 # --- 11. host networking: managed nftables ruleset (M9.2) --------------

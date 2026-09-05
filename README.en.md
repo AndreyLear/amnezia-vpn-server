@@ -119,6 +119,51 @@ runs its own resolver inside the tunnel: for connected devices it answers the
 panel's hostname with the panel's in-tunnel address. The certificate stays
 valid — the name does not change.
 
+### What is switched on for you
+
+Two things the installer decides, because otherwise you would have to
+remember them.
+
+**SSH brute-force protection.** Every server with a public address is guessed
+at around the clock, from its first hour. `fail2ban` is installed: five failed
+attempts in ten minutes, banned for an hour. The tunnel port is never touched
+— there are no passwords to guess there, and a ban would cut off a real
+person.
+
+**IPv6 in the tunnel**, when the server has it and it *works*. What is checked
+is not that an address exists but that traffic actually leaves: plenty of
+hosting providers configure IPv6 halfway, handing out an address that routes
+nowhere.
+
+Why it matters: YouTube, Instagram and most large sites are dual-stack. A
+tunnel carrying IPv4 only squeezes all of their traffic through one pipe and
+leaves the other half of their capacity unreachable.
+
+### Turning either one off
+
+```bash
+./bootstrap.sh --ip 203.0.113.10 --no-ipv6        # IPv4-only tunnel
+./bootstrap.sh --ip 203.0.113.10 --no-fail2ban    # no SSH protection
+```
+
+`install.sh` takes the same flags when you run it on the server yourself.
+
+To turn IPv6 off later, rerun with the flag: everything that was added is
+removed — the ruleset, the forwarding and the addresses in client configs.
+`--ipv6` turns it back on.
+
+Two promises worth knowing exactly:
+
+- **Upgrading a version never changes your decision.** A server running
+  without IPv6 keeps running without it. Nothing switches itself on for a
+  deployment that already exists — only for a new one.
+- **Turning it off is complete, not partial.** What was added is removed, on
+  every run, not only on the run that flips the switch.
+
+One honest caveat: switching IPv6 on or off **restarts the tunnel**. Every
+client loses the connection for a few seconds and gets it back by itself.
+An interface address cannot be changed any other way.
+
 ## Clients
 
 A client is one device: a phone, a laptop, a router. Each has its own keys, so
@@ -219,11 +264,19 @@ before 2.3.0: running the installer without the domain flag returned the
 panel to loopback. Settings are remembered now, so a plain rerun changes
 nothing. On an older version, pass the domain again.
 
-**Pages load but video does not.** Almost always the MTU: small packets get
-through while the large ones carrying video are dropped on the way. The
-installer picks a size that survives mobile networks too, so a reinstall
-usually settles it. If it does not, lower the MTU in the client app itself —
-1280 instead of 1340.
+**Pages load but video does not.** Two causes look identical from the outside,
+so check both.
+
+The MTU: small packets get through while the large ones carrying video are
+dropped on the way. The installer picks a size that survives mobile networks
+too, so a reinstall usually settles it. If it does not, lower the MTU in the
+client app itself — 1280 instead of 1340.
+
+A tunnel carrying IPv4 only. YouTube, Instagram and most large sites live in
+both versions of the protocol at once; with IPv4 alone their whole load is
+squeezed through one pipe and half their capacity is unreachable. If the
+server has working IPv6, `--ipv6` gives the tunnel its second half back. See
+"IPv6 in the tunnel" above.
 
 **A client stopped connecting after a move.** Check where the domain points:
 `dig +short example.com`.

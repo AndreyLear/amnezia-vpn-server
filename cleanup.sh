@@ -17,7 +17,9 @@
 #     docker.service.d/amnezia-vpn-nftables.conf
 #   - /etc/modules-load.d/amneziawg.conf, /etc/modules-load.d/amnezia-vpn-bbr.conf,
 #     /etc/sysctl.d/99-amnezia-vpn.conf,
-#     /etc/sysctl.d/amnezia-vpn-ipv6.conf, ip link awg0
+#     /etc/sysctl.d/amnezia-vpn-ipv6.conf,
+#     /etc/fail2ban/jail.d/amnezia-vpn-sshd.conf (the package stays),
+#     ip link awg0
 #   - nginx site amnezia-panel
 #   - /opt/amnezia-vpn, /opt/amnezia-vpn-src
 #
@@ -37,6 +39,11 @@ SYSCTL_FILE=/etc/sysctl.d/99-amnezia-vpn.conf
 # Left behind it would keep turning a cleaned-up host into an IPv6 router
 # at every boot.
 SYSCTL_IPV6_FILE=/etc/sysctl.d/amnezia-vpn-ipv6.conf
+# Our fail2ban jail. The PACKAGE is deliberately left installed: the owner
+# may well want brute-force protection after this product is gone, and
+# removing a security daemon on the way out is not a favour
+# (amnezia-vpn-server-rswn).
+FAIL2BAN_JAIL_FILE=/etc/fail2ban/jail.d/amnezia-vpn-sshd.conf
 
 DO_IT=0
 FORCE=0
@@ -259,7 +266,7 @@ fi
 # tcp_bbr at boot and still carries our ip_forward, conntrack and buffer
 # settings.
 
-for managed in "$MODULES_FILE" "$BBR_MODULES_FILE" "$SYSCTL_FILE" "$SYSCTL_IPV6_FILE"; do
+for managed in "$MODULES_FILE" "$BBR_MODULES_FILE" "$SYSCTL_FILE" "$SYSCTL_IPV6_FILE" "$FAIL2BAN_JAIL_FILE"; do
     if [ -f "$managed" ]; then
         if [ "$DO_IT" -eq 1 ]; then
             rm -f "$managed"
