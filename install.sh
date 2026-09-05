@@ -206,6 +206,12 @@ Options:
                 server with a public address gets around the clock. The
                 tunnel port is never touched by it: there are no passwords
                 there, and a ban would cut off a real client.
+  --no-watchdog do not install the watchdog timer. By default a timer
+                checks once a minute that the resolver still answers and
+                that the tunnel still writes its status, and restarts the
+                service that stopped doing so. restart: unless-stopped
+                only catches a dead process; a wedged one looks healthy to
+                Docker and stays broken until someone complains.
   --ipv6        carry IPv6 inside the tunnel (NAT66 to the uplink). A
                 fresh install turns this on by itself when the host has a
                 working IPv6 uplink; an existing deployment never changes
@@ -327,6 +333,10 @@ TUNNEL_IPV6_MODE=auto
 # port is guessed at around the clock (amnezia-vpn-server-rswn). Anyone
 # who already runs their own protection passes --no-fail2ban.
 FAIL2BAN_ENABLED=1
+# Watchdog for the two services whose failure is silent (ptuo). On by
+# default for the same reason as fail2ban: the owner should not have to
+# know that a container can be up and useless at the same time.
+WATCHDOG_ENABLED=1
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -379,6 +389,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --no-fail2ban)
             FAIL2BAN_ENABLED=0
+            shift
+            ;;
+        --no-watchdog)
+            WATCHDOG_ENABLED=0
             shift
             ;;
         --ipv6)
@@ -889,14 +903,15 @@ copy_tree() { # cp -a with per-file error stop
 copy_tree "$SCRIPT_DIR/compose.yaml" "$ROOT_DIR/"
 copy_tree "$SCRIPT_DIR/versions.lock" "$ROOT_DIR/"
 copy_tree "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR/"
+copy_tree "$SCRIPT_DIR/watchdog.sh" "$ROOT_DIR/"
 # Build context is the repository root (compose.yaml build.context = "."):
 # the app/ tree (panel Dockerfile + Go module incl. embedded templates,
 # awg Dockerfile + entrypoint scripts, dns Dockerfile + entrypoint) must
 # be present under the root.
 copy_tree "$SCRIPT_DIR/app" "$ROOT_DIR/"
 chmod 0644 "$ROOT_DIR/compose.yaml" "$ROOT_DIR/versions.lock"
-chmod 0755 "$ROOT_DIR/docker-prune.sh"
-log "deployment files installed (compose.yaml, versions.lock, docker-prune.sh, app/)"
+chmod 0755 "$ROOT_DIR/docker-prune.sh" "$ROOT_DIR/watchdog.sh"
+log "deployment files installed (compose.yaml, versions.lock, docker-prune.sh, watchdog.sh, app/)"
 
 # --- 10. journald cap + weekly docker-prune timer ---------------------
 
@@ -935,6 +950,46 @@ Persistent=true
 WantedBy=timers.target
 EOF
 chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-prune.timer"
+# Watchdog units (amnezia-vpn-server-ptuo). Written even when the watchdog
+# is switched off, then removed below: a rerun with --no-watchdog has to
+# take away what a previous run left, otherwise "off" would mean "off for
+# fresh installs only".
+if [ "$WATCHDOG_ENABLED" = "1" ]; then
+    cat > "$SYSTEMD_DIR/amnezia-vpn-watchdog.service" <<EOF
+# amnezia-vpn managed: restart a service that is up but not working.
+[Unit]
+Description=Amnezia VPN service watchdog
+
+[Service]
+Type=oneshot
+ExecStart=${ROOT_DIR}/watchdog.sh
+EOF
+    chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-watchdog.service"
+    cat > "$SYSTEMD_DIR/amnezia-vpn-watchdog.timer" <<'EOF'
+# amnezia-vpn managed: minute checks of resolver and tunnel.
+[Unit]
+Description=Amnezia VPN watchdog every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+# Persistent=false on purpose: a missed minute is not worth catching up,
+# and a burst of catch-up runs after downtime is exactly when a restart
+# would be least welcome.
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+EOF
+    chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-watchdog.timer"
+    log "watchdog units written (ExecStart=$ROOT_DIR/watchdog.sh, every minute)"
+else
+    if [ -f "$SYSTEMD_DIR/amnezia-vpn-watchdog.timer" ]; then
+        cmd systemctl disable --now amnezia-vpn-watchdog.timer >/dev/null 2>&1 || true
+    fi
+    rm -f "$SYSTEMD_DIR/amnezia-vpn-watchdog.timer" "$SYSTEMD_DIR/amnezia-vpn-watchdog.service"
+    log "watchdog skipped (--no-watchdog): units removed if they were there"
+fi
 cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed (prune timer)"
 log "weekly docker-prune units written (enable --now after compose up; ExecStart=$ROOT_DIR/docker-prune.sh)"
 
@@ -2156,6 +2211,19 @@ apply_deployment_values
 cmd systemctl enable --now amnezia-vpn-prune.timer \
     || die_op "systemctl enable --now amnezia-vpn-prune.timer failed"
 log "weekly docker-prune timer enabled (ExecStart=$ROOT_DIR/docker-prune.sh)"
+
+# The watchdog is enabled only after the stack is up: a timer that starts
+# firing during the build would see a resolver that does not exist yet and
+# would count that as a failure.
+if [ "$WATCHDOG_ENABLED" = "1" ]; then
+    if ! cmd command -v "${AMNEZIA_INSTALL_DIG_BIN:-dig}" >/dev/null 2>&1; then
+        run_apt_get install -y dnsutils \
+            || log "WARNING: apt-get install dnsutils failed; the watchdog will skip the resolver check"
+    fi
+    cmd systemctl enable --now amnezia-vpn-watchdog.timer \
+        || die_op "systemctl enable --now amnezia-vpn-watchdog.timer failed"
+    log "watchdog timer enabled (ExecStart=$ROOT_DIR/watchdog.sh, every minute)"
+fi
 
 # --- 13b. panel domain: reverse proxy + Let's Encrypt (T-121) ---------
 # Optional --domain mode: nginx terminates TLS in front of the

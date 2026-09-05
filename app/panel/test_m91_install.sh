@@ -2265,6 +2265,75 @@ test_fail2ban_installs_the_package_when_missing() {
         || fail "package installed but no jail written"
 }
 
+# Сторож (amnezia-vpn-server-ptuo): юниты, порядок включения и снятие при
+# повторном запуске с --no-watchdog.
+test_watchdog_units_installed_by_default() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "watchdog default: exit $rc"
+    local svc="$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.service"
+    local timer="$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer"
+    [ -f "$svc" ] && [ -f "$timer" ] \
+        && pass "watchdog units installed by default" \
+        || fail "watchdog units missing"
+    grep -Fq "ExecStart=${ROOT}/watchdog.sh" "$svc" \
+        && pass "watchdog service runs the deployed script" \
+        || fail "watchdog ExecStart does not point at $ROOT/watchdog.sh"
+    grep -q "OnUnitActiveSec=1min" "$timer" \
+        && pass "watchdog runs once a minute" \
+        || fail "watchdog timer has no minute cadence"
+    # Persistent=true would fire every missed minute at once after downtime,
+    # and a burst of restarts is the last thing a just-booted server needs.
+    grep -q "Persistent=false" "$timer" \
+        && pass "watchdog does not catch up on missed minutes" \
+        || fail "watchdog timer would replay missed runs"
+    [ -x "$ROOT/watchdog.sh" ] \
+        && pass "watchdog.sh deployed and executable" \
+        || fail "watchdog.sh missing from the deployment"
+    # A timer that starts firing during the build would see a resolver that
+    # does not exist yet and would call that a failure.
+    local up_n enable_n
+    up_n="$(grep -nE 'docker compose .*[[:space:]]up([[:space:]]|$)' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    enable_n="$(grep -n 'systemctl enable --now amnezia-vpn-watchdog.timer' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    if [ -n "$up_n" ] && [ -n "$enable_n" ] && [ "$enable_n" -gt "$up_n" ]; then
+        pass "watchdog enabled only after the stack is up"
+    else
+        fail "watchdog enable --now must follow compose up (up=$up_n enable=$enable_n)"
+    fi
+}
+
+test_watchdog_can_be_declined() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-watchdog)"
+    [ "$rc" = "0" ] || fail "--no-watchdog: exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer" ] \
+        && fail "--no-watchdog still wrote a timer" \
+        || pass "--no-watchdog writes no timer"
+    grep -q "systemctl enable --now amnezia-vpn-watchdog.timer" "$FAKE_CALLS" \
+        && fail "--no-watchdog still enabled the timer" \
+        || pass "--no-watchdog enables nothing"
+    grep -q "watchdog skipped" "$TMP_TEST/out" "$TMP_TEST/err" \
+        && pass "--no-watchdog says it skipped" || fail "--no-watchdog was silent"
+}
+
+# "Off" has to mean off on an existing deployment too, not just on a fresh
+# one: the second run must take away what the first one left.
+test_watchdog_removed_on_rerun_with_flag() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "watchdog rerun setup: exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer" ] \
+        || fail "watchdog rerun setup: no timer to remove"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-watchdog)"
+    [ "$rc" = "0" ] || fail "watchdog rerun: exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer" ] \
+        && fail "rerun with --no-watchdog left the timer behind" \
+        || pass "rerun with --no-watchdog removes the timer"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.service" ] \
+        && fail "rerun with --no-watchdog left the service behind" \
+        || pass "rerun with --no-watchdog removes the service"
+}
+
 test_fail2ban_can_be_declined() {
     fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$TMP_TEST/f2b-off/amnezia-vpn-sshd.conf" \
@@ -2353,6 +2422,9 @@ test_ipv6_change_restarts_the_tunnel
 test_fail2ban_configured_by_default
 test_fail2ban_installs_the_package_when_missing
 test_fail2ban_can_be_declined
+test_watchdog_units_installed_by_default
+test_watchdog_can_be_declined
+test_watchdog_removed_on_rerun_with_flag
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
 test_prune_soft_fail

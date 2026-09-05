@@ -245,6 +245,32 @@ else
     log "skip: amnezia-vpn-forward.service not present"
 fi
 
+# Сторож (amnezia-vpn-server-ptuo): таймер, юнит и каталог состояния в /run.
+# Оставленный таймер после удаления развёртывания раз в минуту звал бы
+# отсутствующий скрипт и заполнял журнал.
+for unit in amnezia-vpn-watchdog.timer amnezia-vpn-watchdog.service; do
+    if [ -f "$SYSTEMD_DIR/$unit" ]; then
+        if [ "$DO_IT" -eq 1 ]; then
+            systemctl disable --now "$unit" >/dev/null 2>&1 || true
+            rm -f "$SYSTEMD_DIR/$unit"
+            systemctl daemon-reload
+            log "removed $SYSTEMD_DIR/$unit"
+        else
+            log "would remove $SYSTEMD_DIR/$unit"
+        fi
+    else
+        log "skip: $unit not present"
+    fi
+done
+if [ -d /run/amnezia-vpn-watchdog ]; then
+    if [ "$DO_IT" -eq 1 ]; then
+        rm -rf /run/amnezia-vpn-watchdog
+        log "removed /run/amnezia-vpn-watchdog"
+    else
+        log "would remove /run/amnezia-vpn-watchdog"
+    fi
+fi
+
 DROPIN="$SYSTEMD_DIR/docker.service.d/amnezia-vpn-nftables.conf"
 if [ -f "$DROPIN" ]; then
     if [ "$DO_IT" -eq 1 ]; then

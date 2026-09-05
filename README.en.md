@@ -121,7 +121,7 @@ valid — the name does not change.
 
 ### What is switched on for you
 
-Two things the installer decides, because otherwise you would have to
+Three things the installer decides, because otherwise you would have to
 remember them.
 
 **SSH brute-force protection.** Every server with a public address is guessed
@@ -139,11 +139,23 @@ Why it matters: YouTube, Instagram and most large sites are dual-stack. A
 tunnel carrying IPv4 only squeezes all of their traffic through one pipe and
 leaves the other half of their capacity unreachable.
 
-### Turning either one off
+**A watchdog over the resolver and the tunnel.** Once a minute it checks that
+the resolver still answers and that the tunnel still writes its status, and
+restarts whichever service stopped doing so — after two consecutive failures,
+and no more than once every ten minutes.
+
+Why it matters: a container can be up and useless at the same time. To Docker
+that is success, so the ordinary restart policy never sees it, and a wedged
+resolver stays silent until somebody complains. Client handshakes are
+deliberately not a trigger: people are legitimately offline, and restarting a
+tunnel over that would be harm without a cause.
+
+### Turning any of them off
 
 ```bash
 ./bootstrap.sh --ip 203.0.113.10 --no-ipv6        # IPv4-only tunnel
 ./bootstrap.sh --ip 203.0.113.10 --no-fail2ban    # no SSH protection
+./bootstrap.sh --ip 203.0.113.10 --no-watchdog    # no watchdog
 ```
 
 `install.sh` takes the same flags when you run it on the server yourself.
