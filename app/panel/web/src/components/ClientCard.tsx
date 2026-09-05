@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, HandshakeIcon, MoreVerticalIcon } from "lucide-react";
 
 import {
@@ -70,6 +70,17 @@ export function ClientMenu({
   onDelete,
   pending,
 }: { client: Client } & ClientActions) {
+  // Radix возвращает фокус на кнопку, когда меню закрывается. Для клавиатуры
+  // это единственно верно — иначе человек теряет место, откуда пришёл. Для
+  // мыши это лишнее: кольцо фокуса остаётся гореть на кнопке, будто меню всё
+  // ещё открыто, и гаснет только от щелчка мимо. Браузер сам различить не
+  // может: фокус возвращается программно, и Chrome наследует «видимый»
+  // признак от пункта меню, с которого ушёл (amnezia-vpn-server-c7iz).
+  //
+  // Поэтому запоминаем, чем меню открыли, и возврат фокуса отменяем только
+  // для указателя.
+  const openedByKeyboard = useRef(false);
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -78,12 +89,27 @@ export function ClientMenu({
           size="icon-sm"
           disabled={pending}
           aria-label={`Действия для ${client.name}`}
+          onPointerDown={() => {
+            openedByKeyboard.current = false;
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              openedByKeyboard.current = true;
+            }
+          }}
           onClick={(event) => event.stopPropagation()}
         >
           <MoreVerticalIcon />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => {
+          if (!openedByKeyboard.current) {
+            event.preventDefault();
+          }
+        }}
+      >
         <DropdownMenuItem onClick={onInfo}>Сведения</DropdownMenuItem>
         <DropdownMenuItem onClick={onQr}>QR-код</DropdownMenuItem>
         <DropdownMenuItem onClick={onDownload}>Скачать конфиг</DropdownMenuItem>
