@@ -2111,7 +2111,21 @@ verify_awg_listen_port() {
 }
 
 awg_tunnel_params() {
-    sed -n -E 's/^[[:space:]]*(ListenPort|MTU)[[:space:]]*=[[:space:]]*/\1=/p' \
+    # Address belongs here for the same reason ListenPort and MTU do: it
+    # is applied when the interface is created and by nothing else. The
+    # awg entrypoint hands a changed config to `awg syncconf`, which
+    # synchronises peers and keys and does not touch interface addresses
+    # — measured on a live server while proving out
+    # amnezia-vpn-server-d9vm: after a hot reload the peer's IPv6
+    # allowed-ip had appeared while the interface still had no IPv6
+    # address at all, no route existed and not a single IPv6 packet
+    # entered the tunnel.
+    #
+    # Leaving it out meant switching IPv6 on wrote a correct config and a
+    # correct database and changed nothing about the running tunnel, with
+    # every part of the installer reporting success. Found by deploying
+    # to a real server rather than by any test.
+    sed -n -E 's/^[[:space:]]*(ListenPort|MTU|Address)[[:space:]]*=[[:space:]]*/\1=/p' \
         "$ROOT_DIR/config/awg0.conf" 2>/dev/null | sort
 }
 

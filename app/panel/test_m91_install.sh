@@ -2264,6 +2264,25 @@ test_fail2ban_can_be_declined() {
         && pass "--no-fail2ban says it skipped" || fail "--no-fail2ban was silent"
 }
 
+
+# Switching IPv6 on writes a new interface address, and an interface
+# address is applied only when the interface is created — `awg syncconf`
+# synchronises peers and keys and leaves addresses alone. Without a
+# restart the installer would report success over a tunnel that had not
+# changed at all, which is exactly what happened on the first real
+# deployment (amnezia-vpn-server-29fc).
+test_ipv6_change_restarts_the_tunnel() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 restart: first run exit $rc"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 restart: opt-in run exit $rc"
+    grep -qE "compose.*restart awg|restart awg" "$FAKE_CALLS" \
+        && pass "switching IPv6 on restarts the tunnel" \
+        || fail "IPv6 was switched on without restarting the tunnel"
+}
+
 # --- main ---------------------------------------------------------------
 
 m91_run_all() {
@@ -2289,6 +2308,7 @@ test_ipv6_upgrade_never_decides
 test_ipv6_upgrade_opts_in
 test_ipv6_switch_off_clears_everything
 test_ipv6_prefix_is_stable_across_reruns
+test_ipv6_change_restarts_the_tunnel
 test_fail2ban_configured_by_default
 test_fail2ban_installs_the_package_when_missing
 test_fail2ban_can_be_declined

@@ -867,7 +867,7 @@ log "initializing the server row"
 # MTU in the deployment .env; read it there (on the server, hence the
 # escaping) so the operator never has to work the number out. Missing value
 # = the panel's own safe default.
-READ_ENV="MTU_ARG=\"\"; DNS=1.1.1.1,8.8.8.8; if [ -f .env ]; then TUNNEL_MTU=\"\$(sed -n 's/^TUNNEL_MTU=//p' .env | tail -1)\"; if [ -n \"\$TUNNEL_MTU\" ]; then MTU_ARG=\"--mtu \$TUNNEL_MTU\"; fi; TUNNEL_DNS=\"\$(sed -n 's/^TUNNEL_DNS=//p' .env | tail -1)\"; if [ -n \"\$TUNNEL_DNS\" ]; then DNS=\"\$TUNNEL_DNS\"; fi; fiADDR6_ARG=\"\"; if [ -f .env ]; then TUNNEL_ADDRESS6=\"\$(sed -n 's/^TUNNEL_ADDRESS6=//p' .env | tail -1)\"; if [ -n \"\$TUNNEL_ADDRESS6\" ]; then ADDR6_ARG=\"--address6 \$TUNNEL_ADDRESS6\"; fi; fi"
+READ_ENV="MTU_ARG=\"\"; DNS=1.1.1.1,8.8.8.8; if [ -f .env ]; then TUNNEL_MTU=\"\$(sed -n 's/^TUNNEL_MTU=//p' .env | tail -1)\"; if [ -n \"\$TUNNEL_MTU\" ]; then MTU_ARG=\"--mtu \$TUNNEL_MTU\"; fi; TUNNEL_DNS=\"\$(sed -n 's/^TUNNEL_DNS=//p' .env | tail -1)\"; if [ -n \"\$TUNNEL_DNS\" ]; then DNS=\"\$TUNNEL_DNS\"; fi; fi; ADDR6_ARG=\"\"; if [ -f .env ]; then TUNNEL_ADDRESS6=\"\$(sed -n 's/^TUNNEL_ADDRESS6=//p' .env | tail -1)\"; if [ -n \"\$TUNNEL_ADDRESS6\" ]; then ADDR6_ARG=\"--address6 \$TUNNEL_ADDRESS6\"; fi; fi"
 INIT_CMD="cd '$ROOT_DIR' && $READ_ENV; docker compose --env-file versions.lock run --rm panel-init /app/panel server init 10.8.0.1/24 '$AWG_PORT' --endpoint '$ENDPOINT' --dns \"\$DNS\" \$MTU_ARG \$ADDR6_ARG"
 INIT_OUT="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-init.XXXXXX")"
 if ! remote_cmd "$INIT_CMD" >/dev/null 2>"$INIT_OUT"; then
