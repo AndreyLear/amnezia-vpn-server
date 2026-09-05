@@ -22,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { UserText } from "@/components/UserText";
 import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -202,7 +203,9 @@ export function ClientInfoDialog({
                       </Button>
                     }
                   >
-                    <dd>{viewName}</dd>
+                    <dd>
+                      <UserText>{viewName}</UserText>
+                    </dd>
                   </ReadOnlyProperty>
                   <ReadOnlyProperty
                     label="Описание"
@@ -220,7 +223,9 @@ export function ClientInfoDialog({
                       </Button>
                     }
                   >
-                    <dd>{viewDescription}</dd>
+                    <dd>
+                      <UserText>{viewDescription}</UserText>
+                    </dd>
                   </ReadOnlyProperty>
                   <PropertyRow
                     actions={
@@ -410,7 +415,9 @@ export function ClientInfoDialog({
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Удалить клиента «{client?.name}»?</AlertDialogTitle>
+            <AlertDialogTitle>
+              Удалить клиента «<UserText>{client?.name}</UserText>»?
+            </AlertDialogTitle>
             <AlertDialogDescription>
               Конфигурация клиента будет убрана из awg0.conf
             </AlertDialogDescription>

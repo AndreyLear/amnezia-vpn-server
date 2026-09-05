@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UserText, noTranslate } from "@/components/UserText";
 import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshakeAge } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -110,13 +111,23 @@ function ClientName({
   const nameEl = isSmUp ? (
     <button
       type="button"
-      className="min-w-0 truncate text-left font-heading text-base font-medium"
+      translate="no"
+      className={cn(
+        noTranslate.className,
+        "min-w-0 truncate text-left font-heading text-base font-medium",
+      )}
       onClick={onInfo}
     >
       {client.name}
     </button>
   ) : (
-    <span className="min-w-0 truncate font-heading text-base font-medium">
+    <span
+      translate="no"
+      className={cn(
+        noTranslate.className,
+        "min-w-0 truncate font-heading text-base font-medium",
+      )}
+    >
       {client.name}
     </span>
   );
@@ -126,7 +137,9 @@ function ClientName({
   return (
     <Tooltip>
       <TooltipTrigger asChild>{nameEl}</TooltipTrigger>
-      <TooltipContent>{client.description}</TooltipContent>
+      <TooltipContent>
+        <UserText>{client.description}</UserText>
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -229,7 +242,9 @@ export function ClientCard({
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Удалить клиента «{client.name}»?</AlertDialogTitle>
+            <AlertDialogTitle>
+              Удалить клиента «<UserText>{client.name}</UserText>»?
+            </AlertDialogTitle>
             <AlertDialogDescription>
               Конфигурация клиента будет убрана из awg0.conf
             </AlertDialogDescription>
