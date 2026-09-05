@@ -11,11 +11,13 @@
 #   - containers amnezia-vpn-*
 #   - images amnezia-vpn-server/* (including the ghcr.io/<owner>/ prefix)
 #   - volumes amnezia-vpn_*
-#   - nft table ip amnezia and the marker block in /etc/nftables.conf
+#   - nft tables ip amnezia and ip6 amnezia, and the marker block in
+#     /etc/nftables.conf
 #   - systemd units amnezia-vpn-forward.service and
 #     docker.service.d/amnezia-vpn-nftables.conf
 #   - /etc/modules-load.d/amneziawg.conf, /etc/modules-load.d/amnezia-vpn-bbr.conf,
-#     /etc/sysctl.d/99-amnezia-vpn.conf, ip link awg0
+#     /etc/sysctl.d/99-amnezia-vpn.conf,
+#     /etc/sysctl.d/amnezia-vpn-ipv6.conf, ip link awg0
 #   - nginx site amnezia-panel
 #   - /opt/amnezia-vpn, /opt/amnezia-vpn-src
 #
@@ -31,6 +33,10 @@ NGINX_SITE=/etc/nginx/sites-enabled/amnezia-panel
 MODULES_FILE=/etc/modules-load.d/amneziawg.conf
 BBR_MODULES_FILE=/etc/modules-load.d/amnezia-vpn-bbr.conf
 SYSCTL_FILE=/etc/sysctl.d/99-amnezia-vpn.conf
+# Written only when the tunnel carries IPv6 (amnezia-vpn-server-nxp2).
+# Left behind it would keep turning a cleaned-up host into an IPv6 router
+# at every boot.
+SYSCTL_IPV6_FILE=/etc/sysctl.d/amnezia-vpn-ipv6.conf
 
 DO_IT=0
 FORCE=0
@@ -80,8 +86,13 @@ foreign_artifacts() {
         | awk '/^amnezia-/ && !/^amnezia-vpn-/'
     ls /etc/nginx/sites-enabled 2>/dev/null \
         | awk '/^amnezia-/ && $0 != "amnezia-panel"'
+    # "table ip6 amnezia" is ours too since amnezia-vpn-server-nxp2: the
+    # tunnel's IPv6 rules live in their own table rather than in an inet
+    # one shared with IPv4. Without this exclusion cleanup would call our
+    # own ruleset a foreign project and refuse to run on every server
+    # where IPv6 was ever switched on.
     nft list tables 2>/dev/null \
-        | awk '/table (ip|ip6|inet) amnezia/ && $0 != "table ip amnezia"'
+        | awk '/table (ip|ip6|inet) amnezia/ && $0 != "table ip amnezia" && $0 != "table ip6 amnezia"'
     local f
     for f in /opt/amnezia-*; do
         [ -e "$f" ] || continue
@@ -174,6 +185,16 @@ fi
 
 # --- nft table ip amnezia ----------------------------------------------
 
+if nft list tables 2>/dev/null | grep -qx 'table ip6 amnezia'; then
+    if [ "$DO_IT" -eq 1 ]; then
+        nft delete table ip6 amnezia && log "removed nft table ip6 amnezia"
+    else
+        log "would run: nft delete table ip6 amnezia"
+    fi
+else
+    log "skip: nft table ip6 amnezia not present"
+fi
+
 if nft list tables 2>/dev/null | grep -qx 'table ip amnezia'; then
     if [ "$DO_IT" -eq 1 ]; then
         nft delete table ip amnezia && log "removed nft table ip amnezia"
@@ -238,7 +259,7 @@ fi
 # tcp_bbr at boot and still carries our ip_forward, conntrack and buffer
 # settings.
 
-for managed in "$MODULES_FILE" "$BBR_MODULES_FILE" "$SYSCTL_FILE"; do
+for managed in "$MODULES_FILE" "$BBR_MODULES_FILE" "$SYSCTL_FILE" "$SYSCTL_IPV6_FILE"; do
     if [ -f "$managed" ]; then
         if [ "$DO_IT" -eq 1 ]; then
             rm -f "$managed"
