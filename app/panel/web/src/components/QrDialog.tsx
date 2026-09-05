@@ -17,8 +17,21 @@ export function QrDialog({ clientId, clientName, onOpenChange }: QrDialogProps) 
       <DialogContent onOpenAutoFocus={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>QR-код: {clientName}</DialogTitle>
+          {/* Название одного приложения здесь было неправдой для тех, у кого
+              стоит другой клиент: конфигурацию AWG понимает не только
+              приложение Amnezia. Ссылка ведёт в раздел документации со
+              списком клиентов по системам (amnezia-vpn-server-d86w). */}
           <p className="text-sm text-muted-foreground">
-            Отсканируйте код в приложении AmneziaVPN
+            Отсканируйте код в приложении, которое понимает конфигурации
+            AmneziaWG —{" "}
+            <a
+              className="underline underline-offset-4 hover:text-foreground"
+              href="https://docs.amnezia.org/documentation/amnezia-wg"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              список клиентов
+            </a>
           </p>
         </DialogHeader>
         {clientId !== null ? (

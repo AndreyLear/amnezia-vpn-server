@@ -4,17 +4,31 @@ import { describe, expect, it } from "vitest";
 import { QrDialog } from "@/components/QrDialog";
 
 describe("QrDialog", () => {
-  it("shows a scan hint without a trailing period", () => {
+  // Подпись называла одно приложение, тогда как конфигурацию AWG понимают
+  // несколько клиентов: человеку с другим клиентом она говорила неправду
+  // (amnezia-vpn-server-d86w).
+  it("не называет одно приложение и не ставит точку в конце", () => {
     render(
       <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
     );
 
-    expect(
-      screen.getByText("Отсканируйте код в приложении AmneziaVPN"),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Отсканируйте код в приложении AmneziaVPN."),
-    ).toBeNull();
+    const hint = screen.getByText(/Отсканируйте код в приложении/);
+    expect(hint).toBeInTheDocument();
+    expect(hint.textContent).not.toMatch(/AmneziaVPN/);
+    expect(hint.textContent?.trim().endsWith(".")).toBe(false);
+  });
+
+  it("ведёт к списку клиентов, а не к одному приложению", () => {
+    render(
+      <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
+    );
+
+    const link = screen.getByRole("link", { name: "список клиентов" });
+    expect(link).toHaveAttribute("href", "https://docs.amnezia.org/documentation/amnezia-wg");
+    expect(link).toHaveAttribute("target", "_blank");
+    // Вкладка, открытая ссылкой, не должна получать доступ к окну панели.
+    expect(link.getAttribute("rel")).toContain("noopener");
+    expect(link.getAttribute("rel")).toContain("noreferrer");
   });
 
   it("puts title and hint in a header with 8px gap", () => {
@@ -23,7 +37,7 @@ describe("QrDialog", () => {
     );
 
     const title = screen.getByRole("heading", { name: "QR-код: Alice" });
-    const hint = screen.getByText("Отсканируйте код в приложении AmneziaVPN");
+    const hint = screen.getByText(/Отсканируйте код в приложении/);
     const header = title.parentElement;
 
     expect(header).toHaveAttribute("data-slot", "dialog-header");
