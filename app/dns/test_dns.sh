@@ -178,6 +178,42 @@ check "disabled: does not answer the panel hostname" lacks 'address=/' "$OUT"
 OUT="$(render TUNNEL_DNS_DISABLED=0 TUNNEL_ADDRESS=10.8.0.1 UPSTREAM_DNS=1.1.1.1)"
 check "TUNNEL_DNS_DISABLED=0 still serves" has 'listen-address=10.8.0.1' "$OUT"
 
+
+# ---- amnezia-vpn-server-ypxl: the AAAA filter follows the tunnel -------
+#
+# filter-AAAA was added (amnezia-vpn-server-3jbg) because a tunnel that
+# carries no IPv6 must not hand clients addresses it cannot reach. The
+# moment the tunnel does carry IPv6 the same line stops being a shield and
+# becomes a blindfold, hiding half a working internet from the client. So
+# it follows the deployment's IPv6 decision rather than being permanent.
+
+CONF_V4="$(render TUNNEL_ADDRESS=10.8.0.1 UPSTREAM_DNS=1.1.1.1,8.8.8.8)"
+check "IPv4-only tunnel still filters AAAA" has 'filter-AAAA' "$CONF_V4"
+check "IPv4-only tunnel binds no IPv6 address" \
+    lacks 'listen-address=fd' "$CONF_V4"
+
+CONF_V6="$(render TUNNEL_ADDRESS=10.8.0.1 TUNNEL_ADDRESS6=fd42:a11e:c0de::1/64 \
+    UPSTREAM_DNS=1.1.1.1,8.8.8.8)"
+check "tunnel with IPv6 stops filtering AAAA" lacks 'filter-AAAA' "$CONF_V6"
+check "tunnel with IPv6 is answered on its IPv6 address" \
+    has 'listen-address=fd42:a11e:c0de::1' "$CONF_V6"
+check "the prefix length never reaches listen-address" \
+    lacks 'listen-address=fd42:a11e:c0de::1/64' "$CONF_V6"
+check "the IPv4 address is still bound alongside" \
+    has 'listen-address=10.8.0.1' "$CONF_V6"
+# Whatever else changes, this must not: the resolver answers inside the
+# tunnel and nowhere else.
+check "still never binds every interface" lacks 'bind-interfaces' "$CONF_V6"
+check "still binds dynamically" has 'bind-dynamic' "$CONF_V6"
+
+# An empty value is how IPv6 is switched off, and it must read as off
+# rather than as a malformed address.
+CONF_EMPTY="$(render TUNNEL_ADDRESS=10.8.0.1 TUNNEL_ADDRESS6= \
+    UPSTREAM_DNS=1.1.1.1,8.8.8.8)"
+check "an empty IPv6 address means IPv4 only" has 'filter-AAAA' "$CONF_EMPTY"
+check "an empty IPv6 address binds nothing extra" \
+    lacks 'listen-address=$' "$CONF_EMPTY"
+
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"
-[ "${FAILED}" = "0" ]
+[ "${FAILED}" = "0" ] || exit 1
