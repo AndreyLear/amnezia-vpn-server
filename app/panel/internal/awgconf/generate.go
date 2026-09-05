@@ -44,6 +44,7 @@ func Generate(handle *sql.DB, path string) error {
 	cfg := ServerConfig{
 		PrivateKey: server.PrivateKey,
 		Address:    server.Address,
+		Address6:   server.Address6,
 		ListenPort: uint16(server.ListenPort),
 		DNS:        server.DNS,
 		MTU:        mtu,
@@ -55,10 +56,18 @@ func Generate(handle *sql.DB, path string) error {
 
 	peers := make([]PeerConfig, 0, len(clients))
 	for _, c := range clients {
+		// Derived, not stored: see db.ClientAddress6. Empty whenever the
+		// tunnel carries IPv4 only, which leaves the peer line byte-for-
+		// byte what it has always been.
+		address6, err := db.ClientAddress6(server.Address, server.Address6, c.Address)
+		if err != nil {
+			return fmt.Errorf("client %d: %w", c.ID, err)
+		}
 		peer := PeerConfig{
 			PublicKey:    c.PublicKey,
 			PresharedKey: c.PresharedKey,
 			AllowedIPs:   c.Address,
+			AllowedIPs6:  address6,
 		}
 		if err := ValidatePeer(peer); err != nil {
 			return fmt.Errorf("client %d: %w", c.ID, err)

@@ -238,7 +238,7 @@ func TestGenerateClientExpiredClient(t *testing.T) {
 // real address is exposed and any block on that route still applies).
 // Routing ::/0 into an interface that has no IPv6 address blackholes v6 on
 // the client, so Happy Eyeballs falls back to IPv4 through the tunnel.
-func TestGenerateClientFullTunnelBlackholesIPv6(t *testing.T) {
+func TestGenerateClientRoutesIPv6EvenWithoutATunnelForIt(t *testing.T) {
 	handle, _ := newTestDB(t)
 	seedServer(t, handle, "", "")
 	seedClient(t, handle, 1, "", true, "10.8.0.2/32")
@@ -252,8 +252,13 @@ func TestGenerateClientFullTunnelBlackholesIPv6(t *testing.T) {
 	if !strings.Contains(got, "AllowedIPs = 0.0.0.0/0, ::/0\n") {
 		t.Fatalf("AllowedIPs must route both families so IPv6 cannot bypass the tunnel:\n%s", got)
 	}
-	// The [Interface] Address stays IPv4-only: ::/0 is a blackhole route,
-	// not IPv6 connectivity through the tunnel.
+	// This server carries IPv4 only, so the [Interface] Address stays
+	// IPv4-only and ::/0 is a blackhole route rather than IPv6
+	// connectivity. The route is still handed out: without it the
+	// client's own IPv6 would leave around the VPN with the real address,
+	// and a blackhole is the lesser of those two evils
+	// (amnezia-vpn-server-0rmu). A server that does carry IPv6 is covered
+	// by TestClientAddressFollowsTheTunnel in ipv6_test.go.
 	if strings.Contains(got, "Address = 10.8.0.2/32, ") {
 		t.Fatalf("client Address must stay IPv4-only:\n%s", got)
 	}

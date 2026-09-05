@@ -26,13 +26,24 @@ const settingsEndpointKey = "endpoint"
 
 // clientAllowedIPs is the full-tunnel route of the client config.
 //
-// The tunnel itself carries IPv4 only, but ::/0 must be routed into it as
-// well: on a dual-stack client every AAAA-capable destination (YouTube,
-// Instagram and the rest of Google/Meta) is reached over the client's own
-// IPv6 otherwise, bypassing the VPN completely — the real address is
-// exposed and any block on that path still applies. The interface has no
-// IPv6 address, so ::/0 is a blackhole: v6 connections fail immediately and
-// Happy Eyeballs falls back to IPv4 through the tunnel.
+// ::/0 is unconditional, and deliberately so. On a dual-stack client every
+// AAAA-capable destination (YouTube, Instagram and the rest of
+// Google/Meta) is otherwise reached over the client's own IPv6, bypassing
+// the VPN completely — the real address is exposed and any block on that
+// path still applies (amnezia-vpn-server-2064).
+//
+// It was tempting to make this conditional once the tunnel could carry
+// IPv6: route ::/0 only when there is somewhere for it to go. That is
+// wrong. On a tunnel without IPv6 the two states are a blackhole (::/0
+// routed nowhere: v6 connections fail at once and Happy Eyeballs falls
+// back to IPv4) or a leak (::/0 absent: v6 leaves around the VPN with the
+// real address). A product whose purpose is hiding the address does not
+// trade the blackhole for the leak, however much faster the leak is
+// (amnezia-vpn-server-0rmu).
+//
+// What is conditional is ClientConfig.Address6: with an IPv6 address the
+// route leads somewhere and the blackhole is gone; without one the
+// resolver's AAAA filter keeps clients from walking into it.
 const clientAllowedIPs = "0.0.0.0/0, ::/0"
 
 // ClientConfig is the [Interface] and [Peer] section of the client-side
@@ -40,7 +51,11 @@ const clientAllowedIPs = "0.0.0.0/0, ::/0"
 type ClientConfig struct {
 	PrivateKey string
 	Address    string
-	DNS        string // empty = omit
+	// Address6 is the client's address inside the tunnel's IPv6 prefix,
+	// empty when the tunnel carries IPv4 only. This — not the ::/0 route
+	// above — is what turns the blackhole into a working path.
+	Address6 string
+	DNS      string // empty = omit
 	// MTU pins the client tunnel MTU; 0 leaves the line out.
 	MTU    uint16
 	Params Params
@@ -67,6 +82,9 @@ func ValidateClient(c ClientConfig) error {
 	}
 	if _, _, err := net.ParseCIDR(c.Address); err != nil {
 		return fmt.Errorf("invalid client address %q: not a CIDR network", c.Address)
+	}
+	if err := validateIPv6CIDR(c.Address6, "client address6"); err != nil {
+		return err
 	}
 	if err := validateDNS(c.DNS); err != nil {
 		return err
@@ -117,7 +135,7 @@ func RenderClient(c ClientConfig) string {
 	}
 	b.WriteString("[Interface]\n")
 	line("PrivateKey", c.PrivateKey)
-	line("Address", c.Address)
+	line("Address", joinFamilies(c.Address, c.Address6))
 	if c.MTU != 0 {
 		line("MTU", strconv.FormatUint(uint64(c.MTU), 10))
 	}
@@ -178,9 +196,14 @@ func GenerateClient(handle *sql.DB, clientID int64) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("client config: %w", err)
 	}
+	address6, err := db.ClientAddress6(server.Address, server.Address6, client.Address)
+	if err != nil {
+		return nil, fmt.Errorf("client config: %w", err)
+	}
 	cfg := ClientConfig{
 		PrivateKey:      client.PrivateKey,
 		Address:         client.Address,
+		Address6:        address6,
 		DNS:             server.DNS,
 		MTU:             mtu,
 		Params:          *params,

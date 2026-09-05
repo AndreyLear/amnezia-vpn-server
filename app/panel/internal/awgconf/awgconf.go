@@ -22,6 +22,11 @@ import (
 type ServerConfig struct {
 	PrivateKey string
 	Address    string
+	// Address6 is the tunnel's IPv6 address, empty when the tunnel
+	// carries IPv4 only. Kept a separate field rather than folded into
+	// Address so each stays one CIDR and can be validated as one
+	// (amnezia-vpn-server-0rmu).
+	Address6   string
 	ListenPort uint16
 	DNS        string // empty = omit
 	// MTU pins the tunnel MTU; 0 leaves the line out and lets awg-quick
@@ -35,6 +40,20 @@ type PeerConfig struct {
 	PublicKey    string
 	PresharedKey string // empty = omit
 	AllowedIPs   string
+	// AllowedIPs6 is the peer's IPv6 address, empty when the tunnel
+	// carries IPv4 only. The server must accept the family it hands out,
+	// or a client would send IPv6 the runtime silently discards.
+	AllowedIPs6 string
+}
+
+// joinFamilies renders "v4" or "v4, v6" for the config keys that take a
+// list. Empty v6 leaves the line exactly as it has always been, which is
+// what every IPv4-only deployment must keep seeing.
+func joinFamilies(v4, v6 string) string {
+	if v6 == "" {
+		return v4
+	}
+	return v4 + ", " + v6
 }
 
 // Params holds the optional AWG obfuscation parameters of [Interface].
@@ -369,6 +388,9 @@ func ValidateServer(s ServerConfig) error {
 	if _, _, err := net.ParseCIDR(s.Address); err != nil {
 		return fmt.Errorf("invalid address %q: not a CIDR network", s.Address)
 	}
+	if err := validateIPv6CIDR(s.Address6, "address6"); err != nil {
+		return err
+	}
 	if err := validateDNS(s.DNS); err != nil {
 		return err
 	}
@@ -417,6 +439,28 @@ func ValidatePeer(p PeerConfig) error {
 	if _, _, err := net.ParseCIDR(p.AllowedIPs); err != nil {
 		return fmt.Errorf("invalid allowed IPs %q: not a CIDR network", p.AllowedIPs)
 	}
+	if err := validateIPv6CIDR(p.AllowedIPs6, "allowed IPs6"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateIPv6CIDR accepts the empty string — the tunnel carries IPv4
+// only — or an IPv6 CIDR. An IPv4 value is refused rather than passed
+// through: rendered into the config it would silently duplicate the IPv4
+// entry, and a config that lies about what the tunnel carries is the
+// defect amnezia-vpn-server-mhea exists to fix.
+func validateIPv6CIDR(value, what string) error {
+	if value == "" {
+		return nil
+	}
+	ip, _, err := net.ParseCIDR(value)
+	if err != nil {
+		return fmt.Errorf("invalid %s %q: not a CIDR network", what, value)
+	}
+	if ip.To4() != nil {
+		return fmt.Errorf("invalid %s %q: not IPv6", what, value)
+	}
 	return nil
 }
 
@@ -450,7 +494,7 @@ func Render(server ServerConfig, peers []PeerConfig) string {
 	}
 	b.WriteString("[Interface]\n")
 	line("PrivateKey", server.PrivateKey)
-	line("Address", server.Address)
+	line("Address", joinFamilies(server.Address, server.Address6))
 	line("ListenPort", strconv.FormatUint(uint64(server.ListenPort), 10))
 	if server.MTU != 0 {
 		line("MTU", strconv.FormatUint(uint64(server.MTU), 10))
@@ -471,7 +515,7 @@ func Render(server ServerConfig, peers []PeerConfig) string {
 		if peer.PresharedKey != "" {
 			line("PresharedKey", peer.PresharedKey)
 		}
-		line("AllowedIPs", peer.AllowedIPs)
+		line("AllowedIPs", joinFamilies(peer.AllowedIPs, peer.AllowedIPs6))
 	}
 	return b.String()
 }
