@@ -214,10 +214,22 @@ if [ "${1:-}" = "compose" ]; then
                     [ "${CONFIG_REGEN:-1}" = "1" ] || exit 0
                     port="$(printf '%s\n' "$COMPOSE_ARGS" | sed -n 's/.*--listen-port \([0-9][0-9]*\).*/\1/p')"
                     mtu="$(printf '%s\n' "$COMPOSE_ARGS" | sed -n 's/.*--mtu \([0-9][0-9]*\).*/\1/p')"
+                    # Address as well, because the real panel writes it and
+                    # install.sh compares it: an interface address is applied
+                    # only when the interface is created, so a change in it
+                    # has to restart awg. A fake that omitted the line made
+                    # that path look untestable and, worse, made a missing
+                    # restart look correct (amnezia-vpn-server-29fc).
+                    addr6="$(printf '%s\n' "$COMPOSE_ARGS" | sed -n 's/.*--address6 \([^ ][^ ]*\).*/\1/p')"
                     if [ -n "$port" ]; then
                         mkdir -p config
-                        printf '[Interface]\nListenPort = %s\nMTU = %s\n' \
-                            "$port" "${mtu:-1340}" > config/awg0.conf
+                        if [ -n "$addr6" ]; then
+                            printf '[Interface]\nAddress = 10.8.0.1/24, %s\nListenPort = %s\nMTU = %s\n' \
+                                "$addr6" "$port" "${mtu:-1340}" > config/awg0.conf
+                        else
+                            printf '[Interface]\nAddress = 10.8.0.1/24\nListenPort = %s\nMTU = %s\n' \
+                                "$port" "${mtu:-1340}" > config/awg0.conf
+                        fi
                     fi
                     ;;
             esac
@@ -2218,6 +2230,7 @@ test_ipv6_prefix_is_stable_across_reruns() {
 test_fail2ban_configured_by_default() {
     fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$TMP_TEST/f2b/amnezia-vpn-sshd.conf" \
+          AMNEZIA_INSTALL_FAIL2BAN_BIN=fail2ban-server \
           AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
     [ "$rc" = "0" ] || fail "fail2ban default: exit $rc"
     local jail="$TMP_TEST/f2b/amnezia-vpn-sshd.conf"
@@ -2240,8 +2253,8 @@ test_fail2ban_configured_by_default() {
 # The other half: a host without the package gets it installed.
 test_fail2ban_installs_the_package_when_missing() {
     fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
-    rm -f "$FAKE_DIR/fail2ban-server"
     rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$TMP_TEST/f2b-new/amnezia-vpn-sshd.conf" \
+          AMNEZIA_INSTALL_FAIL2BAN_BIN=amnezia-no-such-binary-c0de \
           AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
     [ "$rc" = "0" ] || fail "fail2ban install: exit $rc"
     grep -q "apt-get install -y fail2ban" "$FAKE_CALLS" \
@@ -2275,12 +2288,39 @@ test_ipv6_change_restarts_the_tunnel() {
     fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
     [ "$rc" = "0" ] || fail "ipv6 restart: first run exit $rc"
+    # An existing deployment, which is the only case where the restart
+    # question arises: on a fresh install `server init` writes the values
+    # and the stack starts with them. The harness normally has panel-init
+    # report an empty database, so say otherwise for this run.
+    printf '%s\n' "panel init: ok" > "$FAKE_DIR/pi_log.txt"
     : > "$FAKE_CALLS"
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
     [ "$rc" = "0" ] || fail "ipv6 restart: opt-in run exit $rc"
-    grep -qE "compose.*restart awg|restart awg" "$FAKE_CALLS" \
-        && pass "switching IPv6 on restarts the tunnel" \
-        || fail "IPv6 was switched on without restarting the tunnel"
+    if grep -qE "restart awg" "$FAKE_CALLS"; then
+        pass "switching IPv6 on restarts the tunnel"
+    else
+        fail "IPv6 was switched on without restarting the tunnel"
+    fi
+}
+
+
+# Turning IPv6 off and on again must land on the SAME prefix. A client
+# config carries the address, so a new prefix would leave every issued
+# client without working IPv6 until reissued — silently, because IPv4
+# keeps working.
+test_ipv6_prefix_survives_a_round_trip() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "round trip: on exit $rc"
+    first="$(env_value TUNNEL_SUBNET6)"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --no-ipv6)"
+    [ "$rc" = "0" ] || fail "round trip: off exit $rc"
+    [ -z "$(env_value TUNNEL_SUBNET6)" ] || fail "round trip: still on after --no-ipv6"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "round trip: on again exit $rc"
+    [ -n "$first" ] && [ "$first" = "$(env_value TUNNEL_SUBNET6)" ] \
+        && pass "off then on returns to the same prefix" \
+        || fail "the prefix changed across a round trip: $first -> $(env_value TUNNEL_SUBNET6)"
 }
 
 # --- main ---------------------------------------------------------------
@@ -2308,6 +2348,7 @@ test_ipv6_upgrade_never_decides
 test_ipv6_upgrade_opts_in
 test_ipv6_switch_off_clears_everything
 test_ipv6_prefix_is_stable_across_reruns
+test_ipv6_prefix_survives_a_round_trip
 test_ipv6_change_restarts_the_tunnel
 test_fail2ban_configured_by_default
 test_fail2ban_installs_the_package_when_missing
@@ -2712,9 +2753,19 @@ test_unchanged_tunnel_parameters_leave_awg_alone() {
     stdout | grep -q "tunnel parameters unchanged" \
         && pass "the installer says it left the tunnel alone on purpose" \
         || fail "a guard that stays silent when it does nothing cannot be told from one that never ran"
-    stdout | grep -q "tunnel parameters unchanged (ListenPort=4500" \
+    # Named, not ordered: the set of compared parameters grew when the
+    # interface Address joined it (amnezia-vpn-server-29fc), and an
+    # assertion pinned to the first name in the list would fail on a
+    # change that is entirely correct. What matters is that each one is
+    # in the line, so the log carries the evidence.
+    unchanged_line="$(stdout | grep 'tunnel parameters unchanged' | head -1)"
+    missing=""
+    for want in "ListenPort=4500" "MTU=" "Address="; do
+        case "$unchanged_line" in *"$want"*) ;; *) missing="$missing $want" ;; esac
+    done
+    [ -z "$missing" ] \
         && pass "the unchanged parameters are named, so the log carries the evidence" \
-        || fail "the unchanged line must name the parameters it compared"
+        || fail "the unchanged line does not name:$missing"
     # Leaving the tunnel alone is only defensible once the daemon has
     # been asked; the line has to show that it was (amnezia-vpn-server-8w6t).
     stdout | grep -q "tunnel listening on UDP 4500" \

@@ -95,6 +95,8 @@
 #                                      into (default /etc/nftables.conf)
 #   AMNEZIA_INSTALL_IPV6_PROBE=ok|fail  answer the IPv6 uplink probe
 #                                      instead of reaching the internet
+#   AMNEZIA_INSTALL_FAIL2BAN_BIN=NAME  binary whose presence means
+#                                      fail2ban is already installed
 #   AMNEZIA_INSTALL_SYSTEMD_DIR=DIR    systemd unit dir for the docker
 #                                      boot-order drop-in and the weekly
 #                                      docker-prune timer
@@ -1361,7 +1363,14 @@ tunnel_ipv6_preflight() {
 
     if [ "$TUNNEL_IPV6_MODE" = "off" ]; then
         if [ -n "$stored" ]; then
-            log "IPv6 disabled by --no-ipv6: the tunnel goes back to IPv4 only"
+            # Remembered, not forgotten. Turning IPv6 off and on again is
+            # the most ordinary thing an owner does, and a fresh prefix on
+            # the way back would renumber every client: their configs
+            # carry the address, so each one would quietly stop having
+            # working IPv6 until reissued. The prefix costs nothing to
+            # keep and means the round trip returns to where it started.
+            env_set TUNNEL_SUBNET6_PREVIOUS "$stored"
+            log "IPv6 disabled by --no-ipv6: the tunnel goes back to IPv4 only (the prefix is remembered for --ipv6)"
         fi
         TUNNEL_SUBNET6=""
         env_set TUNNEL_SUBNET6 ""
@@ -1398,7 +1407,11 @@ tunnel_ipv6_preflight() {
         return 0
     fi
 
-    TUNNEL_SUBNET6="${stored:-$(generate_ula)}"
+    # Order: what is in use, then what this deployment used before, then
+    # a new one. Only a server that has never carried IPv6 gets a fresh
+    # prefix.
+    TUNNEL_SUBNET6="${stored:-$(env_read TUNNEL_SUBNET6_PREVIOUS)}"
+    TUNNEL_SUBNET6="${TUNNEL_SUBNET6:-$(generate_ula)}"
     if [ -z "$TUNNEL_SUBNET6" ]; then
         log "WARNING: could not generate an IPv6 prefix; leaving the tunnel on IPv4 only"
         env_set TUNNEL_SUBNET6 ""
@@ -1435,7 +1448,12 @@ fail2ban_setup() {
         log "fail2ban skipped (--no-fail2ban)"
         return 0
     fi
-    if ! cmd command -v fail2ban-server >/dev/null 2>&1; then
+    # The binary name is hookable so the harness can present a host
+    # without fail2ban. Probing the real PATH made the test depend on
+    # whether the machine running it happened to have the package —
+    # exactly the kind of host-dependent assertion this harness exists
+    # to avoid.
+    if ! cmd command -v "${AMNEZIA_INSTALL_FAIL2BAN_BIN:-fail2ban-server}" >/dev/null 2>&1; then
         run_apt_get install -y fail2ban || {
             log "WARNING: could not install fail2ban; SSH is left unguarded"
             return 0
