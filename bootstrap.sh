@@ -48,6 +48,7 @@ SOURCE_URL=""
 PANEL_PORT_SET=0
 # Published images are the default; --build compiles them on the server.
 BUILD_FROM_SOURCE=0
+PASSTHROUGH_FLAGS=""
 DOMAIN_SET=0
 CLIENT_DOMAIN_SET=0
 NONINTERACTIVE=0
@@ -101,6 +102,13 @@ Options:
   --awg-port PORT      AmneziaWG UDP port (default: 4500; avoid 443,
                        which mobile carriers throttle as QUIC, and 51820)
   --root DIR           deployment root on the server (default: /opt/amnezia-vpn)
+  --ipv6               carry IPv6 inside the tunnel; --no-ipv6 keeps it
+                       IPv4-only. A fresh install decides for itself when
+                       the server has working IPv6; an existing one never
+                       changes on an upgrade. Passed to install.sh.
+  --no-ipv6            see --ipv6
+  --no-fail2ban        do not install SSH brute-force protection. Passed
+                       to install.sh.
   --source URL         download a release tarball instead of packing the
                        local repository
   --help               print this message
@@ -221,6 +229,14 @@ while [ "$#" -gt 0 ]; do
             DOMAIN_SET=1
             NONINTERACTIVE=1
             shift 2
+            ;;
+        --ipv6|--no-ipv6|--no-fail2ban)
+            # Passed straight through to install.sh, which owns the
+            # decisions. The README tells people to run the wizard with
+            # these, so the wizard has to understand them
+            # (amnezia-vpn-server-29fc, amnezia-vpn-server-rswn).
+            PASSTHROUGH_FLAGS="$PASSTHROUGH_FLAGS $1"
+            shift
             ;;
         --build)
             # Development / unreachable-registry escape hatch: compile the
@@ -699,6 +715,9 @@ if [ "$PANEL_PORT_SET" = "1" ] && [ -n "$PANEL_PORT" ]; then
 fi
 if [ "$BUILD_FROM_SOURCE" = "1" ]; then
     INSTALL_FLAGS="$INSTALL_FLAGS --build"
+fi
+if [ -n "$PASSTHROUGH_FLAGS" ]; then
+    INSTALL_FLAGS="$INSTALL_FLAGS$PASSTHROUGH_FLAGS"
 fi
 
 REMOTE_INSTALL=$(cat <<EOF
