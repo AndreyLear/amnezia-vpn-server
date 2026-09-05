@@ -68,6 +68,7 @@ func (a *app) cmdServerInit(args []string) int {
 		"awg-params": true,
 		"endpoint":   true,
 		"mtu":        true,
+		"address6":   true,
 	})
 	if err != nil {
 		return a.usageError(opServerInit, err.Error())
@@ -138,10 +139,11 @@ func (a *app) cmdServerInit(args []string) int {
 
 	createErr := fault("server-init.create")
 	if createErr == nil {
-		// address6 stays empty here: which tunnels carry IPv6 is a
-		// deployment decision install.sh makes, and the flag that
-		// carries it lands with amnezia-vpn-server-29fc.
-		createErr = db.CreateServer(handle, privateKey, publicKey, address, "",
+		// Which tunnels carry IPv6 is a deployment decision install.sh
+		// makes and passes in; absent means IPv4 only, which is what
+		// every deployment did before amnezia-vpn-server-mhea.
+		createErr = db.CreateServer(handle, privateKey, publicKey, address,
+			parsed.flags["address6"],
 			listenPort, parsed.flags["dns"], awgParams, endpoint)
 	}
 	if createErr == nil && mtu != 0 {
@@ -255,6 +257,7 @@ func (a *app) cmdServerUpdate(args []string) int {
 		"endpoint":    true,
 		"mtu":         true,
 		"listen-port": true,
+		"address6":    true,
 	})
 	if err != nil {
 		return a.usageError(opServerUpdate, err.Error())
@@ -325,7 +328,15 @@ func (a *app) cmdServerUpdate(args []string) int {
 		if hasPort {
 			portArg = &listenPort
 		}
-		carriedEndpoint, updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg, nil, portArg)
+		// Omitted leaves the stored prefix alone; an explicit empty
+		// value is how IPv6 is switched back off. A rerun of the
+		// installer for an unrelated reason passes nothing and so
+		// cannot change a deployment's mind about IPv6.
+		var address6Arg *string
+		if v, ok := parsed.flags["address6"]; ok {
+			address6Arg = &v
+		}
+		carriedEndpoint, updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg, address6Arg, portArg)
 	}
 	if updateErr == nil && hasMTU {
 		updateErr = db.SetSetting(handle, "mtu", strconv.FormatUint(uint64(mtu), 10))

@@ -93,6 +93,8 @@
 #                                      (default /etc/nftables.d)
 #   AMNEZIA_INSTALL_NFTABLES_CONF=FILE nftables.conf to hook the include
 #                                      into (default /etc/nftables.conf)
+#   AMNEZIA_INSTALL_IPV6_PROBE=ok|fail  answer the IPv6 uplink probe
+#                                      instead of reaching the internet
 #   AMNEZIA_INSTALL_SYSTEMD_DIR=DIR    systemd unit dir for the docker
 #                                      boot-order drop-in and the weekly
 #                                      docker-prune timer
@@ -197,6 +199,16 @@ Options:
                     must not take the panel offline by omission. Both
                     flags therefore read back from .env when left out,
                     and only an explicit empty value leaves a mode.
+  --ipv6        carry IPv6 inside the tunnel (NAT66 to the uplink). A
+                fresh install turns this on by itself when the host has a
+                working IPv6 uplink; an existing deployment never changes
+                its mind on an upgrade, so this flag is how one opts in.
+                Refused with a warning when the uplink cannot reach the
+                IPv6 internet — addresses leading nowhere are worse than
+                no addresses at all.
+  --no-ipv6     the tunnel carries IPv4 only. On a deployment that had
+                IPv6 this also removes what was added: the ip6 ruleset,
+                the forwarding sysctl and the addresses in the configs.
   --no-tunnel-dns
                 stand the in-tunnel resolver down: it binds nothing and
                 leaves port 53 to whatever else this host runs there.
@@ -297,6 +309,12 @@ TUNNEL_DNS_ENABLED=1
 # already holds, so a rerun of the installer never changes the answer by
 # itself.
 TUNNEL_SUBNET6="${TUNNEL_SUBNET6:-}"
+# auto  — решает предполётная проверка: свежая установка получает IPv6, если
+#         он на этом хосте действительно работает; существующая сохраняет то,
+#         что уже записано в .env, и обновление версии её мнения не меняет
+# on    — --ipv6: включить, даже если проверка молчит (оператор знает лучше)
+# off   — --no-ipv6: выключить и убрать за собой
+TUNNEL_IPV6_MODE=auto
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -345,6 +363,14 @@ while [ "$#" -gt 0 ]; do
             ;;
         --build)
             BUILD_FROM_SOURCE=1
+            shift
+            ;;
+        --ipv6)
+            TUNNEL_IPV6_MODE=on
+            shift
+            ;;
+        --no-ipv6)
+            TUNNEL_IPV6_MODE=off
             shift
             ;;
         --no-tunnel-dns)
@@ -1258,6 +1284,130 @@ tunnel_mtu_preflight() {
 
 tunnel_mtu_preflight
 
+# --- 10d. tunnel IPv6 pre-flight (amnezia-vpn-server-29fc) ------------
+#
+# Whether a tunnel carries IPv6 is a deployment fact, decided once and
+# stored in .env like the MTU and the resolver list. Everything else —
+# the nftables ip6 table, the address handed to `server init`, the
+# resolver's AAAA filter — reads it rather than guessing.
+#
+# THE RULE THAT MATTERS: upgrading a version never switches IPv6 on or
+# off by itself. An existing deployment keeps whatever .env already says,
+# so clients that work today keep working exactly as they do today. Only
+# a fresh install, or an explicit --ipv6/--no-ipv6, decides anything.
+
+# ipv6_uplink_works: not "is there an address" but "does traffic leave".
+# An address with no route, or a route into a black hole, is common on
+# hosts whose provider half-configured IPv6 — and enabling the tunnel's
+# IPv6 there would hand clients addresses leading nowhere, which is the
+# defect amnezia-vpn-server-mhea exists to fix, merely moved indoors.
+ipv6_uplink_works() {
+    # AMNEZIA_INSTALL_IPV6_PROBE lets the harness state the answer: the
+    # probe reaches the real internet, which no test may depend on.
+    case "${AMNEZIA_INSTALL_IPV6_PROBE-}" in
+        ok) return 0 ;;
+        fail) return 1 ;;
+    esac
+    ip -6 route show default 2>/dev/null | grep -q . || return 1
+    ip -6 addr show scope global 2>/dev/null | grep -q inet6 || return 1
+    local target
+    for target in ${AMNEZIA_INSTALL_IPV6_TARGETS-2001:4860:4860::8888 2606:4700:4700::1111}; do
+        if cmd ping6 -c 1 -W 3 "$target" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# generate_ula: a random RFC 4193 prefix (fd00::/8 plus 40 random bits).
+# Random rather than fixed so two of these tunnels bridged together — a
+# person running one at home and one at the office — do not collide.
+generate_ula() {
+    local hex
+    hex="$(od -An -N5 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    [ -n "$hex" ] || return 1
+    printf 'fd%s:%s:%s::/64' "$(echo "$hex" | cut -c1-2)" \
+        "$(echo "$hex" | cut -c3-6)" "$(echo "$hex" | cut -c7-10)"
+}
+
+tunnel_ipv6_preflight() {
+    local stored preexisting
+    stored="$(env_read TUNNEL_SUBNET6)"
+    # The marker for "this deployment already has clients", and therefore
+    # a behaviour an upgrade must not change. It has to be read here and
+    # not at the top of the script: --root is parsed after those lines
+    # run, so an early read would inspect the default path instead of the
+    # one this run is actually installing into. .env is no good either —
+    # the MTU pre-flight creates it moments before this, on a fresh
+    # install too. The database is written only when the stack first
+    # runs, which is much later than this point, so its presence means a
+    # previous install and nothing else.
+    preexisting=0
+    [ -f "$ROOT_DIR/data/amnezia.sqlite" ] && preexisting=1
+
+    if [ "$TUNNEL_IPV6_MODE" = "off" ]; then
+        if [ -n "$stored" ]; then
+            log "IPv6 disabled by --no-ipv6: the tunnel goes back to IPv4 only"
+        fi
+        TUNNEL_SUBNET6=""
+        env_set TUNNEL_SUBNET6 ""
+        env_set TUNNEL_ADDRESS6 ""
+        return 0
+    fi
+
+    # An existing deployment already has an answer. Keeping it is the
+    # whole promise of this task: a rerun for some unrelated reason must
+    # not change how the clients of a working server behave.
+    if [ "$TUNNEL_IPV6_MODE" = "auto" ] && [ -n "$stored" ]; then
+        TUNNEL_SUBNET6="$stored"
+        env_set TUNNEL_ADDRESS6 "$(tunnel_address6)"
+        log "tunnel IPv6 stays as this deployment already has it ($stored)"
+        return 0
+    fi
+    if [ "$TUNNEL_IPV6_MODE" = "auto" ] && [ "$preexisting" = "1" ]; then
+        log "tunnel IPv6 left off: this deployment predates it, and an upgrade does not decide for it (--ipv6 turns it on)"
+        TUNNEL_SUBNET6=""
+        env_set TUNNEL_SUBNET6 ""
+        env_set TUNNEL_ADDRESS6 ""
+        return 0
+    fi
+
+    if ! ipv6_uplink_works; then
+        if [ "$TUNNEL_IPV6_MODE" = "on" ]; then
+            log "WARNING: --ipv6 was asked for but this host cannot reach the IPv6 internet; leaving the tunnel on IPv4 only"
+        else
+            log "tunnel IPv6 off: this host has no working IPv6 uplink"
+        fi
+        TUNNEL_SUBNET6=""
+        env_set TUNNEL_SUBNET6 ""
+        env_set TUNNEL_ADDRESS6 ""
+        return 0
+    fi
+
+    TUNNEL_SUBNET6="${stored:-$(generate_ula)}"
+    if [ -z "$TUNNEL_SUBNET6" ]; then
+        log "WARNING: could not generate an IPv6 prefix; leaving the tunnel on IPv4 only"
+        env_set TUNNEL_SUBNET6 ""
+        env_set TUNNEL_ADDRESS6 ""
+        return 0
+    fi
+    env_set TUNNEL_SUBNET6 "$TUNNEL_SUBNET6"
+    # The address as well as the prefix: bootstrap.sh hands it straight to
+    # `server init` and has no business doing arithmetic in a remote shell.
+    env_set TUNNEL_ADDRESS6 "$(tunnel_address6)"
+    log "tunnel carries IPv6 on $TUNNEL_SUBNET6 (clients reach the internet through NAT66)"
+}
+
+# tunnel_address6: the server's own address inside the tunnel prefix —
+# ::1, mirroring 10.8.0.1 on the IPv4 side. Empty prefix, empty address.
+tunnel_address6() {
+    local subnet="${TUNNEL_SUBNET6:-}"
+    [ -n "$subnet" ] || return 0
+    printf '%s1/%s' "${subnet%%/*}" "${subnet##*/}"
+}
+
+tunnel_ipv6_preflight
+
 
 # --- 11. host networking: managed nftables ruleset (M9.2) --------------
 
@@ -1570,9 +1720,6 @@ RULES
 
     mkdir -p "$NFT_DEPLOY_DIR" || die_op "cannot create $NFT_DEPLOY_DIR"
     chmod 0750 "$NFT_DEPLOY_DIR"
-    # Read back rather than assume: a rerun for an unrelated reason must
-    # not silently drop IPv6 from a deployment that has it.
-    TUNNEL_SUBNET6="${TUNNEL_SUBNET6:-$(env_read TUNNEL_SUBNET6)}"
     render_nftables_deploy "$subnet" "$port" "$input_rules" "$TUNNEL_DNS_ENABLED" "$TUNNEL_SUBNET6" > "$NFT_DEPLOY_FILE"
     chmod 0644 "$NFT_DEPLOY_FILE"
 
@@ -1756,6 +1903,10 @@ apply_deployment_values() {
     set -- --listen-port "$AWG_PORT"
     [ -n "$mtu" ] && set -- "$@" --mtu "$mtu"
     [ -n "$dns" ] && set -- "$@" --dns "$dns"
+    # Always passed, empty included: an empty value is how IPv6 is
+    # switched back off, and omitting it would leave a deployment that
+    # once had IPv6 handing out addresses nothing routes any more.
+    set -- "$@" --address6 "$(env_read TUNNEL_ADDRESS6)"
 
     # ListenPort and MTU only take effect when the interface is created:
     # the awg entrypoint strips both keys before handing the config to

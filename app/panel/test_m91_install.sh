@@ -2089,6 +2089,122 @@ test_idempotent_rerun() {
         || fail "rerun: docker installation repeated"
 }
 
+
+# --- amnezia-vpn-server-29fc: the IPv6 switch ---------------------------
+#
+# The promise being tested is not "IPv6 works" but "nothing decides for
+# the operator". An upgrade must never turn IPv6 on or off by itself,
+# because the clients of a working server would change behaviour without
+# anyone asking.
+
+env_value() { sed -n "s/^$1=//p" "$ROOT/.env" 2>/dev/null | tail -1; }
+
+test_ipv6_fresh_install_with_working_uplink() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 fresh: exit $rc"
+    case "$(env_value TUNNEL_SUBNET6)" in
+        fd*::/64) pass "fresh install with IPv6 gets a ULA prefix" ;;
+        *) fail "fresh install with IPv6: TUNNEL_SUBNET6=$(env_value TUNNEL_SUBNET6)" ;;
+    esac
+    case "$(env_value TUNNEL_ADDRESS6)" in
+        fd*::1/64) pass "the server's own IPv6 address mirrors 10.8.0.1" ;;
+        *) fail "TUNNEL_ADDRESS6=$(env_value TUNNEL_ADDRESS6)" ;;
+    esac
+    grep -q "^table ip6 amnezia {" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "fresh install with IPv6: the ip6 ruleset is written" \
+        || fail "fresh install with IPv6: no ip6 ruleset"
+}
+
+test_ipv6_fresh_install_without_uplink() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 no-uplink: exit $rc"
+    [ -z "$(env_value TUNNEL_SUBNET6)" ] \
+        && pass "no IPv6 uplink: the tunnel stays IPv4-only" \
+        || fail "no IPv6 uplink but TUNNEL_SUBNET6=$(env_value TUNNEL_SUBNET6)"
+    grep -q "^delete table ip6 amnezia$" "$ROOT/nftables/amnezia-vpn.nft" \
+        && pass "no IPv6 uplink: the ip6 table is explicitly deleted" \
+        || fail "no IPv6 uplink: missing the ip6 delete"
+}
+
+# --ipv6 on a host that cannot reach the IPv6 internet must warn and
+# refuse. Addresses that lead nowhere are worse than no addresses: that
+# is the defect the whole chain exists to fix, merely moved indoors.
+test_ipv6_forced_on_without_uplink_refuses() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 forced: exit $rc"
+    [ -z "$(env_value TUNNEL_SUBNET6)" ] \
+        && pass "--ipv6 without an uplink does not enable IPv6" \
+        || fail "--ipv6 enabled IPv6 with no uplink"
+    grep -q "WARNING: --ipv6 was asked for" "$TMP_TEST/out" "$TMP_TEST/err" \
+        && pass "--ipv6 without an uplink says why it refused" \
+        || fail "--ipv6 refused silently"
+}
+
+# The rule the owner asked for: upgrading a deployment that predates IPv6
+# leaves it exactly as it was, even on a host where IPv6 works perfectly.
+test_ipv6_upgrade_never_decides() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    mkdir -p "$ROOT/data" && : > "$ROOT/data/amnezia.sqlite"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 upgrade: exit $rc"
+    [ -z "$(env_value TUNNEL_SUBNET6)" ] \
+        && pass "an upgrade does not switch IPv6 on by itself" \
+        || fail "an upgrade enabled IPv6: $(env_value TUNNEL_SUBNET6)"
+    grep -q "an upgrade does not decide for it" "$TMP_TEST/out" "$TMP_TEST/err" \
+        && pass "the upgrade says why IPv6 stayed off" \
+        || fail "the upgrade left IPv6 off without saying so"
+}
+
+# ...and the same deployment turns it on when actually asked.
+test_ipv6_upgrade_opts_in() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    mkdir -p "$ROOT/data" && : > "$ROOT/data/amnezia.sqlite"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 opt-in: exit $rc"
+    case "$(env_value TUNNEL_SUBNET6)" in
+        fd*::/64) pass "--ipv6 opts an existing deployment in" ;;
+        *) fail "--ipv6 did not enable IPv6 on an existing deployment" ;;
+    esac
+}
+
+# Switching off must clear what switching on added, every run, not only
+# on the run that flips it.
+test_ipv6_switch_off_clears_everything() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 off: first run exit $rc"
+    prefix="$(env_value TUNNEL_SUBNET6)"
+    [ -n "$prefix" ] || fail "ipv6 off: IPv6 was not on for the first run"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --no-ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 off: second run exit $rc"
+    [ -z "$(env_value TUNNEL_SUBNET6)" ] \
+        && pass "--no-ipv6 clears the prefix" \
+        || fail "--no-ipv6 left TUNNEL_SUBNET6=$(env_value TUNNEL_SUBNET6)"
+    [ -z "$(env_value TUNNEL_ADDRESS6)" ] \
+        && pass "--no-ipv6 clears the address too" \
+        || fail "--no-ipv6 left TUNNEL_ADDRESS6 behind"
+    grep -q "^table ip6 amnezia {" "$ROOT/nftables/amnezia-vpn.nft" \
+        && fail "--no-ipv6 left the ip6 ruleset in place" \
+        || pass "--no-ipv6 removes the ip6 ruleset"
+}
+
+# A rerun that keeps IPv6 must keep the SAME prefix: regenerating it would
+# renumber every client for no reason.
+test_ipv6_prefix_is_stable_across_reruns() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 stable: first run exit $rc"
+    first="$(env_value TUNNEL_SUBNET6)"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 stable: rerun exit $rc"
+    [ -n "$first" ] && [ "$first" = "$(env_value TUNNEL_SUBNET6)" ] \
+        && pass "a rerun keeps the prefix it already had" \
+        || fail "the prefix changed on a rerun: $first -> $(env_value TUNNEL_SUBNET6)"
+}
+
 # --- main ---------------------------------------------------------------
 
 m91_run_all() {
@@ -2107,6 +2223,13 @@ test_default_port
 test_custom_port
 test_unknown_argument
 test_help_examples
+test_ipv6_fresh_install_with_working_uplink
+test_ipv6_fresh_install_without_uplink
+test_ipv6_forced_on_without_uplink_refuses
+test_ipv6_upgrade_never_decides
+test_ipv6_upgrade_opts_in
+test_ipv6_switch_off_clears_everything
+test_ipv6_prefix_is_stable_across_reruns
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
 test_prune_soft_fail
