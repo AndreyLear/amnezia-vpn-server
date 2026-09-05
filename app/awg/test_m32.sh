@@ -253,6 +253,74 @@ check "filter: keeps PrivateKey/Jc in variants sample" grep -q "^PrivateKey =" "
 
 make_stubs
 
+
+# =====================================================================
+# 2.5) amnezia-vpn-server-mmh6: IPv6 must never cost the tunnel its life
+# =====================================================================
+#
+# awg-quick runs under set -e. On a host with IPv6 disabled, an IPv6
+# address in the config makes `ip -6 address add` fail, and awg-quick
+# deletes the interface it had just created — so every client loses the
+# VPN, including those who never wanted IPv6. Reproduced on a live test
+# server before this guard existed.
+
+# The entrypoint runs work at the top level, so its functions are lifted
+# out rather than sourced.
+MMH6_FUNCS="${TMP}/mmh6-funcs.sh"
+sed -n '/^ipv6_usable() {/,/^install_config() {/p' entrypoint.sh | sed '$d' > "${MMH6_FUNCS}"
+# shellcheck source=/dev/null
+source "${MMH6_FUNCS}"
+
+MMH6_CONF="${TMP}/mmh6.conf"
+cat > "${MMH6_CONF}" <<'MMH6EOF'
+[Interface]
+PrivateKey = SECRET
+Address = 10.8.0.1/24, fd42:a11e:c0de::1/64
+ListenPort = 4500
+MTU = 1340
+
+[Peer]
+PublicKey = KEY1
+AllowedIPs = 10.8.0.2/32, fd42:a11e:c0de::2/128
+
+[Peer]
+PublicKey = KEY2
+AllowedIPs = 10.8.0.3/32
+MMH6EOF
+
+check "mmh6: config with IPv6 is recognised" config_has_ipv6 "${MMH6_CONF}"
+
+MMH6_V4ONLY="${TMP}/mmh6-v4.conf"
+sed '/^Address/s/, fd42.*$//; /^AllowedIPs/s/, fd42.*$//' "${MMH6_CONF}" > "${MMH6_V4ONLY}"
+check "mmh6: IPv4-only config is not mistaken for IPv6" not config_has_ipv6 "${MMH6_V4ONLY}"
+
+MMH6_OUT="${TMP}/mmh6-stripped.conf"
+strip_ipv6 "${MMH6_CONF}" > "${MMH6_OUT}"
+check "mmh6: interface keeps its IPv4 address" grep -qx "Address = 10.8.0.1/24" "${MMH6_OUT}"
+check "mmh6: peer keeps its IPv4 allowed-ip" grep -qx "AllowedIPs = 10.8.0.2/32" "${MMH6_OUT}"
+check "mmh6: an IPv4-only peer is left alone" grep -qx "AllowedIPs = 10.8.0.3/32" "${MMH6_OUT}"
+check "mmh6: not one IPv6 entry survives" not grep -q ":" "${MMH6_OUT}"
+check "mmh6: nothing else in the file is touched" grep -qx "PrivateKey = SECRET" "${MMH6_OUT}"
+check "mmh6: MTU survives" grep -qx "MTU = 1340" "${MMH6_OUT}"
+check "mmh6: the file keeps its shape" [ "$(grep -c '' "${MMH6_OUT}")" = "$(grep -c '' "${MMH6_CONF}")" ]
+
+# The decision function, against a fake /proc. Unknown must read as
+# unusable: guessing wrong that way costs the tunnel its IPv6, guessing
+# wrong the other way costs the tunnel its existence.
+mmh6_proc() { # mmh6_proc all default [--no-inet6]
+    local root="${TMP}/proc-$1-$2-${3:-x}"
+    mkdir -p "${root}/proc/net" "${root}/proc/sys/net/ipv6/conf/all" "${root}/proc/sys/net/ipv6/conf/default"
+    [ "${3:-}" = "--no-inet6" ] || : > "${root}/proc/net/if_inet6"
+    printf '%s\n' "$1" > "${root}/proc/sys/net/ipv6/conf/all/disable_ipv6"
+    printf '%s\n' "$2" > "${root}/proc/sys/net/ipv6/conf/default/disable_ipv6"
+    printf '%s' "${root}"
+}
+check "mmh6: healthy host is usable"          env AWG_PROC_ROOT="$(mmh6_proc 0 0)" bash -c "source '${MMH6_FUNCS}'; ipv6_usable"
+check "mmh6: all.disable_ipv6=1 is unusable"  not env AWG_PROC_ROOT="$(mmh6_proc 1 0)" bash -c "source '${MMH6_FUNCS}'; ipv6_usable"
+check "mmh6: default.disable_ipv6=1 is unusable" not env AWG_PROC_ROOT="$(mmh6_proc 0 1)" bash -c "source '${MMH6_FUNCS}'; ipv6_usable"
+check "mmh6: a kernel without IPv6 is unusable"  not env AWG_PROC_ROOT="$(mmh6_proc 0 0 --no-inet6)" bash -c "source '${MMH6_FUNCS}'; ipv6_usable"
+check "mmh6: an unreadable /proc reads as unusable" not env AWG_PROC_ROOT="${TMP}/nowhere" bash -c "source '${MMH6_FUNCS}'; ipv6_usable"
+
 # --- 3.1 reload on mtime change; filtered config reaches syncconf ----
 DIR_A="${TMP}/flow-a"
 mkdir -p "${DIR_A}/config" "${DIR_A}/etc"
