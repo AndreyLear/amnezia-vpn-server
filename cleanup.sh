@@ -245,6 +245,24 @@ else
     log "skip: amnezia-vpn-forward.service not present"
 fi
 
+# Еженедельная чистка Docker (amnezia-vpn-server-996w): её юниты ставит
+# install.sh, а cleanup.sh про них не знал. Оставленный таймер раз в неделю
+# звал бы удалённый вместе с развёртыванием скрипт и сорил в журнал.
+for unit in amnezia-vpn-prune.timer amnezia-vpn-prune.service; do
+    if [ -f "$SYSTEMD_DIR/$unit" ]; then
+        if [ "$DO_IT" -eq 1 ]; then
+            systemctl disable --now "$unit" >/dev/null 2>&1 || true
+            rm -f "$SYSTEMD_DIR/$unit"
+            systemctl daemon-reload
+            log "removed $SYSTEMD_DIR/$unit"
+        else
+            log "would remove $SYSTEMD_DIR/$unit"
+        fi
+    else
+        log "skip: $unit not present"
+    fi
+done
+
 # Сторож (amnezia-vpn-server-ptuo): таймер, юнит и каталог состояния в /run.
 # Оставленный таймер после удаления развёртывания раз в минуту звал бы
 # отсутствующий скрипт и заполнял журнал.
