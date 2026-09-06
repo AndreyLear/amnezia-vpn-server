@@ -38,7 +38,8 @@ fakes_reset() {
     mkdir -p "$FAKE_HOME/.ssh"
     printf 'FAKE-ED25519-KEY\n' > "$FAKE_HOME/.ssh/id_ed25519"
     printf 'FAKE-RSA-KEY\n' > "$FAKE_HOME/.ssh/id_rsa"
-    rm -f "$FAKE_DIR/install.err" "$FAKE_DIR/last-bundle"
+    rm -f "$FAKE_DIR/install.err" "$FAKE_DIR/last-bundle" \
+        "$FAKE_DIR/bad-shell.log" "$FAKE_DIR/shell-checked.log" "$FAKE_DIR/shell-check.err"
     # Every fake comes back, not a hand-kept list of the ones somebody
     # remembered. tar and git were restored here and sshpass was not, so
     # test_sshpass_missing deleted it and every later password run fell
@@ -83,6 +84,24 @@ echo "ssh $*" >> "$LOG"
 case "$*" in
     *add-user*|*set-password*)
         [ -t 0 ] || cat >/dev/null
+        ;;
+esac
+# Команда, которую мастер отправляет на сервер, обязана быть валидным
+# shell. Настоящий ssh это и делает — просто передаёт строку удалённому
+# bash, — и когда в bootstrap.sh потерялся разделитель, живой сервер
+# ответил «syntax error: unexpected end of file», а харнесс не заметил
+# ничего: он смотрел на аргументы, а не на то, исполнимы ли они
+# (amnezia-vpn-server-bjej). Проверяем так же, как проверил бы сервер.
+for last in "$@"; do :; done
+case "$last" in
+    ""|-*) ;;
+    *)
+        if ! printf '%s\n' "$last" | bash -n 2>"${FAKE_DIR}/shell-check.err"; then
+            printf 'BAD SHELL: %s\n' "$last" >> "${FAKE_DIR}/bad-shell.log"
+            printf 'bash: -c: %s\n' "$(head -1 "${FAKE_DIR}/shell-check.err")" >&2
+            exit 2
+        fi
+        printf 'shell-ok\n' >> "${FAKE_DIR}/shell-checked.log"
         ;;
 esac
 . "${FAKE_STATE:?}"
@@ -1269,6 +1288,42 @@ test_failed_pack_explains_itself() {
 # Same shape as the server-row case: a run that was interrupted leaves the
 # admin behind, and the wizard is the first thing anyone reruns. It used to
 # die on "auth user already exists" against a working system.
+# Проверка самой проверки: заглушка ssh обязана ловить сломанный shell, иначе
+# она молча пропустит следующую такую же ошибку (amnezia-vpn-server-bjej).
+test_ssh_fake_rejects_a_broken_remote_command() {
+    fakes_reset
+    # Ровно та форма, что уехала на живой сервер: слово fi слиплось со
+    # следующим присваиванием, внутренний if остался незакрытым, и bash
+    # споткнулся о конец файла. Обратите внимание: fiB="" сам по себе —
+    # законное присваивание, поэтому ошибка вылезает не там, где опечатка.
+    if FAKE_CALLS="$FAKE_DIR/calls-probe" FAKE_STATE="$FAKE_STATE" FAKE_DIR="$FAKE_DIR" \
+        "$FAKE_DIR/ssh" root@host 'if [ -f .env ]; then A=1; fiB=""; if [ -f .env ]; then B=2; fi' >/dev/null 2>&1; then
+        fail "the ssh fake accepted a command with a syntax error"
+    else
+        pass "the ssh fake rejects a command the remote shell could not parse"
+    fi
+    [ -f "$FAKE_DIR/bad-shell.log" ] \
+        && pass "and says which command was broken" \
+        || fail "the broken command was not recorded"
+    rm -f "$FAKE_DIR/calls-probe" "$FAKE_DIR/bad-shell.log"
+}
+
+# И обратное: на нормальном прогоне проверка действительно срабатывает, а не
+# простаивает. Без этого предыдущий тест мог бы проходить при выключенной
+# проверке.
+test_remote_commands_are_checked_on_a_normal_run() {
+    fakes_reset
+    SSH_TEST_PW="hunter2" \
+        rc="$(SSH_TEST_PW="hunter2" run_bootstrap --ip 203.0.113.10 --password-env SSH_TEST_PW)"
+    [ "$rc" = "0" ] || fail "normal run: exit $rc"
+    [ -s "$FAKE_DIR/shell-checked.log" ] \
+        && pass "the wizard's remote commands are parsed on every run ($(grep -c . "$FAKE_DIR/shell-checked.log") of them)" \
+        || fail "no remote command was ever checked — the guard is inert"
+    [ -f "$FAKE_DIR/bad-shell.log" ] \
+        && fail "a command the wizard sends does not parse: $(cat "$FAKE_DIR/bad-shell.log")" \
+        || pass "every command the wizard sends is valid shell"
+}
+
 test_rerun_survives_existing_admin() {
     fakes_reset
     setstate ADDUSER_RC 1 "$FAKE_STATE"
@@ -1338,6 +1393,8 @@ test_failed_pack_explains_itself
 test_summary_points_at_the_server_for_passwords
 test_ssh_keepalive_tolerates_a_busy_host
 test_rerun_survives_existing_server_row
+test_ssh_fake_rejects_a_broken_remote_command
+test_remote_commands_are_checked_on_a_normal_run
 test_rerun_survives_existing_admin
 test_real_adduser_failure_still_aborts
 test_real_init_failure_still_aborts
