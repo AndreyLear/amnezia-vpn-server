@@ -105,11 +105,12 @@ if [ "${1:-}" = "info" ]; then
 fi
 if [ "${1:-}" = "compose" ]; then
     shift
+    COMPOSE_ARGS="$*"
     verb=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --env-file) shift 2 ;;
-            version | config | build | up | ps) verb="$1"; break ;;
+            version | config | build | up | ps | run) verb="$1"; break ;;
             *) shift ;;
         esac
     done
@@ -124,6 +125,17 @@ if [ "${1:-}" = "compose" ]; then
             echo "amneziavpn-panel-init-1   panel-init   /app/panel init   Exited (1) 0 seconds ago"
             echo "amneziavpn-panel-1        panel        /app/panel serve  Created 0 seconds ago"
             echo "amneziavpn-awg-1          awg          /entrypoint.sh    Created 0 seconds ago"
+            ;;
+        run)
+            # Установщик спрашивает образ, что тот умеет, прежде чем трогать
+            # хост (amnezia-vpn-server-v4xj). Молчащая фальшивка означала бы
+            # «образ старше скриптов», и установка отказывалась бы в каждом
+            # сетевом сценарии.
+            case "$COMPOSE_ARGS" in
+                *"/app/panel capabilities"*)
+                    printf 'server-update:address6\nserver-update:listen-port\nserver-update:mtu\nserver-update:dns\nserver-init:address6\nserver-init:mtu\n'
+                    ;;
+            esac
             ;;
         build | up) ;;
     esac
