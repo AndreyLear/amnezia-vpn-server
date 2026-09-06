@@ -206,6 +206,15 @@ if [ "${1:-}" = "compose" ]; then
             # writes it would make the restart path untestable.
             [ "${COMPOSE_RUN_RC:-0}" = "0" ] || exit "${COMPOSE_RUN_RC}"
             case "$COMPOSE_ARGS" in
+                *"/app/panel capabilities"*)
+                    # Установщик спрашивает образ, что тот умеет, прежде чем
+                    # трогать хост (amnezia-vpn-server-v4xj). По умолчанию
+                    # фальшивка отвечает как ровесник этих скриптов; тесты
+                    # про несовпадение подменяют ответ через
+                    # AMNEZIA_INSTALL_CAPABILITIES.
+                    printf 'server-update:address6\nserver-update:listen-port\nserver-update:mtu\nserver-update:dns\nserver-init:address6\nserver-init:mtu\n'
+                    exit 0
+                    ;;
                 *"server update"*)
                     # CONFIG_REGEN=0 stands for the update that reports
                     # success without the rendered config coming back —
