@@ -141,6 +141,8 @@ export type Client = {
   name: string;
   description: string;
   address: string;
+  /** Адрес внутри префикса IPv6 туннеля; пусто, когда туннель без IPv6. */
+  address6: string;
   enabled: boolean;
   online: boolean;
   last_handshake_utc: string | null;

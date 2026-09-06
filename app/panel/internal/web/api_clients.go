@@ -74,6 +74,7 @@ func clientToJSON(c db.ClientRecord, st *status.Status, dns *status.DNSSeen, add
 		Name:        c.Name,
 		Description: c.Description,
 		Address:     c.Address,
+		Address6:    addr6,
 		Enabled:     c.Enabled,
 		MTU:         c.MTU,
 	}

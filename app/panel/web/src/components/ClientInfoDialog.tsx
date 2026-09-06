@@ -356,6 +356,13 @@ export function ClientInfoDialog({
                     <div className="grid gap-0.5">
                       <dt className="text-muted-foreground">IP</dt>
                       <dd className="font-mono">{client.address}</dd>
+                      {/* Выданный конфиг несёт оба адреса, значит и панель
+                          должна показывать оба: иначе владелец не видит того,
+                          что роздал (amnezia-vpn-server-lhlv). Пусто, когда
+                          туннель несёт только IPv4. */}
+                      {client.address6 ? (
+                        <dd className="font-mono">{client.address6}</dd>
+                      ) : null}
                     </div>
                   </PropertyRow>
                   <PropertyRow>
