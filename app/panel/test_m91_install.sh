@@ -2314,6 +2314,32 @@ test_fail2ban_installs_the_package_when_missing() {
         || fail "package installed but no jail written"
 }
 
+# Параметры обфускации обязаны пережить обновление (amnezia-vpn-server-jci6).
+#
+# Они должны совпадать у сервера и клиента: смена рвёт связь у ВСЕХ выданных
+# конфигов, пока каждый человек не отсканирует новый QR. Сейчас установщик их
+# просто не передаёт — но держится это на том, что никто не добавил флаг «за
+# компанию» с портом и MTU. Один такой недосмотр отключит всех клиентов на
+# всех установках сразу, поэтому пусть держится на проверке.
+test_upgrade_never_touches_the_obfuscation_params() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "params setup: exit $rc"
+
+    fakes_reset
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "params upgrade: exit $rc"
+    grep -q "server update" "$FAKE_CALLS" \
+        && pass "the upgrade does apply deployment values" \
+        || fail "no server update call at all — the test checks nothing"
+    grep -q "awg-params" "$FAKE_CALLS" \
+        && fail "the upgrade passed --awg-params: every issued client config would stop working" \
+        || pass "the upgrade never passes --awg-params"
+    grep -q "gen-awg-params" "$FAKE_CALLS" \
+        && fail "the upgrade regenerated the obfuscation params" \
+        || pass "and never regenerates them"
+}
+
 # Проверка «стек действительно ожил» (amnezia-vpn-server-rlct). Свежая
 # установка её не проходит и не должна: строки сервера ещё нет.
 test_post_install_check_passes_on_a_live_deployment() {
@@ -2614,6 +2640,7 @@ test_ipv6_change_restarts_the_tunnel
 test_fail2ban_configured_by_default
 test_fail2ban_installs_the_package_when_missing
 test_fail2ban_can_be_declined
+test_upgrade_never_touches_the_obfuscation_params
 test_post_install_check_passes_on_a_live_deployment
 test_post_install_check_is_silent_on_a_fresh_install
 test_post_install_check_catches_a_tunnel_without_its_ipv6
