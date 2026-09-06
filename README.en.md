@@ -301,10 +301,10 @@ curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/
 bash bootstrap.sh --ip 203.0.113.10
 ```
 
-**Repeat the flags you used at install** — the domains above all. The address
-that goes into new client configs comes from the flags of this run: without
-`--vpn-domain` the wizard writes the server's IP there. Configs already handed
-out are unaffected, but new ones would carry a different address.
+There is no need to repeat the flags: the wizard remembers what the server was
+set up with. The client domain stays as it was even when the update runs
+without `--vpn-domain`. Going back to the server address is explicit:
+`--vpn-domain ""`.
 
 Nothing has to be reissued to clients: their configs keep working. The restart
 costs a few seconds of connectivity, and clients recover on their own. A rerun

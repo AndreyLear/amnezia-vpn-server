@@ -54,6 +54,7 @@ fakes_reset() {
         chmod +x "$target"
     done
     cat > "$FAKE_STATE" <<EOF
+DEPLOYED_CLIENT_DOMAIN=
 SSH_RC=0
 SSH_STDERR=
 INSTALL_RC=0
@@ -115,6 +116,13 @@ fi
 
 cmd="$*"
 case "$cmd" in
+    *"CLIENT_DOMAIN="*)
+        # Мастер спрашивает у сервера, какой домен уже записан в
+        # развёртывании (amnezia-vpn-server-xer8). DEPLOYED_CLIENT_DOMAIN
+        # пустой — установка свежая или домена там не было.
+        printf '%s\n' "${DEPLOYED_CLIENT_DOMAIN:-}"
+        exit 0
+        ;;
     *mktemp*)
         printf '%s\n' "/tmp/amnezia-bootstrap.fake"
         exit 0
@@ -597,7 +605,7 @@ ANSWERS
     grep -q 'Домен панели (пусто = панель на IP; например panel.example.com)' "$TMP_TEST/err" \
         && pass "domain prompt examples: step 4 example hostname" \
         || fail "domain prompt examples: step 4 missing example hostname"
-    grep -q 'Домен VPN для клиентов (пусто = IP сервера; например example.com)' "$TMP_TEST/err" \
+    grep -q 'Домен VPN для клиентов (пусто = оставить как есть; например example.com)' "$TMP_TEST/err" \
         && pass "domain prompt examples: step 6 example hostname" \
         || fail "domain prompt examples: step 6 missing example hostname"
     if grep -q -- '--panel-domain\|--vpn-domain\|--client-domain' "$TMP_TEST/err"; then
@@ -1200,6 +1208,51 @@ test_rerun_applies_the_endpoint_only() {
         || pass "the wizard leaves the MTU to install.sh"
 }
 
+# Домен клиентов — свойство развёртывания, а не выбор на каждый запуск
+# (amnezia-vpn-server-xer8). Обновление без флага не должно молча переводить
+# всех новых клиентов на IP.
+test_rerun_without_the_flag_keeps_the_deployed_domain() {
+    fakes_reset
+    setstate DEPLOYED_CLIENT_DOMAIN "vpn.example.com" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --awg-port 4500 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" = "0" ] || fail "rerun without the domain flag: exit $rc"
+    local apply
+    apply="$(grep 'server update' "$FAKE_CALLS" | tail -1)"
+    printf '%s\n' "$apply" | grep -q -- "--endpoint .vpn.example.com:4500." \
+        && pass "the wizard keeps the domain the deployment already had" \
+        || { fail "the endpoint fell back to the IP and every new config would carry it"; printf '%s\n' "$apply" >&2; }
+    grep -q "client domain remembered from the deployment" "$TMP_TEST/err" \
+        && pass "and says where it took the domain from" \
+        || fail "the wizard silently reused a value without saying so"
+}
+
+# Обратный ход: пустое значение флага — это решение вернуться на IP, и оно
+# обязано срабатывать, иначе домен станет невыключаемым.
+test_explicit_empty_domain_returns_to_the_ip() {
+    fakes_reset
+    setstate DEPLOYED_CLIENT_DOMAIN "vpn.example.com" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --awg-port 4500 --vpn-domain "" --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" = "0" ] || fail "explicit empty domain: exit $rc"
+    local apply
+    apply="$(grep 'server update' "$FAKE_CALLS" | tail -1)"
+    printf '%s\n' "$apply" | grep -q -- "--endpoint .2.26.93.192:4500." \
+        && pass "an explicitly empty --vpn-domain goes back to the IP" \
+        || { fail "the wizard ignored an explicit request to drop the domain"; printf '%s\n' "$apply" >&2; }
+}
+
+# Свежая установка: помнить нечего, и выдумывать тоже.
+test_fresh_install_without_a_domain_uses_the_ip() {
+    fakes_reset
+    setstate DEPLOYED_CLIENT_DOMAIN "" "$FAKE_STATE"
+    rc="$(run_bootstrap --ip 2.26.93.192 --awg-port 4500 --key "$FAKE_HOME/.ssh/id_ed25519")"
+    [ "$rc" = "0" ] || fail "fresh install without a domain: exit $rc"
+    local apply
+    apply="$(grep 'server update' "$FAKE_CALLS" | tail -1)"
+    printf '%s\n' "$apply" | grep -q -- "--endpoint .2.26.93.192:4500." \
+        && pass "with nothing remembered the endpoint is the server address" \
+        || { fail "a fresh install must use the IP"; printf '%s\n' "$apply" >&2; }
+}
+
 # If the settings cannot be applied, the firewall has already been rebuilt
 # around values the tunnel does not use. Reporting success there is what
 # made the breakage silent, so this must abort.
@@ -1399,6 +1452,9 @@ test_rerun_survives_existing_admin
 test_real_adduser_failure_still_aborts
 test_real_init_failure_still_aborts
 test_rerun_applies_the_endpoint_only
+test_rerun_without_the_flag_keeps_the_deployed_domain
+test_explicit_empty_domain_returns_to_the_ip
+test_fresh_install_without_a_domain_uses_the_ip
 test_apply_failure_aborts_instead_of_reporting_success
 }
 

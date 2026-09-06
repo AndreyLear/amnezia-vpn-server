@@ -378,7 +378,7 @@ if [ "$NONINTERACTIVE" = "0" ]; then
         prompt PANEL_PORT "$(step_label 5 6 "Порт панели")" "$DEFAULT_PANEL_PORT"
         PANEL_PORT_SET=1
     fi
-    prompt CLIENT_DOMAIN "$(step_label 6 6 "Домен VPN для клиентов (пусто = IP сервера; например example.com)")"
+    prompt CLIENT_DOMAIN "$(step_label 6 6 "Домен VPN для клиентов (пусто = оставить как есть; например example.com)")"
     if [ -n "$CLIENT_DOMAIN" ]; then
         CLIENT_DOMAIN_SET=1
         BIND_CLIENTS=1
@@ -409,8 +409,13 @@ if [ "$DOMAIN_SET" = "1" ] && [ -n "$DOMAIN" ]; then
     fi
     validate_safe "$DOMAIN" || die_usage "invalid --panel-domain/--domain (unsupported characters)"
 fi
-if [ "$CLIENT_DOMAIN_SET" = "1" ]; then
-    [ -n "$CLIENT_DOMAIN" ] || die_usage "empty --vpn-domain/--client-domain"
+if [ "$CLIENT_DOMAIN_SET" = "1" ] && [ -z "$CLIENT_DOMAIN" ]; then
+    # Явно пустое значение — решение вернуться на адрес сервера. Раньше это
+    # был отказ, а теперь единственный способ снять домен: без флага мастер
+    # помнит то, что записано в развёртывании (amnezia-vpn-server-xer8).
+    BIND_CLIENTS=0
+    log "client domain cleared by an explicit empty --vpn-domain: clients will be issued the server address"
+elif [ "$CLIENT_DOMAIN_SET" = "1" ]; then
     if ! validate_fqdn "$CLIENT_DOMAIN"; then
         if [ "$NONINTERACTIVE" = "0" ]; then
             die_op "некорректный домен VPN (буквы, цифры, дефис; точки между частями; например example.com; пусто = IP)"
@@ -826,6 +831,26 @@ else
 fi
 [ -n "$PUBLIC_IP" ] || die_op "cannot determine the public IP of the server (needed for the client endpoint)"
 validate_safe "$PUBLIC_IP" || die_op "unexpected public IP from the server"
+
+# The client domain is a deployment value, not a per-run choice
+# (amnezia-vpn-server-xer8). install.sh remembers its own values in .env and
+# the README promises that an upgrade never changes a decision; the wizard
+# did not keep that promise. Rerunning it without --vpn-domain rewrote the
+# endpoint to the server IP, and every config issued from then on carried the
+# address instead of the domain — silently, since the configs already on
+# devices keep working. The whole point of the domain is that clients survive
+# a move to another server; that survived exactly until the next upgrade.
+#
+# So the wizard reads back what the deployment already decided. An explicitly
+# empty --vpn-domain "" remains the way to say "go back to the IP".
+if [ "$CLIENT_DOMAIN_SET" = "0" ]; then
+    remembered_domain="$(remote_cmd "sed -n 's/^CLIENT_DOMAIN=//p' '$ROOT_DIR/.env' 2>/dev/null | tail -1" 2>/dev/null | tr -d '\r' | tr -d '[:space:]')" || remembered_domain=""
+    if [ -n "$remembered_domain" ] && validate_safe "$remembered_domain"; then
+        CLIENT_DOMAIN="$remembered_domain"
+        BIND_CLIENTS=1
+        log "client domain remembered from the deployment: ${CLIENT_DOMAIN} (pass --vpn-domain \"\" to go back to the IP)"
+    fi
+fi
 
 if [ "$BIND_CLIENTS" = "1" ] && [ -n "$CLIENT_DOMAIN" ]; then
     ENDPOINT="${CLIENT_DOMAIN}:${AWG_PORT}"
