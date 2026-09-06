@@ -150,13 +150,25 @@ echo "apt-get $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 if [ "${1:-}" = "install" ]; then
     touch "$FAKE_FS/apt-installed"
-    # installing nftables restores the nft fake (nft.hidden is the
-    # pristine copy; fakes_reset removed the live one on purpose only
-    # when the nft-absent path is under test)
-    if [ ! -x "$FAKE_DIR/nft" ] && [ -f "$FAKE_DIR/nft.hidden" ]; then
-        cp "$FAKE_DIR/nft.hidden" "$FAKE_DIR/nft"
-        chmod +x "$FAKE_DIR/nft"
-    fi
+    # Установка nftables возвращает фальшивку nft (nft.hidden — чистая
+    # копия; fakes_reset убирает живую только когда проверяется путь «nft
+    # отсутствует»).
+    #
+    # Именно nftables, а не любой пакет: установщик ставит docker,
+    # ca-certificates и amneziawg ЗАНЬШЕ, чем доходит до сети, и
+    # безусловное восстановление возвращало nft раньше времени. Проверка
+    # command -v nft после этого находила фальшивку, ветка установки
+    # nftables не выполнялась, и тест падал на утверждении, которое
+    # описывает поведение установщика верно
+    # (amnezia-vpn-server-qc8y).
+    case " $* " in
+        *" nftables "*|*" nftables")
+            if [ ! -x "$FAKE_DIR/nft" ] && [ -f "$FAKE_DIR/nft.hidden" ]; then
+                cp "$FAKE_DIR/nft.hidden" "$FAKE_DIR/nft"
+                chmod +x "$FAKE_DIR/nft"
+            fi
+            ;;
+    esac
     if [ -n "$NEW_COMPOSE_VERSION" ]; then
         sed "s|^COMPOSE_VERSION=.*|COMPOSE_VERSION=${NEW_COMPOSE_VERSION}|" "$FAKE_STATE" \
             > "$FAKE_STATE.new" && mv "$FAKE_STATE.new" "$FAKE_STATE"
