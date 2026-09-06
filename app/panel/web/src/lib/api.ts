@@ -171,6 +171,19 @@ export type HostSnapshot = {
 };
 
 /** Toast only after a confirmed success: `{ok:true}` or a created/patched client. */
+// Отказ сервера — это ответ человеку, а не строка в консоли. Панель его
+// получала и выбрасывала: кнопка нажата, окно открыто, ничего не произошло и
+// никто не объяснил почему (amnezia-vpn-server-o3hx).
+//
+// Возвращает то же, что mutationSucceeded, но по дороге показывает причину:
+// текст сервера, если он есть, и общий текст, если ответа не разобрать.
+export function mutationOk(data: MutationResponse | undefined): boolean {
+  if (mutationSucceeded(data)) return true;
+  const message = data?.message?.trim();
+  toast.error(message && message.length > 0 ? message : "Не удалось сохранить изменения");
+  return false;
+}
+
 export function mutationSucceeded(data: MutationResponse | undefined): boolean {
   if (!data) return false;
   if (data.ok === true) return true;

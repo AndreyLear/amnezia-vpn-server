@@ -27,6 +27,13 @@ import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+// Границы MTU повторяют серверные (db.ClientMTUFloor/Ceiling): ниже нижней
+// туннель не может нести IPv6, выше верхней полный пакет не влезает на
+// провод с обычными 1500 байтами. Сервер всё равно проверит своё, но человек
+// не должен упираться в отказ, уже нажав «Сохранить» (amnezia-vpn-server-h2pg).
+const mtuFloor = 1280;
+const mtuCeiling = 1440;
+
 const confirmButtonClass = "max-sm:h-12 max-sm:w-full";
 const saveButtonClass = "max-sm:h-12 max-sm:w-full";
 
@@ -174,12 +181,20 @@ export function ClientInfoDialog({
     setEditingMTU(false);
   }
 
+  // Пустое поле — снятие своего значения, поэтому оно допустимо.
+  const mtuDraftValue = mtuDraft.trim();
+  const mtuOutOfRange =
+    mtuDraftValue !== "" &&
+    (!/^\d+$/.test(mtuDraftValue) ||
+      Number(mtuDraftValue) < mtuFloor ||
+      Number(mtuDraftValue) > mtuCeiling);
+
   async function saveMTU() {
     if (!client) return;
     // Пустое поле — «как у сервера»: снять своё значение и оставить его
     // нельзя одним и тем же действием, поэтому пустота и есть снятие.
-    const next = mtuDraft.trim() === "" ? 0 : Number(mtuDraft);
-    if (!Number.isInteger(next) || next < 0) return;
+    if (mtuOutOfRange) return;
+    const next = mtuDraftValue === "" ? 0 : Number(mtuDraftValue);
     if (next === viewMTU) {
       setEditingMTU(false);
       return;
@@ -436,6 +451,9 @@ export function ClientInfoDialog({
               <Label htmlFor="info-mtu">Размер пакета, байт</Label>
               <Input
                 id="info-mtu"
+                type="number"
+                min={mtuFloor}
+                max={mtuCeiling}
                 inputMode="numeric"
                 placeholder="как у сервера"
                 value={mtuDraft}
@@ -443,10 +461,17 @@ export function ClientInfoDialog({
                 disabled={pending}
               />
               <p className="text-sm text-muted-foreground">
-                Пусто — как у сервера. Задавайте своё значение, если у этого
-                клиента канал заведомо лучше: например роутер на проводе.
-                Новое значение попадёт в настройки, которые вы выдадите после
-                изменения; те, что уже стоят на устройстве, останутся прежними
+                Пусто — как у сервера. Своё значение задаётся в пределах от{" "}
+                {mtuFloor} до {mtuCeiling}: больше не помещается на обычном
+                канале в 1500 байт, потому что сам туннель занимает 60. Поднять
+                имеет смысл там, где канал заведомо хороший, — например роутер
+                на проводе.
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Значение попадёт в настройки, которые вы выдадите после этого.
+                Тем, кто уже подключён, выдавать новые не обязательно — то же
+                число можно вписать вручную в приложении, в настройках
+                подключения
               </p>
             </div>
             <DialogFooter>
@@ -454,7 +479,7 @@ export function ClientInfoDialog({
                 type="submit"
                 className={saveButtonClass}
                 aria-label="Сохранить MTU"
-                disabled={pending}
+                disabled={pending || mtuOutOfRange}
               >
                 Сохранить
               </Button>

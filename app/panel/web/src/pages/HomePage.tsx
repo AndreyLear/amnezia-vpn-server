@@ -9,7 +9,7 @@ import { ClientInfoDialog } from "@/components/ClientInfoDialog";
 import { QrDialog } from "@/components/QrDialog";
 import {
   api,
-  mutationSucceeded,
+  mutationOk,
   setCsrf,
   setLastUsername,
   type Client,
@@ -97,7 +97,7 @@ export default function HomePage() {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      if (!mutationSucceeded(data)) return;
+      if (!mutationOk(data)) return;
       toast.success("Клиент добавлен");
       setAddOpen(false);
       await load();
@@ -113,7 +113,7 @@ export default function HomePage() {
         method: "PATCH",
         body: JSON.stringify({ enabled: !client.enabled }),
       });
-      if (!mutationSucceeded(data)) return;
+      if (!mutationOk(data)) return;
       const enabled = !client.enabled;
       setClients((list) =>
         list?.map((c) => (c.id === client.id ? { ...c, enabled } : c)) ?? list,
@@ -134,7 +134,7 @@ export default function HomePage() {
       const data = await api<MutationResponse>(`/api/clients/${client.id}`, {
         method: "DELETE",
       });
-      if (!mutationSucceeded(data)) return;
+      if (!mutationOk(data)) return;
       toast.success("Клиент удалён");
       setInfoId(null);
       await load();
@@ -155,7 +155,7 @@ export default function HomePage() {
         method: "PATCH",
         body: JSON.stringify(payload),
       });
-      if (!mutationSucceeded(data)) return false;
+      if (!mutationOk(data)) return false;
       toast.success("Информация о пользователе была изменена.");
       await load();
       return true;
