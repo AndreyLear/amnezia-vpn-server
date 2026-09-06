@@ -160,7 +160,7 @@ if [ "${1:-}" = "install" ]; then
     # command -v nft после этого находила фальшивку, ветка установки
     # nftables не выполнялась, и тест падал на утверждении, которое
     # описывает поведение установщика верно
-    # (amnezia-vpn-server-qc8y).
+    # (amnezia-vpn-server-b1u0).
     case " $* " in
         *" nftables "*|*" nftables")
             if [ ! -x "$FAKE_DIR/nft" ] && [ -f "$FAKE_DIR/nft.hidden" ]; then

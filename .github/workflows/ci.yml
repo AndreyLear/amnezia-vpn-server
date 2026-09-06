@@ -14,7 +14,7 @@ jobs:
           go-version-file: app/panel/go.mod
           # Модуль лежит не в корне, и без этого кэш не находил go.sum:
           # зависимости выкачивались заново каждый прогон
-          # (amnezia-vpn-server-sqzz).
+          # (amnezia-vpn-server-b6gm).
           cache-dependency-path: app/panel/go.sum
       - uses: actions/setup-node@v4
         with:
