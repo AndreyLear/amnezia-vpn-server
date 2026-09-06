@@ -75,6 +75,8 @@
 #
 # Testability hooks (environment, not arguments):
 #   AMNEZIA_INSTALL_TEST=1             skip the root-user check
+#   AMNEZIA_INSTALL_VERIFY_WAIT_SEC    how long the post-install check waits
+#                                      for awg0 to carry its addresses
 #   AMNEZIA_INSTALL_CAPABILITIES=LIST  answer the image capability probe with
 #                                      LIST instead of running a container
 #   AMNEZIA_INSTALL_FAKE_DIR=DIR       prefix PATH with DIR so fakes can
@@ -2542,6 +2544,90 @@ for svc in panel-init panel awg; do
         || die_op "self-check: service $svc is absent from the stack (docker compose ps -a)"
 done
 log "self-check: services panel-init/panel/awg present in the stack"
+
+# --- 14b. did the stack actually come up? ------------------------------
+#
+# Самый частый отказ у этого продукта — не «однажды сломалось само», а
+# «обновились, и не поднялось». Дважды за один день установка обрывалась
+# посреди работы, и оба раза об этом узнавал человек, который смотрел, а не
+# установщик, который делал: потерянный разделитель в мастере дал бы отказ
+# на любой свежей установке, а образ старее скриптов оставил туннель без
+# IPv6 (amnezia-vpn-server-rlct).
+#
+# Проверяется то, ради чего всё это ставилось: туннель поднят и несёт
+# объявленные адреса, резолвер отвечает, панель отдаёт страницу. Не откат —
+# откат опаснее наполовину поднятого стека, который видно, — а громкая
+# диагностика с ненулевым кодом.
+verify_deployment_alive() {
+    # На свежей установке проверять нечего: строки сервера ещё нет, туннель
+    # и панель поднимутся после `server init`, и panel-init выходит с 1 по
+    # замыслу (контракт M3.1).
+    if [ "$NO_SERVER_ROW" = "1" ]; then
+        log "self-check: fresh install — the tunnel and the panel start after 'server init'; nothing to verify yet"
+        return 0
+    fi
+
+    local wait_sec waited failures addr addr6 seen
+    wait_sec="${AMNEZIA_INSTALL_VERIFY_WAIT_SEC:-15}"
+    failures=""
+    addr="$(env_read TUNNEL_ADDRESS)"
+    addr6="$(env_read TUNNEL_ADDRESS6)"
+    addr6="${addr6%%/*}"
+
+    # 1. Интерфейс существует и несёт объявленные адреса. Именно адреса, а
+    #    не только имя: сегодняшняя авария оставила awg0 живым и без IPv6.
+    waited=0
+    while :; do
+        seen="$(cmd ip -brief addr show awg0 2>/dev/null || true)"
+        if printf '%s' "$seen" | grep -q "${addr:-10.8.0.1}" \
+            && { [ -z "$addr6" ] || printf '%s' "$seen" | grep -q "$addr6"; }; then
+            break
+        fi
+        [ "$waited" -lt "$wait_sec" ] || break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if ! printf '%s' "$seen" | grep -q "${addr:-10.8.0.1}"; then
+        failures="${failures}
+install:   tunnel: awg0 does not carry ${addr:-10.8.0.1} (saw: ${seen:-nothing}). The firewall is open on UDP ${AWG_PORT} while the tunnel is not there."
+    elif [ -n "$addr6" ] && ! printf '%s' "$seen" | grep -q "$addr6"; then
+        failures="${failures}
+install:   tunnel: awg0 carries IPv4 but not ${addr6} (saw: ${seen}). Clients whose config names an IPv6 address route it into a tunnel that cannot carry it."
+    else
+        log "self-check: tunnel up (awg0: ${seen})"
+    fi
+
+    # 2. Резолвер отвечает. Пропускается там, где его намеренно нет.
+    if [ "$(env_read TUNNEL_DNS_DISABLED)" = "1" ]; then
+        log "self-check: in-tunnel resolver skipped (--no-tunnel-dns)"
+    elif ! cmd command -v "${AMNEZIA_INSTALL_DIG_BIN:-dig}" >/dev/null 2>&1; then
+        # Отсутствие dig — не отказ резолвера. Считать иначе значило бы
+        # ронять исправную установку из-за недостающего пакета.
+        log "self-check: in-tunnel resolver not checked (${AMNEZIA_INSTALL_DIG_BIN:-dig} is not installed)"
+    elif cmd "${AMNEZIA_INSTALL_DIG_BIN:-dig}" +time=3 +tries=1 +short \
+        "@${addr:-10.8.0.1}" example.com A >/dev/null 2>&1; then
+        log "self-check: in-tunnel resolver answers on ${addr:-10.8.0.1}"
+    else
+        failures="${failures}
+install:   resolver: nothing answers on ${addr:-10.8.0.1}:53. Clients get the address in their config and no names."
+    fi
+
+    # 3. Панель отвечает на своём петлевом адресе. Проверяется сам сервис, а
+    #    не nginx перед ним: если не отвечает он, остальное неважно.
+    if cmd curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:8787/login 2>/dev/null; then
+        log "self-check: panel answers on 127.0.0.1:8787"
+    else
+        failures="${failures}
+install:   panel: no answer from http://127.0.0.1:8787/login."
+    fi
+
+    [ -z "$failures" ] || die_op "the stack was deployed but did not come up:${failures}
+install:   Nothing was rolled back — the deployment is intact and half up.
+install:   Look at:  cd ${ROOT_DIR} && docker compose --env-file versions.lock logs --no-color --tail 50"
+    log "self-check: the deployment answers on all three counts (tunnel, resolver, panel)"
+}
+
+verify_deployment_alive
 
 # --- 15. final status + SSH tunnel hint --------------------------------
 

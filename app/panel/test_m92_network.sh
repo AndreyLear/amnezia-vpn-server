@@ -49,6 +49,10 @@ DAEMON=ok
 IP_FORWARD=1
 FAKE_PMTU=1500
 TCP_CC="bbr cubic"
+AWG0_ADDRS=auto
+ROOT_ENV="$ROOT/.env"
+PANEL_HTTP_RC=0
+DIG_RC=0
 NFT_CHECK_RC=0
 NFT_APPLY_RC=0
 NFT_APPLIED=0
@@ -238,6 +242,30 @@ fi
 exit 0
 FAKE_EOF
 
+cat > "$FAKE_DIR/ip" <<'FAKE_EOF'
+#!/bin/bash
+# Проверка после установки спрашивает, какие адреса несёт awg0
+# (amnezia-vpn-server-rlct). auto — интерфейс несёт то, что записано в .env
+# развёртывания, как на живом сервере; none — интерфейса нет.
+echo "ip $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "-brief" ] && [ "${2:-}" = "addr" ]; then
+    case "${AWG0_ADDRS:-auto}" in
+        auto)
+            v4="$(sed -n 's/^TUNNEL_ADDRESS=//p' "${ROOT_ENV:-/nonexistent}" 2>/dev/null | tail -1)"
+            v6="$(sed -n 's/^TUNNEL_ADDRESS6=//p' "${ROOT_ENV:-/nonexistent}" 2>/dev/null | tail -1)"
+            [ -n "$v4" ] || [ ! -f "${ROOT_ENV:-/nonexistent}" ] || v4=10.8.0.1
+            [ -n "$v4" ] || exit 0
+            printf 'awg0             UNKNOWN        %s/24 %s\n' "$v4" "$v6"
+            ;;
+        none) : ;;
+        *) printf 'awg0             UNKNOWN        %s\n' "${AWG0_ADDRS}" ;;
+    esac
+    exit 0
+fi
+exit 0
+FAKE_EOF
+
 cat > "$FAKE_DIR/curl" <<'FAKE_EOF'
 #!/bin/bash
 echo "curl $*" >> "${FAKE_CALLS:?}"
@@ -252,6 +280,11 @@ if printf '%s' "$*" | grep -q "api.ipify.org"; then
     printf '%s\n' "${PUBLIC_IP}"
     exit 0
 fi
+# Проверка после установки стучится в панель на петлевом адресе.
+if printf '%s' "$*" | grep -q "127.0.0.1:8787"; then
+    . "${FAKE_STATE:?}"
+    exit "${PANEL_HTTP_RC:-0}"
+fi
 if [ -n "$oarg" ]; then
     mkdir -p "$(dirname "$oarg")"
     printf 'FAKE-DOCKER-GPG-KEY\n' > "$oarg"
@@ -263,6 +296,10 @@ cat > "$FAKE_DIR/dig" <<'FAKE_EOF'
 #!/bin/bash
 echo "dig $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
+# Резолвер в туннеле: DIG_RC=1 — молчит.
+if printf '%s' "$*" | grep -q "@10\."; then
+    exit "${DIG_RC:-0}"
+fi
 case "$*" in
     *" A"*) [ -n "${DNS_A}" ] && printf '%s\n' "${DNS_A}" ;;
     *" AAAA"*) [ -n "${DNS_AAAA}" ] && printf '%s\n' "${DNS_AAAA}" ;;
@@ -285,7 +322,7 @@ exit 0
 FAKE_EOF
 
 chmod +x "$FAKE_DIR/docker" "$FAKE_DIR/apt-get" "$FAKE_DIR/systemctl" \
-    "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl" \
+    "$FAKE_DIR/sysctl" "$FAKE_DIR/nft" "$FAKE_DIR/curl" "$FAKE_DIR/ip" \
     "$FAKE_DIR/dig" "$FAKE_DIR/nginx" "$FAKE_DIR/certbot" "$FAKE_DIR/ping"
 
 cat > "$FAKE_DIR/modprobe" <<'FAKE_EOF'
@@ -385,6 +422,7 @@ run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
     AMNEZIA_INSTALL_MODULES_DIR="$TMP_TEST/modules-load.d" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
+    AMNEZIA_INSTALL_VERIFY_WAIT_SEC="${VERIFY_WAIT_SEC:-0}" \
     PATH="${M92_PATH:-$FAKE_DIR:$PATH}" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?

@@ -57,6 +57,10 @@ NEW_COMPOSE_VERSION=
 DAEMON=ok
 IP_FORWARD=1
 TCP_CC="bbr cubic"
+AWG0_ADDRS=auto
+ROOT_ENV="$ROOT/.env"
+PANEL_HTTP_RC=0
+DIG_RC=0
 NFT_CHECK_RC=0
 NFT_APPLY_RC=0
 NFT_APPLIED=0
@@ -352,6 +356,27 @@ cat > "$FAKE_DIR/ip" <<'FAKE_EOF'
 #!/bin/bash
 echo "ip $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
+# Проверка после установки спрашивает, какие адреса несёт awg0
+# (amnezia-vpn-server-rlct). AWG0_ADDRS пустой — интерфейса нет вовсе.
+if [ "${1:-}" = "-brief" ] && [ "${2:-}" = "addr" ]; then
+    # auto: интерфейс несёт то, что записано в .env развёртывания — так
+    # ведёт себя живой сервер. none: интерфейса нет. Явное значение
+    # подменяет ответ, чтобы проверить расхождение.
+    case "${AWG0_ADDRS:-auto}" in
+        auto)
+            v4="$(sed -n 's/^TUNNEL_ADDRESS=//p' "${ROOT_ENV:-/nonexistent}" 2>/dev/null | tail -1)"
+            # В режиме --no-tunnel-dns установщик не пишет TUNNEL_ADDRESS в
+            # .env, но интерфейс всё равно несёт шлюз туннеля.
+            [ -n "$v4" ] || [ ! -f "${ROOT_ENV:-/nonexistent}" ] || v4=10.8.0.1
+            v6="$(sed -n 's/^TUNNEL_ADDRESS6=//p' "${ROOT_ENV:-/nonexistent}" 2>/dev/null | tail -1)"
+            [ -n "$v4" ] || exit 0
+            printf 'awg0             UNKNOWN        %s/24 %s\n' "$v4" "$v6"
+            ;;
+        none) : ;;
+        *) printf 'awg0             UNKNOWN        %s\n' "${AWG0_ADDRS}" ;;
+    esac
+    exit 0
+fi
 if [ "${1:-}" = "route" ] && [ "${2:-}" = "show" ] && [ "${3:-}" = "default" ]; then
     # DEFAULT_IFACE empty stands for a host with no default route at all.
     [ -n "${DEFAULT_IFACE:-}" ] || exit 0
@@ -469,6 +494,12 @@ if printf '%s' "$*" | grep -q "api.ipify.org"; then
     printf '%s\n' "${PUBLIC_IP}"
     exit 0
 fi
+# Проверка после установки стучится в панель на петлевом адресе
+# (amnezia-vpn-server-rlct).
+if printf '%s' "$*" | grep -q "127.0.0.1:8787"; then
+    . "${FAKE_STATE:?}"
+    exit "${PANEL_HTTP_RC:-0}"
+fi
 if [ -n "$oarg" ]; then
     mkdir -p "$(dirname "$oarg")"
     printf 'FAKE-DOCKER-GPG-KEY\n' > "$oarg"
@@ -482,6 +513,11 @@ cat > "$FAKE_DIR/dig" <<'FAKE_EOF'
 #!/bin/bash
 echo "dig $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
+# Проверка после установки спрашивает резолвер в туннеле; DIG_RC=1 —
+# резолвер молчит (amnezia-vpn-server-rlct).
+if printf '%s' "$*" | grep -q "@10\."; then
+    exit "${DIG_RC:-0}"
+fi
 case "$*" in
     *" A"*) [ -n "${DNS_A}" ] && printf '%s\n' "${DNS_A}" ;;
     *" AAAA"*) [ -n "${DNS_AAAA}" ] && printf '%s\n' "${DNS_AAAA}" ;;
@@ -665,6 +701,7 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_NGINX_SITES_DIR="$NGINX_SITES_TEST" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
     AMNEZIA_INSTALL_STATUS_WAIT_SEC=0 \
+    AMNEZIA_INSTALL_VERIFY_WAIT_SEC="${VERIFY_WAIT_SEC:-0}" \
     AMNEZIA_INSTALL_RESTART_VERIFY_SEC="${VERIFY_WAIT:-0}" \
     PATH="$FAKE_DIR:$PATH" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
@@ -1626,7 +1663,10 @@ test_domain_default_no_domain() {
     [ "$rc" = "0" ] || fail "no-domain flow: exit $rc"
     if grep -q "certbot" "$FAKE_CALLS"; then fail "no-domain: certbot was invoked"; else pass "no-domain: certbot not invoked"; fi
     if grep -q "nginx " "$FAKE_CALLS"; then fail "no-domain: nginx was invoked"; else pass "no-domain: nginx not invoked"; fi
-    if grep -q "dig " "$FAKE_CALLS"; then fail "no-domain: dig was invoked"; else pass "no-domain: dig not invoked"; fi
+    # Считаем именно пред-полётную проверку домена (dig @1.1.1.1), а не любое
+    # появление dig: проверка стека после установки спрашивает резолвер в
+    # туннеле (amnezia-vpn-server-rlct).
+    if grep -q "dig .*@1\.1\.1\.1" "$FAKE_CALLS"; then fail "no-domain: dig was invoked"; else pass "no-domain: dig not invoked"; fi
     if grep -qE "tcp dport (80|443)" "$ROOT/nftables/amnezia-vpn.nft"; then fail "no-domain: 80/443 opened"; else pass "no-domain: 80/443 stay closed"; fi
     if grep -q "ssh -L 8787" "$TMP_TEST/out"; then pass "no-domain: SSH tunnel hint kept"; else fail "no-domain: SSH hint missing"; fi
 }
@@ -1758,7 +1798,7 @@ test_panel_port_mode_flow() {
     grep -q "AMNEZIA_SECURE_COOKIES=1" "$ROOT/.env" && pass "panel-port: AMNEZIA_SECURE_COOKIES=1 in .env" \
         || fail "panel-port: AMNEZIA_SECURE_COOKIES missing from .env"
     if grep -q "certbot" "$FAKE_CALLS"; then fail "panel-port: certbot was invoked"; else pass "panel-port: certbot not invoked"; fi
-    if grep -q "dig " "$FAKE_CALLS"; then fail "panel-port: dig was invoked"; else pass "panel-port: dig not invoked"; fi
+    if grep -q "dig .*@1\.1\.1\.1" "$FAKE_CALLS"; then fail "panel-port: dig was invoked"; else pass "panel-port: dig not invoked"; fi
 }
 
 test_panel_port_loopback_matrix() {
@@ -1881,9 +1921,9 @@ test_domain_does_not_bind_clients() {
     grep -qE "^CLIENT_DOMAIN=panel\.example\.com$" "$ROOT/.env" \
         && fail "domain-no-vpn-bind: CLIENT_DOMAIN copied from the panel domain" \
         || pass "domain-no-vpn-bind: CLIENT_DOMAIN not set to the panel domain"
-    [ "$(grep -c "dig " "$FAKE_CALLS")" = "2" ] \
+    [ "$(grep -c "dig .*@1\.1\.1\.1" "$FAKE_CALLS")" = "2" ] \
         && pass "domain-no-vpn-bind: only the panel domain pre-flighted (A+AAAA)" \
-        || fail "domain-no-vpn-bind: dig count $(grep -c "dig " "$FAKE_CALLS"), want 2"
+        || fail "domain-no-vpn-bind: pre-flight dig count $(grep -c "dig .*@1\.1\.1\.1" "$FAKE_CALLS"), want 2"
 }
 
 test_panel_domain_and_vpn_domain_aliases() {
@@ -1987,9 +2027,9 @@ test_client_domain_overrides_domain() {
         || pass "client-domain override: panel domain not used as endpoint"
     grep -q "https://panel.example.com" "$TMP_TEST/out" && pass "client-domain override: panel https hint kept" \
         || fail "client-domain override: panel https hint missing"
-    [ "$(grep -c "dig " "$FAKE_CALLS")" = "4" ] \
+    [ "$(grep -c "dig .*@1\.1\.1\.1" "$FAKE_CALLS")" = "4" ] \
         && pass "client-domain override: both domains pre-flighted" \
-        || fail "client-domain override: dig count $(grep -c "dig " "$FAKE_CALLS"), want 4"
+        || fail "client-domain override: pre-flight dig count $(grep -c "dig .*@1\.1\.1\.1" "$FAKE_CALLS"), want 4"
 }
 
 test_client_domain_preflight_before_certbot() {
@@ -2058,7 +2098,7 @@ test_no_domain_ip_endpoint_hint() {
         || fail "no-domain: IP endpoint hint missing"
     grep -q "A-record change" "$TMP_TEST/out" && fail "no-domain: migration note printed without a domain" \
         || pass "no-domain: no migration note"
-    if grep -q "dig " "$FAKE_CALLS"; then fail "no-domain: dig was invoked"; else pass "no-domain: no DNS pre-flight"; fi
+    if grep -q "dig .*@1\.1\.1\.1" "$FAKE_CALLS"; then fail "no-domain: dig was invoked"; else pass "no-domain: no DNS pre-flight"; fi
     grep -q '^CLIENT_DOMAIN=' "$ROOT/.env" && pass "no-domain: empty CLIENT_DOMAIN= line in .env" \
         || fail "no-domain: CLIENT_DOMAIN line missing from .env"
 }
@@ -2274,6 +2314,103 @@ test_fail2ban_installs_the_package_when_missing() {
         || fail "package installed but no jail written"
 }
 
+# Проверка «стек действительно ожил» (amnezia-vpn-server-rlct). Свежая
+# установка её не проходит и не должна: строки сервера ещё нет.
+test_post_install_check_passes_on_a_live_deployment() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "post-install check: exit $rc on a live deployment"
+    grep -q "self-check: tunnel up" "$TMP_TEST/out" \
+        && pass "the tunnel is checked and answers" || fail "the tunnel was never checked"
+    grep -q "self-check: in-tunnel resolver answers" "$TMP_TEST/out" \
+        && pass "the resolver is checked and answers" || fail "the resolver was never checked"
+    grep -q "self-check: panel answers" "$TMP_TEST/out" \
+        && pass "the panel is checked and answers" || fail "the panel was never checked"
+}
+
+# На свежей установке проверять нечего: туннель и панель поднимаются после
+# `server init`, и требовать от них ответа значило бы ронять установку в
+# единственном состоянии, которое задуман контрактом M3.1.
+test_post_install_check_is_silent_on_a_fresh_install() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    setstate UP_RC 1 "$FAKE_STATE"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "fresh install: exit $rc"
+    grep -q "fresh install — the tunnel and the panel start after" "$TMP_TEST/out" \
+        && pass "a fresh install is not asked to be alive yet" \
+        || fail "the fresh-install case was not recognised"
+    grep -q "self-check: tunnel up" "$TMP_TEST/out" \
+        && fail "the tunnel was checked on a fresh install" \
+        || pass "and nothing is demanded of the tunnel yet"
+}
+
+# Ровно сегодняшняя авария: интерфейс жив, IPv6 с него пропал.
+test_post_install_check_catches_a_tunnel_without_its_ipv6() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 setup for the check: exit $rc"
+    setstate AWG0_ADDRS "10.8.0.1/24" "$FAKE_STATE"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" != "0" ] \
+        && pass "a tunnel that lost its IPv6 fails the check (exit $rc)" \
+        || fail "awg0 without its IPv6 address was accepted"
+    grep -q "carries IPv4 but not" "$TMP_TEST/err" \
+        && pass "the failure names the missing family" \
+        || fail "the failure does not say what is missing"
+}
+
+test_post_install_check_catches_a_missing_tunnel() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "missing-tunnel setup: exit $rc"
+    setstate AWG0_ADDRS none "$FAKE_STATE"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" != "0" ] && pass "an absent interface fails the check (exit $rc)" \
+        || fail "an absent awg0 was accepted"
+    grep -q "does not carry" "$TMP_TEST/err" \
+        && pass "the failure says the tunnel is not there" \
+        || fail "the failure does not mention the tunnel"
+    grep -q "firewall is open" "$TMP_TEST/err" \
+        && pass "and says what that costs" || fail "the consequence is not spelled out"
+}
+
+test_post_install_check_catches_a_silent_resolver() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "silent-resolver setup: exit $rc"
+    setstate DIG_RC 1 "$FAKE_STATE"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" != "0" ] && pass "a silent resolver fails the check (exit $rc)" \
+        || fail "a resolver that answers nothing was accepted"
+    grep -q "nothing answers on" "$TMP_TEST/err" \
+        && pass "the failure names the resolver" || fail "the failure does not name the resolver"
+}
+
+test_post_install_check_catches_a_dead_panel() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "dead-panel setup: exit $rc"
+    setstate PANEL_HTTP_RC 7 "$FAKE_STATE"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" != "0" ] && pass "a panel that does not answer fails the check (exit $rc)" \
+        || fail "a dead panel was accepted"
+    grep -q "no answer from" "$TMP_TEST/err" \
+        && pass "the failure names the panel" || fail "the failure does not name the panel"
+}
+
+# --no-tunnel-dns: резолвер намеренно стоит в стороне, молчание — норма.
+test_post_install_check_skips_the_resolver_when_it_is_off() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-tunnel-dns)"
+    [ "$rc" = "0" ] || fail "no-tunnel-dns setup: exit $rc"
+    setstate DIG_RC 1 "$FAKE_STATE"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-tunnel-dns)"
+    [ "$rc" = "0" ] && pass "--no-tunnel-dns: a silent resolver is not a failure" \
+        || fail "--no-tunnel-dns still demanded an answer from the resolver (exit $rc)"
+    grep -q "resolver skipped" "$TMP_TEST/out" \
+        && pass "and it says why it did not check" || fail "the skip is silent"
+}
+
 # Сторож (amnezia-vpn-server-ptuo): юниты, порядок включения и снятие при
 # повторном запуске с --no-watchdog.
 # Проверка совместимости образа и скриптов (amnezia-vpn-server-v4xj).
@@ -2477,6 +2614,13 @@ test_ipv6_change_restarts_the_tunnel
 test_fail2ban_configured_by_default
 test_fail2ban_installs_the_package_when_missing
 test_fail2ban_can_be_declined
+test_post_install_check_passes_on_a_live_deployment
+test_post_install_check_is_silent_on_a_fresh_install
+test_post_install_check_catches_a_tunnel_without_its_ipv6
+test_post_install_check_catches_a_missing_tunnel
+test_post_install_check_catches_a_silent_resolver
+test_post_install_check_catches_a_dead_panel
+test_post_install_check_skips_the_resolver_when_it_is_off
 test_image_capability_gate_passes_with_a_matching_image
 test_image_older_than_scripts_is_refused
 test_image_without_capabilities_command_is_refused
