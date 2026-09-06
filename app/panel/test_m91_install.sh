@@ -358,6 +358,38 @@ echo "ip $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 # Проверка после установки спрашивает, какие адреса несёт awg0
 # (amnezia-vpn-server-rlct). AWG0_ADDRS пустой — интерфейса нет вовсе.
+# Проверка после установки спрашивает не «покажи всё», а «есть ли такой
+# адрес»: ip ... to ADDR фильтрует по адресу, а не по его написанию
+# (amnezia-vpn-server-rlct).
+if { [ "${1:-}" = "-4" ] || [ "${1:-}" = "-6" ]; } && [ "${2:-}" = "addr" ] \
+    && printf '%s' "$*" | grep -q " to "; then
+    want=""
+    prev=""
+    for a in "$@"; do
+        [ "$prev" = "to" ] && want="$a"
+        prev="$a"
+    done
+    case "${AWG0_ADDRS:-auto}" in
+        none) exit 0 ;;
+        auto)
+            if [ "${1}" = "-4" ]; then
+                have="$(sed -n 's/^TUNNEL_ADDRESS=//p' "${ROOT_ENV:-/nonexistent}" 2>/dev/null | tail -1)"
+                [ -n "$have" ] || [ ! -f "${ROOT_ENV:-/nonexistent}" ] || have=10.8.0.1
+            else
+                have="$(sed -n 's/^TUNNEL_ADDRESS6=//p' "${ROOT_ENV:-/nonexistent}" 2>/dev/null | tail -1)"
+            fi
+            have="${have%%/*}"
+            [ -n "$have" ] && [ "$have" = "${want%%/*}" ] \
+                && printf '    inet%s %s scope global\n' "$([ "${1}" = "-6" ] && printf 6)" "$have"
+            ;;
+        *)
+            case " ${AWG0_ADDRS} " in
+                *" ${want%%/*}"*) printf '    inet %s scope global\n' "${want}" ;;
+            esac
+            ;;
+    esac
+    exit 0
+fi
 if [ "${1:-}" = "-brief" ] && [ "${2:-}" = "addr" ]; then
     # auto: интерфейс несёт то, что записано в .env развёртывания — так
     # ведёт себя живой сервер. none: интерфейса нет. Явное значение

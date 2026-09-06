@@ -2558,6 +2558,14 @@ log "self-check: services panel-init/panel/awg present in the stack"
 # объявленные адреса, резолвер отвечает, панель отдаёт страницу. Не откат —
 # откат опаснее наполовину поднятого стека, который видно, — а громкая
 # диагностика с ненулевым кодом.
+# tunnel_carries СЕМЕЙСТВО АДРЕС — несёт ли awg0 этот адрес. Спрашиваем у
+# ip(8), а не сравниваем текст: одно и то же значение IPv6 записывается
+# по-разному, и строковое сравнение объявляло исправный туннель сломанным.
+tunnel_carries() {
+    local family="$1" addr="$2"
+    [ -n "$(cmd ip "-${family}" addr show dev awg0 to "$addr" 2>/dev/null)" ]
+}
+
 verify_deployment_alive() {
     # На свежей установке проверять нечего: строки сервера ещё нет, туннель
     # и панель поднимутся после `server init`, и panel-init выходит с 1 по
@@ -2575,22 +2583,29 @@ verify_deployment_alive() {
     addr6="${addr6%%/*}"
 
     # 1. Интерфейс существует и несёт объявленные адреса. Именно адреса, а
-    #    не только имя: сегодняшняя авария оставила awg0 живым и без IPv6.
+    #    не только имя: авария 06.09.2026 оставила awg0 живым и без IPv6.
+    #
+    #    Сравнивать строки нельзя. У адреса IPv6 текстовых представлений
+    #    много: в .env лежит fded:0a0b:d921::1, а ядро печатает то же самое
+    #    канонически — fded:a0b:d921::1. Первая же живая проверка на это и
+    #    наступила. Поэтому сравнением занимается тот, кто умеет разбирать
+    #    адреса: `ip ... to ADDR` фильтрует по адресу, а не по написанию.
     waited=0
     while :; do
-        seen="$(cmd ip -brief addr show awg0 2>/dev/null || true)"
-        if printf '%s' "$seen" | grep -q "${addr:-10.8.0.1}" \
-            && { [ -z "$addr6" ] || printf '%s' "$seen" | grep -q "$addr6"; }; then
+        if tunnel_carries 4 "${addr:-10.8.0.1}" \
+            && { [ -z "$addr6" ] || tunnel_carries 6 "$addr6"; }; then
             break
         fi
         [ "$waited" -lt "$wait_sec" ] || break
         sleep 1
         waited=$((waited + 1))
     done
-    if ! printf '%s' "$seen" | grep -q "${addr:-10.8.0.1}"; then
+    # Показать в сообщении об отказе, что интерфейс несёт на самом деле.
+    seen="$(cmd ip -brief addr show awg0 2>/dev/null || true)"
+    if ! tunnel_carries 4 "${addr:-10.8.0.1}"; then
         failures="${failures}
 install:   tunnel: awg0 does not carry ${addr:-10.8.0.1} (saw: ${seen:-nothing}). The firewall is open on UDP ${AWG_PORT} while the tunnel is not there."
-    elif [ -n "$addr6" ] && ! printf '%s' "$seen" | grep -q "$addr6"; then
+    elif [ -n "$addr6" ] && ! tunnel_carries 6 "$addr6"; then
         failures="${failures}
 install:   tunnel: awg0 carries IPv4 but not ${addr6} (saw: ${seen}). Clients whose config names an IPv6 address route it into a tunnel that cannot carry it."
     else
