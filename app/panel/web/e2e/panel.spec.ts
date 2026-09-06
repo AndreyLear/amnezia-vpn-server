@@ -34,11 +34,15 @@ test("opens the backup upload dialog", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Загрузить бэкап" })).toBeVisible();
 });
 
-test("opens backup upload from the overflow menu at 375px", async ({ page }) => {
+// На узком экране «Бэкап» открывает не меню, а диалог с крупными кнопками:
+// пункт меню в палец шириной с телефона не нажать. Проверка описывала прежнее
+// устройство и падала, хотя панель работала (amnezia-vpn-server-e72j).
+test("opens backup upload from the backup dialog at 375px", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 720 });
   await login(page);
   await page.getByRole("button", { name: "Бэкап" }).click();
-  await page.getByRole("menuitem", { name: "Загрузить" }).click();
+  await expect(page.getByRole("heading", { name: "Бэкап" })).toBeVisible();
+  await page.getByRole("button", { name: "Загрузить" }).click();
   await expect(page.getByRole("heading", { name: "Загрузить бэкап" })).toBeVisible();
 });
 
