@@ -12,6 +12,43 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: app/panel/go.mod
+          # Модуль лежит не в корне, и без этого кэш не находил go.sum:
+          # зависимости выкачивались заново каждый прогон
+          # (amnezia-vpn-server-sqzz).
+          cache-dependency-path: app/panel/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          # Из файла, а не числом здесь: бандл в репозитории собран этой
+          # версией, и сверка «dist совпадает с исходниками» имеет смысл
+          # только когда обе стороны собирают одинаково.
+          node-version-file: app/panel/web/.nvmrc
+          cache: npm
+          cache-dependency-path: app/panel/web/package-lock.json
+      - name: SPA dependencies
+        working-directory: app/panel/web
+        run: npm ci
+      - name: SPA tests
+        working-directory: app/panel/web
+        run: npm test
+      - name: SPA lint
+        working-directory: app/panel/web
+        run: npm run lint
+      # Собранный бандл закоммичен и уезжает в образ через go:embed. Правка в
+      # src без пересборки означала бы панель в образе старее репозитория —
+      # ту же болезнь, что и образ старее скриптов, только внутри одного
+      # коммита (amnezia-vpn-server-4olz).
+      - name: SPA bundle matches the sources
+        working-directory: app/panel/web
+        run: |
+          npm run build
+          git diff --exit-code -- ../internal/web/dist \
+            || { echo "::error::dist отличается от собранного из src: пересоберите бандл (npm run build) и закоммитьте"; exit 1; }
+      - name: Browser for e2e
+        working-directory: app/panel/web
+        run: npx playwright install --with-deps chromium
+      - name: Panel e2e
+        working-directory: app/panel/web
+        run: npx playwright test
       - name: Go tests
         working-directory: app/panel
         run: go test ./...
