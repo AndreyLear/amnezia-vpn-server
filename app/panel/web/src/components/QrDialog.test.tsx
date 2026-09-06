@@ -12,23 +12,26 @@ describe("QrDialog", () => {
       <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
     );
 
-    const hint = screen.getByText(/Отсканируйте код в приложении/);
+    const hint = screen.getByText(/Отсканируйте QR/);
     expect(hint).toBeInTheDocument();
     expect(hint.textContent).not.toMatch(/AmneziaVPN/);
     expect(hint.textContent?.trim().endsWith(".")).toBe(false);
   });
 
-  it("ведёт к списку клиентов, а не к одному приложению", () => {
+  it("называет примеры приложений, а не одно и не ссылки", () => {
     render(
       <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
     );
 
-    const link = screen.getByRole("link", { name: "список клиентов" });
-    expect(link).toHaveAttribute("href", "https://docs.amnezia.org/documentation/amnezia-wg");
-    expect(link).toHaveAttribute("target", "_blank");
-    // Вкладка, открытая ссылкой, не должна получать доступ к окну панели.
-    expect(link.getAttribute("rel")).toContain("noopener");
-    expect(link.getAttribute("rel")).toContain("noreferrer");
+    const hint = screen.getByText(/Отсканируйте QR/);
+    expect(hint.textContent).toContain("AmneziaWG");
+    expect(hint.textContent).toContain("WG Tunnel");
+    // «или другом приложении» — важная часть: список открытый.
+    expect(hint.textContent).toMatch(/другом приложении/);
+    // Уровень протокола назван, потому что старый клиент конфиг не прочтёт.
+    expect(hint.textContent).toContain("AmneziaWG 2.0 и выше");
+    // Ссылок нет намеренно: адреса магазинов в маленьком окне мешают.
+    expect(screen.queryByRole("link")).toBeNull();
   });
 
   it("puts title and hint in a header with 8px gap", () => {
@@ -37,7 +40,7 @@ describe("QrDialog", () => {
     );
 
     const title = screen.getByRole("heading", { name: "QR-код: Alice" });
-    const hint = screen.getByText(/Отсканируйте код в приложении/);
+    const hint = screen.getByText(/Отсканируйте QR/);
     const header = title.parentElement;
 
     expect(header).toHaveAttribute("data-slot", "dialog-header");

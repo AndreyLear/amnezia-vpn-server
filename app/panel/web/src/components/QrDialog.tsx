@@ -17,21 +17,19 @@ export function QrDialog({ clientId, clientName, onOpenChange }: QrDialogProps) 
       <DialogContent onOpenAutoFocus={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>QR-код: {clientName}</DialogTitle>
-          {/* Название одного приложения здесь было неправдой для тех, у кого
-              стоит другой клиент: конфигурацию AWG понимает не только
-              приложение Amnezia. Ссылка ведёт в раздел документации со
-              списком клиентов по системам (amnezia-vpn-server-d86w). */}
+          {/* Названия приложений здесь — примеры, а не список: конфигурацию
+              читает любой клиент, понимающий протокол. Ссылок нет намеренно —
+              кому нужно, тот найдёт приложение по названию, а три адреса на
+              две строки в маленьком окне мешают больше, чем помогают
+              (amnezia-vpn-server-d86w).
+
+              Уровень 2.0 назван не наугад: набор параметров, который мы
+              выдаём (Jc/Jmin/Jmax, S1-S4, H1-H4, I1-I5), — это именно он
+              (internal/awgconf/generator.go). Клиент постарше конфиг не
+              прочтёт, поэтому цифра в подписи важнее вежливости. */}
           <p className="text-sm text-muted-foreground">
-            Отсканируйте код в приложении, которое понимает конфигурации
-            AmneziaWG —{" "}
-            <a
-              className="underline underline-offset-4 hover:text-foreground"
-              href="https://docs.amnezia.org/documentation/amnezia-wg"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              список клиентов
-            </a>
+            Отсканируйте QR в AmneziaWG, WG Tunnel или другом приложении с
+            поддержкой AmneziaWG 2.0 и выше
           </p>
         </DialogHeader>
         {clientId !== null ? (
