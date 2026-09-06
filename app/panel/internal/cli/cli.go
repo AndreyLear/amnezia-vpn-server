@@ -33,7 +33,7 @@ commands:
   serve [--addr <host:port>]    run the web panel
   status                        print the runtime AWG status (status/status.json)
   server init <address> <listen-port> [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>] [--mtu <bytes>]
-  server update [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>] [--mtu <bytes>] [--listen-port <port>]
+  server update [--dns <dns>] [--awg-params <json>] [--endpoint <host:port>] [--mtu <bytes>] [--listen-port <port>] [--address6 <cidr>]
     (--mtu pins the tunnel MTU; without it the safe default applies. A
      full-size packet costs MTU + 60 bytes on the wire, so the value must
      stay below the uplink path MTU)
@@ -55,6 +55,7 @@ commands:
   backup create                  create a database backup (tar.zst)
   backup list                    list existing backups
   restore <backup>               prepare a restore (restart required)
+  capabilities                   print what this binary supports, one token per line
 `
 
 // serveNotImplemented kept the M2/M6 contract; M6.1 replaces it with a
@@ -92,10 +93,51 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return a.cmdBackup(args[1:])
 	case "restore":
 		return a.cmdRestore(args[1:])
+	case "capabilities":
+		return a.cmdCapabilities(args[1:])
 	default:
 		a.usage()
 		return 2
 	}
+}
+
+// capabilities is what install.sh may ask this binary about before it
+// changes anything on the host (amnezia-vpn-server-v4xj).
+//
+// The installer and the images are versioned together but delivered
+// apart: scripts travel with the source tree, binaries come from the
+// registry by the tag in versions.lock. Sources that changed without a
+// version bump therefore end up beside an older published image, and the
+// first flag the older binary does not know aborts the install halfway —
+// with the firewall already open and the tunnel not listening. That
+// happened on a live server: `server update: unknown flag --address6`.
+//
+// A version string would not catch it: both sides say 2.5.0. What the
+// installer actually depends on is this list, so this list is what it
+// asks for. An image too old to know the command at all fails the probe
+// by returning a non-zero exit — which is the same answer.
+//
+// Tokens are <command>:<flag> and are only ever added, never renamed:
+// an installer that asks for a token it needs must keep getting the
+// truth from every binary that has it.
+var capabilityTokens = []string{
+	"server-update:address6",
+	"server-update:listen-port",
+	"server-update:mtu",
+	"server-update:dns",
+	"server-init:address6",
+	"server-init:mtu",
+}
+
+func (a *app) cmdCapabilities(args []string) int {
+	if len(args) != 0 {
+		fmt.Fprintln(a.stderr, "capabilities: takes no arguments")
+		return 2
+	}
+	for _, token := range capabilityTokens {
+		fmt.Fprintln(a.stdout, token)
+	}
+	return 0
 }
 
 type app struct {

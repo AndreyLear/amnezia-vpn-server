@@ -75,6 +75,8 @@
 #
 # Testability hooks (environment, not arguments):
 #   AMNEZIA_INSTALL_TEST=1             skip the root-user check
+#   AMNEZIA_INSTALL_CAPABILITIES=LIST  answer the image capability probe with
+#                                      LIST instead of running a container
 #   AMNEZIA_INSTALL_FAKE_DIR=DIR       prefix PATH with DIR so fakes can
 #                                      stand in for docker/apt-get/
 #                                      systemctl/sysctl/nft/curl: tests
@@ -1997,6 +1999,52 @@ if [ "$IMAGES_BUILT" = "1" ]; then
         fi
     fi
 fi
+# The scripts and the binaries travel apart: this file comes with the
+# source tree, the images come from the registry by the tag in
+# versions.lock. Sources changed without a version bump therefore land
+# beside an OLDER published image, and the mismatch surfaces at the first
+# flag the older binary does not know — halfway through the install, with
+# the firewall already open and the tunnel not listening. That is not a
+# thought experiment: it happened on a live server as
+# `server update: unknown flag --address6`, and the message named the
+# firewall rather than the cause (amnezia-vpn-server-v4xj).
+#
+# So the image is asked what it supports before anything else is touched.
+# A version string would not do: both sides say the same number. What the
+# installer depends on is the list of flags, so that is what it asks for,
+# and an image too old to know the command at all fails by exiting
+# non-zero — the same answer in a different shape.
+require_image_capabilities() {
+    local needed caps token
+    needed="server-update:address6 server-update:listen-port server-update:mtu server-update:dns"
+    caps="$(capabilities_probe || true)"
+    if [ -z "$caps" ]; then
+        die_op "the panel image does not answer 'capabilities': it is older than these scripts. Raise IMAGE_VERSION in versions.lock and publish that version, or rerun with --build to compile the images from these sources"
+    fi
+    for token in $needed; do
+        case " $caps " in
+            *" $token "*) ;;
+            *)
+                die_op "the panel image lacks '$token': it is older than these scripts. Raise IMAGE_VERSION in versions.lock and publish that version, or rerun with --build to compile the images from these sources"
+                ;;
+        esac
+    done
+    log "image capabilities check passed (the binaries understand these scripts)"
+}
+
+# Hookable so the harness can present an image of any vintage without a
+# registry: the probe is the only part that needs a container.
+capabilities_probe() {
+    if [ -n "${AMNEZIA_INSTALL_CAPABILITIES:-}" ]; then
+        printf '%s' "$AMNEZIA_INSTALL_CAPABILITIES" | tr '\n' ' '
+        return 0
+    fi
+    docker_compose --env-file versions.lock run --rm --no-deps panel-init \
+        /app/panel capabilities 2>/dev/null | tr '\n' ' '
+}
+
+require_image_capabilities
+
 log "starting the stack"
 NO_SERVER_ROW=0
 if ! docker_compose --env-file versions.lock up -d; then

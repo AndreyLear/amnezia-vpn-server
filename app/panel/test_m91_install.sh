@@ -2267,6 +2267,52 @@ test_fail2ban_installs_the_package_when_missing() {
 
 # Сторож (amnezia-vpn-server-ptuo): юниты, порядок включения и снятие при
 # повторном запуске с --no-watchdog.
+# Проверка совместимости образа и скриптов (amnezia-vpn-server-v4xj).
+test_image_capability_gate_passes_with_a_matching_image() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail \
+          AMNEZIA_INSTALL_CAPABILITIES="server-update:address6 server-update:listen-port server-update:mtu server-update:dns" \
+          run_install)"
+    [ "$rc" = "0" ] || fail "capability gate: exit $rc on a matching image"
+    grep -q "image capabilities check passed" "$TMP_TEST/out" \
+        && pass "a matching image passes the capability check" \
+        || fail "the capability check never ran"
+}
+
+# Именно этот случай сломал живой сервер: скрипты новые, образ старый, и
+# установка развалилась уже после того, как открыла порт.
+test_image_older_than_scripts_is_refused() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail \
+          AMNEZIA_INSTALL_CAPABILITIES="server-update:listen-port server-update:mtu server-update:dns" \
+          run_install)"
+    [ "$rc" != "0" ] \
+        && pass "an image lacking a flag these scripts pass is refused (exit $rc)" \
+        || fail "an image without server-update:address6 was accepted"
+    grep -q "server-update:address6" "$TMP_TEST/err" \
+        && pass "the refusal names the missing capability" \
+        || fail "the refusal does not say what was missing"
+    grep -qE "IMAGE_VERSION|--build" "$TMP_TEST/err" \
+        && pass "the refusal says how to get out of it" \
+        || fail "the refusal offers no way forward"
+    # Причина должна быть названа до того, как установка тронет стек.
+    grep -q "starting the stack" "$TMP_TEST/out" \
+        && fail "the stack was started despite the mismatched image" \
+        || pass "nothing was started before the check"
+}
+
+# Образ настолько старый, что про сам вопрос не знает: пустой ответ.
+test_image_without_capabilities_command_is_refused() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail AMNEZIA_INSTALL_CAPABILITIES=" " run_install)"
+    [ "$rc" != "0" ] \
+        && pass "an image that cannot answer the probe is refused (exit $rc)" \
+        || fail "an image with no capabilities at all was accepted"
+    grep -q "older than these scripts" "$TMP_TEST/err" \
+        && pass "the refusal explains the vintage mismatch" \
+        || fail "the refusal does not explain itself"
+}
+
 test_watchdog_units_installed_by_default() {
     fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
@@ -2422,6 +2468,9 @@ test_ipv6_change_restarts_the_tunnel
 test_fail2ban_configured_by_default
 test_fail2ban_installs_the_package_when_missing
 test_fail2ban_can_be_declined
+test_image_capability_gate_passes_with_a_matching_image
+test_image_older_than_scripts_is_refused
+test_image_without_capabilities_command_is_refused
 test_watchdog_units_installed_by_default
 test_watchdog_can_be_declined
 test_watchdog_removed_on_rerun_with_flag
