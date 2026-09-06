@@ -8,15 +8,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: app/panel/go.mod
           # Модуль лежит не в корне, и без этого кэш не находил go.sum:
           # зависимости выкачивались заново каждый прогон
           # (amnezia-vpn-server-b6gm).
           cache-dependency-path: app/panel/go.sum
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Из файла, а не числом здесь: бандл в репозитории собран этой
           # версией, и сверка «dist совпадает с исходниками» имеет смысл

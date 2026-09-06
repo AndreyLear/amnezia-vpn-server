@@ -24,7 +24,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # versions.lock stays the single source of pinned versions: the build
       # args below must match what install.sh would have used locally.
