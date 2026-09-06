@@ -255,12 +255,33 @@ The panel password stays the one currently in effect.
 
 ### Updating
 
+An update is the same wizard as the install, run again. It remembers the
+deployment settings and asks nothing.
+
 ```sh
-ssh root@203.0.113.10 "cd /opt/amnezia-vpn && docker compose --env-file versions.lock pull \
-  && docker compose --env-file versions.lock up -d"
+curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh
+bash bootstrap.sh --ip 203.0.113.10
 ```
 
-Under a minute, and clients are not disturbed.
+**Repeat the flags you used at install** — the domains above all. The address
+that goes into new client configs comes from the flags of this run: without
+`--vpn-domain` the wizard writes the server's IP there. Configs already handed
+out are unaffected, but new ones would carry a different address.
+
+Nothing has to be reissued to clients: their configs keep working. The restart
+costs a few seconds of connectivity, and clients recover on their own. A rerun
+against an already-installed server took 4 minutes 14 seconds when measured
+with the images built on the spot; the usual path, which downloads them ready
+made, is shorter.
+
+An update changes more than the containers — it also updates what lives on the
+server itself: firewall rules, kernel settings, services. A release that adds
+something new (IPv6 inside the tunnel, say) arrives only this way.
+
+**What not to do.** This section used to hold a pair of `docker compose pull`
+commands. They do not update: the image tag comes from a file left on the
+server by the previous install, so the same version that is already running is
+downloaded again. The host side is not touched at all.
 
 ### Uninstalling
 
