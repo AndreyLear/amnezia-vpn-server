@@ -344,8 +344,14 @@ The in-tunnel resolver exists because the panel lives at the same address the
 tunnel ends at. A packet sent to that address never enters the tunnel, and iOS
 creates no bypass route for it — so without answering the hostname differently,
 the panel would be unreachable from exactly the devices connected to it.
-Clients get two resolvers, ours and a public fallback, so stopping the service
-never leaves a client without name resolution.
+Clients get our resolver. On a tunnel that carries IPv6 a public fallback is
+added after it: if ours stops for any reason, names keep resolving and nobody
+notices.
+
+On a tunnel without IPv6 there is no fallback. With one, the nastiest kind of
+breakage appears: pages open, video does not, and there is no way to tell why.
+Without it a failure is visible at once, and the watchdog brings the resolver
+back on its own within a minute.
 
 More in [DEVELOPMENT.md](DEVELOPMENT.md).
 

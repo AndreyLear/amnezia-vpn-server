@@ -1215,9 +1215,8 @@ tunnel_dns_setup() {
 
     env_set TUNNEL_ADDRESS "$gateway"
     env_set UPSTREAM_DNS "$TUNNEL_UPSTREAM_DNS"
-    # The resolver goes first, a public one second: the fallback is what
-    # keeps clients online if the service stops.
-    env_set TUNNEL_DNS "${gateway},${TUNNEL_UPSTREAM_DNS%%,*}"
+    # Строка DNS для клиентов пишется позже: она зависит от того, несёт ли
+    # туннель IPv6, а это решается ниже (tunnel_client_dns).
 
     if [ -n "$DOMAIN" ]; then
         log "tunnel DNS: ${DOMAIN} -> ${gateway} for connected clients"
@@ -1226,8 +1225,10 @@ tunnel_dns_setup() {
     fi
 
     # Something already holding the wildcard port 53 would make the
-    # resolver restart-loop. Not fatal — the fallback in the client
-    # config keeps clients working — but the operator has to know.
+    # resolver restart-loop. On a dual-stack deployment the fallback in the
+    # client config carries people through; on an IPv4-only one there is no
+    # fallback by design (amnezia-vpn-server-w4p7), so there names stop
+    # resolving outright. Either way the operator has to know.
     if command -v ss >/dev/null 2>&1; then
         if cmd ss -lnu 2>/dev/null | awk '{print $5}' | grep -Eq '^(0\.0\.0\.0|\*):53$'; then
             log "WARNING: another service already listens on 0.0.0.0:53; the tunnel resolver cannot bind ${gateway}:53. Stop it, or rerun with --no-tunnel-dns"
@@ -1493,6 +1494,40 @@ tunnel_address6() {
 }
 
 tunnel_ipv6_preflight
+
+# --- 10d-bis. строка DNS в конфиге клиента ----------------------------
+#
+# Второй адрес в строке DNS — запасной: если наш резолвер встанет, клиент
+# продолжит разрешать имена через публичный. Запрос к нему уходит ВНУТРЬ
+# туннеля и выходит с адреса сервера, так что ни адрес клиента, ни его
+# запросы провайдеру не видны.
+#
+# Но цена у этого запасного разная, и зависит она от того, несёт ли туннель
+# IPv6 (amnezia-vpn-server-w4p7):
+#
+#   туннель с IPv6      резолвер отказал, клиент ушёл на публичный —
+#                       теряется только ответ на имя панели;
+#   туннель без IPv6    клиент начинает получать записи AAAA, а маршрут
+#                       ::/0 в его конфиге ведёт в никуда. Возвращается
+#                       ровно та поломка, ради которой существует фильтр
+#                       AAAA: страницы открываются, видео не грузится. Тихо,
+#                       без единого признака в панели.
+#
+# Поэтому запасной адрес выдаётся только там, где он безвреден.
+tunnel_client_dns() {
+    local gateway
+    [ "$TUNNEL_DNS_ENABLED" = "1" ] || return 0
+    gateway="$(tunnel_gateway_address)"
+    if [ -n "$TUNNEL_SUBNET6" ]; then
+        env_set TUNNEL_DNS "${gateway},${TUNNEL_UPSTREAM_DNS%%,*}"
+        log "tunnel DNS for clients: ${gateway} first, ${TUNNEL_UPSTREAM_DNS%%,*} as a fallback"
+    else
+        env_set TUNNEL_DNS "$gateway"
+        log "tunnel DNS for clients: ${gateway} only — a public fallback would hand out AAAA records this tunnel cannot route"
+    fi
+}
+
+tunnel_client_dns
 
 # --- 10e. SSH brute-force protection (amnezia-vpn-server-rswn) --------
 #

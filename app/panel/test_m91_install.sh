@@ -2346,6 +2346,51 @@ test_fail2ban_installs_the_package_when_missing() {
         || fail "package installed but no jail written"
 }
 
+# Запасной резолвер выдаётся только там, где он безвреден
+# (amnezia-vpn-server-w4p7).
+test_client_dns_has_no_fallback_without_ipv6() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "no-ipv6 DNS flow: exit $rc"
+    grep -q "^TUNNEL_DNS=10.8.0.1$" "$ROOT/.env" \
+        && pass "without IPv6 the client config names only our resolver" \
+        || fail "TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing), want 10.8.0.1 alone"
+    grep -q "a public fallback would hand out AAAA records" "$TMP_TEST/out" \
+        && pass "and the installer says why" || fail "the reason was not printed"
+}
+
+test_client_dns_keeps_the_fallback_with_ipv6() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install)"
+    [ "$rc" = "0" ] || fail "ipv6 DNS flow: exit $rc"
+    grep -q "^TUNNEL_DNS=10.8.0.1,1.1.1.1$" "$ROOT/.env" \
+        && pass "with IPv6 the fallback stays: it costs nothing there" \
+        || fail "TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing), want the pair"
+}
+
+# Переключение режима обязано менять строку в обе стороны: иначе установка,
+# однажды выключившая IPv6, оставит клиентам запасной адрес, который теперь
+# вреден.
+test_client_dns_follows_the_ipv6_switch() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "switch setup: exit $rc"
+    grep -q "^TUNNEL_DNS=10.8.0.1,1.1.1.1$" "$ROOT/.env" \
+        || fail "switch setup: expected the fallback while IPv6 is on"
+
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --no-ipv6)"
+    [ "$rc" = "0" ] || fail "switch off: exit $rc"
+    grep -q "^TUNNEL_DNS=10.8.0.1$" "$ROOT/.env" \
+        && pass "turning IPv6 off takes the fallback away with it" \
+        || fail "after --no-ipv6 TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing)"
+
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "switch back on: exit $rc"
+    grep -q "^TUNNEL_DNS=10.8.0.1,1.1.1.1$" "$ROOT/.env" \
+        && pass "turning it back on brings the fallback back" \
+        || fail "after --ipv6 TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing)"
+}
+
 # Параметры обфускации обязаны пережить обновление (amnezia-vpn-server-jci6).
 #
 # Они должны совпадать у сервера и клиента: смена рвёт связь у ВСЕХ выданных
@@ -2672,6 +2717,9 @@ test_ipv6_change_restarts_the_tunnel
 test_fail2ban_configured_by_default
 test_fail2ban_installs_the_package_when_missing
 test_fail2ban_can_be_declined
+test_client_dns_has_no_fallback_without_ipv6
+test_client_dns_keeps_the_fallback_with_ipv6
+test_client_dns_follows_the_ipv6_switch
 test_upgrade_never_touches_the_obfuscation_params
 test_post_install_check_passes_on_a_live_deployment
 test_post_install_check_is_silent_on_a_fresh_install
@@ -3361,7 +3409,7 @@ test_rerun_applies_a_changed_subnet_and_client_domain() {
 test_tunnel_dns_answers_the_panel_domain() {
     fakes_reset
     os_release ubuntu 24.04 noble
-    rc="$(run_install --domain panel.example.com)"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --domain panel.example.com)"
     [ "$rc" = "0" ] || fail "tunnel DNS domain flow: exit $rc"
     grep -q "^PANEL_DOMAIN=panel.example.com$" "$ROOT/.env" \
         && pass "tunnel DNS: the panel hostname is handed to the resolver" \
@@ -3369,8 +3417,8 @@ test_tunnel_dns_answers_the_panel_domain() {
     grep -q "^TUNNEL_ADDRESS=10.8.0.1$" "$ROOT/.env" \
         && pass "tunnel DNS: resolver bound to the tunnel address" \
         || fail "tunnel DNS: TUNNEL_ADDRESS missing from .env"
-    # Clients get our resolver first and a public one after it: if the
-    # service stops, name resolution must not stop with it.
+    # На двухстековой установке клиент получает наш резолвер первым и
+    # публичный вторым: если служба встанет, имена продолжат разрешаться.
     grep -q "^TUNNEL_DNS=10.8.0.1,1.1.1.1$" "$ROOT/.env" \
         && pass "tunnel DNS: clients get the resolver plus a fallback" \
         || fail "tunnel DNS: TUNNEL_DNS is $(grep TUNNEL_DNS "$ROOT/.env" || echo missing)"
@@ -3381,7 +3429,7 @@ test_tunnel_dns_answers_the_panel_domain() {
 test_tunnel_dns_without_a_panel_domain() {
     fakes_reset
     os_release ubuntu 24.04 noble
-    rc="$(run_install)"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install)"
     [ "$rc" = "0" ] || fail "tunnel DNS loopback flow: exit $rc"
     if grep -q "^PANEL_DOMAIN=" "$ROOT/.env"; then
         fail "tunnel DNS: PANEL_DOMAIN written without a panel domain"
@@ -3420,7 +3468,7 @@ test_tunnel_dns_can_be_turned_off() {
 test_tunnel_dns_follows_the_vpn_subnet() {
     fakes_reset
     os_release ubuntu 24.04 noble
-    rc="$(run_install --vpn-subnet 10.20.0.0/24 --domain panel.example.com)"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --vpn-subnet 10.20.0.0/24 --domain panel.example.com)"
     [ "$rc" = "0" ] || fail "custom subnet flow: exit $rc"
     grep -q "^TUNNEL_ADDRESS=10.20.0.1$" "$ROOT/.env" \
         && pass "tunnel DNS: address derived from the deployment subnet" \
