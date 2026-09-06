@@ -210,8 +210,46 @@ The server speaks AmneziaWG, so any client that understands the protocol works.
 **AmneziaVPN** — Amnezia's general client, several protocols at once, for
 Windows, macOS, Linux, Android and iOS: [amnezia.org/downloads](https://amnezia.org/downloads)
 
-**Routers.** OpenWrt with the `amneziawg` package works: set the router up as
-an ordinary client and the whole household goes through the VPN.
+**Routers.** OpenWrt with the `amneziawg` package works, so does a Keenetic
+with AmneziaWG support: set the router up as an ordinary client and the whole
+household goes through the VPN. Three things are worth doing when you do.
+
+### When the tunnel runs on a router
+
+Devices at home ask the router for names, not our server: the client config
+never reaches them. The three points below are not fine tuning — without them
+the household works, but not the way you think it does.
+
+**1. Names should be resolved by our server.** Set `10.8.0.1` as the only name
+server on the router and remove the rest, including the ones the provider hands
+out over DHCP.
+
+**2. Turn off DNS-over-HTTPS and DNS-over-TLS on the router.** Otherwise the
+first point changes nothing: the router keeps asking Cloudflare or Google over
+port 443, around the tunnel. A measurement on a live Keenetic shows it plainly
+— over two minutes, zero queries to `10.8.0.1` and 240 packets to `1.1.1.1`
+and `8.8.8.8`.
+
+**3. Turn off the provider's IPv6 on the internet connection.** The tunnel
+carries IPv6 of its own and it works. But if a device also holds an address
+from the provider it will pick that one, and the traffic leaves around the VPN
+with your real address. On a Keenetic this is IPv6 settings → IPv6
+configuration → disabled.
+
+**How to check.** From any device at home — not from the router itself:
+
+```sh
+curl -6 https://ifconfig.co
+```
+
+The answer should be your server's address. The provider's address means part
+of the traffic goes around the tunnel.
+
+**MTU.** A router on a wire usually carries larger packets than a phone on a
+mobile network, and the server default is sized for the phone. Raising it for
+one client is done in the panel: client card → MTU → Change. That speeds up
+what the household sends; the other direction is set by the server and shared
+by everyone.
 
 ## Common tasks
 
