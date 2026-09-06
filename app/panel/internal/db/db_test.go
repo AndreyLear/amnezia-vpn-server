@@ -226,9 +226,10 @@ func TestMigrateAddsClientDescription(t *testing.T) {
 	}
 	// The literal is a deliberate tripwire: a schema change that forgets
 	// to bump the version fails here. Raised to 7 by
-	// amnezia-vpn-server-xy6j (server.address6).
-	if SchemaVersion != "7" {
-		t.Fatalf("SchemaVersion = %q, want 7", SchemaVersion)
+	// amnezia-vpn-server-xy6j (server.address6), to 8 by
+	// amnezia-vpn-server-h2pg (clients.mtu).
+	if SchemaVersion != "8" {
+		t.Fatalf("SchemaVersion = %q, want 8", SchemaVersion)
 	}
 	if err := Migrate(handle); err != nil {
 		t.Fatalf("second Migrate legacy v5: %v", err)
@@ -1416,5 +1417,107 @@ func TestMigrateAddsAddress6(t *testing.T) {
 	}
 	if stored != SchemaVersion {
 		t.Fatalf("schema_version = %q, want %q", stored, SchemaVersion)
+	}
+}
+
+// mustCreateClient — один клиент со стандартными ключами; тесты про MTU
+// не зависят от того, как именно он создан.
+func mustCreateClient(t *testing.T, handle *sql.DB) int64 {
+	t.Helper()
+	c, err := CreateClient(handle, "10.8.0.1/24", NewClient{
+		Name: "mtu-client", PrivateKey: testPriv, PublicKey: testPub,
+	})
+	if err != nil {
+		t.Fatalf("CreateClient: %v", err)
+	}
+	return c.ID
+}
+
+// Клиент без своего MTU обязан вести себя ровно как раньше: ноль означает
+// «как у сервера», и старая база после миграции даёт именно ноль
+// (amnezia-vpn-server-h2pg).
+func TestMigrateAddsClientMTUDefaultingToServer(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	id := mustCreateClient(t, handle)
+
+	var mtu int64
+	if err := handle.QueryRow(`SELECT mtu FROM clients WHERE id = ?`, id).Scan(&mtu); err != nil {
+		t.Fatal(err)
+	}
+	if mtu != 0 {
+		t.Fatalf("новый клиент получил MTU %d, ожидался 0 (наследует серверный)", mtu)
+	}
+
+	c, err := ClientByID(handle, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MTU != 0 {
+		t.Fatalf("ClientByID вернул MTU %d, ожидался 0", c.MTU)
+	}
+}
+
+func TestUpdateClientMTU(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	id := mustCreateClient(t, handle)
+
+	if err := UpdateClientMTU(handle, id, 1420); err != nil {
+		t.Fatalf("UpdateClientMTU(1420): %v", err)
+	}
+	c, err := ClientByID(handle, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MTU != 1420 {
+		t.Fatalf("MTU = %d, want 1420", c.MTU)
+	}
+
+	// Ноль возвращает клиента к серверному значению — это способ снять
+	// собственное значение, а не запретить туннель.
+	if err := UpdateClientMTU(handle, id, 0); err != nil {
+		t.Fatalf("UpdateClientMTU(0): %v", err)
+	}
+	c, _ = ClientByID(handle, id)
+	if c.MTU != 0 {
+		t.Fatalf("после снятия MTU = %d, want 0", c.MTU)
+	}
+}
+
+// Значение вне границ отклоняется, а не подрезается молча: то, что человек
+// ввёл руками, — решение, и тихая правка спрятала бы ошибку.
+func TestUpdateClientMTURejectsOutOfRange(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	id := mustCreateClient(t, handle)
+
+	for _, mtu := range []int64{1279, 1441, 9000, -1} {
+		if err := UpdateClientMTU(handle, id, mtu); err == nil {
+			t.Fatalf("UpdateClientMTU(%d) прошёл, ожидался отказ", mtu)
+		}
+	}
+	c, err := ClientByID(handle, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MTU != 0 {
+		t.Fatalf("отклонённые значения изменили MTU на %d", c.MTU)
+	}
+}
+
+func TestUpdateClientMTUUnknownID(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := UpdateClientMTU(handle, 4242, 1400); !errors.Is(err, ErrClientNotFound) {
+		t.Fatalf("UpdateClientMTU на несуществующем id: %v, ожидался ErrClientNotFound", err)
 	}
 }

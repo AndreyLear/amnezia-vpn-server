@@ -143,7 +143,11 @@ export default function HomePage() {
     }
   }
 
-  async function saveClientInfo(payload: { name: string; description: string }) {
+  async function saveClientInfo(payload: {
+    name: string;
+    description: string;
+    mtu?: number;
+  }) {
     if (!infoClient) return false;
     setPendingId(infoClient.id);
     try {

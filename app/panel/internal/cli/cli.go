@@ -46,6 +46,10 @@ commands:
   client enable <id>
   client disable <id>
   client rename <id> <name>
+  client set-mtu <id> <bytes|default>
+    (this client's own tunnel MTU; "default" returns it to the server's.
+     It sizes what the client sends — the other direction is bounded by
+     the server interface, which is one value for everyone)
   client set-expiry <id> <RFC3339|none>
   client delete <id>
   client config <id>

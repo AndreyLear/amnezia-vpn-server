@@ -20,6 +20,7 @@ const (
 	opClientDisable   = "client disable"
 	opClientRename    = "client rename"
 	opClientSetExpiry = "client set-expiry"
+	opClientSetMTU    = "client set-mtu"
 	opClientDelete    = "client delete"
 	opClientConfig    = "client config"
 )
@@ -46,6 +47,8 @@ func (a *app) cmdClient(args []string) int {
 		return a.cmdClientSetEnabled(args[1:], false)
 	case "rename":
 		return a.cmdClientRename(args[1:])
+	case "set-mtu":
+		return a.cmdClientSetMTU(args[1:])
 	case "set-expiry":
 		return a.cmdClientSetExpiry(args[1:])
 	case "delete":
@@ -305,6 +308,57 @@ func (a *app) cmdClientRename(args []string) int {
 		return a.fatal(opClientRename, fmt.Errorf("generate config: %w", err))
 	}
 	return a.ok(opClientRename, "renamed client "+strconv.FormatInt(id, 10))
+}
+
+// cmdClientSetMTU sets this client's own tunnel MTU or clears it
+// ("default"), then regenerates the config. The peer section of
+// awg0.conf carries no MTU, so the running tunnel is untouched — what
+// changes is the config this client is handed next.
+//
+// Что это на самом деле меняет, и чего не меняет. MTU в конфиге задаёт
+// размер пакетов, которые отправляет САМ клиент. Обратное направление
+// ограничено интерфейсом сервера, который рассчитан на худшую последнюю
+// милю среди всех клиентов: поднять его для одного нельзя, у awg0 одно
+// значение на всех (amnezia-vpn-server-h2pg).
+func (a *app) cmdClientSetMTU(args []string) int {
+	parsed, err := parseArgs(args, nil)
+	if err != nil {
+		return a.usageError(opClientSetMTU, err.Error())
+	}
+	if len(parsed.positional) != 2 {
+		return a.usageError(opClientSetMTU, "want <id> <bytes|default>")
+	}
+	id, err := parseClientID(parsed.positional[0])
+	if err != nil {
+		return a.usageError(opClientSetMTU, err.Error())
+	}
+	var mtu int64
+	if parsed.positional[1] != "default" {
+		mtu, err = strconv.ParseInt(parsed.positional[1], 10, 64)
+		if err != nil {
+			return a.usageError(opClientSetMTU, "MTU must be a number or \"default\"")
+		}
+		if mtu < db.ClientMTUFloor || mtu > db.ClientMTUCeiling {
+			return a.usageError(opClientSetMTU, fmt.Sprintf(
+				"MTU %d is outside [%d, %d]: below the floor a tunnel cannot carry IPv6, above the ceiling a full packet does not fit on a 1500-byte uplink",
+				mtu, db.ClientMTUFloor, db.ClientMTUCeiling))
+		}
+	}
+	handle, err := a.openDB()
+	if err != nil {
+		return a.fatal(opClientSetMTU, err)
+	}
+	defer handle.Close()
+	if err := db.UpdateClientMTU(handle, id, mtu); err != nil {
+		return a.fatal(opClientSetMTU, err)
+	}
+	if err := a.regenerate(handle); err != nil {
+		return a.fatal(opClientSetMTU, fmt.Errorf("generate config: %w", err))
+	}
+	if mtu == 0 {
+		return a.ok(opClientSetMTU, "client "+strconv.FormatInt(id, 10)+" follows the server MTU again")
+	}
+	return a.ok(opClientSetMTU, fmt.Sprintf("client %d MTU %d (applies to the config issued from now on)", id, mtu))
 }
 
 // cmdClientSetExpiry sets (RFC3339, canonicalized) or clears ("none")

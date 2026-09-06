@@ -35,7 +35,7 @@ type ClientInfoDialogProps = {
   pending?: boolean;
   onOpenChange: (open: boolean) => void;
   onSave?: (
-    payload: { name: string; description: string },
+    payload: { name: string; description: string; mtu?: number },
   ) => boolean | void | Promise<boolean | void>;
   onQr?: () => void;
   onDownload?: () => void;
@@ -101,6 +101,9 @@ export function ClientInfoDialog({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [viewName, setViewName] = useState("");
   const [viewDescription, setViewDescription] = useState("");
+  const [viewMTU, setViewMTU] = useState(0);
+  const [editingMTU, setEditingMTU] = useState(false);
+  const [mtuDraft, setMTUDraft] = useState("");
   const [nameDraft, setNameDraft] = useState("");
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [editingName, setEditingName] = useState(false);
@@ -108,6 +111,7 @@ export function ClientInfoDialog({
 
   useEffect(() => {
     setViewName(client?.name ?? "");
+    setViewMTU(client?.mtu ?? 0);
     setViewDescription(client?.description ?? "");
     setNameDraft(client?.name ?? "");
     setDescriptionDraft(client?.description ?? "");
@@ -157,6 +161,37 @@ export function ClientInfoDialog({
     if (saved) {
       setViewName(payload.name);
       setEditingName(false);
+    }
+  }
+
+  function startMTUEdit() {
+    setMTUDraft(viewMTU === 0 ? "" : String(viewMTU));
+    setEditingMTU(true);
+  }
+
+  function cancelMTUEdit() {
+    setMTUDraft(viewMTU === 0 ? "" : String(viewMTU));
+    setEditingMTU(false);
+  }
+
+  async function saveMTU() {
+    if (!client) return;
+    // Пустое поле — «как у сервера»: снять своё значение и оставить его
+    // нельзя одним и тем же действием, поэтому пустота и есть снятие.
+    const next = mtuDraft.trim() === "" ? 0 : Number(mtuDraft);
+    if (!Number.isInteger(next) || next < 0) return;
+    if (next === viewMTU) {
+      setEditingMTU(false);
+      return;
+    }
+    const saved = await onSave?.({
+      name: client.name,
+      description: committedDescription,
+      mtu: next,
+    });
+    if (saved) {
+      setViewMTU(next);
+      setEditingMTU(false);
     }
   }
 
@@ -225,6 +260,25 @@ export function ClientInfoDialog({
                   >
                     <dd>
                       <UserText>{viewDescription}</UserText>
+                    </dd>
+                  </ReadOnlyProperty>
+                  <ReadOnlyProperty
+                    label="MTU"
+                    actions={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        aria-label="Изменить MTU"
+                        disabled={pending}
+                        onClick={startMTUEdit}
+                      >
+                        <Pencil data-icon="inline-start" aria-hidden />
+                        Изменить
+                      </Button>
+                    }
+                  >
+                    <dd>
+                      {viewMTU === 0 ? "как у сервера" : viewMTU}
                     </dd>
                   </ReadOnlyProperty>
                   <PropertyRow
@@ -353,6 +407,53 @@ export function ClientInfoDialog({
                 type="submit"
                 className={saveButtonClass}
                 aria-label="Сохранить имя"
+                disabled={pending}
+              >
+                Сохранить
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={editingMTU}
+        onOpenChange={(open) => {
+          if (!open) cancelMTUEdit();
+        }}
+      >
+        <DialogContent className="gap-6 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>MTU</DialogTitle>
+          </DialogHeader>
+          <form
+            className="grid gap-6"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveMTU();
+            }}
+          >
+            <div className="grid gap-2">
+              <Label htmlFor="info-mtu">Размер пакета, байт</Label>
+              <Input
+                id="info-mtu"
+                inputMode="numeric"
+                placeholder="как у сервера"
+                value={mtuDraft}
+                onChange={(e) => setMTUDraft(e.target.value)}
+                disabled={pending}
+              />
+              <p className="text-sm text-muted-foreground">
+                Пусто — как у сервера. Задавайте своё значение, если у этого
+                клиента канал заведомо лучше: например роутер на проводе.
+                Новое значение попадёт в настройки, которые вы выдадите после
+                изменения; те, что уже стоят на устройстве, останутся прежними
+              </p>
+            </div>
+            <DialogFooter>
+              <Button
+                type="submit"
+                className={saveButtonClass}
+                aria-label="Сохранить MTU"
                 disabled={pending}
               >
                 Сохранить

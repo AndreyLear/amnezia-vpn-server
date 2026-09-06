@@ -146,6 +146,8 @@ export type Client = {
   last_handshake_utc: string | null;
   rx_bytes: number;
   tx_bytes: number;
+  /** Собственный MTU клиента; 0 — как у сервера (amnezia-vpn-server-h2pg). */
+  mtu: number;
 };
 
 export type MutationResponse = {

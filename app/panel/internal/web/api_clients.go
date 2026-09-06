@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"errors"
 	"net/http"
 	"time"
@@ -26,6 +27,11 @@ type clientJSON struct {
 	// (amnezia-vpn-server-9l30).
 	RxBytes uint64 `json:"rx_bytes"`
 	TxBytes uint64 `json:"tx_bytes"`
+	// MTU is this client's own tunnel MTU; 0 means it follows the server's
+	// (amnezia-vpn-server-h2pg). The panel shows both, because "1340
+	// because nobody chose" and "1340 because somebody did" are different
+	// answers to the same question.
+	MTU int64 `json:"mtu"`
 }
 
 type clientCreateReq struct {
@@ -37,6 +43,9 @@ type clientPatchReq struct {
 	Name        *string `json:"name"`
 	Description *string `json:"description"`
 	Enabled     *bool   `json:"enabled"`
+	// MTU: 0 returns the client to the server value; out of range is
+	// refused rather than clamped.
+	MTU *int64 `json:"mtu"`
 }
 
 func clientToJSON(c db.ClientRecord, st *status.Status, now time.Time) clientJSON {
@@ -46,6 +55,7 @@ func clientToJSON(c db.ClientRecord, st *status.Status, now time.Time) clientJSO
 		Description: c.Description,
 		Address:     c.Address,
 		Enabled:     c.Enabled,
+		MTU:         c.MTU,
 	}
 	if st == nil {
 		return out
@@ -209,6 +219,21 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			internalFailure(w, r, s, "api clients patch description", err)
+			return
+		}
+	}
+	if req.MTU != nil {
+		if err := db.UpdateClientMTU(s.db(), id, *req.MTU); err != nil {
+			if errors.Is(err, db.ErrClientNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": flashNotFound})
+				return
+			}
+			// Значение вне границ — ошибка человека, а не сбой: он вводил
+			// его руками, и ему надо сказать, в каких пределах можно.
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"ok":      false,
+				"message": fmt.Sprintf("MTU должен быть от %d до %d", db.ClientMTUFloor, db.ClientMTUCeiling),
+			})
 			return
 		}
 	}

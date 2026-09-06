@@ -48,7 +48,7 @@ func mapNameConstraint(err error) error {
 // which cannot be derived (amnezia-vpn-server-xy6j). Archives written
 // by older releases are still accepted by restore and migrated here at
 // apply time (T-110 backward compatibility).
-const SchemaVersion = "7"
+const SchemaVersion = "8"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS server (
@@ -73,7 +73,8 @@ var schemaStatements = []string{
 		enabled INTEGER NOT NULL DEFAULT 1,
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
-		expires_at TEXT
+		expires_at TEXT,
+		mtu INTEGER NOT NULL DEFAULT 0
 	);`,
 	`CREATE TABLE IF NOT EXISTS settings (
 		key TEXT PRIMARY KEY,
@@ -153,6 +154,9 @@ func Migrate(handle *sql.DB) error {
 	if err := migrateClientDescription(handle); err != nil {
 		return err
 	}
+	if err := migrateClientMTU(handle); err != nil {
+		return err
+	}
 	if err := migrateServerAddress6(handle); err != nil {
 		return err
 	}
@@ -221,6 +225,44 @@ func migrateClientDescription(handle *sql.DB) error {
 	if !found {
 		if _, err := handle.Exec(`ALTER TABLE clients ADD COLUMN description TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("db: add clients description: %w", err)
+		}
+	}
+	return nil
+}
+
+// migrateClientMTU (schema v8) adds clients.mtu, this client's own tunnel
+// MTU. Zero is the normal state and means "whatever the server says": the
+// server-wide value is sized for the worst last mile anyone might have —
+// a mobile carrier measured 1411 bytes on the wire where the server's own
+// path carried 1476 — and a router on fibre pays for that caution with
+// about 7% of every packet. Per-client MTU is how that is paid back
+// without putting the phone in the metro at risk
+// (amnezia-vpn-server-h2pg).
+func migrateClientMTU(handle *sql.DB) error {
+	rows, err := handle.Query(`PRAGMA table_info(clients)`)
+	if err != nil {
+		return fmt.Errorf("db: inspect clients schema: %w", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("db: inspect clients schema: %w", err)
+		}
+		if name == "mtu" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("db: inspect clients schema: %w", err)
+	}
+	if !found {
+		if _, err := handle.Exec(`ALTER TABLE clients ADD COLUMN mtu INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("db: add clients mtu: %w", err)
 		}
 	}
 	return nil
@@ -676,6 +718,9 @@ type ClientRecord struct {
 	UpdatedAt    string
 	ExpiresAt    string // empty when clients.expires_at is NULL
 	Description  string
+	// MTU is this client's own tunnel MTU; 0 means "whatever the server
+	// says" and is the normal state (amnezia-vpn-server-h2pg).
+	MTU int64
 }
 
 // Expired reports whether the record is past expires_at (see ClientRow.
@@ -916,7 +961,7 @@ func ClientAddress6(serverAddress, serverAddress6, clientAddress string) (string
 // ErrClientNotFound.
 func ClientByID(handle *sql.DB, id int64) (*ClientRecord, error) {
 	row := handle.QueryRow(
-		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu
 		   FROM clients WHERE id = ?`, id,
 	)
 	c, err := scanClient(row)
@@ -932,7 +977,7 @@ func ClientByID(handle *sql.DB, id int64) (*ClientRecord, error) {
 // ClientsAll loads all client records, ordered by id.
 func ClientsAll(handle *sql.DB) ([]ClientRecord, error) {
 	rows, err := handle.Query(
-		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu
 		   FROM clients ORDER BY id`,
 	)
 	if err != nil {
@@ -966,13 +1011,49 @@ func scanClient(row rowScanner) (*ClientRecord, error) {
 		expiresAt sql.NullString
 	)
 	if err := row.Scan(&c.ID, &c.Name, &c.PrivateKey, &c.PublicKey, &psk,
-		&c.Address, &enabled, &c.CreatedAt, &c.UpdatedAt, &expiresAt, &c.Description); err != nil {
+		&c.Address, &enabled, &c.CreatedAt, &c.UpdatedAt, &expiresAt, &c.Description, &c.MTU); err != nil {
 		return nil, err
 	}
 	c.PresharedKey = psk.String
 	c.Enabled = enabled == 1
 	c.ExpiresAt = expiresAt.String
 	return &c, nil
+}
+
+// MTU bounds for a client override (amnezia-vpn-server-h2pg).
+//
+// The floor is the IPv6 minimum link MTU: below it a tunnel cannot carry
+// IPv6 at all. The ceiling is what a 1500-byte uplink leaves after the
+// encapsulation (60 bytes) — anything above it could not fit on the wire
+// even in the best case, so accepting it would only hand out configs that
+// silently drop full-size packets.
+const (
+	ClientMTUFloor   = 1280
+	ClientMTUCeiling = 1440
+)
+
+// UpdateClientMTU sets this client's own tunnel MTU; 0 clears it and
+// returns the client to the server-wide value. Out-of-range values are
+// refused rather than clamped: a value the operator typed by hand is a
+// decision, and silently changing it would hide the mistake in a place
+// nobody looks again.
+func UpdateClientMTU(handle *sql.DB, id int64, mtu int64) error {
+	if mtu != 0 && (mtu < ClientMTUFloor || mtu > ClientMTUCeiling) {
+		return fmt.Errorf("db: client MTU %d is outside [%d, %d]", mtu, ClientMTUFloor, ClientMTUCeiling)
+	}
+	res, err := handle.Exec(`UPDATE clients SET mtu = ?, updated_at = ? WHERE id = ?`,
+		mtu, stamp(), id)
+	if err != nil {
+		return fmt.Errorf("db: update client mtu: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("db: update client mtu: %w", err)
+	}
+	if n == 0 {
+		return ErrClientNotFound
+	}
+	return nil
 }
 
 // UpdateClientName renames a client. ErrClientNotFound when the id is

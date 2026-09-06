@@ -196,6 +196,16 @@ func GenerateClient(handle *sql.DB, clientID int64) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("client config: %w", err)
 	}
+	// Собственный MTU клиента побеждает серверный. Серверный рассчитан на
+	// худшую последнюю милю, какая может встретиться кому угодно из
+	// клиентов: мобильный оператор пронёс 1411 байт там, где путь сервера
+	// держал 1476. Роутер на оптике платит за эту осторожность семью
+	// процентами каждого пакета, и вернуть их можно только адресно
+	// (amnezia-vpn-server-h2pg). Ноль означает «как у сервера» и является
+	// нормальным состоянием.
+	if client.MTU != 0 {
+		mtu = uint16(client.MTU)
+	}
 	address6, err := db.ClientAddress6(server.Address, server.Address6, client.Address)
 	if err != nil {
 		return nil, fmt.Errorf("client config: %w", err)
