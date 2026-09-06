@@ -245,6 +245,15 @@ curl -6 https://ifconfig.co
 The answer should be your server's address. The provider's address means part
 of the traffic goes around the tunnel.
 
+**The panel says it about DNS itself.** When a client moves data through the
+tunnel but asks somebody else for names, an amber mark appears in its row,
+labelled "names are resolved around the tunnel". Nothing has to be configured
+for that: the server sees who talks to it, and silence is as visible as a
+query.
+
+No mark means either all is well or there is nothing to say yet: the client is
+offline or has only just connected.
+
 **MTU.** A router on a wire usually carries larger packets than a phone on a
 mobile network, and the server default is sized for the phone. Raising it for
 one client is done in the panel: client card → MTU → Change. That speeds up

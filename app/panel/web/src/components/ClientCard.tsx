@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, HandshakeIcon, MoreVerticalIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  ArrowUpDownIcon,
+  ArrowUpIcon,
+  HandshakeIcon,
+  MoreVerticalIcon,
+  ShieldAlertIcon,
+} from "lucide-react";
 
 import {
   AlertDialog,
@@ -197,6 +204,26 @@ export function ClientCard({
             <ClientName client={client} isSmUp={isSmUp} onInfo={onInfo} />
             {!client.enabled ? (
               <span className="shrink-0 text-muted-foreground">Пауза</span>
+            ) : null}
+            {/* Клиент шлёт трафик через туннель, а имена спрашивает у
+                кого-то другого (amnezia-vpn-server-g0vd). Так выглядит
+                подключение с роутера: устройства дома берут DNS у роутера,
+                и запрос до нас не доходит. Отметка появляется только когда
+                есть о чём говорить — см. dns_bypass в api.ts. */}
+            {client.dns_bypass ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="shrink-0 text-amber-500"
+                    aria-label="Имена разрешаются мимо туннеля"
+                  >
+                    <ShieldAlertIcon className="size-4" aria-hidden />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Имена разрешаются мимо туннеля: запросов к нашему серверу нет
+                </TooltipContent>
+              </Tooltip>
             ) : null}
           </div>
           <div className="flex flex-nowrap shrink-0 items-center gap-3 text-muted-foreground sm:contents">

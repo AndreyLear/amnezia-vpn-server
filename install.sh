@@ -1676,6 +1676,20 @@ PREROUTING
 # rules.
 
 table ip amnezia {
+    # Кто из клиентов спрашивает имена у нас (amnezia-vpn-server-g0vd).
+    #
+    # Подключение с роутера выглядит так: устройства дома берут DNS у
+    # роутера, запрос до туннеля не доходит, и подмена ответа провайдером
+    # остаётся невидимой. Со стороны сервера это не чинится — запрос
+    # физически не проходит через нас, — но видно, что его нет.
+    #
+    # Состояние живёт в ядре и стареет само: срок задан самим множеством,
+    # поэтому ничего не надо чистить и нечему протухнуть незаметно.
+    set dns_seen {
+        type ipv4_addr
+        timeout 30m
+    }
+
     chain forward {
         # priority -100: evaluated before foreign filter chains (ufw/
         # docker/iptables all register at priority 0), so the VPN-subnet
@@ -1703,8 +1717,11 @@ table ip amnezia {
         # is accept, and an accept here does not stop a foreign chain at
         # the same hook from dropping the packet. They state the intent
         # and would carry it if this chain ever gained a drop policy.
-        iifname "awg0" udp dport 53 accept
-        iifname "awg0" tcp dport 53 accept
+        # update, а не add: каждый запрос продлевает срок, поэтому
+        # множество отвечает на вопрос «спрашивал недавно», а не
+        # «спрашивал когда-нибудь».
+        iifname "awg0" udp dport 53 update @dns_seen { ip saddr } accept
+        iifname "awg0" tcp dport 53 update @dns_seen { ip saddr } accept
 ${input_rules}
     }
 ${prerouting}
@@ -1719,6 +1736,14 @@ EOF
     cat <<EOF
 
 table ip6 amnezia {
+    # Та же запись, что и в таблице ip: клиент может спрашивать резолвер по
+    # его адресу IPv6 внутри туннеля, и такой запрос — тоже «спрашивал у
+    # нас» (amnezia-vpn-server-g0vd).
+    set dns_seen {
+        type ipv6_addr
+        timeout 30m
+    }
+
     chain forward {
         type filter hook forward priority -100; policy accept;
         # The IPv4 table's clamp cannot reach here: that table is of the
@@ -1738,8 +1763,8 @@ table ip6 amnezia {
         # bug into a permanent condition. Neighbour discovery rides the
         # same protocol — without it IPv6 does not work at all.
         icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request, echo-reply, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
-        iifname "awg0" udp dport 53 accept
-        iifname "awg0" tcp dport 53 accept
+        iifname "awg0" udp dport 53 update @dns_seen { ip6 saddr } accept
+        iifname "awg0" tcp dport 53 update @dns_seen { ip6 saddr } accept
     }
 
     chain postrouting {

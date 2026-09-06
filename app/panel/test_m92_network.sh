@@ -471,6 +471,28 @@ stderr() { cat "$TMP_TEST/err"; }
 assert_in() { # assert_in needle file label
     grep -q "$1" "$2" && pass "$3" || fail "$3"
 }
+# assert_dns_rule ПРОТОКОЛ ЯРЛЫК — правило про 53-й порт: приходит только из
+# туннеля, заканчивается accept и ведёт учёт обратившихся. Каждая часть здесь
+# что-то значит: без iifname сервер стал бы открытым резолвером, без accept
+# резолвер был бы недоступен, без update панель не смогла бы показать, кто
+# спрашивает имена мимо туннеля.
+assert_dns_rule() { # assert_dns_rule <udp|tcp> <label>
+    local proto="$1" label="$2" line
+    line="$(grep -E "^[[:space:]]*iifname \"awg0\" ${proto} dport 53 " "$NFT_SYS_FILE" | head -1)"
+    if [ -z "$line" ]; then
+        fail "$label (нет правила про ${proto} dport 53 из awg0)"
+        return 0
+    fi
+    case "$line" in
+        *"update @dns_seen"*) ;;
+        *) fail "$label (правило не ведёт учёт: $line)"; return 0 ;;
+    esac
+    case "$line" in
+        *accept) pass "$label" ;;
+        *) fail "$label (правило не заканчивается accept: $line)" ;;
+    esac
+}
+
 assert_not_in() {
     grep -q "$1" "$2" && fail "$3" || pass "$3"
 }
@@ -553,8 +575,13 @@ test_default_rules() {
     assert_in "udp dport 4500 accept" "$NFT_SYS_FILE" "input: default UDP 4500 accepted"
     # T-rnub: the in-tunnel resolver is reachable from the tunnel and
     # from nowhere else — iifname "awg0" is what keeps it off the WAN.
-    assert_in 'iifname "awg0" udp dport 53 accept' "$NFT_SYS_FILE" "input: tunnel DNS accepted over UDP"
-    assert_in 'iifname "awg0" tcp dport 53 accept' "$NFT_SYS_FILE" "input: tunnel DNS accepted over TCP"
+    #
+    # Проверяем намерение, а не текст правила: внутри той же строки живёт ещё
+    # и учёт того, кто спрашивал (amnezia-vpn-server-g0vd), и приколоченная к
+    # точной подстроке проверка ломалась от добавления, ничего не потеряв по
+    # смыслу.
+    assert_dns_rule udp "input: tunnel DNS accepted over UDP"
+    assert_dns_rule tcp "input: tunnel DNS accepted over TCP"
     assert_not_in '^ *udp dport 53 accept' "$NFT_SYS_FILE" "input: DNS never accepted off the tunnel"
     assert_in 'ip saddr 10.8.0.0/24 oifname != "awg0" masquerade' "$NFT_SYS_FILE" "postrouting: NAT for subnet, never into the tunnel"
 }

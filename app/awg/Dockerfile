@@ -80,7 +80,10 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/awgstatus ./cmd/awgstatus
 # ---- runtime stage: only binaries + tools required to run ----
 FROM alpine:${ALPINE_VERSION}
 
-RUN apk add --no-cache bash iproute2 iptables openresolv
+# nftables: контейнер снимает множество dns_seen — кто из клиентов
+# спрашивает имена у нашего резолвера (amnezia-vpn-server-g0vd). Права на
+# это у него уже есть (NET_ADMIN, сеть хоста), а у панели нет и не будет.
+RUN apk add --no-cache bash iproute2 iptables nftables openresolv
 
 COPY --from=amneziawg-go-build /out/amneziawg-go /usr/bin/amneziawg-go
 COPY --from=amneziawg-tools-build /out/awg /out/awg-quick /usr/bin/

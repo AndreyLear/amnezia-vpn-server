@@ -1,9 +1,11 @@
 package web
 
 import (
-	"fmt"
 	"errors"
+	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
@@ -13,10 +15,15 @@ import (
 )
 
 type clientJSON struct {
-	ID               int64      `json:"id"`
-	Name             string     `json:"name"`
-	Description      string     `json:"description"`
-	Address          string     `json:"address"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Address     string `json:"address"`
+	// Address6 — адрес клиента внутри префикса IPv6 туннеля; пусто, когда
+	// туннель несёт только IPv4. Выводится из префикса сервера, а не
+	// хранится: конфиг клиента уже несёт оба адреса, и панель должна
+	// показывать то, что роздано (amnezia-vpn-server-lhlv).
+	Address6         string     `json:"address6"`
 	Enabled          bool       `json:"enabled"`
 	Online           bool       `json:"online"`
 	LastHandshakeUTC *time.Time `json:"last_handshake_utc"`
@@ -27,6 +34,11 @@ type clientJSON struct {
 	// (amnezia-vpn-server-9l30).
 	RxBytes uint64 `json:"rx_bytes"`
 	TxBytes uint64 `json:"tx_bytes"`
+	// DNSBypass says this client sends traffic through the tunnel and asks
+	// somebody else for names (amnezia-vpn-server-g0vd). False also means
+	// "nothing to say": no snapshot, client offline, or nothing
+	// transferred yet.
+	DNSBypass bool `json:"dns_bypass"`
 	// MTU is this client's own tunnel MTU; 0 means it follows the server's
 	// (amnezia-vpn-server-h2pg). The panel shows both, because "1340
 	// because nobody chose" and "1340 because somebody did" are different
@@ -48,7 +60,15 @@ type clientPatchReq struct {
 	MTU *int64 `json:"mtu"`
 }
 
-func clientToJSON(c db.ClientRecord, st *status.Status, now time.Time) clientJSON {
+// dnsBypassMinRx: сколько клиент должен был прислать, прежде чем молчание
+// его резолвера что-то значит. Только что подключившийся ещё ничего не
+// спрашивал — это не обход, это первая секунда.
+const dnsBypassMinRx = 1 << 20 // 1 МиБ
+
+// clientToJSON собирает представление клиента для панели. dns и addr6 нужны
+// только для отметки об обходе резолвера: dns == nil означает «сказать
+// нечего», а не «все обходят».
+func clientToJSON(c db.ClientRecord, st *status.Status, dns *status.DNSSeen, addr6 string, now time.Time) clientJSON {
 	out := clientJSON{
 		ID:          c.ID,
 		Name:        c.Name,
@@ -72,7 +92,22 @@ func clientToJSON(c db.ClientRecord, st *status.Status, now time.Time) clientJSO
 		}
 		break
 	}
+	// Отметка ставится только когда есть о чём говорить: снимок снят, клиент
+	// на связи и через туннель уже что-то прошло. Молчание резолвера у
+	// клиента, который ничего не передавал, ничего не значит.
+	if dns != nil && out.Online && out.RxBytes >= dnsBypassMinRx {
+		out.DNSBypass = !dns.Seen(hostAddress(c.Address), hostAddress(addr6))
+	}
 	return out
+}
+
+// hostAddress отбрасывает длину префикса: в базе адреса лежат как 10.8.0.4/32,
+// а ядро в множестве держит просто адрес.
+func hostAddress(cidr string) string {
+	if i := strings.IndexByte(cidr, '/'); i >= 0 {
+		return cidr[:i]
+	}
+	return cidr
 }
 
 func (s *Server) loadStatus() *status.Status {
@@ -83,8 +118,32 @@ func (s *Server) loadStatus() *status.Status {
 	return st
 }
 
+// loadDNSSeen возвращает снимок или nil, если сказать нечего.
+func (s *Server) loadDNSSeen() *status.DNSSeen {
+	dir := filepath.Dir(s.cfg.StatusPath)
+	seen, err := status.ReadDNSSeen(filepath.Join(dir, "dns-seen.json"))
+	if err != nil {
+		return nil
+	}
+	return seen
+}
+
+// clientAddress6 выводит адрес IPv6 клиента из строки сервера; пусто, когда
+// туннель несёт только IPv4.
+func (s *Server) clientAddress6(c db.ClientRecord) string {
+	server, err := db.ServerRow(s.db())
+	if err != nil || server == nil {
+		return ""
+	}
+	addr6, err := db.ClientAddress6(server.Address, server.Address6, c.Address)
+	if err != nil {
+		return ""
+	}
+	return addr6
+}
+
 func (s *Server) writeClientJSON(w http.ResponseWriter, code int, c db.ClientRecord) {
-	writeJSON(w, code, clientToJSON(c, s.loadStatus(), time.Now()))
+	writeJSON(w, code, clientToJSON(c, s.loadStatus(), s.loadDNSSeen(), s.clientAddress6(c), time.Now()))
 }
 
 func (s *Server) apiClientsList(w http.ResponseWriter, r *http.Request) {
@@ -94,10 +153,18 @@ func (s *Server) apiClientsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := s.loadStatus()
+	dns := s.loadDNSSeen()
+	// Строку сервера читаем один раз на весь список, а не на каждого
+	// клиента: адрес IPv6 выводится из неё арифметикой.
+	var serverAddress, serverAddress6 string
+	if server, err := db.ServerRow(s.db()); err == nil && server != nil {
+		serverAddress, serverAddress6 = server.Address, server.Address6
+	}
 	now := time.Now()
 	out := make([]clientJSON, 0, len(clients))
 	for _, c := range clients {
-		out = append(out, clientToJSON(c, st, now))
+		addr6, _ := db.ClientAddress6(serverAddress, serverAddress6, c.Address)
+		out = append(out, clientToJSON(c, st, dns, addr6, now))
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -148,6 +148,13 @@ export type Client = {
   tx_bytes: number;
   /** Собственный MTU клиента; 0 — как у сервера (amnezia-vpn-server-h2pg). */
   mtu: number;
+  /**
+   * Клиент шлёт трафик через туннель, а имена спрашивает у кого-то другого
+   * (amnezia-vpn-server-g0vd). false означает и «спрашивает у нас», и
+   * «сказать нечего»: клиент не на связи, ничего не передал или снимок не
+   * снят.
+   */
+  dns_bypass: boolean;
 };
 
 export type MutationResponse = {

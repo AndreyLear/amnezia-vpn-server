@@ -37,6 +37,44 @@ generate_status() {
     fi
 }
 
+# generate_dns_seen: снимок множества dns_seen рядом со status.json.
+#
+# Панель работает без прав на сеть и прочитать nftables не может. Права есть
+# здесь: контейнер живёт в сети хоста и с NET_ADMIN. Снимок обновляется тем же
+# тиком, что и status.json, и ложится в тот же каталог, который панель уже
+# читает только на чтение (amnezia-vpn-server-g0vd).
+#
+# Пустой файл — законное состояние: множества может не быть вовсе, если
+# правила ещё не применены. Отсутствие записи о клиенте означает «не
+# спрашивал», а отсутствие файла — «нечего сказать», и панель обязана
+# различать эти два случая.
+DNS_SEEN_FILE="${DNS_SEEN_FILE:-$(dirname "${STATUS_FILE}")/dns-seen.json}"
+
+generate_dns_seen() {
+    command -v nft >/dev/null 2>&1 || return 0
+    local addrs tmp
+    addrs="$(
+        {
+            nft -j list set ip amnezia dns_seen 2>/dev/null || true
+            nft -j list set ip6 amnezia dns_seen 2>/dev/null || true
+        } | tr ',' '\n' \
+          | sed -n 's/.*"val"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F:.]*\)".*/\1/p' \
+          | sort -u
+    )"
+    tmp="${DNS_SEEN_FILE}.tmp"
+    {
+        printf '{"schema":"v1","generated_at_utc":"%s","addresses":[' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        local first=1 a
+        for a in ${addrs}; do
+            [ "${first}" = "1" ] || printf ','
+            printf '"%s"' "${a}"
+            first=0
+        done
+        printf ']}\n'
+    } > "${tmp}" && mv -f "${tmp}" "${DNS_SEEN_FILE}"
+}
+
 wait_for_config() {
     local deadline=$((SECONDS + CONFIG_TIMEOUT))
     while [ ! -f "${CONFIG_SRC}" ]; do
@@ -209,6 +247,7 @@ while true; do
     # reload does not trigger a separate generation; the next tick
     # rewrites status from the already-applied runtime.
     generate_status
+    generate_dns_seen
 
     if [ "$(config_mtime)" != "${LAST_MTIME}" ]; then
         reload_config
