@@ -3,7 +3,9 @@ package awgconf
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
@@ -90,4 +92,52 @@ func MTUFromSettings(handle *sql.DB) (uint16, error) {
 		return 0, fmt.Errorf("invalid mtu setting %q: %w", raw, err)
 	}
 	return mtu, nil
+}
+
+// deviceMTUEnv — потолок, который тянет путь самого сервера. Его измеряет
+// установщик и кладёт в .env развёртывания; панель читает оттуда, потому
+// что это свойство машины, а не настройка продукта.
+const deviceMTUEnv = "TUNNEL_MTU_MAX"
+
+// DeviceMTU возвращает MTU интерфейса awg0 (amnezia-vpn-server-wc2l).
+//
+// Интерфейс один на всех, поэтому раньше он и был осторожным: значение
+// рассчитывали на худшую последнюю милю, какая может встретиться кому
+// угодно. Из-за этого роутер на оптике получал половину выигрыша — быструю
+// отдачу и прежнее скачивание, потому что обратное направление ограничено
+// интерфейсом.
+//
+// Теперь интерфейс поднимается до того, что тянет сервер, а осторожное
+// значение раздаётся маршрутами. Меньше clientMTU потолок не бывает: это
+// сделало бы хуже всем сразу. Развёртывание, где потолок не измеряли,
+// получает потолок, равный осторожному значению, — то есть ровно то, что
+// было до этой возможности.
+func DeviceMTU(clientMTU uint16) uint16 {
+	raw := strings.TrimSpace(os.Getenv(deviceMTUEnv))
+	if raw == "" {
+		return clientMTU
+	}
+	v, err := strconv.ParseUint(raw, 10, 16)
+	if err != nil {
+		return clientMTU
+	}
+	device := uint16(v)
+	if ValidateMTU(device) != nil || device < clientMTU {
+		return clientMTU
+	}
+	return device
+}
+
+// RouteMTU — размер, который получит этот клиент: свой, если задан, иначе
+// общий. Больше потолка устройства не бывает никогда: ядро откажется
+// принять такой маршрут, и клиент остался бы вообще без маршрута.
+func RouteMTU(clientOwn, clientDefault, device uint16) uint16 {
+	mtu := clientDefault
+	if clientOwn != 0 {
+		mtu = clientOwn
+	}
+	if device != 0 && mtu > device {
+		mtu = device
+	}
+	return mtu
 }
