@@ -216,6 +216,14 @@ Options:
                 service that stopped doing so. restart: unless-stopped
                 only catches a dead process; a wedged one looks healthy to
                 Docker and stays broken until someone complains.
+  --no-update-check
+                do not ask GitHub once a day whether a newer release is
+                out. By default the server checks and the panel shows the
+                answer; nothing is downloaded or installed on its own. The
+                reason to decline is not traffic: any such check tells
+                GitHub the address of a server whose whole purpose is to
+                be hard to see. A rerun with this flag removes a timer an
+                earlier run installed.
   --ipv6        carry IPv6 inside the tunnel (NAT66 to the uplink). A
                 fresh install turns this on by itself when the host has a
                 working IPv6 uplink; an existing deployment never changes
@@ -341,6 +349,11 @@ FAIL2BAN_ENABLED=1
 # default for the same reason as fail2ban: the owner should not have to
 # know that a container can be up and useless at the same time.
 WATCHDOG_ENABLED=1
+# Проверка обновлений (amnezia-vpn-server-zklt). Включена по умолчанию:
+# сервер, который не знает о вышедшем выпуске, не обновится никогда, а
+# обновления здесь — это в том числе починенный обход блокировок. Наружу
+# ходит хост, панель по-прежнему никуда не ходит.
+UPDATE_CHECK_ENABLED=1
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -397,6 +410,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --no-watchdog)
             WATCHDOG_ENABLED=0
+            shift
+            ;;
+        --no-update-check)
+            UPDATE_CHECK_ENABLED=0
             shift
             ;;
         --ipv6)
@@ -908,14 +925,15 @@ copy_tree "$SCRIPT_DIR/compose.yaml" "$ROOT_DIR/"
 copy_tree "$SCRIPT_DIR/versions.lock" "$ROOT_DIR/"
 copy_tree "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR/"
 copy_tree "$SCRIPT_DIR/watchdog.sh" "$ROOT_DIR/"
+copy_tree "$SCRIPT_DIR/update-check.sh" "$ROOT_DIR/"
 # Build context is the repository root (compose.yaml build.context = "."):
 # the app/ tree (panel Dockerfile + Go module incl. embedded templates,
 # awg Dockerfile + entrypoint scripts, dns Dockerfile + entrypoint) must
 # be present under the root.
 copy_tree "$SCRIPT_DIR/app" "$ROOT_DIR/"
 chmod 0644 "$ROOT_DIR/compose.yaml" "$ROOT_DIR/versions.lock"
-chmod 0755 "$ROOT_DIR/docker-prune.sh" "$ROOT_DIR/watchdog.sh"
-log "deployment files installed (compose.yaml, versions.lock, docker-prune.sh, watchdog.sh, app/)"
+chmod 0755 "$ROOT_DIR/docker-prune.sh" "$ROOT_DIR/watchdog.sh" "$ROOT_DIR/update-check.sh"
+log "deployment files installed (compose.yaml, versions.lock, docker-prune.sh, watchdog.sh, update-check.sh, app/)"
 
 # --- 10. journald cap + weekly docker-prune timer ---------------------
 
@@ -993,6 +1011,55 @@ else
     fi
     rm -f "$SYSTEMD_DIR/amnezia-vpn-watchdog.timer" "$SYSTEMD_DIR/amnezia-vpn-watchdog.service"
     log "watchdog skipped (--no-watchdog): units removed if they were there"
+fi
+
+# Проверка обновлений (amnezia-vpn-server-zklt). Как и у сторожа, юниты
+# снимаются при повторном запуске с флагом: иначе «выключено» означало бы
+# «выключено только для новых установок», и отказ от похода наружу зависел
+# бы от того, ставился сервер до этой возможности или после.
+if [ "$UPDATE_CHECK_ENABLED" = "1" ]; then
+    cat > "$SYSTEMD_DIR/amnezia-vpn-update-check.service" <<EOF
+# amnezia-vpn managed: ask GitHub whether a newer release is out.
+[Unit]
+Description=Amnezia VPN update check
+
+[Service]
+Type=oneshot
+# Развёртывание может лежать не в /opt/amnezia-vpn (--root), и скрипт узнаёт
+# об этом только отсюда.
+Environment=AMNEZIA_UPDATE_ROOT=${ROOT_DIR}
+ExecStart=${ROOT_DIR}/update-check.sh
+EOF
+    chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-update-check.service"
+    cat > "$SYSTEMD_DIR/amnezia-vpn-update-check.timer" <<'EOF'
+# amnezia-vpn managed: daily update check.
+[Unit]
+Description=Amnezia VPN update check, once a day
+
+[Timer]
+OnCalendar=daily
+# Servers installed from the same instructions would otherwise all knock on
+# GitHub at midnight; the answer is the same at four in the morning.
+RandomizedDelaySec=4h
+# Persistent=true: a server that was off overnight should still learn about
+# a release, and one missed check is worth catching up on.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-update-check.timer"
+    log "update-check units written (ExecStart=$ROOT_DIR/update-check.sh, once a day)"
+else
+    if [ -f "$SYSTEMD_DIR/amnezia-vpn-update-check.timer" ]; then
+        cmd systemctl disable --now amnezia-vpn-update-check.timer >/dev/null 2>&1 || true
+    fi
+    rm -f "$SYSTEMD_DIR/amnezia-vpn-update-check.timer" \
+          "$SYSTEMD_DIR/amnezia-vpn-update-check.service"
+    # Ответ прошлой проверки — тоже след похода наружу; человек, который
+    # сказал «не ходи», не должен находить его в панели.
+    rm -f "$ROOT_DIR/status/update-latest.json" "$ROOT_DIR/status/update-check.json"
+    log "update check skipped (--no-update-check): units removed if they were there"
 fi
 cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed (prune timer)"
 log "weekly docker-prune units written (enable --now after compose up; ExecStart=$ROOT_DIR/docker-prune.sh)"
@@ -2348,6 +2415,18 @@ if [ "$WATCHDOG_ENABLED" = "1" ]; then
     cmd systemctl enable --now amnezia-vpn-watchdog.timer \
         || die_op "systemctl enable --now amnezia-vpn-watchdog.timer failed"
     log "watchdog timer enabled (ExecStart=$ROOT_DIR/watchdog.sh, every minute)"
+fi
+
+# Первая проверка — сразу, не через сутки: человек, который только что
+# поставил сервер, должен увидеть в панели ответ, а не пустое место. Отказ
+# GitHub при этом не срывает установку — сервер уже работает, а знание о
+# выпусках подождёт до завтра.
+if [ "$UPDATE_CHECK_ENABLED" = "1" ]; then
+    cmd systemctl enable --now amnezia-vpn-update-check.timer \
+        || die_op "systemctl enable --now amnezia-vpn-update-check.timer failed"
+    cmd env AMNEZIA_UPDATE_ROOT="$ROOT_DIR" "$ROOT_DIR/update-check.sh" >/dev/null 2>&1 \
+        || log "WARNING: the first update check did not succeed; the daily timer will try again"
+    log "update check enabled (ExecStart=$ROOT_DIR/update-check.sh, once a day)"
 fi
 
 # --- 13b. panel domain: reverse proxy + Let's Encrypt (T-121) ---------

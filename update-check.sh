@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#
+# update-check.sh — раз в сутки спросить GitHub, вышел ли выпуск новее
+# (amnezia-vpn-server-zklt).
+#
+# Наружу ходит хост, а не панель. Панель по замыслу не делает исходящих
+# запросов вовсе: она открыта в интернет по паролю, и чем меньше она умеет,
+# тем меньше можно сделать, захватив её. Ответ ложится в тот же каталог,
+# откуда панель уже читает состояние туннеля, — и она читает его оттуда так
+# же, как status.json: только на чтение, ничего не выясняя сама.
+#
+# Проверка снимается флагом установщика --no-update-check. Причина не в
+# экономии трафика: обращение к GitHub раскрывает ему адрес сервера, а
+# продукт — про обход блокировок. Человек вправе сказать «не ходи наружу».
+#
+# Недоступный GitHub — не поломка, а обычное дело у части наших
+# пользователей. Прошлый ответ в этом случае остаётся на месте, а рядом
+# отмечается неудача: панель покажет её только тому, кто сам открыл страницу
+# обновления. Ежедневная жалоба «не могу проверить обновления» мозолила бы
+# глаза и ничего не меняла.
+#
+# Два файла, а не один, потому что описание выпуска — произвольный текст с
+# переносами и кавычками, и собирать из него JSON в shell значит однажды его
+# порвать. Ответ GitHub сохраняется как есть, разбирает его панель, которая
+# это умеет; собственная запись скрипта состоит из двух заведомо безопасных
+# полей.
+
+set -u
+
+STATUS_DIR="${AMNEZIA_UPDATE_STATUS_DIR:-${AMNEZIA_UPDATE_ROOT:-/opt/amnezia-vpn}/status}"
+LATEST_FILE="${STATUS_DIR}/update-latest.json"
+CHECK_FILE="${STATUS_DIR}/update-check.json"
+RELEASE_URL="${AMNEZIA_UPDATE_URL:-https://api.github.com/repos/AndreyLear/amnezia-vpn-server/releases/latest}"
+CURL_BIN="${AMNEZIA_UPDATE_CURL:-curl}"
+
+log() { printf 'update-check: %s\n' "$*"; }
+
+usage() {
+    cat <<'EOF'
+update-check.sh — узнать, вышел ли выпуск новее установленного.
+
+Спрашивает GitHub про последний выпуск и кладёт ответ рядом со status.json.
+Ничего не скачивает и не устанавливает: решение обновляться остаётся за
+человеком.
+
+Использование: ./update-check.sh
+Ключи: --help — эта справка.
+EOF
+}
+
+case "${1:-}" in
+    --help | -h)
+        usage
+        exit 0
+        ;;
+    "") ;;
+    *)
+        printf 'update-check: неизвестный аргумент: %s\n' "$1" >&2
+        exit 2
+        ;;
+esac
+
+[ -d "${STATUS_DIR}" ] || {
+    log "нет каталога ${STATUS_DIR}: развёртывание не найдено"
+    exit 1
+}
+
+# Отметка о проверке пишется в обоих исходах: без неё «не проверяли ни разу»
+# и «проверяли, не получилось» выглядели бы одинаково, а это разные новости.
+write_check() { # write_check ok|failed
+    local tmp="${CHECK_FILE}.tmp"
+    printf '{"schema":"v1","checked_at_utc":"%s","result":"%s"}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" > "${tmp}" \
+        && chmod 0644 "${tmp}" \
+        && mv -f "${tmp}" "${CHECK_FILE}"
+}
+
+body="$(mktemp "${TMPDIR:-/tmp}/amnezia-update.XXXXXX")" || {
+    log "не удалось создать временный файл"
+    exit 1
+}
+trap 'rm -f "${body}"' EXIT
+
+if ! "${CURL_BIN}" -fsSL --max-time 20 \
+        -H 'Accept: application/vnd.github+json' \
+        -o "${body}" "${RELEASE_URL}" 2>/dev/null; then
+    write_check failed
+    log "GitHub недоступен; прошлый ответ оставлен как есть"
+    exit 0
+fi
+
+# Ответ без номера выпуска — это не ответ: так выглядит и страница-заглушка
+# провайдера, и подменённый ответ. Заменять им прошлый снимок нельзя.
+if ! grep -q '"tag_name"' "${body}"; then
+    write_check failed
+    log "ответ не похож на выпуск GitHub; прошлый ответ оставлен как есть"
+    exit 0
+fi
+
+tmp="${LATEST_FILE}.tmp"
+if cp -f "${body}" "${tmp}" && chmod 0644 "${tmp}" && mv -f "${tmp}" "${LATEST_FILE}"; then
+    write_check ok
+    log "снимок последнего выпуска обновлён: ${LATEST_FILE}"
+else
+    rm -f "${tmp}"
+    write_check failed
+    log "не удалось записать ${LATEST_FILE}"
+    exit 1
+fi

@@ -121,7 +121,7 @@ valid — the name does not change.
 
 ### What is switched on for you
 
-Three things the installer decides, because otherwise you would have to
+Four things the installer decides, because otherwise you would have to
 remember them.
 
 **SSH brute-force protection.** Every server with a public address is guessed
@@ -150,13 +150,33 @@ resolver stays silent until somebody complains. Client handshakes are
 deliberately not a trigger: people are legitimately offline, and restarting a
 tunnel over that would be harm without a cause.
 
+**A daily update check.** The server asks GitHub whether a newer release is
+out, and the panel shows the answer. Nothing is downloaded or installed on its
+own: updating is your decision.
+
+Why it matters: blocking changes, and what got around it in March may stop
+working by autumn. Releases here include repaired circumvention. A server that
+never learns a release exists never updates, and its owner hears about the
+problem from users instead.
+
+If GitHub is unreachable from your server, the check fails quietly — a daily
+complaint about it would change nothing. The reason is on the update page if
+you go looking.
+
 ### Turning any of them off
 
 ```bash
 ./bootstrap.sh --ip 203.0.113.10 --no-ipv6        # IPv4-only tunnel
 ./bootstrap.sh --ip 203.0.113.10 --no-fail2ban    # no SSH protection
 ./bootstrap.sh --ip 203.0.113.10 --no-watchdog    # no watchdog
+./bootstrap.sh --ip 203.0.113.10 --no-update-check  # never ask GitHub
 ```
+
+`--no-update-check` is worth understanding before you use it: any update check
+tells GitHub the address of your server. A server meant to be unremarkable
+announces itself once a day to a party outside your control. If that matters
+more to you than hearing about releases, the flag is yours — you will have to
+follow releases yourself.
 
 `install.sh` takes the same flags when you run it on the server yourself.
 

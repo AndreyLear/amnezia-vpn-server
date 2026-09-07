@@ -98,6 +98,7 @@ APT_FUSER_BUSY_REMAINING=0
 FAKE_PMTU=1500
 DEFAULT_IFACE=ens3
 TC_RC=0
+GITHUB_RELEASE_RC=0
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -531,6 +532,14 @@ fi
 if printf '%s' "$*" | grep -q "127.0.0.1:8787"; then
     . "${FAKE_STATE:?}"
     exit "${PANEL_HTTP_RC:-0}"
+fi
+# Проверка обновлений спрашивает GitHub про последний выпуск
+# (amnezia-vpn-server-zklt).
+if printf '%s' "$*" | grep -q "api.github.com"; then
+    . "${FAKE_STATE:?}"
+    [ "${GITHUB_RELEASE_RC:-0}" = "0" ] || exit "${GITHUB_RELEASE_RC}"
+    [ -n "$oarg" ] && printf '{"tag_name":"v9.9.9","body":"note"}\n' > "$oarg"
+    exit 0
 fi
 if [ -n "$oarg" ]; then
     mkdir -p "$(dirname "$oarg")"
@@ -2613,6 +2622,106 @@ test_watchdog_can_be_declined() {
 
 # "Off" has to mean off on an existing deployment too, not just on a fresh
 # one: the second run must take away what the first one left.
+# Проверка обновлений (amnezia-vpn-server-zklt): юниты, первый прогон и
+# снятие при повторном запуске с --no-update-check.
+test_update_check_installed_by_default() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "update check default: exit $rc"
+    local svc="$SYSTEMD_DIR_TEST/amnezia-vpn-update-check.service"
+    local timer="$SYSTEMD_DIR_TEST/amnezia-vpn-update-check.timer"
+    [ -f "$svc" ] && [ -f "$timer" ] \
+        && pass "update-check units installed by default" \
+        || fail "update-check units missing"
+    grep -Fq "ExecStart=${ROOT}/update-check.sh" "$svc" \
+        && pass "update-check service runs the deployed script" \
+        || fail "update-check ExecStart does not point at $ROOT/update-check.sh"
+    # --root ставит развёртывание не в /opt/amnezia-vpn, и таймер обязан
+    # знать, куда класть ответ.
+    grep -Fq "AMNEZIA_UPDATE_ROOT=${ROOT}" "$svc" \
+        && pass "the unit tells the script where the deployment is" \
+        || fail "the unit would write the answer into the default root"
+    grep -q "^OnCalendar=daily" "$timer" \
+        && pass "the check runs once a day" \
+        || fail "update-check timer has no daily cadence"
+    # Все серверы ставятся по одной инструкции; без разброса они постучатся
+    # к GitHub в одну и ту же минуту.
+    grep -q "^RandomizedDelaySec=" "$timer" \
+        && pass "the daily check is spread over a window" \
+        || fail "every server would ask GitHub at the same moment"
+    [ -x "$ROOT/update-check.sh" ] \
+        && pass "update-check.sh deployed and executable" \
+        || fail "update-check.sh missing from the deployment"
+}
+
+# Человек, только что поставивший сервер, должен увидеть ответ в панели, а не
+# ждать сутки.
+test_update_check_runs_once_at_install() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "first update check: exit $rc"
+    [ -f "$ROOT/status/update-latest.json" ] \
+        && pass "the install leaves an answer about the latest release" \
+        || fail "no update-latest.json after the install"
+    grep -q '"tag_name"' "$ROOT/status/update-latest.json" \
+        && pass "and the answer is the release GitHub returned" \
+        || fail "update-latest.json does not hold the GitHub answer"
+    grep -q '"result":"ok"' "$ROOT/status/update-check.json" \
+        && pass "the check records that it succeeded" \
+        || fail "update-check.json does not record a successful check"
+}
+
+# GitHub недоступен у части наших пользователей — это обычный день, а не сбой
+# установки.
+test_unreachable_github_does_not_break_the_install() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    setstate GITHUB_RELEASE_RC 7 "$FAKE_STATE"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] \
+        && pass "an unreachable GitHub does not fail the install" \
+        || fail "the install died because GitHub was unreachable (exit $rc)"
+    [ -f "$ROOT/status/update-check.json" ] \
+        && pass "the failed check is still recorded" \
+        || fail "a failed check left no trace at all"
+    grep -q '"result":"failed"' "$ROOT/status/update-check.json" \
+        && pass "and it is recorded as a failure, not as silence" \
+        || fail "update-check.json does not distinguish failure from never"
+    [ -f "$ROOT/status/update-latest.json" ] \
+        && fail "a failed check invented an answer" \
+        || pass "a failed check writes no release of its own"
+}
+
+test_update_check_can_be_declined() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-update-check)"
+    [ "$rc" = "0" ] || fail "--no-update-check: exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-update-check.timer" ] \
+        && fail "--no-update-check still wrote a timer" \
+        || pass "--no-update-check writes no timer"
+    grep -q "api.github.com" "$FAKE_CALLS" \
+        && fail "--no-update-check still went out to GitHub" \
+        || pass "--no-update-check never leaves the server"
+    grep -q "update check skipped" "$TMP_TEST/out" "$TMP_TEST/err" \
+        && pass "--no-update-check says it skipped" || fail "--no-update-check was silent"
+}
+
+test_update_check_removed_on_rerun_with_flag() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "update check rerun setup: exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-update-check.timer" ] \
+        || fail "update check rerun setup: no timer to remove"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-update-check)"
+    [ "$rc" = "0" ] || fail "update check rerun: exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-update-check.timer" ] \
+        && fail "rerun with --no-update-check left the timer behind" \
+        || pass "rerun with --no-update-check removes the timer"
+    # Ответ прошлой проверки — тоже след похода наружу.
+    [ -f "$ROOT/status/update-latest.json" ] \
+        && fail "the answer from the earlier check stayed behind" \
+        || pass "rerun with --no-update-check clears the earlier answer"
+}
+
 test_watchdog_removed_on_rerun_with_flag() {
     fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
@@ -2734,6 +2843,11 @@ test_image_without_capabilities_command_is_refused
 test_watchdog_units_installed_by_default
 test_watchdog_can_be_declined
 test_watchdog_removed_on_rerun_with_flag
+test_update_check_installed_by_default
+test_update_check_runs_once_at_install
+test_unreachable_github_does_not_break_the_install
+test_update_check_can_be_declined
+test_update_check_removed_on_rerun_with_flag
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
 test_prune_soft_fail
