@@ -21,6 +21,11 @@ export default defineConfig({
       testMatch: /first-launch\.spec\.ts/,
       use: { baseURL: "http://127.0.0.1:18788" },
     },
+    {
+      name: "update",
+      testMatch: /update\.spec\.ts/,
+      use: { baseURL: "http://127.0.0.1:18789" },
+    },
   ],
   webServer: [
     {
@@ -32,6 +37,14 @@ export default defineConfig({
     {
       command: "AMNEZIA_E2E_PORT=18788 AMNEZIA_E2E_NO_CLIENTS=1 bash e2e/run-panel.sh",
       url: "http://127.0.0.1:18788/login",
+      timeout: 120_000,
+      reuseExistingServer: false,
+    },
+    {
+      // Панель, которой есть что предложить: снимок выпуска новее
+      // установленного кладёт фикстура (amnezia-vpn-server-tjoq).
+      command: "AMNEZIA_E2E_PORT=18789 AMNEZIA_E2E_UPDATE=1 bash e2e/run-panel.sh",
+      url: "http://127.0.0.1:18789/login",
       timeout: 120_000,
       reuseExistingServer: false,
     },

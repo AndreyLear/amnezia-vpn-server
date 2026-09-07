@@ -58,7 +58,13 @@ func (s *Server) apiUpdateStart(w http.ResponseWriter, r *http.Request) {
 // server: the same owner opens the panel from a laptop and from a phone,
 // and closing it in one place has to hold in the other.
 func (s *Server) apiUpdateDismiss(w http.ResponseWriter, r *http.Request) {
-	version := strings.TrimSpace(r.FormValue("version"))
+	var req struct {
+		Version string `json:"version"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	version := strings.TrimSpace(req.Version)
 	if version == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"ok": false, "message": "Не указана версия",

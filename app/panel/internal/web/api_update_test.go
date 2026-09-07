@@ -3,12 +3,27 @@ package web
 import (
 	"encoding/json"
 	"net/http"
-	"net/url"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"testing"
 )
+
+// postBody отправляет мутацию так же, как это делает панель: телом JSON.
+func (f *fixture) postBody(path, body string) *httptest.ResponseRecorder {
+	f.t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Requested-With", "fetch")
+	req.Header.Set(auth.CSRFHeaderName, f.csrf)
+	rec := httptest.NewRecorder()
+	f.serve(rec, req)
+	return rec
+}
 
 func writeStatusFile(t *testing.T, f *fixture, name, body string) {
 	t.Helper()
@@ -165,9 +180,7 @@ func TestDismissedBannerIsRememberedOnTheServer(t *testing.T) {
 	t.Setenv("AMNEZIA_VERSION", "2.8.2")
 	writeStatusFile(t, f, "update-latest.json", `{"tag_name":"v2.9.0","body":"x"}`)
 
-	form := url.Values{}
-	form.Set("version", "2.9.0")
-	if rec := f.postJSON("/api/update/dismiss", form); rec.Code != http.StatusOK {
+	if rec := f.postBody("/api/update/dismiss", `{"version":"2.9.0"}`); rec.Code != http.StatusOK {
 		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
 	}
 

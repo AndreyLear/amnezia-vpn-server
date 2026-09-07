@@ -20,4 +20,19 @@ if [ "${AMNEZIA_E2E_NO_CLIENTS:-0}" != "1" ]; then
     go run . client add "alice" >/dev/null
     go run . client add "bob" >/dev/null
 fi
+# Полоса о новом выпуске рисуется по файлу, который на живом сервере пишет
+# хост (amnezia-vpn-server-tjoq). Здесь его кладём мы: иначе проверить полосу
+# можно было бы только дождавшись настоящего выпуска.
+if [ "${AMNEZIA_E2E_UPDATE:-0}" = "1" ]; then
+    # Без своей версии панель молчит, и правильно делает: сказать «вышла
+    # версия N» тому, кто её, может быть, уже поставил, — хуже, чем промолчать.
+    # На развёртывании версию задаёт compose из versions.lock.
+    export AMNEZIA_VERSION="1.0.0"
+    cat > "$DIR/update-latest.json" <<'JSON'
+{"tag_name":"v99.9.9","body":"- Первое изменение\n- Второе изменение\n\namnezia-sha256: 0000000000000000000000000000000000000000000000000000000000000000\n"}
+JSON
+    printf '{"schema":"v1","checked_at_utc":"2026-09-07T09:00:00Z","result":"ok"}\n' \
+        > "$DIR/update-check.json"
+fi
+
 exec go run . serve --addr "127.0.0.1:${AMNEZIA_E2E_PORT:-18787}"
