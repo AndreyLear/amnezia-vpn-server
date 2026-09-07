@@ -56,3 +56,13 @@ func (s *Server) auditAs(actor, action, subject, detail string) {
 		s.cfg.Logger.Printf("audit %s: %v", action, err)
 	}
 }
+
+// clientNameForAudit — имя клиента для записи в журнал, или пусто, если его
+// уже не прочитать. Номер в журнале бесполезен: по нему потом некого искать,
+// особенно после удаления.
+func (s *Server) clientNameForAudit(id int64) string {
+	if c, err := db.ClientByID(s.db(), id); err == nil {
+		return c.Name
+	}
+	return ""
+}

@@ -354,6 +354,7 @@ func (s *Server) clientNew(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		createdID = record.ID
+		s.audit(r, auditClientAdd, record.Name, "")
 		return nil
 	})
 }
@@ -379,7 +380,19 @@ func (s *Server) clientSetEnabled(enabled bool) http.HandlerFunc {
 		s.withID(w, r, okFlash, func(id int64) (mutationPayload, error) {
 			return s.cardPayload(r, id)
 		}, func(id int64) error {
-			return db.SetClientEnabled(s.db(), id, enabled)
+			// Старая форма меняет то же самое, что и панель, и в журнал
+			// должна попадать так же: иначе часть изменений записана, а
+			// часть нет, и по журналу нельзя судить ни о чём
+			// (amnezia-vpn-server-y5y2).
+			if err := db.SetClientEnabled(s.db(), id, enabled); err != nil {
+				return err
+			}
+			detail := "отключён"
+			if enabled {
+				detail = "включён"
+			}
+			s.audit(r, auditClientToggle, s.clientNameForAudit(id), detail)
+			return nil
 		})
 	}
 }
@@ -390,7 +403,14 @@ func (s *Server) clientDelete(w http.ResponseWriter, r *http.Request) {
 	s.withID(w, r, flashDeleted, func(id int64) (mutationPayload, error) {
 		return s.countPayload()
 	}, func(id int64) error {
-		return db.DeleteClient(s.db(), id)
+		// Имя читается до удаления: после него в журнал попал бы номер, по
+		// которому уже некого искать.
+		name := s.clientNameForAudit(id)
+		if err := db.DeleteClient(s.db(), id); err != nil {
+			return err
+		}
+		s.audit(r, auditClientDelete, name, "")
+		return nil
 	})
 }
 
@@ -409,6 +429,10 @@ func (s *Server) clientRename(w http.ResponseWriter, r *http.Request) {
 	s.withID(w, r, flashRenamed, func(id int64) (mutationPayload, error) {
 		return s.cardPayload(r, id)
 	}, func(id int64) error {
-		return db.UpdateClientName(s.db(), id, name)
+		if err := db.UpdateClientName(s.db(), id, name); err != nil {
+			return err
+		}
+		s.audit(r, auditClientEdit, name, "имя")
+		return nil
 	})
 }
