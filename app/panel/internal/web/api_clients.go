@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -239,6 +240,7 @@ func (s *Server) apiClientsCreate(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api clients create conf", err)
 		return
 	}
+	s.audit(r, auditClientAdd, record.Name, "")
 	s.writeClientJSON(w, http.StatusCreated, *record)
 }
 
@@ -270,7 +272,9 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api clients patch load", err)
 		return
 	}
+	changes := []string{}
 	if req.Name != nil {
+		changes = append(changes, "имя")
 		if err := db.UpdateClientName(s.db(), id, *req.Name); err != nil {
 			if msg, ok := classifyExpected(err); ok {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": msg})
@@ -281,6 +285,7 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Description != nil {
+		changes = append(changes, "описание")
 		if err := db.UpdateClientDescription(s.db(), id, *req.Description); err != nil {
 			if msg, ok := classifyExpected(err); ok {
 				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": msg})
@@ -324,6 +329,26 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api clients patch reload", err)
 		return
 	}
+	// Включение и MTU записываются отдельно от переименования: по журналу
+	// разбирают «что стало с этим клиентом», и «изменён» без указания чего
+	// отвечает на этот вопрос ровно наполовину.
+	if req.MTU != nil {
+		detail := "как у сервера"
+		if *req.MTU != 0 {
+			detail = strconv.FormatInt(*req.MTU, 10)
+		}
+		s.audit(r, auditClientMTU, c.Name, detail)
+	}
+	if req.Enabled != nil {
+		detail := "отключён"
+		if *req.Enabled {
+			detail = "включён"
+		}
+		s.audit(r, auditClientToggle, c.Name, detail)
+	}
+	if len(changes) > 0 {
+		s.audit(r, auditClientEdit, c.Name, strings.Join(changes, ", "))
+	}
 	s.writeClientJSON(w, http.StatusOK, *c)
 }
 
@@ -335,6 +360,12 @@ func (s *Server) apiClientsDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	// Имя читается до удаления: после него в журнал попал бы номер, по
+	// которому уже некого искать.
+	name := ""
+	if c, err := db.ClientByID(s.db(), id); err == nil {
+		name = c.Name
+	}
 	if err := db.DeleteClient(s.db(), id); err != nil {
 		if errors.Is(err, db.ErrClientNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": flashNotFound})
@@ -347,5 +378,6 @@ func (s *Server) apiClientsDelete(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api clients delete conf", err)
 		return
 	}
+	s.audit(r, auditClientDelete, name, "")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

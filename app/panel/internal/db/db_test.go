@@ -227,9 +227,10 @@ func TestMigrateAddsClientDescription(t *testing.T) {
 	// The literal is a deliberate tripwire: a schema change that forgets
 	// to bump the version fails here. Raised to 7 by
 	// amnezia-vpn-server-xy6j (server.address6), to 8 by
-	// amnezia-vpn-server-h2pg (clients.mtu).
-	if SchemaVersion != "8" {
-		t.Fatalf("SchemaVersion = %q, want 8", SchemaVersion)
+	// amnezia-vpn-server-h2pg (clients.mtu), to 9 by
+	// amnezia-vpn-server-gqep (audit).
+	if SchemaVersion != "9" {
+		t.Fatalf("SchemaVersion = %q, want 9", SchemaVersion)
 	}
 	if err := Migrate(handle); err != nil {
 		t.Fatalf("second Migrate legacy v5: %v", err)
@@ -1519,5 +1520,77 @@ func TestUpdateClientMTUUnknownID(t *testing.T) {
 	}
 	if err := UpdateClientMTU(handle, 4242, 1400); !errors.Is(err, ErrClientNotFound) {
 		t.Fatalf("UpdateClientMTU на несуществующем id: %v, ожидался ErrClientNotFound", err)
+	}
+}
+
+// Журнал панели (amnezia-vpn-server-gqep): при одном администраторе это
+// защита от «я такого не делал».
+func TestAuditKeepsWhatHappenedAndDropsTheOldest(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ actor, action, subject, detail string }{
+		{"admin", "login", "", ""},
+		{"admin", "client.add", "alice", ""},
+		{"admin", "client.mtu", "alice", "1420"},
+	} {
+		if err := AuditAppend(handle, c.actor, c.action, c.subject, c.detail); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := AuditTail(handle, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("записей = %d, ожидалось 3", len(got))
+	}
+	// Свежее первым: разбирают по журналу недавнее.
+	if got[0].Action != "client.mtu" || got[0].Subject != "alice" {
+		t.Fatalf("первая запись = %+v", got[0])
+	}
+	if got[0].AtUTC == "" {
+		t.Fatalf("запись без времени: %+v", got[0])
+	}
+}
+
+// Журнал, растущий без предела, однажды становится проблемой сам по себе.
+func TestAuditTrimsToItsLimit(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < AuditKeep+50; i++ {
+		if err := AuditAppend(handle, "admin", "client.add", "x", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := handle.QueryRow(`SELECT COUNT(*) FROM audit`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count > AuditKeep {
+		t.Fatalf("в журнале %d записей, предел %d", count, AuditKeep)
+	}
+}
+
+// Схема должна пережить откат на прошлый выпуск: таблица добавляется, ничего
+// существующего не трогается (docs/adr/0001).
+func TestAuditMigrationIsAdditive(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	if err := AuditAppend(handle, "admin", "login", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Повторная миграция ничего не теряет: так выглядит откат и возврат.
+	if err := Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	got, err := AuditTail(handle, 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("после повторной миграции записей = %d (err %v)", len(got), err)
 	}
 }

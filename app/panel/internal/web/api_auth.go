@@ -26,6 +26,10 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if outcome.message != "" {
+		// Имя записывается, введённый пароль — никогда: журнал должен
+		// пережить кражу базы, не добавив вору ничего сверх того, что он в
+		// ней и так нашёл (amnezia-vpn-server-gqep).
+		s.auditAs(req.Username, auditLoginFailed, "", "")
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "message": outcome.message})
 		return
 	}
@@ -33,6 +37,7 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api login: create session", err)
 		return
 	}
+	s.auditAs(req.Username, auditLogin, "", "")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -50,6 +55,8 @@ func (s *Server) apiMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiLogout(w http.ResponseWriter, r *http.Request) {
+	// Имя берётся до удаления сессии: после неё некого записывать.
+	s.audit(r, auditLogout, "", "")
 	if sid, ok := auth.ReadSessionID(r); ok {
 		s.cfg.Sessions.Delete(sid)
 	}

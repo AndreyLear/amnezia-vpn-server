@@ -243,6 +243,8 @@ func New(cfg Config) (*Server, error) {
 	// Что сторож видел в последнюю минуту. Только чтение: панель хостом не
 	// распоряжается (amnezia-vpn-server-eq82).
 	s.mux.Handle("GET /api/services", s.auth.RequireAPI(http.HandlerFunc(s.apiServices)))
+	// Журнал панели: кто входил и что менял (amnezia-vpn-server-gqep).
+	s.mux.Handle("GET /api/audit", s.auth.RequireAPI(http.HandlerFunc(s.apiAudit)))
 	s.mux.Handle("POST /api/update/check", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateCheck)))
 	s.mux.Handle("POST /api/update/start", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateStart)))
 	s.mux.Handle("POST /api/update/dismiss", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateDismiss)))
