@@ -354,8 +354,13 @@ sed -i '' 's/10.8.0.2\/32/10.8.0.9\/32/' "${DIR_A}/config/awg0.conf" 2>/dev/null
     || sed -i 's/10.8.0.2\/32/10.8.0.9\/32/' "${DIR_A}/config/awg0.conf"
 printf '200\n' > "${STUB_MTIME}"
 
+# Ждём завершения, а не начала. Подделка пишет строку в журнал ПЕРВОЙ, до
+# того как скопирует поданный ей конфиг, поэтому ожидание журнала возвращалось
+# раньше, чем появлялся файл, и следующая проверка падала примерно раз из пяти
+# (amnezia-vpn-server-bfy3). Отметка syncconf-ok пишется ПОСЛЕ копирования и
+# означает «сделано» — её и ждём.
 check "flow-a: syncconf invoked after mtime change" \
-    wait_for_line "${STUB_LOG}" "syncconf awg0"
+    wait_for_line "${STUB_STATE}" "^syncconf-ok$"
 
 CAPTURED="${STUB_CAPTURE}/last-syncconf.conf"
 check "flow-a: syncconf input captured" [ -f "${CAPTURED}" ]
