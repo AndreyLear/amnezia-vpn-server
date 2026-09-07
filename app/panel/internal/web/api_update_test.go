@@ -258,3 +258,37 @@ func TestOutcomeIsRememberedOnceItHasBeenShown(t *testing.T) {
 		t.Fatalf("подтверждение итога заодно закрыло полосу: %v", got)
 	}
 }
+
+// Запрос к хосту пишется так же, как остальные производные файлы: целиком
+// или никак. Хост следит за появлением файла, и половина запроса выглядела
+// бы для него целым (amnezia-vpn-server-i4m6).
+func TestUpdateRequestIsWrittenWholeAndPrivate(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("AMNEZIA_VERSION", "2.8.2")
+	writeStatusFile(t, f, "update-latest.json", `[{"tag_name":"v2.9.0","body":"x"}]`)
+
+	if rec := f.postJSON("/api/update/start", nil); rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	path := filepath.Join(filepath.Dir(f.dbPath), "update-request.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 0600: запрос лежит в томе панели, и лишним читателям там делать
+	// нечего.
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("права %o, ожидалось 600", mode)
+	}
+	// Никаких временных огрызков рядом: их подобрал бы хост, следящий за
+	// каталогом.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Fatalf("рядом остался временный файл %s", e.Name())
+		}
+	}
+}
