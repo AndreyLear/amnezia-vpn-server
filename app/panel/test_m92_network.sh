@@ -1167,48 +1167,135 @@ test_ipv6_switch_off_after_on() {
     assert_in "^table ip amnezia {" "$NFT_SYS_FILE" "switch-off: the IPv4 table survived untouched"
 }
 
+# Настоящий nft вместо фальшивки (amnezia-vpn-server-ofq9).
+#
+# Фальшивка отвечает успехом на всё, включая nft -c -f. Из-за этого 131
+# утверждение прошло, а ядро отвергло набор правил целиком: множество нельзя
+# объявить поверх существующего, и набор перестал применяться на уже
+# настроенном сервере. Проверка «синтаксис в порядке» не проверяла синтаксис.
+#
+# Здесь набор правил отдаётся НАСТОЯЩЕМУ nft, и не один раз, а дважды: первое
+# применение создаёт таблицы, второе повторяет то, что делает обновление на
+# живом сервере. Именно второе и падало.
+#
+# Всё происходит в отдельном сетевом пространстве имён: правила хоста, на
+# котором идёт прогон, не затрагиваются вовсе.
+#
+# Где nft нет (macOS) — проверка ГРОМКО пропускается. Молчаливый пропуск был бы
+# той же самой фальшивкой, только без фальшивки.
+real_nft_path() {
+    PATH=/usr/sbin:/sbin:/usr/bin:/bin command -v nft 2>/dev/null
+}
+
+test_generated_ruleset_survives_a_real_kernel() {
+    local nft ns rc
+    nft="$(real_nft_path)"
+    if [ -z "$nft" ]; then
+        pass "real nft check skipped: nft(8) is not installed here (macOS)"
+        return 0
+    fi
+    if [ "$(id -u)" != "0" ] && ! sudo -n true 2>/dev/null; then
+        pass "real nft check skipped: needs root or passwordless sudo"
+        return 0
+    fi
+    local SUDO=""
+    [ "$(id -u)" = "0" ] || SUDO="sudo -n"
+
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || { fail "real nft: install flow exit $rc"; return 0; }
+
+    ns="amnezia-m92-$$"
+    $SUDO ip netns add "$ns" 2>/dev/null || { pass "real nft check skipped: cannot create a network namespace"; return 0; }
+
+    if $SUDO ip netns exec "$ns" "$nft" -f "$NFT_SYS_FILE" 2>"$TMP_TEST/nft1.err"; then
+        pass "the generated ruleset is accepted by a real kernel"
+    else
+        fail "a real kernel refused the generated ruleset: $(head -2 "$TMP_TEST/nft1.err" | tr '\n' ' ')"
+    fi
+
+    # Второе применение — то самое обновление на уже настроенном сервере.
+    if $SUDO ip netns exec "$ns" "$nft" -f "$NFT_SYS_FILE" 2>"$TMP_TEST/nft2.err"; then
+        pass "and it applies a second time, as an update does"
+    else
+        fail "the ruleset applies once but not twice: $(head -2 "$TMP_TEST/nft2.err" | tr '\n' ' ')"
+    fi
+
+    # И проверка синтаксиса поверх живого набора — ровно то, что делает
+    # установщик перед применением.
+    if $SUDO ip netns exec "$ns" "$nft" -c -f "$NFT_SYS_FILE" 2>"$TMP_TEST/nft3.err"; then
+        pass "the syntax check passes against a ruleset that already exists"
+    else
+        fail "the syntax check fails against an existing ruleset: $(head -2 "$TMP_TEST/nft3.err" | tr '\n' ' ')"
+    fi
+
+    $SUDO ip netns del "$ns" 2>/dev/null || true
+}
+
 # --- main ---------------------------------------------------------------
 
-test_bash_syntax
-test_help_lists_m92
-test_invalid_subnets
-test_host_cidr_normalized
-test_default_rules
-test_ipv6_absent_when_switched_off
-test_ipv6_rules_when_enabled
-test_ipv6_mss_clamp_in_its_own_table
-test_ipv6_no_drop_rules
-test_ipv6_switch_off_after_on
-test_dns_interception
-test_dns_interception_absent_when_resolver_stands_down
-test_atomic_replace_on_rerun
-test_custom_values
-test_no_flush_no_drop
-test_fragments_identical
-test_check_before_apply
-test_syntax_failure_rollback
-test_apply_failure_rollback
-test_persistence_first_run
-test_persistence_start_when_inactive
-test_persistence_inactive_skips_docker_when_docker_down
-test_persistence_foreign_content
-test_persistence_dropin
-test_subnet_from_awg0_conf
-test_subnet_awg0_conf_invalid_fallback
-test_nft_absent_installs_package
-test_env_readback_on_rerun
-test_env_vpn_subnet_missing
-test_env_invalid_awg_port
-test_env_invalid_vpn_subnet
-test_env_missing_awg_port
-test_secrets_absent
-test_ssh_hint
-test_awg_stack_present_skips_install
-test_awg_stack_forced_install
-test_forward_accept_docker_user
-test_forward_accept_no_docker_user
-test_nft_panel_domain_with_panel_port
-test_nft_panel_domain_default_443
+m92_run_all() {
+    test_bash_syntax
+    test_help_lists_m92
+    test_invalid_subnets
+    test_host_cidr_normalized
+    test_default_rules
+    test_ipv6_absent_when_switched_off
+    test_ipv6_rules_when_enabled
+    test_ipv6_mss_clamp_in_its_own_table
+    test_ipv6_no_drop_rules
+    test_ipv6_switch_off_after_on
+    test_dns_interception
+    test_dns_interception_absent_when_resolver_stands_down
+    test_atomic_replace_on_rerun
+    test_custom_values
+    test_no_flush_no_drop
+    test_fragments_identical
+    test_check_before_apply
+    test_syntax_failure_rollback
+    test_apply_failure_rollback
+    test_persistence_first_run
+    test_persistence_start_when_inactive
+    test_persistence_inactive_skips_docker_when_docker_down
+    test_persistence_foreign_content
+    test_persistence_dropin
+    test_subnet_from_awg0_conf
+    test_subnet_awg0_conf_invalid_fallback
+    test_nft_absent_installs_package
+    test_generated_ruleset_survives_a_real_kernel
+    test_env_readback_on_rerun
+    test_env_vpn_subnet_missing
+    test_env_invalid_awg_port
+    test_env_invalid_vpn_subnet
+    test_env_missing_awg_port
+    test_secrets_absent
+    test_ssh_hint
+    test_awg_stack_present_skips_install
+    test_awg_stack_forced_install
+    test_forward_accept_docker_user
+    test_forward_accept_no_docker_user
+    test_nft_panel_domain_with_panel_port
+    test_nft_panel_domain_default_443
+}
+
+# Выбор теста по имени, как в харнессе установщика. Полный прогон идёт
+# около получаса, и без выборочного запуска нельзя ни проверить одну
+# правку, ни начать разбор того, куда уходит это время
+# (amnezia-vpn-server-xyxk).
+if [ "$#" -gt 0 ]; then
+    for t in "$@"; do
+        # Опечатка в имени не должна выглядеть как успешный прогон: так
+        # CI позеленел бы, не выполнив ничего.
+        if ! declare -F "$t" >/dev/null; then
+            echo "M9.2 network: no such test: $t" >&2
+            exit 2
+        fi
+        "$t"
+    done
+else
+    m92_run_all
+fi
 
 echo
 if [ "$M92_ERRORS" -eq 0 ]; then
