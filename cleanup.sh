@@ -280,6 +280,23 @@ for unit in amnezia-vpn-watchdog.timer amnezia-vpn-watchdog.service; do
         log "skip: $unit not present"
     fi
 done
+# Проверка обновлений (amnezia-vpn-server-zklt): её таймер после удаления
+# развёртывания раз в сутки звал бы отсутствующий скрипт.
+for unit in amnezia-vpn-update-check.timer amnezia-vpn-update-check.service; do
+    if [ -f "$SYSTEMD_DIR/$unit" ]; then
+        if [ "$DO_IT" -eq 1 ]; then
+            systemctl disable --now "$unit" >/dev/null 2>&1 || true
+            rm -f "$SYSTEMD_DIR/$unit"
+            systemctl daemon-reload
+            log "removed $SYSTEMD_DIR/$unit"
+        else
+            log "would remove $SYSTEMD_DIR/$unit"
+        fi
+    else
+        log "skip: $unit not present"
+    fi
+done
+
 if [ -d /run/amnezia-vpn-watchdog ]; then
     if [ "$DO_IT" -eq 1 ]; then
         rm -rf /run/amnezia-vpn-watchdog

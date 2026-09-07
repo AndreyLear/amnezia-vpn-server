@@ -112,6 +112,9 @@ Options:
   --no-watchdog        do not install the minute watchdog that restarts a
                        resolver or tunnel that is up but not working.
                        Passed to install.sh.
+  --no-update-check    do not ask GitHub once a day whether a newer
+                       release is out. Any such check tells GitHub the
+                       address of this server. Passed to install.sh.
   --source URL         download a release tarball instead of packing the
                        local repository
   --help               print this message
@@ -233,7 +236,7 @@ while [ "$#" -gt 0 ]; do
             NONINTERACTIVE=1
             shift 2
             ;;
-        --ipv6|--no-ipv6|--no-fail2ban|--no-watchdog)
+        --ipv6|--no-ipv6|--no-fail2ban|--no-watchdog|--no-update-check)
             # Passed straight through to install.sh, which owns the
             # decisions. The README tells people to run the wizard with
             # these, so the wizard has to understand them

@@ -66,3 +66,5 @@ jobs:
         run: bash app/awg/test_m5.sh
       - name: DNS harness
         run: bash app/dns/test_dns.sh
+      - name: Update check harness
+        run: bash app/panel/test_update_check.sh
