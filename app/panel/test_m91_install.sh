@@ -14,11 +14,52 @@
 set -u
 
 M91_ERRORS=0
-M91_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+M91_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Установщик копирует к себе дерево репозитория, и делает это на КАЖДОМ
+# запуске — то есть сотню раз за прогон. Пока он копирует, `npm run build`
+# переписывает app/panel/internal/web/dist/assets: старый бандл исчезает,
+# новый появляется под другим именем, cp натыкается на пропавший файл и
+# падает. Установка выходит с единицей, и провалившимся объявляется тот
+# тест, которому не повезло оказаться в этот момент — каждый раз другой
+# (amnezia-vpn-server-f85b).
+#
+# Поэтому дерево снимается один раз, в начале, и все запуски идут по копии.
+# Гонка с пересборкой остаётся возможной ровно в этот единственный миг — и
+# тогда прогон честно не стартует, вместо того чтобы наврать посередине.
+M91_HOME="$(mktemp -d /tmp/m91-tree.XXXXXX)"
+snapshot_repo() {
+    tar -cf - -C "$M91_REPO" \
+        --exclude=./.git --exclude=./.beads --exclude=./.worktrees \
+        --exclude=./node_modules --exclude=./app/panel/web/node_modules \
+        --exclude=./app/panel/web/test-results . 2>/dev/null \
+        | tar -xf - -C "$M91_HOME" 2>/dev/null
+}
+if ! snapshot_repo || [ ! -f "$M91_HOME/install.sh" ]; then
+    # Одна повторная попытка: сборка панели длится секунды, и второй заход
+    # почти всегда попадает в спокойное дерево.
+    sleep 2
+    if ! snapshot_repo || [ ! -f "$M91_HOME/install.sh" ]; then
+        printf 'M9.1: не удалось снять копию дерева %s.\n' "$M91_REPO" >&2
+        printf 'M9.1: похоже, дерево меняется прямо сейчас — идёт сборка панели?\n' >&2
+        printf 'M9.1: дождитесь её окончания и запустите прогон снова.\n' >&2
+        rm -rf "$M91_HOME"
+        exit 2
+    fi
+fi
 INSTALL_SH="$M91_HOME/install.sh"
 
 pass() { printf 'PASS  %s\n' "$1"; }
-fail() { printf 'FAIL  %s\n' "$1"; M91_ERRORS=$((M91_ERRORS + 1)); }
+# Путь берётся с диска, а не из переменной: run_install зовут внутри
+# подстановки, то есть в отдельной оболочке, и наружу её переменные не
+# возвращаются.
+fail() {
+    printf 'FAIL  %s\n' "$1"
+    local last
+    last="$(ls -t "$TMP_TEST/failures/" 2>/dev/null | head -1)"
+    [ -n "$last" ] && printf '      вывод неудачного запуска: %s\n' "$TMP_TEST/failures/$last"
+    M91_ERRORS=$((M91_ERRORS + 1))
+}
 
 # --- fakes -------------------------------------------------------------
 
@@ -28,7 +69,18 @@ FAKE_CALLS="$FAKE_DIR/calls.log"
 FAKE_FS="$FAKE_DIR/fs"
 TMP_TEST="$(mktemp -d /tmp/m91-run.XXXXXX)"
 export FAKE_DIR FAKE_STATE FAKE_CALLS FAKE_FS
-trap 'rm -rf "$FAKE_DIR" "$TMP_TEST"' EXIT
+# Вывод упавшего запуска остаётся на диске, если что-то не сошлось: без него
+# отказ неотличим от настоящей поломки, и каждый такой случай стоит получаса
+# на перепроверку (amnezia-vpn-server-f85b).
+m91_cleanup() {
+    rm -rf "$FAKE_DIR" "$M91_HOME"
+    if [ "$M91_ERRORS" -gt 0 ]; then
+        printf 'M9.1: вывод упавших запусков оставлен в %s\n' "$TMP_TEST" >&2
+        return
+    fi
+    rm -rf "$TMP_TEST"
+}
+trap m91_cleanup EXIT
 
 setstate() { # portable in-place update: sed(1) -i differs on BSD/GNU
     local key="$1" value="$2" file="$3"
@@ -754,6 +806,19 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     PATH="$FAKE_DIR:$PATH" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
+    # Каждый неудачный запуск сохраняется целиком, а не только по просьбе:
+    # M91_DEBUG включают задним числом, когда отказ уже не воспроизвести.
+    if [ "$rc" != "0" ]; then
+        mkdir -p "$TMP_TEST/failures"
+        # Имя по времени: счётчик в подстановке наружу не выходит, а список
+        # по свежести нужен fail(), чтобы назвать нужный файл.
+        {
+            printf '=== install.sh --root %s %s\n=== exit %s\n--- stdout\n' "$ROOT" "$*" "$rc"
+            cat "$TMP_TEST/out"
+            printf -- '--- stderr\n'
+            cat "$TMP_TEST/err"
+        } > "$TMP_TEST/failures/run-$(date +%s)-$$.log" 2>/dev/null
+    fi
     if [ -n "${M91_DEBUG:-}" ] && [ "$rc" != "0" ]; then
         echo "=== DEBUG run rc=$rc ===" >&2
         cat "$TMP_TEST/out" "$TMP_TEST/err" >&2
