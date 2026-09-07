@@ -3,8 +3,10 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -102,5 +104,80 @@ func TestAPIUpdateCheckOnlyLeavesARequest(t *testing.T) {
 	request := filepath.Join(filepath.Dir(f.dbPath), "update-check-request")
 	if _, err := os.Stat(request); err != nil {
 		t.Fatalf("запрос не появился: %v", err)
+	}
+}
+
+// Кнопка «Обновить»: панель кладёт запрос в свой том, а делает обновление
+// хост (amnezia-vpn-server-tjoq).
+func TestAPIUpdateStartLeavesARequestForTheHost(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("AMNEZIA_VERSION", "2.8.2")
+	writeStatusFile(t, f, "update-latest.json", `{"tag_name":"v2.9.0","body":"x"}`)
+
+	rec := f.postJSON("/api/update/start", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(f.dbPath), "update-request.json"))
+	if err != nil {
+		t.Fatalf("запрос не появился: %v", err)
+	}
+	// Версию в запрос кладёт панель из того, что нашёл хост, — не из того,
+	// что прислал браузер.
+	if !strings.Contains(string(data), `"version":"2.9.0"`) {
+		t.Fatalf("запрос = %s", data)
+	}
+}
+
+// Просить нечего — и человек должен услышать это, а не смотреть в тишину.
+func TestAPIUpdateStartRefusesWhenThereIsNothingToTake(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("AMNEZIA_VERSION", "2.9.0")
+	writeStatusFile(t, f, "update-latest.json", `{"tag_name":"v2.9.0","body":"x"}`)
+
+	rec := f.postJSON("/api/update/start", nil)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("панель попросила обновиться на ту же версию")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(f.dbPath), "update-request.json")); err == nil {
+		t.Fatalf("запрос всё-таки лёг")
+	}
+}
+
+// Два установщика в одном каталоге подерутся, и разбирать это придётся
+// руками на живом сервере.
+func TestAPIUpdateStartRefusesWhileOneIsRunning(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("AMNEZIA_VERSION", "2.8.2")
+	writeStatusFile(t, f, "update-latest.json", `{"tag_name":"v2.9.0","body":"x"}`)
+	writeStatusFile(t, f, "update-state.json", `{"state":"running","to":"2.9.0"}`)
+
+	rec := f.postJSON("/api/update/start", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("код %d, ожидался 409: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Закрытая крестиком полоса переживает и перезагрузку страницы, и другой
+// браузер: владелец один и тот же на компьютере и на телефоне.
+func TestDismissedBannerIsRememberedOnTheServer(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("AMNEZIA_VERSION", "2.8.2")
+	writeStatusFile(t, f, "update-latest.json", `{"tag_name":"v2.9.0","body":"x"}`)
+
+	form := url.Values{}
+	form.Set("version", "2.9.0")
+	if rec := f.postJSON("/api/update/dismiss", form); rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got := decodeAPI(t, f.get("/api/update"))
+	if got["dismissed"] != "2.9.0" {
+		t.Fatalf("dismissed = %v", got["dismissed"])
+	}
+	// Полосу закрыли, но взять выпуск по-прежнему есть что: значок-
+	// напоминание живёт отдельно от полосы.
+	if got["available"] != true {
+		t.Fatalf("закрытие полосы погасило само предложение: %v", got)
 	}
 }

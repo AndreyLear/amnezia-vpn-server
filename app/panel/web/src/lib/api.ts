@@ -179,6 +179,28 @@ export type Versions = {
   docker: string;
 };
 
+/** Всё про обновление одним ответом (amnezia-vpn-server-tjoq). */
+export type UpdateInfo = {
+  installed: string;
+  latest: string;
+  available: boolean;
+  notes: string;
+  checked_at_utc: string;
+  check_result: string;
+  check_reason: string;
+  state: string;
+  state_from: string;
+  state_to: string;
+  state_step: string;
+  state_message: string;
+  state_at_utc: string;
+  /**
+   * Версия, для которой полосу закрыли крестиком. Хранится на сервере:
+   * владелец один и тот же на компьютере и на телефоне.
+   */
+  dismissed: string;
+};
+
 export type MutationResponse = {
   ok?: boolean;
   message?: string;

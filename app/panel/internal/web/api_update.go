@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
@@ -37,7 +38,18 @@ type updateJSON struct {
 	StateStep    string `json:"state_step"`
 	StateMessage string `json:"state_message"`
 	StateAtUTC   string `json:"state_at_utc"`
+
+	// Какую версию владелец убрал с глаз крестиком. Хранится на сервере, а
+	// не в браузере: владелец один и тот же на компьютере и на телефоне, и
+	// закрытая полоса должна остаться закрытой в обоих
+	// (amnezia-vpn-server-tjoq).
+	Dismissed string `json:"dismissed"`
 }
+
+// dismissedSetting is where the closed banner is remembered. The value is
+// the version it was closed for, not a flag: the next release must bring
+// the banner back by itself.
+const dismissedSetting = "update_banner_dismissed"
 
 func (s *Server) statusDir() string {
 	return filepath.Dir(s.cfg.StatusPath)
@@ -63,6 +75,9 @@ func (s *Server) apiUpdate(w http.ResponseWriter, r *http.Request) {
 		out.CheckedAtUTC = chk.CheckedAtUTC
 		out.CheckResult = chk.Result
 		out.CheckReason = chk.Reason
+	}
+	if v, ok, err := db.GetSetting(s.db(), dismissedSetting); err == nil && ok {
+		out.Dismissed = v
 	}
 	if st, err := status.ReadUpdateState(filepath.Join(dir, "update-state.json")); err == nil && st != nil {
 		out.State = st.State
