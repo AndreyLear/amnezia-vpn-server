@@ -32,11 +32,9 @@ export function UpdateBanner({
   async function dismiss() {
     if (!info || hiding) return;
     setHiding(true);
-    const body = new URLSearchParams({ version: info.latest });
     const data = await api<MutationResponse>("/api/update/dismiss", {
       method: "POST",
-      body,
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: JSON.stringify({ version: info.latest }),
     });
     if (mutationOk(data)) onChanged();
     setHiding(false);
