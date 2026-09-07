@@ -51,7 +51,23 @@ describe("меню в шапке", () => {
 
     await user.click(screen.getByRole("button", { name: "Ещё" }));
     expect(await screen.findByText("О версиях")).toBeInTheDocument();
+    expect(screen.getByText("Состояние служб")).toBeInTheDocument();
     expect(screen.getByText("Проверить обновления")).toBeInTheDocument();
+  });
+
+  // Пункты живут списком: новый добавляется строкой и вёрстку шапки не
+  // трогает. Проверяем это тем, что все они и есть один список.
+  it("рисует пункты одним списком, а не вёрсткой", async () => {
+    const user = userEvent.setup();
+    render(<HeaderMenu />);
+
+    await user.click(screen.getByRole("button", { name: "Ещё" }));
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "О версиях",
+      "Состояние служб",
+      "Проверить обновления",
+    ]);
   });
 
   it("открывается с клавиатуры", async () => {

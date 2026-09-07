@@ -3,6 +3,7 @@ import { MoreHorizontalIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { AboutDialog } from "@/components/AboutDialog";
+import { ServicesDialog } from "@/components/ServicesDialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -27,6 +28,7 @@ type MenuItem = {
 
 export function HeaderMenu({ pendingUpdate = false }: { pendingUpdate?: boolean }) {
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [servicesOpen, setServicesOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   // Radix возвращает фокус на кнопку при закрытии меню. Для клавиатуры это
   // единственно верно; для мыши кольцо фокуса остаётся гореть, будто меню всё
@@ -45,6 +47,7 @@ export function HeaderMenu({ pendingUpdate = false }: { pendingUpdate?: boolean 
 
   const items: MenuItem[] = [
     { label: "О версиях", onSelect: () => setAboutOpen(true) },
+    { label: "Состояние служб", onSelect: () => setServicesOpen(true) },
     { label: "Проверить обновления", onSelect: () => void checkForUpdates() },
   ];
 
@@ -95,6 +98,7 @@ export function HeaderMenu({ pendingUpdate = false }: { pendingUpdate?: boolean 
         </DropdownMenuContent>
       </DropdownMenu>
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <ServicesDialog open={servicesOpen} onOpenChange={setServicesOpen} />
     </>
   );
 }

@@ -240,6 +240,9 @@ func New(cfg Config) (*Server, error) {
 	// делает агент. Запрос проверки — единственное, что панель тут пишет,
 	// и пишет она его в свой том, а не хосту (amnezia-vpn-server-8bt5).
 	s.mux.Handle("GET /api/update", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdate)))
+	// Что сторож видел в последнюю минуту. Только чтение: панель хостом не
+	// распоряжается (amnezia-vpn-server-eq82).
+	s.mux.Handle("GET /api/services", s.auth.RequireAPI(http.HandlerFunc(s.apiServices)))
 	s.mux.Handle("POST /api/update/check", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateCheck)))
 	s.mux.Handle("POST /api/update/start", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateStart)))
 	s.mux.Handle("POST /api/update/dismiss", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateDismiss)))

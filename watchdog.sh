@@ -106,6 +106,10 @@ restart_service() { # restart_service СЕРВИС ПРИЧИНА
     log "перезапускаю $service: $reason"
     if (cd "$ROOT_DIR" && "$DOCKER" compose --env-file versions.lock restart "$service") >/dev/null 2>&1; then
         printf '%s' "$now" > "$STATE_DIR/$service.restarted"
+        # Причина перезапуска переживает сам перезапуск: через минуту всё
+        # будет исправно, и без этой записи в панели не останется следа,
+        # что что-то вообще происходило.
+        printf '%s' "$reason" > "$STATE_DIR/$service.restart_reason"
         printf '0' > "$STATE_DIR/$service.fail"
         log "$service перезапущен"
     else
@@ -115,6 +119,12 @@ restart_service() { # restart_service СЕРВИС ПРИЧИНА
 
 record() { # record СЕРВИС ok|fail ПРИЧИНА
     local service="$1" verdict="$2" reason="${3:-}" count
+    # Приговор и причина запоминаются для панели: отказ, который чинится
+    # сам, сегодня невидим, и владелец узнаёт о нём от пользователей, а не
+    # от панели — ровно та беда, из-за которой сторож и заводился
+    # (amnezia-vpn-server-eq82).
+    printf '%s' "$verdict" > "$STATE_DIR/$service.verdict"
+    printf '%s' "$reason" > "$STATE_DIR/$service.reason"
     if [ "$verdict" = ok ]; then
         printf '0' > "$STATE_DIR/$service.fail"
         return 0
@@ -174,3 +184,47 @@ else
         record awg ok
     fi
 fi
+
+# --- снимок для панели (amnezia-vpn-server-eq82) -----------------------
+#
+# Панель живёт в контейнере и ни про журнал, ни про systemd знать не может.
+# Всё, что сторож выяснил за эту минуту, он и записывает — рядом со
+# status.json, откуда панель уже читает и только на чтение.
+#
+# Отказ, который чинится сам, невидим ровно до тех пор, пока о нём негде
+# прочитать. Здесь и есть это «где».
+services_snapshot() {
+    local dir="$ROOT_DIR/status" tmp file service
+    [ -d "$dir" ] || return 0
+    file="$dir/services.json"
+    tmp="$file.tmp"
+
+    entry() { # entry СЕРВИС — один объект JSON
+        local service="$1" verdict reason fails restarted restart_reason
+        verdict="$(cat "$STATE_DIR/$service.verdict" 2>/dev/null || printf 'unknown')"
+        reason="$(cat "$STATE_DIR/$service.reason" 2>/dev/null || printf '')"
+        fails="$(counter_read "$service")"
+        restarted="$(cat "$STATE_DIR/$service.restarted" 2>/dev/null || printf '')"
+        restart_reason="$(cat "$STATE_DIR/$service.restart_reason" 2>/dev/null || printf '')"
+        # Время наружу уходит в том же виде, что и везде: UTC по RFC 3339.
+        if [ -n "$restarted" ]; then
+            restarted="$(date -u -r "$restarted" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+                || date -u -d "@$restarted" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '')"
+        fi
+        printf '{"name":"%s","state":"%s","reason":"%s","fails":%s,"restarted_at_utc":"%s","restart_reason":"%s"}' \
+            "$service" "$verdict" "$reason" "$fails" "$restarted" "$restart_reason"
+    }
+
+    {
+        printf '{"schema":"v1","checked_at_utc":"%s","services":[' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '%s,' "$(entry dns)"
+        printf '%s' "$(entry awg)"
+        printf ']}\n'
+    } > "$tmp" 2>/dev/null \
+        && chmod 0644 "$tmp" \
+        && mv -f "$tmp" "$file"
+    return 0
+}
+
+services_snapshot

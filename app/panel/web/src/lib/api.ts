@@ -201,6 +201,25 @@ export type UpdateInfo = {
   dismissed: string;
 };
 
+/** Что сторож видел в последнюю минуту (amnezia-vpn-server-eq82). */
+export type ServiceState = {
+  name: string;
+  /** «ok», «fail» или «unknown» — последнее значит «не смотрели», а не «сломано». */
+  state: string;
+  reason: string;
+  fails: number;
+  /** Переживают починку: иначе не осталось бы следа, что сервер сам себя чинил. */
+  restarted_at_utc: string;
+  restart_reason: string;
+};
+
+export type ServicesInfo = {
+  checked_at_utc: string;
+  /** null — неизвестно, false — сторож не ставился. */
+  watchdog: boolean | null;
+  services: ServiceState[];
+};
+
 export type MutationResponse = {
   ok?: boolean;
   message?: string;
