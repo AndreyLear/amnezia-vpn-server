@@ -126,14 +126,16 @@ check_not "и не перезапускается" grep -q "restart dns" "$CALLS
 # --- нечем проверить ---------------------------------------------------
 # Отсутствие dig — не отказ резолвера. Считать иначе значило бы
 # перезапускать исправный сервис по кругу из-за отсутствующего пакета.
+#
+# Имя несуществующей программы, а не удаление подделки из каталога: dig есть
+# и на машине разработчика, и на бегунке CI, так что удаление подделки лишь
+# открывало настоящий. На macOS он к недоступному серверу возвращает ноль, на
+# Linux — нет, и проверка проходила здесь по случайности, а в CI падала.
 setup
-rm -f "$FAKE_DIR/dig"
-run_watchdog >/dev/null 2>&1
+run_watchdog AMNEZIA_WATCHDOG_DIG=amnezia-no-such-dig >/dev/null 2>&1
 check_not "без dig резолвер не объявляется сломанным" \
     grep -q '"name":"dns","state":"fail"' <<<"$(snapshot)"
 check_not "и не перезапускается" grep -q "restart dns" "$CALLS"
-printf '#!/bin/bash\necho "dig $*" >> "${WD_CALLS:?}"\nexit "${DIG_RC:-0}"\n' > "$FAKE_DIR/dig"
-chmod +x "$FAKE_DIR/dig"
 
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"
