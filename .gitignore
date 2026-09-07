@@ -48,7 +48,13 @@ node_modules/
 AUDITS/
 # Internal design documents (spec, architecture, security notes) are
 # kept out of the repository like the audits.
-docs/
+# docs/* , а не docs/: исключённый каталог git не просматривает вовсе, и
+# обратное правило внутри него не работает.
+docs/*
+# Кроме решений: правило, на котором держится безопасность отката, бесполезно,
+# если живёт на одной машине. ADR — часть договора о том, как менять продукт,
+# и уезжает вместе с ним.
+!docs/adr/
 # The changelog is maintained locally and not committed.
 CHANGELOG.md
 
