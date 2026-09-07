@@ -68,3 +68,5 @@ jobs:
         run: bash app/dns/test_dns.sh
       - name: Update check harness
         run: bash app/panel/test_update_check.sh
+      - name: Update agent harness
+        run: bash app/panel/test_update_agent.sh
