@@ -21,7 +21,10 @@ jobs:
   images:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # contents: write — чтобы выложить описание выпуска. Пользователь узнаёт,
+      # что изменилось, из тела выпуска на GitHub; агент обновления будет
+      # забирать его оттуда же (amnezia-vpn-server-mmpd).
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v7
@@ -128,6 +131,31 @@ jobs:
           tags: ${{ env.IMAGE_REGISTRY }}/dns:${{ env.PUBLISH_VERSION }}
           build-args: |
             ALPINE_VERSION=${{ env.ALPINE_VERSION }}
+
+      # Описание выпуска для людей берётся из RELEASES.md: раздел этой версии,
+      # без заголовка. Отсутствие раздела — не отказ сборки (образы уже
+      # опубликованы), но заметная строка в итогах: выпуск без описания
+      # оставляет пользователя гадать, стоит ли обновляться.
+      - name: Publish release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="$(awk -v want="## ${PUBLISH_VERSION}" '
+              $0 == want { inside = 1; next }
+              inside && /^## / { exit }
+              inside { print }
+          ' RELEASES.md)"
+          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            printf '::warning::RELEASES.md has no section for %s; the release will have no notes\n' "$PUBLISH_VERSION"
+            printf 'RELEASES.md has no section for `%s`.\n' "$PUBLISH_VERSION" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if gh release view "v${PUBLISH_VERSION}" >/dev/null 2>&1; then
+            printf '%s\n' "$notes" | gh release edit "v${PUBLISH_VERSION}" --notes-file -
+          else
+            printf '%s\n' "$notes" | gh release create "v${PUBLISH_VERSION}" \
+              --title "v${PUBLISH_VERSION}" --notes-file -
+          fi
 
       - name: Summary
         run: |
