@@ -1,0 +1,117 @@
+// Обновление глазами панели (amnezia-vpn-server-8bt5, -tjoq).
+//
+// Панель наружу не ходит и хостом не распоряжается: она открыта в интернет по
+// паролю, и чем меньше она умеет, тем меньше можно сделать, захватив её.
+// Всё, что здесь есть, — это чтение файлов, которые пишет хост, и просьба,
+// положенная в файл. Проверяет просьбу и выполняет её хостовой агент.
+package web
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
+)
+
+type updateJSON struct {
+	// Installed — версия этого развёртывания; Latest — последняя, о которой
+	// известно хосту. Пусто там, где сказать нечего.
+	Installed string `json:"installed"`
+	Latest    string `json:"latest"`
+	Available bool   `json:"available"`
+	Notes     string `json:"notes"`
+
+	// Про последнюю проверку: когда и чем кончилась. «Ни разу не
+	// проверяли» и «проверяли, не вышло» — разные новости.
+	CheckedAtUTC string `json:"checked_at_utc"`
+	CheckResult  string `json:"check_result"`
+	CheckReason  string `json:"check_reason"`
+
+	// Что делает агент прямо сейчас или чем кончил. Итог лежит в файле и
+	// дожидается: обновление перезапускает саму панель.
+	State        string `json:"state"`
+	StateFrom    string `json:"state_from"`
+	StateTo      string `json:"state_to"`
+	StateStep    string `json:"state_step"`
+	StateMessage string `json:"state_message"`
+	StateAtUTC   string `json:"state_at_utc"`
+
+	// Какую версию владелец убрал с глаз крестиком. Хранится на сервере, а
+	// не в браузере: владелец один и тот же на компьютере и на телефоне, и
+	// закрытая полоса должна остаться закрытой в обоих
+	// (amnezia-vpn-server-tjoq).
+	Dismissed string `json:"dismissed"`
+}
+
+// dismissedSetting is where the closed banner is remembered. The value is
+// the version it was closed for, not a flag: the next release must bring
+// the banner back by itself.
+const dismissedSetting = "update_banner_dismissed"
+
+func (s *Server) statusDir() string {
+	return filepath.Dir(s.cfg.StatusPath)
+}
+
+// dataDir is where the panel may write: its own volume. The host watches it
+// for requests, which is the only channel from the panel to the host.
+func (s *Server) dataDir() string {
+	return filepath.Dir(s.cfg.DBPath)
+}
+
+func (s *Server) apiUpdate(w http.ResponseWriter, r *http.Request) {
+	out := updateJSON{Installed: productVersion()}
+	dir := s.statusDir()
+
+	if rel, err := status.ReadRelease(filepath.Join(dir, "update-latest.json")); err == nil && rel != nil {
+		out.Latest = rel.Version()
+		out.Notes = rel.Notes()
+	}
+	out.Available = status.IsNewer(out.Latest, out.Installed)
+
+	if chk, err := status.ReadUpdateCheck(filepath.Join(dir, "update-check.json")); err == nil && chk != nil {
+		out.CheckedAtUTC = chk.CheckedAtUTC
+		out.CheckResult = chk.Result
+		out.CheckReason = chk.Reason
+	}
+	if v, ok, err := db.GetSetting(s.db(), dismissedSetting); err == nil && ok {
+		out.Dismissed = v
+	}
+	if st, err := status.ReadUpdateState(filepath.Join(dir, "update-state.json")); err == nil && st != nil {
+		out.State = st.State
+		out.StateFrom = st.From
+		out.StateTo = st.To
+		out.StateStep = st.Step
+		out.StateMessage = st.Message
+		out.StateAtUTC = st.AtUTC
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// apiUpdateCheck asks the host to look now. The panel writes an empty file
+// and nothing else: a systemd path unit wakes the same daily check.
+func (s *Server) apiUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(s.dataDir(), "update-check-request")
+	if err := writeRequest(path, ""); err != nil {
+		s.cfg.Logger.Printf("update check request: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "Не удалось запросить проверку"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// writeRequest drops a request file atomically. Atomically because the host
+// watches the path: a half-written request would be read as a whole one.
+func writeRequest(path, body string) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
+		return fmt.Errorf("web: write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("web: rename %s: %w", tmp, err)
+	}
+	return nil
+}

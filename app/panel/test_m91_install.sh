@@ -2633,6 +2633,61 @@ test_watchdog_can_be_declined() {
 # снятие при повторном запуске с --no-update-check.
 # Агент обновления (amnezia-vpn-server-nukf): дорожка по файлу, сам скрипт и
 # копия установщика, без которой откат нечем поднимать.
+# Факты о развёртывании (amnezia-vpn-server-8bt5): панель в контейнере и про
+# хост знать не может, поэтому про хост записывает установщик.
+test_deployment_facts_written() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "deployment facts: exit $rc"
+    local file="$ROOT/status/deployment.json"
+    [ -f "$file" ] && pass "deployment facts written" || fail "no $file"
+    grep -q '"os":"ubuntu 24.04 (noble)"' "$file" \
+        && pass "the facts name the system the server runs" \
+        || fail "the OS did not reach the facts: $(cat "$file" 2>/dev/null)"
+    # Выключенное и неизвестное — разные вещи, и панель должна их различать.
+    grep -q '"watchdog":true' "$file" \
+        && pass "an enabled watchdog is recorded as enabled" \
+        || fail "the watchdog state did not reach the facts"
+}
+
+test_deployment_facts_follow_the_flags() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-watchdog --no-update-check)"
+    [ "$rc" = "0" ] || fail "deployment facts with flags: exit $rc"
+    grep -q '"watchdog":false' "$ROOT/status/deployment.json" \
+        && pass "a declined watchdog is recorded as declined" \
+        || fail "the facts still claim a watchdog"
+    grep -q '"update_check":false' "$ROOT/status/deployment.json" \
+        && pass "a declined update check is recorded as declined" \
+        || fail "the facts still claim an update check"
+}
+
+# Пункт «Проверить обновления» в панели: панель кладёт файл, спрашивает хост.
+test_on_demand_check_armed() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "on-demand check: exit $rc"
+    local path="$SYSTEMD_DIR_TEST/amnezia-vpn-update-check-request.path"
+    [ -f "$path" ] && pass "the on-demand check path unit is written" || fail "no $path"
+    grep -Fq "PathExists=${ROOT}/data/update-check-request" "$path" \
+        && pass "it watches the panel's own volume" || fail "it watches the wrong file"
+    grep -Fq "Unit=amnezia-vpn-update-check.service" "$path" \
+        && pass "and it runs the same check as the daily timer" \
+        || fail "the on-demand path runs something else"
+    grep -q "systemctl enable --now amnezia-vpn-update-check-request.path" "$FAKE_CALLS" \
+        && pass "the on-demand check is armed" || fail "the path unit was never enabled"
+}
+
+# Кнопка в панели не должна обходить решение владельца не ходить наружу.
+test_on_demand_check_follows_the_flag() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-update-check)"
+    [ "$rc" = "0" ] || fail "on-demand check with flag: exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-update-check-request.path" ] \
+        && fail "--no-update-check left a way to check on demand" \
+        || pass "--no-update-check removes the on-demand path too"
+}
+
 test_update_agent_installed() {
     fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
@@ -2911,6 +2966,10 @@ test_update_check_runs_once_at_install
 test_unreachable_github_does_not_break_the_install
 test_update_check_can_be_declined
 test_update_check_removed_on_rerun_with_flag
+test_deployment_facts_written
+test_deployment_facts_follow_the_flags
+test_on_demand_check_armed
+test_on_demand_check_follows_the_flag
 test_update_agent_installed
 test_installer_keeps_a_copy_of_itself
 test_rerun_from_inside_the_deployment

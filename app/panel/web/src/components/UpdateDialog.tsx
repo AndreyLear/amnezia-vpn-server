@@ -1,0 +1,149 @@
+import { useEffect, useRef, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { api, mutationOk, type MutationResponse, type UpdateInfo } from "@/lib/api";
+
+/**
+ * Окно изменений и ход обновления (amnezia-vpn-server-tjoq).
+ *
+ * ПОЛОСА ПРОГРЕССА НЕ ПРИВЯЗАНА КО ВРЕМЕНИ. Панель в середине обновления
+ * перезапускается, и живой ход отдавать некому. Полоса идёт к 99% и там
+ * замирает, дожидаясь настоящего итога из файла состояния: иначе она соврала
+ * бы ровно в тот момент, когда обновление затянулось, — а это единственный
+ * момент, когда на неё смотрят.
+ *
+ * Закрытый браузер ничего не ломает: итог лежит на сервере и дождётся.
+ */
+
+// Девяносто девять процентов за пять минут — не обещание, а темп, при котором
+// полоса не упирается в потолок раньше обычного обновления (около минуты) и
+// не выглядит застывшей, если выпуск собирается на месте.
+const creepToPercent = 99;
+const creepOverMs = 5 * 60 * 1000;
+const creepTickMs = 1000;
+
+// Отсчёт идёт, только пока на него смотрят: окно закрыто — таймер не нужен,
+// а обновление от этого не останавливается. Настоящий итог всё равно придёт
+// из файла состояния, а не отсюда.
+function useCreepingProgress(running: boolean, visible: boolean) {
+  const [percent, setPercent] = useState(0);
+  const startedAt = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!running) {
+      startedAt.current = null;
+      return;
+    }
+    if (!visible) return;
+    startedAt.current ??= Date.now();
+    const tick = () => {
+      const started = startedAt.current;
+      if (started === null) return;
+      const share = Math.min(1, (Date.now() - started) / creepOverMs);
+      setPercent(Math.round(share * creepToPercent));
+    };
+    tick();
+    const timer = window.setInterval(tick, creepTickMs);
+    return () => window.clearInterval(timer);
+  }, [running, visible]);
+
+  return percent;
+}
+
+function Notes({ notes }: { notes: string }) {
+  const lines = notes.split("\n").filter((line) => line.trim() !== "");
+  if (lines.length === 0) {
+    return <p className="text-muted-foreground">Описание выпуска не пришло</p>;
+  }
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      {lines.map((line, index) => (
+        <p key={index}>{line.replace(/^[-*]\s*/, "")}</p>
+      ))}
+    </div>
+  );
+}
+
+export function UpdateDialog({
+  info,
+  open,
+  onOpenChange,
+  onStarted,
+}: {
+  info: UpdateInfo | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onStarted: () => void;
+}) {
+  const [starting, setStarting] = useState(false);
+  const running = info?.state === "running";
+  const percent = useCreepingProgress(running, open);
+
+  async function start() {
+    if (starting || running) return;
+    setStarting(true);
+    const data = await api<MutationResponse>("/api/update/start", { method: "POST" });
+    if (mutationOk(data)) onStarted();
+    setStarting(false);
+  }
+
+  const finished = info?.state === "ok" || info?.state === "rolled-back" || info?.state === "failed";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="gap-6">
+        <DialogHeader>
+          <DialogTitle>{running ? "Обновление идёт" : `Версия ${info?.latest ?? ""}`}</DialogTitle>
+        </DialogHeader>
+
+        {running ? (
+          <div className="flex flex-col gap-2">
+            <div
+              role="progressbar"
+              aria-valuenow={percent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              className="h-2 w-full overflow-hidden rounded-full bg-muted"
+            >
+              <div
+                className="h-full rounded-full bg-primary transition-[width] duration-1000 ease-linear"
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {info?.state_step ? `Шаг: ${info.state_step}` : "Идёт обновление"}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Окно можно закрыть — обновление от этого не остановится, а итог дождётся
+            </p>
+          </div>
+        ) : finished ? (
+          <p>{info?.state_message}</p>
+        ) : (
+          <>
+            <Notes notes={info?.notes ?? ""} />
+            <p className="text-sm text-muted-foreground">
+              Пока идёт обновление, клиенты остаются без связи — обычно около минуты.
+              Они восстановят её сами
+            </p>
+          </>
+        )}
+
+        {running || finished ? null : (
+          <DialogFooter>
+            <Button type="button" disabled={starting} onClick={() => void start()}>
+              Обновить
+            </Button>
+          </DialogFooter>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -7,6 +7,7 @@ import { ClientCard } from "@/components/ClientCard";
 import { EmptyClients } from "@/components/EmptyClients";
 import { ClientInfoDialog } from "@/components/ClientInfoDialog";
 import { QrDialog } from "@/components/QrDialog";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import {
   api,
   mutationOk,
@@ -18,6 +19,7 @@ import {
   type MutationResponse,
 } from "@/lib/api";
 import { nextDemoHost } from "@/lib/demoHost";
+import { useUpdateInfo } from "@/lib/update";
 
 const DEMO_HOST_OVERLAY =
   import.meta.env.DEV &&
@@ -31,6 +33,9 @@ export default function HomePage() {
   const [qrId, setQrId] = useState<number | null>(null);
   const [pendingId, setPendingId] = useState<number | "new" | null>(null);
   const [host, setHost] = useState<HostSnapshot | null>(null);
+  // Всё про обновление приходит одним ответом и обновляется само, пока агент
+  // работает (amnezia-vpn-server-tjoq).
+  const { info: updateInfo, reload: reloadUpdate } = useUpdateInfo();
 
   const load = useCallback(async () => {
     const list = await api<unknown>("/api/clients");
@@ -170,7 +175,9 @@ export default function HomePage() {
       restorePending={restorePending}
       onAddClient={() => setAddOpen(true)}
       host={host}
+      pendingUpdate={updateInfo?.available ?? false}
     >
+      <UpdateBanner info={updateInfo} onChanged={reloadUpdate} />
       {clients === null ? null : clients.length === 0 ? (
         <EmptyClients onAdd={() => setAddOpen(true)} restorePending={restorePending} />
       ) : (

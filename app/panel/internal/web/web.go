@@ -236,6 +236,13 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /api/backups/restore", s.auth.RequireAPI(http.HandlerFunc(s.apiBackupRestore)))
 	s.mux.Handle("GET /api/stats/host", s.auth.RequireAPI(http.HandlerFunc(s.apiStatsHost)))
 	s.mux.Handle("GET /api/versions", s.auth.RequireAPI(http.HandlerFunc(s.apiVersions)))
+	// Всё про обновление одним ответом: что вышло, когда спрашивали и что
+	// делает агент. Запрос проверки — единственное, что панель тут пишет,
+	// и пишет она его в свой том, а не хосту (amnezia-vpn-server-8bt5).
+	s.mux.Handle("GET /api/update", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdate)))
+	s.mux.Handle("POST /api/update/check", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateCheck)))
+	s.mux.Handle("POST /api/update/start", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateStart)))
+	s.mux.Handle("POST /api/update/dismiss", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateDismiss)))
 	s.mux.Handle("GET /api/clients", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsList)))
 	s.mux.Handle("POST /api/clients", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsCreate))))
 	s.mux.Handle("GET /api/clients/{id}", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsGet)))
