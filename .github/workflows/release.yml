@@ -132,10 +132,32 @@ jobs:
           build-args: |
             ALPINE_VERSION=${{ env.ALPINE_VERSION }}
 
+      # Исходники выпуска отдельным файлом (amnezia-vpn-server-nukf). Агент
+      # обновления скачивает именно его, а не автоматический архив GitHub:
+      # тот собирается на лету и его состав нам никто не обещал, а этот —
+      # ровно то дерево, из которого собраны образы выше.
+      #
+      # git archive, потому что так же поступает bootstrap.sh: в архив
+      # попадает закоммиченное дерево, без .git и без локального мусора.
+      - name: Pack the release sources
+        run: |
+          set -euo pipefail
+          name="amnezia-vpn-server-${PUBLISH_VERSION}"
+          git archive --format=tar.gz --prefix="${name}/" -o "${name}.tar.gz" HEAD
+          sha="$(sha256sum "${name}.tar.gz" | cut -d' ' -f1)"
+          printf 'SOURCE_TARBALL=%s.tar.gz\n' "$name" >> "$GITHUB_ENV"
+          printf 'SOURCE_SHA256=%s\n' "$sha" >> "$GITHUB_ENV"
+
       # Описание выпуска для людей берётся из RELEASES.md: раздел этой версии,
       # без заголовка. Отсутствие раздела — не отказ сборки (образы уже
       # опубликованы), но заметная строка в итогах: выпуск без описания
       # оставляет пользователя гадать, стоит ли обновляться.
+      #
+      # Последней строкой к описанию приписывается контрольная сумма архива.
+      # Она лежит не рядом с архивом, а в теле выпуска намеренно: подменивший
+      # файл должен ещё и отредактировать текст, который люди читают на
+      # странице выпуска и в панели. Строка машинная, с постоянным началом,
+      # чтобы панель показывала человеку прозу, а не хеш.
       - name: Publish release notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -148,14 +170,18 @@ jobs:
           if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
             printf '::warning::RELEASES.md has no section for %s; the release will have no notes\n' "$PUBLISH_VERSION"
             printf 'RELEASES.md has no section for `%s`.\n' "$PUBLISH_VERSION" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
           fi
+          {
+            printf '%s\n\n' "$notes"
+            printf 'amnezia-sha256: %s\n' "$SOURCE_SHA256"
+          } > /tmp/notes.md
           if gh release view "v${PUBLISH_VERSION}" >/dev/null 2>&1; then
-            printf '%s\n' "$notes" | gh release edit "v${PUBLISH_VERSION}" --notes-file -
+            gh release edit "v${PUBLISH_VERSION}" --notes-file /tmp/notes.md
           else
-            printf '%s\n' "$notes" | gh release create "v${PUBLISH_VERSION}" \
-              --title "v${PUBLISH_VERSION}" --notes-file -
+            gh release create "v${PUBLISH_VERSION}" \
+              --title "v${PUBLISH_VERSION}" --notes-file /tmp/notes.md
           fi
+          gh release upload "v${PUBLISH_VERSION}" "$SOURCE_TARBALL" --clobber
 
       - name: Summary
         run: |

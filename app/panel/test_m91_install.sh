@@ -2631,6 +2631,62 @@ test_watchdog_can_be_declined() {
 # one: the second run must take away what the first one left.
 # Проверка обновлений (amnezia-vpn-server-zklt): юниты, первый прогон и
 # снятие при повторном запуске с --no-update-check.
+# Агент обновления (amnezia-vpn-server-nukf): дорожка по файлу, сам скрипт и
+# копия установщика, без которой откат нечем поднимать.
+test_update_agent_installed() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "update agent: exit $rc"
+    local svc="$SYSTEMD_DIR_TEST/amnezia-vpn-update.service"
+    local path="$SYSTEMD_DIR_TEST/amnezia-vpn-update.path"
+    [ -f "$svc" ] && [ -f "$path" ] \
+        && pass "update agent units installed" || fail "update agent units missing"
+    grep -Fq "ExecStart=${ROOT}/update-agent.sh" "$svc" \
+        && pass "the unit runs the deployed agent" \
+        || fail "the unit does not point at $ROOT/update-agent.sh"
+    # Панель пишет запрос в свой том данных — он у неё уже смонтирован, и
+    # ничего нового ей для этого не нужно.
+    grep -Fq "PathExists=${ROOT}/data/update-request.json" "$path" \
+        && pass "the agent waits for a request in the panel's own volume" \
+        || fail "the path unit watches the wrong file"
+    [ -x "$ROOT/update-agent.sh" ] \
+        && pass "update-agent.sh deployed and executable" \
+        || fail "update-agent.sh missing from the deployment"
+    grep -q "systemctl enable --now amnezia-vpn-update.path" "$FAKE_CALLS" \
+        && pass "the request path is armed" || fail "the path unit was never enabled"
+}
+
+# Откат ставит прежний выпуск установщиком той же версии. Качать его по сети
+# на откате нельзя — сеть и есть то, что могло сломаться.
+test_installer_keeps_a_copy_of_itself() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "installer copy: exit $rc"
+    [ -x "$ROOT/install.sh" ] \
+        && pass "the deployment keeps the installer that made it" \
+        || fail "no install.sh in the deployment: a rollback would have nothing to run"
+}
+
+# Раз установщик лежит в развёртывании, его оттуда и запустят — руками или
+# откатом. `cp -a` файла на самого себя падает, а не молчит.
+test_rerun_from_inside_the_deployment() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "in-place rerun setup: exit $rc"
+    # Присваивание перед вызовом функции в bash переживает сам вызов, а
+    # следующие тесты должны запускать установщик из репозитория.
+    local saved="$INSTALL_SH"
+    INSTALL_SH="$ROOT/install.sh"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    INSTALL_SH="$saved"
+    [ "$rc" = "0" ] \
+        && pass "a rerun from inside the deployment survives" \
+        || fail "running the deployed installer in place failed (exit $rc)"
+    grep -q "the files are already in place" "$TMP_TEST/out" \
+        && pass "and it says why it copied nothing" \
+        || fail "the in-place rerun said nothing about skipping the copies"
+}
+
 test_update_check_installed_by_default() {
     fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
@@ -2855,6 +2911,9 @@ test_update_check_runs_once_at_install
 test_unreachable_github_does_not_break_the_install
 test_update_check_can_be_declined
 test_update_check_removed_on_rerun_with_flag
+test_update_agent_installed
+test_installer_keeps_a_copy_of_itself
+test_rerun_from_inside_the_deployment
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
 test_prune_soft_fail

@@ -921,19 +921,36 @@ copy_tree() { # cp -a with per-file error stop
     fi
 }
 
-copy_tree "$SCRIPT_DIR/compose.yaml" "$ROOT_DIR/"
-copy_tree "$SCRIPT_DIR/versions.lock" "$ROOT_DIR/"
-copy_tree "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR/"
-copy_tree "$SCRIPT_DIR/watchdog.sh" "$ROOT_DIR/"
-copy_tree "$SCRIPT_DIR/update-check.sh" "$ROOT_DIR/"
-# Build context is the repository root (compose.yaml build.context = "."):
-# the app/ tree (panel Dockerfile + Go module incl. embedded templates,
-# awg Dockerfile + entrypoint scripts, dns Dockerfile + entrypoint) must
-# be present under the root.
-copy_tree "$SCRIPT_DIR/app" "$ROOT_DIR/"
+# Установщик кладёт рядом с развёртыванием и сам себя
+# (amnezia-vpn-server-nukf). Не ради удобства: агент обновления снимает копию
+# развёртывания перед тем, как ставить новый выпуск, и откатывать её должен
+# установщик той же версии. Качать его по сети на откате нельзя — сеть и есть
+# то, что могло сломаться.
+#
+# А раз он там лежит, его оттуда и запустят — руками или откатом. `cp -a`
+# файла на самого себя не молчит, а падает, и повторный запуск на месте
+# развалился бы на первой же строке. Копировать в этом случае нечего: всё
+# уже там, где нужно.
+if [ "$SCRIPT_DIR" = "$ROOT_DIR" ]; then
+    log "running from the deployment itself: the files are already in place"
+else
+    copy_tree "$SCRIPT_DIR/compose.yaml" "$ROOT_DIR/"
+    copy_tree "$SCRIPT_DIR/versions.lock" "$ROOT_DIR/"
+    copy_tree "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR/"
+    copy_tree "$SCRIPT_DIR/watchdog.sh" "$ROOT_DIR/"
+    copy_tree "$SCRIPT_DIR/update-check.sh" "$ROOT_DIR/"
+    copy_tree "$SCRIPT_DIR/update-agent.sh" "$ROOT_DIR/"
+    copy_tree "$SCRIPT_DIR/install.sh" "$ROOT_DIR/"
+    # Build context is the repository root (compose.yaml build.context = "."):
+    # the app/ tree (panel Dockerfile + Go module incl. embedded templates,
+    # awg Dockerfile + entrypoint scripts, dns Dockerfile + entrypoint) must
+    # be present under the root.
+    copy_tree "$SCRIPT_DIR/app" "$ROOT_DIR/"
+fi
 chmod 0644 "$ROOT_DIR/compose.yaml" "$ROOT_DIR/versions.lock"
-chmod 0755 "$ROOT_DIR/docker-prune.sh" "$ROOT_DIR/watchdog.sh" "$ROOT_DIR/update-check.sh"
-log "deployment files installed (compose.yaml, versions.lock, docker-prune.sh, watchdog.sh, update-check.sh, app/)"
+chmod 0755 "$ROOT_DIR/docker-prune.sh" "$ROOT_DIR/watchdog.sh" \
+    "$ROOT_DIR/update-check.sh" "$ROOT_DIR/update-agent.sh" "$ROOT_DIR/install.sh"
+log "deployment files installed (compose.yaml, versions.lock, install.sh, docker-prune.sh, watchdog.sh, update-check.sh, update-agent.sh, app/)"
 
 # --- 10. journald cap + weekly docker-prune timer ---------------------
 
@@ -1061,6 +1078,43 @@ else
     rm -f "$ROOT_DIR/status/update-latest.json" "$ROOT_DIR/status/update-check.json"
     log "update check skipped (--no-update-check): units removed if they were there"
 fi
+
+# Агент обновления (amnezia-vpn-server-nukf). Ставится всегда: он ничего не
+# делает, пока панель не попросит, а без него кнопка «обновиться» в панели
+# была бы кнопкой в никуда.
+#
+# Юнит по файлу, а не сокет и не порт: панель пишет запрос в свой том данных,
+# который у неё уже смонтирован, и ничего нового ей для этого не нужно. Всё,
+# что даёт эта дорожка захватившему панель, — возможность попросить обновление
+# вперёд, на выпуск из нашего репозитория; проверяет запрос агент, а не панель.
+cat > "$SYSTEMD_DIR/amnezia-vpn-update.service" <<EOF
+# amnezia-vpn managed: bring the deployment to a requested release.
+[Unit]
+Description=Amnezia VPN update agent
+
+[Service]
+Type=oneshot
+Environment=AMNEZIA_UPDATE_ROOT=${ROOT_DIR}
+ExecStart=${ROOT_DIR}/update-agent.sh
+# Обновление перезапускает стек, в том числе панель, которая его и попросила.
+# Агент не должен уехать вместе с ней.
+KillMode=process
+TimeoutStartSec=30min
+EOF
+chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-update.service"
+cat > "$SYSTEMD_DIR/amnezia-vpn-update.path" <<EOF
+# amnezia-vpn managed: run the update agent when the panel asks.
+[Unit]
+Description=Amnezia VPN update request
+
+[Path]
+PathExists=${ROOT_DIR}/data/update-request.json
+
+[Install]
+WantedBy=paths.target
+EOF
+chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-update.path"
+log "update agent units written (ExecStart=$ROOT_DIR/update-agent.sh, on request)"
 cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed (prune timer)"
 log "weekly docker-prune units written (enable --now after compose up; ExecStart=$ROOT_DIR/docker-prune.sh)"
 
@@ -2428,6 +2482,12 @@ if [ "$UPDATE_CHECK_ENABLED" = "1" ]; then
         || log "WARNING: the first update check did not succeed; the daily timer will try again"
     log "update check enabled (ExecStart=$ROOT_DIR/update-check.sh, once a day)"
 fi
+
+# Дорожка запроса включается последней: до этого момента стека, который она
+# стала бы обновлять, ещё не было.
+cmd systemctl enable --now amnezia-vpn-update.path \
+    || die_op "systemctl enable --now amnezia-vpn-update.path failed"
+log "update agent armed (watching $ROOT_DIR/data/update-request.json)"
 
 # --- 13b. panel domain: reverse proxy + Let's Encrypt (T-121) ---------
 # Optional --domain mode: nginx terminates TLS in front of the

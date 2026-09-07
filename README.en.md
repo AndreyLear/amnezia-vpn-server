@@ -328,6 +328,17 @@ The panel password stays the one currently in effect.
 
 ### Updating
 
+From 2.9.0 the server updates itself: the panel shows that a newer release is
+out, and a button starts the update. No ssh needed.
+
+**Once, the old way.** The service that performs the update ships *with* a
+release, so a server installed before it has to be given it first. The update
+to 2.9.0 is done with the wizard below; every one after that is a button in
+the panel.
+
+The wizard also stays the way for anyone who turned the update check off
+(`--no-update-check`): without it the server does not know what came out.
+
 An update is the same wizard as the install, run again. It remembers the
 deployment settings and asks nothing.
 
