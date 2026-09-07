@@ -494,6 +494,7 @@ run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
     AMNEZIA_INSTALL_MODULES_DIR="$TMP_TEST/modules-load.d" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
+    AMNEZIA_INSTALL_FAIL2BAN_JAIL="${AMNEZIA_INSTALL_FAIL2BAN_JAIL:-$TMP_TEST/fail2ban/jail.d/amnezia-vpn-sshd.conf}" \
     AMNEZIA_INSTALL_VERIFY_WAIT_SEC="${VERIFY_WAIT_SEC:-0}" \
     PATH="${M92_PATH:-$FAKE_DIR:$PATH}" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
