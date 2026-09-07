@@ -245,9 +245,14 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("GET /api/services", s.auth.RequireAPI(http.HandlerFunc(s.apiServices)))
 	// Журнал панели: кто входил и что менял (amnezia-vpn-server-gqep).
 	s.mux.Handle("GET /api/audit", s.auth.RequireAPI(http.HandlerFunc(s.apiAudit)))
-	s.mux.Handle("POST /api/update/check", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateCheck)))
-	s.mux.Handle("POST /api/update/start", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateStart)))
-	s.mux.Handle("POST /api/update/dismiss", s.auth.RequireAPI(http.HandlerFunc(s.apiUpdateDismiss)))
+	// RequireCSRF, как у любой мутации: RequireAPI проверяет сессию и
+	// только её. SameSite=Lax роняет чужие межсайтовые POST и потому
+	// прикрывает этот пропуск, но заведён он вторым слоем, а не
+	// единственным — и «обнови весь сервер» последнее, что стоит оставлять
+	// на одном (amnezia-vpn-server-f0xm).
+	s.mux.Handle("POST /api/update/check", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiUpdateCheck))))
+	s.mux.Handle("POST /api/update/start", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiUpdateStart))))
+	s.mux.Handle("POST /api/update/dismiss", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiUpdateDismiss))))
 	s.mux.Handle("GET /api/clients", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsList)))
 	s.mux.Handle("POST /api/clients", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsCreate))))
 	s.mux.Handle("GET /api/clients/{id}", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsGet)))

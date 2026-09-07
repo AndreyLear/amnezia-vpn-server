@@ -194,3 +194,40 @@ func TestDismissedBannerIsRememberedOnTheServer(t *testing.T) {
 		t.Fatalf("закрытие полосы погасило само предложение: %v", got)
 	}
 }
+
+// Мутация без токена должна быть отвергнута — иначе пропуск повторится
+// (amnezia-vpn-server-f0xm).
+//
+// SameSite=Lax роняет чужие межсайтовые POST и потому прикрывает такой
+// пропуск в браузере, но заведён он вторым слоем, а не единственным. Самая
+// дорогая операция продукта — «обнови весь сервер», выполняется от root на
+// хосте — последнее, что стоит оставлять на одном слое.
+func TestUpdateRoutesRefuseAMutationWithoutCSRF(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("AMNEZIA_VERSION", "2.8.2")
+	writeStatusFile(t, f, "update-latest.json", `{"tag_name":"v2.9.0","body":"x"}`)
+
+	for _, path := range []string{
+		"/api/update/check",
+		"/api/update/start",
+		"/api/update/dismiss",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"version":"2.9.0"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("X-Requested-With", "fetch")
+		// Токена нет намеренно: сессия при этом живая.
+		rec := httptest.NewRecorder()
+		f.serve(rec, req)
+		if rec.Code == http.StatusOK {
+			t.Errorf("%s принял мутацию без токена (код %d)", path, rec.Code)
+		}
+	}
+
+	// И ничего не сделал по дороге: запросов на хост не появилось.
+	for _, name := range []string{"update-check-request", "update-request.json"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(f.dbPath), name)); err == nil {
+			t.Fatalf("запрос %s лёг, хотя токена не было", name)
+		}
+	}
+}
