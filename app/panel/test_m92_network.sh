@@ -566,7 +566,12 @@ test_default_rules() {
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "default flow: exit $rc"
     assert_in "^table ip amnezia$" "$NFT_SYS_FILE" "fresh install: idempotent add-table line present"
-    assert_in "^flush table ip amnezia$" "$NFT_SYS_FILE" "fresh install: flush of own table present (no-op when empty)"
+    # delete, а не flush: flush оставляет определения множеств, и повторное
+    # объявление dns_seen сталкивается с существующим — набор правил
+    # переставал применяться на уже настроенном сервере
+    # (amnezia-vpn-server-g0vd). Всё это одной транзакцией nft -f, окна без
+    # правил не возникает.
+    assert_in "^delete table ip amnezia$" "$NFT_SYS_FILE" "fresh install: own table deleted before rebuild"
     assert_in "^table ip amnezia {" "$NFT_SYS_FILE" "table ip amnezia declared"
     assert_in "ip saddr 10.8.0.0/24 accept" "$NFT_SYS_FILE" "forward: vpn subnet saddr accepted"
     assert_in "ip daddr 10.8.0.0/24 accept" "$NFT_SYS_FILE" "forward: vpn subnet daddr accepted"
@@ -629,7 +634,7 @@ test_atomic_replace_on_rerun() {
     cmp -s "$NFT_SYS_FILE" "$TMP_TEST/ref.nft" && pass "second pass: rendered fragment byte-identical (deterministic)" \
         || fail "second pass: rendered fragment changed between passes"
     assert_in "^table ip amnezia$" "$NFT_SYS_FILE" "second pass: add-table line still present"
-    assert_in "^flush table ip amnezia$" "$NFT_SYS_FILE" "second pass: flush clears only own table"
+    assert_in "^delete table ip amnezia$" "$NFT_SYS_FILE" "second pass: only own table is deleted"
     assert_in "^table ip amnezia {" "$NFT_SYS_FILE" "second pass: table recreated in the same batch"
 }
 
@@ -1094,8 +1099,16 @@ test_ipv6_rules_when_enabled() {
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
     [ "$rc" = "0" ] || fail "ipv6 enabled flow: exit $rc"
     assert_in "^table ip6 amnezia {" "$NFT_SYS_FILE" "ipv6: the ip6 table is defined"
-    assert_in "^flush table ip6 amnezia$" "$NFT_SYS_FILE" "ipv6: own table flushed before rebuild"
-    assert_not_in "^delete table ip6 amnezia$" "$NFT_SYS_FILE" "ipv6: the table is not deleted while enabled"
+    assert_in "^delete table ip6 amnezia$" "$NFT_SYS_FILE" "ipv6: own table deleted before rebuild"
+    # Удаление есть в обоих режимах — с amnezia-vpn-server-g0vd так стало и у
+    # таблицы ip: множество нельзя объявить поверх существующего. Включённый
+    # IPv6 отличается не отсутствием удаления, а тем, что СРАЗУ ЗА НИМ идёт
+    # определение таблицы. Выключенный обрывается на удалении.
+    if awk "/^delete table ip6 amnezia\$/{seen=1} seen && /^table ip6 amnezia \{/{found=1} END{exit !found}" "$NFT_SYS_FILE"; then
+        pass "ipv6: the table is rebuilt right after the delete"
+    else
+        fail "ipv6: nothing rebuilds the table after the delete"
+    fi
     assert_in "ip6 saddr fd[0-9a-f:]*::/64 accept" "$NFT_SYS_FILE" "ipv6 forward: subnet saddr accepted"
     assert_in "ip6 daddr fd[0-9a-f:]*::/64 accept" "$NFT_SYS_FILE" "ipv6 forward: subnet daddr accepted"
     assert_in 'ip6 saddr fd[0-9a-f:]*::/64 oifname != "awg0" masquerade' "$NFT_SYS_FILE" \

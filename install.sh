@@ -1797,8 +1797,17 @@ EOF
 # Never touches foreign tables and never fails on missing state.
 render_nftables_deploy() {
     {
+        # delete, а не flush. flush очищает правила и содержимое множеств, но
+        # само определение множества оставляет — и повторное объявление
+        # dns_seen (amnezia-vpn-server-g0vd) сталкивается с существующим:
+        # «Could not process rule: File exists». То есть с flush набор правил
+        # ставился на чистый сервер и отвергался на уже настроенном.
+        #
+        # Опасности в удалении нет: весь файл применяется одной транзакцией
+        # nft -f, поэтому окна без правил не возникает — либо применилось всё,
+        # либо ничего.
         printf 'table ip amnezia\n'
-        printf 'flush table ip amnezia\n'
+        printf 'delete table ip amnezia\n'
         # Both branches name the table first, because nft cannot flush or
         # delete one that does not exist yet and the whole batch would
         # fail. Switching IPv6 off must DELETE the table, not merely stop
@@ -1808,7 +1817,7 @@ render_nftables_deploy() {
         # server where the rollback is needed (amnezia-vpn-server-nxp2).
         if [ -n "${5:-}" ]; then
             printf 'table ip6 amnezia\n'
-            printf 'flush table ip6 amnezia\n'
+            printf 'delete table ip6 amnezia\n'
         else
             printf 'table ip6 amnezia\n'
             printf 'delete table ip6 amnezia\n'
