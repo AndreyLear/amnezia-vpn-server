@@ -67,10 +67,23 @@ esac
 
 # Отметка о проверке пишется в обоих исходах: без неё «не проверяли ни разу»
 # и «проверяли, не получилось» выглядели бы одинаково, а это разные новости.
-write_check() { # write_check ok|failed
-    local tmp="${CHECK_FILE}.tmp"
-    printf '{"schema":"v1","checked_at_utc":"%s","result":"%s"}\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" > "${tmp}" \
+#
+# У неудачи называется причина, потому что человеку они советуют разное:
+# unreachable — сервер не достучался, и это про его сеть или про блокировку;
+# no-release — достучался, а выпуска там нет, и это уже про нас. Панель
+# покажет её только на странице обновления, куда человек пришёл сам.
+write_check() { # write_check ok|unreachable|no-release|write-failed
+    local tmp="${CHECK_FILE}.tmp" result="failed" reason=""
+    case "$1" in
+        ok) result="ok" ;;
+        *)  reason="$1" ;;
+    esac
+    {
+        printf '{"schema":"v1","checked_at_utc":"%s","result":"%s"' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${result}"
+        [ -n "${reason}" ] && printf ',"reason":"%s"' "${reason}"
+        printf '}\n'
+    } > "${tmp}" \
         && chmod 0644 "${tmp}" \
         && mv -f "${tmp}" "${CHECK_FILE}"
 }
@@ -84,7 +97,7 @@ trap 'rm -f "${body}"' EXIT
 if ! "${CURL_BIN}" -fsSL --max-time 20 \
         -H 'Accept: application/vnd.github+json' \
         -o "${body}" "${RELEASE_URL}" 2>/dev/null; then
-    write_check failed
+    write_check unreachable
     log "GitHub недоступен; прошлый ответ оставлен как есть"
     exit 0
 fi
@@ -92,7 +105,7 @@ fi
 # Ответ без номера выпуска — это не ответ: так выглядит и страница-заглушка
 # провайдера, и подменённый ответ. Заменять им прошлый снимок нельзя.
 if ! grep -q '"tag_name"' "${body}"; then
-    write_check failed
+    write_check no-release
     log "ответ не похож на выпуск GitHub; прошлый ответ оставлен как есть"
     exit 0
 fi
@@ -103,7 +116,9 @@ if cp -f "${body}" "${tmp}" && chmod 0644 "${tmp}" && mv -f "${tmp}" "${LATEST_F
     log "снимок последнего выпуска обновлён: ${LATEST_FILE}"
 else
     rm -f "${tmp}"
-    write_check failed
+    # Не про GitHub: он ответил, а записать не вышло у нас. Сваливать это в
+    # ту же причину значило бы послать человека чинить сеть.
+    write_check write-failed
     log "не удалось записать ${LATEST_FILE}"
     exit 1
 fi

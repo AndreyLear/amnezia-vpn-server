@@ -30,6 +30,10 @@ check() { # check <name> <cmd...>
     local name="$1"; shift
     if "$@" >/dev/null 2>&1; then pass "$name"; else fail "$name"; fi
 }
+check_not() { # check_not <name> <cmd...> — the command must fail
+    local name="$1"; shift
+    if "$@" >/dev/null 2>&1; then fail "$name"; else pass "$name"; fi
+}
 
 STATUS_DIR="$TMP/status"
 FAKE_DIR="$TMP/bin"
@@ -73,6 +77,9 @@ check "the release notes survive quotes and newlines untouched" \
     diff -q "$RELEASE" "$STATUS_DIR/update-latest.json"
 check "it records the check as successful" \
     grep -q '"result":"ok"' "$STATUS_DIR/update-check.json"
+# Причина есть только у неудачи: успех ничего не объясняет.
+check_not "a successful check explains nothing away" \
+    grep -q reason "$STATUS_DIR/update-check.json"
 check "and when it happened" \
     grep -qE '"checked_at_utc":"[0-9]{4}-[0-9]{2}-[0-9]{2}T' "$STATUS_DIR/update-check.json"
 mode="$(stat -c %a "$STATUS_DIR/update-latest.json" 2>/dev/null \
@@ -86,6 +93,10 @@ check "the previous answer stays where it was" \
     grep -q '"tag_name":"v2.9.0"' "$STATUS_DIR/update-latest.json"
 check "the failure is recorded" \
     grep -q '"result":"failed"' "$STATUS_DIR/update-check.json"
+# «Не достучались» и «достучались, а выпуска нет» советуют человеку разное:
+# первое про его сеть, второе про нас.
+check "and it says the server could not reach GitHub" \
+    grep -q '"reason":"unreachable"' "$STATUS_DIR/update-check.json"
 
 # --- something that is not a release -----------------------------------
 out="$(run CURL_BODY="$BLOCKPAGE" 2>&1)"; rc=$?
@@ -94,12 +105,14 @@ check "a block page never replaces a real release" \
     grep -q '"tag_name":"v2.9.0"' "$STATUS_DIR/update-latest.json"
 check "and it is recorded as a failed check" \
     grep -q '"result":"failed"' "$STATUS_DIR/update-check.json"
+check "and the reason is the answer, not the network" \
+    grep -q '"reason":"no-release"' "$STATUS_DIR/update-check.json"
 
 # --- the very first check fails ----------------------------------------
 rm -f "$STATUS_DIR/update-latest.json" "$STATUS_DIR/update-check.json"
 run CURL_RC=7 CURL_BODY="$RELEASE" >/dev/null 2>&1
-check "a first check that failed invents no release" \
-    test ! -f "$STATUS_DIR/update-latest.json"
+check_not "a first check that failed invents no release" \
+    test -f "$STATUS_DIR/update-latest.json"
 check "but it still says a check was attempted" \
     grep -q '"result":"failed"' "$STATUS_DIR/update-check.json"
 
