@@ -94,16 +94,32 @@ body="$(mktemp "${TMPDIR:-/tmp}/amnezia-update.XXXXXX")" || {
 }
 trap 'rm -f "${body}"' EXIT
 
-if ! "${CURL_BIN}" -fsSL --max-time 20 \
+# Без -f намеренно: этот флаг превращает ответ сервера в ошибку выхода, и
+# «не дошли до GitHub» становится неотличимо от «дошли, он ответил 404».
+# Ровно так и вышло на тестовом сервере: файл советовал чинить сеть, с
+# которой всё было в порядке (amnezia-vpn-server-18n6.3). Код ответа
+# спрашивается отдельно и решает сам.
+code="$("${CURL_BIN}" -sSL --max-time 20 \
         -H 'Accept: application/vnd.github+json' \
-        -o "${body}" "${RELEASE_URL}" 2>/dev/null; then
-    write_check unreachable
-    log "GitHub недоступен; прошлый ответ оставлен как есть"
-    exit 0
-fi
+        -o "${body}" -w '%{http_code}' "${RELEASE_URL}" 2>/dev/null)" || code=""
+
+case "${code}" in
+    2??) ;;
+    "" | 000)
+        write_check unreachable
+        log "до GitHub не достучались; прошлый ответ оставлен как есть"
+        exit 0
+        ;;
+    *)
+        write_check no-release
+        log "GitHub ответил ${code}; прошлый ответ оставлен как есть"
+        exit 0
+        ;;
+esac
 
 # Ответ без номера выпуска — это не ответ: так выглядит и страница-заглушка
-# провайдера, и подменённый ответ. Заменять им прошлый снимок нельзя.
+# провайдера, которая приходит с честным кодом 200, и подменённый ответ.
+# Заменять им прошлый снимок нельзя.
 if ! grep -q '"tag_name"' "${body}"; then
     write_check no-release
     log "ответ не похож на выпуск GitHub; прошлый ответ оставлен как есть"
