@@ -50,9 +50,15 @@ generate_status() {
 # различать эти два случая.
 DNS_SEEN_FILE="${DNS_SEEN_FILE:-$(dirname "${STATUS_FILE}")/dns-seen.json}"
 
+# Ничто здесь не имеет права уронить туннель. Снимок — диагностика для панели,
+# а скрипт работает под set -e: неудачная запись завершила бы его целиком, и
+# контейнер ушёл бы в перезапуск. Так и случилось в CI, где nft есть и функция
+# доходила до записи в каталог, которого в харнессе не существует.
 generate_dns_seen() {
     command -v nft >/dev/null 2>&1 || return 0
-    local addrs tmp
+    local addrs tmp dir
+    dir="$(dirname "${DNS_SEEN_FILE}")"
+    [ -d "${dir}" ] || return 0
     addrs="$(
         {
             nft -j list set ip amnezia dns_seen 2>/dev/null || true
@@ -72,7 +78,11 @@ generate_dns_seen() {
             first=0
         done
         printf ']}\n'
-    } > "${tmp}" && mv -f "${tmp}" "${DNS_SEEN_FILE}"
+    } > "${tmp}" 2>/dev/null && mv -f "${tmp}" "${DNS_SEEN_FILE}" || {
+        log "warning: could not write ${DNS_SEEN_FILE}; the tunnel is unaffected"
+        rm -f "${tmp}" 2>/dev/null || true
+    }
+    return 0
 }
 
 wait_for_config() {
@@ -247,7 +257,9 @@ while true; do
     # reload does not trigger a separate generation; the next tick
     # rewrites status from the already-applied runtime.
     generate_status
-    generate_dns_seen
+    # Дважды подстрахованы: функция сама не падает, и её неудача всё равно не
+    # прерывает цикл. Туннель важнее снимка.
+    generate_dns_seen || true
 
     if [ "$(config_mtime)" != "${LAST_MTIME}" ]; then
         reload_config
