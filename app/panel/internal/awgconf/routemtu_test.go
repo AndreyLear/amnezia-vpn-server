@@ -94,3 +94,46 @@ func TestRenderIsUnchangedWithoutACeiling(t *testing.T) {
 		t.Fatalf("появилась строка размера там, где раздавать нечего:\n%s", out)
 	}
 }
+
+// Клиент, попросивший максимум, получал минимум (amnezia-vpn-server-wc2l).
+//
+// Условие «строка не нужна, если размер совпадает с потолком устройства»
+// было неверным: отсутствие строки означает не «взять потолок», а «взять
+// общее осторожное значение». Потолок клиента в базе равен 1440, и на
+// чистом пути потолок устройства ровно 1440 — то есть случай достижим
+// обычной настройкой, а не краем.
+func TestPeerLineSurvivesAClientAtTheCeiling(t *testing.T) {
+	const device, common = 1440, 1340
+	cases := []struct {
+		name string
+		own  uint16
+		want uint16 // 0 = строки нет
+	}{
+		{"как у всех", 0, 0},
+		{"меньше общего", 1300, 1300},
+		{"больше общего", 1420, 1420},
+		// Вот он: свой размер равен потолку устройства.
+		{"ровно потолок", 1440, 1440},
+		// И тот, кто попросил сверх потолка: зажимается, но строку получает.
+		{"сверх потолка", 1500, 1440},
+	}
+	for _, c := range cases {
+		got := PeerRouteMTU(c.own, common, device)
+		if got != c.want {
+			t.Errorf("%s: PeerRouteMTU(%d, %d, %d) = %d, ожидалось %d",
+				c.name, c.own, common, device, got, c.want)
+		}
+	}
+}
+
+// Развёртывание без измеренного потолка: общего значения нет, и строку
+// получает только тот, у кого размер свой.
+func TestPeerLineWithoutAMeasuredCeiling(t *testing.T) {
+	const device = 1340
+	if got := PeerRouteMTU(0, 0, device); got != 0 {
+		t.Errorf("клиент без своего размера получил строку: %d", got)
+	}
+	if got := PeerRouteMTU(1300, 0, device); got != 1300 {
+		t.Errorf("свой размер не доехал: %d", got)
+	}
+}

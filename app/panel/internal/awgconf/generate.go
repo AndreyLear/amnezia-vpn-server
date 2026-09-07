@@ -77,13 +77,9 @@ func Generate(handle *sql.DB, path string) error {
 			AllowedIPs:   c.Address,
 			AllowedIPs6:  address6,
 		}
-		// Строка нужна только там, где размер отличается от общего:
-		// одинаковое значение у каждого пира — это шум, который ещё и
-		// заставил бы контейнер класть маршрут там, где он ничего не
-		// меняет.
-		if route := RouteMTU(uint16(c.MTU), mtu, device); route != cfg.ClientMTU && route != device {
-			peer.MTU = route
-		}
+		// Строка нужна каждому, у кого размер свой. Тому, у кого своего
+		// нет, хватает общего значения, выписанного один раз выше.
+		peer.MTU = PeerRouteMTU(uint16(c.MTU), mtu, device)
 		if err := ValidatePeer(peer); err != nil {
 			return fmt.Errorf("client %d: %w", c.ID, err)
 		}
