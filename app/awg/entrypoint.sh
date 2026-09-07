@@ -230,6 +230,152 @@ config_mtime() {
 # feeds the rest to `awg syncconf` via a temporary file (session state is
 # preserved by the daemon), and refreshes the runtime copy. Any failure
 # is fatal so the container exits 1 and stops.
+# --- маршруты с собственным размером (amnezia-vpn-server-wc2l) ---------
+#
+# Интерфейс awg0 один на всех, и раньше он был осторожным: размер выбирали по
+# худшей последней миле, какая может встретиться кому угодно. Роутер на оптике
+# получал от этого половину выигрыша — быструю отдачу и прежнее скачивание,
+# потому что обратное направление ограничено интерфейсом.
+#
+# Теперь интерфейс поднят до того, что тянет сервер, а осторожное значение
+# раздаётся маршрутом каждому клиенту отдельно. Панель пишет размеры
+# комментариями в awg0.conf: ключа для них в AmneziaWG нет и быть не должно —
+# это свойство маршрута, а не пира.
+ROUTE_STATE="${AWG_ROUTE_STATE:-/run/amnezia-awg-routes}"
+IP_BIN="${AWG_IP_BIN:-ip}"
+
+# route_mtu_plan: печатает «сеть размер» для каждого адреса каждого пира.
+# Общее значение берётся из [Interface], собственное — из блока пира.
+route_mtu_plan() {
+    awk '
+        function flush_peer(   i, n, parts, entry) {
+            if (!in_peer || allowed == "") return
+            n = split(allowed, parts, ",")
+            for (i = 1; i <= n; i++) {
+                entry = parts[i]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", entry)
+                if (entry == "") continue
+                if (peer_mtu != "") print entry, peer_mtu
+                else if (common != "") print entry, common
+            }
+            allowed = ""; peer_mtu = ""
+        }
+        /^[[:space:]]*#[[:space:]]*amnezia-route-mtu[[:space:]]*=/ {
+            value = $0
+            sub(/.*=[[:space:]]*/, "", value)
+            gsub(/[[:space:]]/, "", value)
+            if (in_peer) peer_mtu = value; else common = value
+            next
+        }
+        /^[[:space:]]*\[Peer\][[:space:]]*$/ { flush_peer(); in_peer = 1; next }
+        /^[[:space:]]*\[/ { flush_peer(); in_peer = 0; next }
+        /^[[:space:]]*[Aa][Ll][Ll][Oo][Ww][Ee][Dd][Ii][Pp][Ss][[:space:]]*=/ {
+            value = $0
+            sub(/.*=[[:space:]]*/, "", value)
+            allowed = value
+            next
+        }
+        END { flush_peer() }
+    ' "$1"
+}
+
+# route_family: -6 для адреса с двоеточием, пусто для остальных.
+route_family() {
+    case "$1" in
+        *:*) printf -- '-6\n' ;;
+        *) printf '\n' ;;
+    esac
+}
+
+# apply_route_mtu: приводит маршруты к плану и снимает те, что остались от
+# ушедших клиентов. Список применённого хранится в файле: гадать, какой
+# маршрут наш, а какой поставил awg-quick, значит однажды снести чужой.
+#
+# Возвращает 1, если хоть один маршрут не принял нужный размер. Молчать об
+# этом нельзя: интерфейс теперь не осторожный, и клиент без маршрута получит
+# пакеты крупнее, чем тянет его последняя миля.
+apply_route_mtu() {
+    local plan cidr mtu family rc=0
+    plan="$(route_mtu_plan "${CONFIG_DEST}")" || return 1
+
+    # Сначала снять лишнее: маршрут ушедшего клиента переживёт его удаление и
+    # будет молча ограничивать чужой адрес, когда тот выдадут заново.
+    if [ -f "${ROUTE_STATE}" ]; then
+        while read -r cidr _; do
+            [ -n "${cidr}" ] || continue
+            printf '%s\n' "${plan}" | cut -d' ' -f1 | grep -qxF "${cidr}" && continue
+            family="$(route_family "${cidr}")"
+            # shellcheck disable=SC2086
+            ${IP_BIN} ${family} route del "${cidr}" dev "${IFACE}" >/dev/null 2>&1 \
+                && log "маршрут снят: ${cidr}"
+        done < "${ROUTE_STATE}"
+    fi
+
+    printf '%s\n' "${plan}" | while read -r cidr mtu; do
+        [ -n "${cidr}" ] && [ -n "${mtu}" ] || continue
+        family="$(route_family "${cidr}")"
+        # shellcheck disable=SC2086
+        if ! ${IP_BIN} ${family} route replace "${cidr}" dev "${IFACE}" mtu "${mtu}" >/dev/null 2>&1; then
+            log "error: не удалось задать размер ${mtu} для ${cidr}"
+            exit 1
+        fi
+        # Проверяем, а не верим: маршрут, который молча не применился,
+        # выглядит точно так же, как применившийся.
+        # shellcheck disable=SC2086
+        if ! ${IP_BIN} ${family} route show "${cidr}" dev "${IFACE}" 2>/dev/null | grep -q "mtu ${mtu}"; then
+            log "error: маршрут ${cidr} не принял размер ${mtu}"
+            exit 1
+        fi
+    done || rc=1
+
+    printf '%s\n' "${plan}" > "${ROUTE_STATE}" 2>/dev/null || true
+    return "${rc}"
+}
+
+# config_device_mtu: размер интерфейса, каким его назначила панель.
+config_device_mtu() {
+    sed -n 's/^[[:space:]]*MTU[[:space:]]*=[[:space:]]*//p' "${CONFIG_DEST}" \
+        | head -1 | tr -d '[:space:]'
+}
+
+# safe_device_mtu: общее осторожное значение из конфигурации. Оно и есть то,
+# на что опускается интерфейс, если раздать маршруты не вышло.
+safe_device_mtu() {
+    sed -n 's/^[[:space:]]*#[[:space:]]*amnezia-route-mtu[[:space:]]*=[[:space:]]*//p' \
+        "${CONFIG_DEST}" | head -1 | tr -d '[:space:]'
+}
+
+# sync_routes: применить план, а при неудаче — опустить интерфейс до
+# осторожного значения. Так никому не станет хуже, чем было до этой
+# возможности: выигрыш теряется, связь — нет.
+sync_routes() {
+    local safe device
+    # Раскладывать нечего — не трогаем ничего: так выглядит развёртывание, где
+    # потолок не измеряли и ни у кого нет своего размера.
+    [ -n "$(route_mtu_plan "${CONFIG_DEST}")" ] || return 0
+    safe="$(safe_device_mtu)"
+    # Общего значения может не быть, а собственное у кого-то — быть: тогда
+    # осторожным считается сам потолок, он же и есть сегодняшнее поведение.
+    [ -n "${safe}" ] || safe="$(config_device_mtu)"
+    # Размер устройства ставит awg-quick при подъёме, но горячая
+    # перезагрузка до него не доходит: MTU — ключ awg-quick, и до syncconf
+    # он не долетает. Без этой строки изменившийся потолок ждал бы
+    # перезапуска контейнера, а маршруты с новым размером ядро бы не приняло.
+    device="$(config_device_mtu)"
+    if [ -n "${device}" ]; then
+        ${IP_BIN} link set dev "${IFACE}" mtu "${device}" >/dev/null 2>&1 \
+            || log "WARNING: не удалось задать ${IFACE} размер ${device}"
+    fi
+    if apply_route_mtu; then
+        return 0
+    fi
+    log "WARNING: маршруты не разошлись; опускаю ${IFACE} до ${safe}, чтобы"
+    log "WARNING: никто не получал пакеты крупнее, чем тянет его канал"
+    ${IP_BIN} link set dev "${IFACE}" mtu "${safe}" >/dev/null 2>&1 \
+        || log "error: не удалось опустить ${IFACE} до ${safe}"
+    return 0
+}
+
 reload_config() {
     if [ ! -f "${CONFIG_SRC}" ]; then
         log "error: ${CONFIG_SRC} disappeared"
@@ -246,6 +392,8 @@ reload_config() {
     fi
     rm -f "${SYNCCONF_TMP}"
     install_config
+    # Набор клиентов мог измениться, значит и набор маршрутов тоже.
+    sync_routes
     log "configuration reloaded via awg syncconf"
 }
 
@@ -261,6 +409,10 @@ LAST_MTIME="$(config_mtime)" || {
     log "error: cannot stat ${CONFIG_SRC}"
     exit 1
 }
+
+# Только после подъёма: размер маршрута не может быть больше размера
+# устройства, а устройство появляется здесь.
+sync_routes
 
 generate_versions || true
 

@@ -41,14 +41,22 @@ func Generate(handle *sql.DB, path string) error {
 	if err != nil {
 		return err
 	}
+	// Интерфейс поднимается до того, что тянет сервер, а осторожное
+	// значение раздаётся маршрутами (amnezia-vpn-server-wc2l). Там, где
+	// потолок не измеряли, они совпадают, и файл остаётся прежним до
+	// байта — вместе с поведением.
+	device := DeviceMTU(mtu)
 	cfg := ServerConfig{
 		PrivateKey: server.PrivateKey,
 		Address:    server.Address,
 		Address6:   server.Address6,
 		ListenPort: uint16(server.ListenPort),
 		DNS:        server.DNS,
-		MTU:        mtu,
+		MTU:        device,
 		Params:     *params,
+	}
+	if device != mtu {
+		cfg.ClientMTU = mtu
 	}
 	if err := ValidateServer(cfg); err != nil {
 		return err
@@ -68,6 +76,13 @@ func Generate(handle *sql.DB, path string) error {
 			PresharedKey: c.PresharedKey,
 			AllowedIPs:   c.Address,
 			AllowedIPs6:  address6,
+		}
+		// Строка нужна только там, где размер отличается от общего:
+		// одинаковое значение у каждого пира — это шум, который ещё и
+		// заставил бы контейнер класть маршрут там, где он ничего не
+		// меняет.
+		if route := RouteMTU(uint16(c.MTU), mtu, device); route != cfg.ClientMTU && route != device {
+			peer.MTU = route
 		}
 		if err := ValidatePeer(peer); err != nil {
 			return fmt.Errorf("client %d: %w", c.ID, err)

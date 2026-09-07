@@ -62,12 +62,47 @@ elif [ "${1:-}" = "down" ]; then
 fi
 exit 0
 SH
+    # ip держит игрушечную таблицу маршрутов в файле: проверка «маршрут
+    # принял размер» есть в самом entrypoint, и заглушка, которая на show
+    # молчит, проверяла бы не то (amnezia-vpn-server-wc2l).
     cat > "${TMP}/bin/ip" <<'SH'
 #!/bin/bash
-if [ "${1:-}" = "link" ] && [ -f "${AWG_STUB_FLAG_IP_GONE:-}" ]; then
+echo "ip $*" >> "${AWG_STUB_LOG}"
+if [ "${1:-}" = "link" ] && [ "${2:-}" = "show" ] && [ -f "${AWG_STUB_FLAG_IP_GONE:-}" ]; then
     echo "no such interface" >&2
     exit 1
 fi
+TABLE="${AWG_STUB_ROUTES:-/dev/null}"
+[ -f "$TABLE" ] || : > "$TABLE"
+# Семейство роли не играет: адрес сам себя различает.
+args=()
+for a in "$@"; do [ "$a" = "-6" ] || args+=("$a"); done
+set -- "${args[@]}"
+case "${1:-}:${2:-}" in
+    route:replace)
+        [ -f "${AWG_STUB_FLAG_ROUTE_FAIL:-}" ] && exit 2
+        cidr="$3"; mtu=""
+        while [ "$#" -gt 0 ]; do [ "$1" = "mtu" ] && mtu="$2"; shift; done
+        grep -v "^${cidr} " "$TABLE" > "$TABLE.new" 2>/dev/null || : > "$TABLE.new"
+        printf '%s %s\n' "$cidr" "$mtu" >> "$TABLE.new"
+        mv "$TABLE.new" "$TABLE"
+        exit 0
+        ;;
+    route:show)
+        cidr="$3"
+        line="$(grep "^${cidr} " "$TABLE" 2>/dev/null | head -1)" || true
+        [ -n "$line" ] || exit 0
+        printf '%s dev awg0 mtu %s\n' "${line%% *}" "${line##* }"
+        exit 0
+        ;;
+    route:del)
+        cidr="$3"
+        grep -q "^${cidr} " "$TABLE" 2>/dev/null || exit 2
+        grep -v "^${cidr} " "$TABLE" > "$TABLE.new" 2>/dev/null || : > "$TABLE.new"
+        mv "$TABLE.new" "$TABLE"
+        exit 0
+        ;;
+esac
 exit 0
 SH
     cat > "${TMP}/bin/awg" <<'SH'
@@ -123,6 +158,9 @@ export AWG_STUB_MTIME_FILE="${STUB_MTIME}"
 export AWG_STUB_FLAG_IP_GONE="${STUB_FLAG_DIR}/ip-gone"
 export AWG_STUB_FLAG_UAPI_GONE="${STUB_FLAG_DIR}/uapi-gone"
 export AWG_STUB_FLAG_SYNCONF_FAIL="${STUB_FLAG_DIR}/syncconf-fail"
+export AWG_STUB_FLAG_ROUTE_FAIL="${STUB_FLAG_DIR}/route-fail"
+export AWG_STUB_ROUTES="${dir}/routes.table"
+export AWG_ROUTE_STATE="${dir}/routes.state"
 export CONFIG_SRC="${dir}/config/awg0.conf"
 export CONFIG_DEST="${dir}/etc/awg0.conf"
 export SYNCCONF_TMP="${dir}/syncconf.tmp"
@@ -135,6 +173,7 @@ run_entrypoint() {
     local dir="$1" tag="$2"
     {
         eval "$(entrypoint_env "${dir}")"
+        [ -n "${AWG_PROC_ROOT:-}" ] && export AWG_PROC_ROOT
         exec bash entrypoint.sh
     } > "${TMP}/${tag}.out" 2>&1 &
     PIDS="${PIDS} $!"
@@ -457,6 +496,164 @@ touch "${STUB_FLAG_DIR}/ip-gone"
 wait "${PID_E}"; RC_E=$?
 check "flow-e: interface gone exits 1" [ "${RC_E}" = "1" ]
 check "flow-e: interface gone message" grep -q "interface awg0 is gone" "${TMP}/flow-e.out"
+
+# --- 3.6 маршруты с собственным размером (amnezia-vpn-server-wc2l) -----
+#
+# Интерфейс один на всех, поэтому размер клиенту задаёт маршрут. Проверяем,
+# что план разошёлся, переживает горячую перезагрузку и что маршрут ушедшего
+# клиента снимается вместе с ним.
+DIR_F="${TMP}/flow-f"
+mkdir -p "${DIR_F}/config" "${DIR_F}/etc"
+printf '100\n' > "${STUB_MTIME}"
+cat > "${DIR_F}/config/awg0.conf" <<'CONF'
+[Interface]
+PrivateKey = kEY
+Address = 10.8.0.1/24, fded:a0b:d921::1/64
+ListenPort = 51820
+MTU = 1440
+# amnezia-route-mtu = 1340
+
+[Peer]
+PublicKey = aaa
+AllowedIPs = 10.8.0.2/32, fded:a0b:d921::2/128
+
+[Peer]
+PublicKey = bbb
+AllowedIPs = 10.8.0.3/32, fded:a0b:d921::3/128
+# amnezia-route-mtu = 1420
+CONF
+
+: > "${STUB_LOG}"; : > "${STUB_STATE}"
+rm -f "${STUB_FLAG_DIR}"/*
+# Хост с исправным IPv6: иначе install_config вырежет из конфигурации все
+# адреса v6, и проверять маршруты для них будет не на чем.
+AWG_PROC_ROOT="$(mmh6_proc 0 0)" run_entrypoint "${DIR_F}" "flow-f"
+PID_F=$!
+check "flow-f: awg-quick up invoked" wait_for_line "${STUB_STATE}" "^up$"
+sleep 0.6
+
+ROUTES_F="${DIR_F}/routes.table"
+# Клиент без своего размера получает общий — то же, что и до этой
+# возможности, только теперь маршрутом, а не интерфейсом.
+check "flow-f: обычный клиент получает общий размер" \
+    grep -qx "10.8.0.2/32 1340" "${ROUTES_F}"
+check "flow-f: и по IPv6 тоже" \
+    grep -qx "fded:a0b:d921::2/128 1340" "${ROUTES_F}"
+# Клиент со своим размером получает свой, в обе стороны.
+check "flow-f: свой размер доходит до маршрута" \
+    grep -qx "10.8.0.3/32 1420" "${ROUTES_F}"
+check "flow-f: и по IPv6 тоже" \
+    grep -qx "fded:a0b:d921::3/128 1420" "${ROUTES_F}"
+
+# Горячая перезагрузка: клиент bbb ушёл, его маршруты обязаны уйти с ним,
+# иначе они молча ограничат чужой адрес, когда тот выдадут заново.
+cat > "${DIR_F}/config/awg0.conf" <<'CONF'
+[Interface]
+PrivateKey = kEY
+Address = 10.8.0.1/24, fded:a0b:d921::1/64
+ListenPort = 51820
+MTU = 1440
+# amnezia-route-mtu = 1340
+
+[Peer]
+PublicKey = aaa
+AllowedIPs = 10.8.0.2/32, fded:a0b:d921::2/128
+CONF
+printf '200\n' > "${STUB_MTIME}"
+check "flow-f: перезагрузка прошла" wait_for_line "${STUB_STATE}" "^syncconf-ok$"
+sleep 0.6
+check "flow-f: маршрут ушедшего клиента снят" \
+    not grep -q "^10.8.0.3/32 " "${ROUTES_F}"
+check "flow-f: и его IPv6 тоже" \
+    not grep -q "^fded:a0b:d921::3/128 " "${ROUTES_F}"
+check "flow-f: оставшийся клиент маршрут сохранил" \
+    grep -qx "10.8.0.2/32 1340" "${ROUTES_F}"
+# Потолок ставит awg-quick при подъёме, но горячая перезагрузка до него не
+# доходит: MTU — ключ awg-quick, и до syncconf он не долетает.
+check "flow-f: потолок устройства выставлен" \
+    grep -q "ip link set dev awg0 mtu 1440" "${STUB_LOG}"
+stop_pid "${PID_F}"
+
+# --- 3.7 маршруты не разошлись → интерфейс опускается до осторожного ---
+# Интерфейс теперь не осторожный, и клиент без маршрута получил бы пакеты
+# крупнее, чем тянет его последняя миля. Потерять выигрыш лучше, чем связь.
+DIR_G="${TMP}/flow-g"
+mkdir -p "${DIR_G}/config" "${DIR_G}/etc"
+printf '100\n' > "${STUB_MTIME}"
+cp "${DIR_F}/config/awg0.conf" "${DIR_G}/config/awg0.conf"
+: > "${STUB_LOG}"; : > "${STUB_STATE}"
+rm -f "${STUB_FLAG_DIR}"/*
+touch "${STUB_FLAG_DIR}/route-fail"
+run_entrypoint "${DIR_G}" "flow-g"
+PID_G=$!
+check "flow-g: awg-quick up invoked" wait_for_line "${STUB_STATE}" "^up$"
+check "flow-g: неудача маршрутов замечена" \
+    wait_for_line "${TMP}/flow-g.out" "маршруты не разошлись"
+check "flow-g: интерфейс опущен до осторожного значения" \
+    grep -q "ip link set dev awg0 mtu 1340" "${STUB_LOG}"
+check "flow-g: туннель при этом жив" not grep -q "^down$" "${STUB_STATE}"
+stop_pid "${PID_G}"
+
+# --- 3.8 развёртывание без потолка: маршруты не появляются -------------
+# Там, где потолок не измеряли, всё обязано остаться ровно как было.
+DIR_H="${TMP}/flow-h"
+mkdir -p "${DIR_H}/config" "${DIR_H}/etc"
+printf '100\n' > "${STUB_MTIME}"
+cat > "${DIR_H}/config/awg0.conf" <<'CONF'
+[Interface]
+PrivateKey = kEY
+Address = 10.8.0.1/24
+ListenPort = 51820
+MTU = 1340
+
+[Peer]
+PublicKey = aaa
+AllowedIPs = 10.8.0.2/32
+CONF
+: > "${STUB_LOG}"; : > "${STUB_STATE}"
+rm -f "${STUB_FLAG_DIR}"/*
+run_entrypoint "${DIR_H}" "flow-h"
+PID_H=$!
+check "flow-h: awg-quick up invoked" wait_for_line "${STUB_STATE}" "^up$"
+sleep 0.6
+check "flow-h: ни одного маршрута не поставлено" \
+    not grep -q "route replace" "${STUB_LOG}"
+stop_pid "${PID_H}"
+
+# --- 3.9 старое развёртывание, но у клиента свой размер ----------------
+# Потолка нет, общего значения нет — а собственное у клиента есть, и оно
+# обязано доехать до маршрута, иначе настройка тихо не работает.
+DIR_I="${TMP}/flow-i"
+mkdir -p "${DIR_I}/config" "${DIR_I}/etc"
+printf '100\n' > "${STUB_MTIME}"
+cat > "${DIR_I}/config/awg0.conf" <<'CONF'
+[Interface]
+PrivateKey = kEY
+Address = 10.8.0.1/24
+ListenPort = 51820
+MTU = 1340
+
+[Peer]
+PublicKey = aaa
+AllowedIPs = 10.8.0.2/32
+
+[Peer]
+PublicKey = bbb
+AllowedIPs = 10.8.0.3/32
+# amnezia-route-mtu = 1300
+CONF
+: > "${STUB_LOG}"; : > "${STUB_STATE}"
+rm -f "${STUB_FLAG_DIR}"/*
+run_entrypoint "${DIR_I}" "flow-i"
+PID_I=$!
+check "flow-i: awg-quick up invoked" wait_for_line "${STUB_STATE}" "^up$"
+sleep 0.6
+check "flow-i: свой размер доехал до маршрута" \
+    grep -qx "10.8.0.3/32 1300" "${DIR_I}/routes.table"
+# А тому, у кого своего нет, маршрут не нужен: интерфейс и так осторожный.
+check "flow-i: остальным маршрут не выписан" \
+    not grep -q "^10.8.0.2/32 " "${DIR_I}/routes.table"
+stop_pid "${PID_I}"
 
 # =====================================================================
 echo

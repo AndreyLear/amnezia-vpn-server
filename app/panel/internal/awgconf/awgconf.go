@@ -31,8 +31,20 @@ type ServerConfig struct {
 	DNS        string // empty = omit
 	// MTU pins the tunnel MTU; 0 leaves the line out and lets awg-quick
 	// pick its own (see mtu.go for why that default is unsafe).
-	MTU    uint16
-	Params Params
+	//
+	// Это ПОТОЛОК УСТРОЙСТВА — сколько тянет путь самого сервера. Он не
+	// то же самое, что получает клиент: клиенту размер задаёт маршрут
+	// (ClientMTU ниже и MTU у пира). Интерфейс один на всех, и поднять
+	// его ради одного клиента нельзя, а вот раздать разное маршрутами —
+	// можно (amnezia-vpn-server-wc2l).
+	MTU uint16
+	// ClientMTU — что получает клиент, которому ничего не задано отдельно.
+	// Значение осторожное: рассчитано на худшую последнюю милю, какая может
+	// встретиться кому угодно. Ноль означает «как MTU устройства» — так
+	// выглядит развёртывание, где потолок не измеряли, и там всё остаётся
+	// ровно как было.
+	ClientMTU uint16
+	Params    Params
 }
 
 // PeerConfig is one [Peer] section of awg0.conf (an enabled client).
@@ -44,6 +56,10 @@ type PeerConfig struct {
 	// carries IPv4 only. The server must accept the family it hands out,
 	// or a client would send IPv6 the runtime silently discards.
 	AllowedIPs6 string
+	// MTU — собственный размер этого клиента; 0 означает «как у всех».
+	// Уезжает комментарием: ключа для него в конфигурации AmneziaWG нет и
+	// быть не должно — это не свойство пира, а свойство маршрута к нему.
+	MTU uint16
 }
 
 // joinFamilies renders "v4" or "v4, v6" for the config keys that take a
@@ -478,6 +494,11 @@ func validKey(s string) bool {
 	return len(raw) == keyLen
 }
 
+// routeMTUComment вводит строку с размером для маршрута. Начало постоянное
+// и обыскиваемое: это метка для контейнера awg, а не заметка для человека,
+// и удалять её нельзя (amnezia-vpn-server-wc2l).
+const routeMTUComment = "# amnezia-route-mtu"
+
 // Render produces the deterministic awg0.conf text: precisely the
 // [Interface] section (section header included — required by the real
 // amneziawg-tools parser, src/config.c rejects keys outside a section
@@ -499,6 +520,16 @@ func Render(server ServerConfig, peers []PeerConfig) string {
 	if server.MTU != 0 {
 		line("MTU", strconv.FormatUint(uint64(server.MTU), 10))
 	}
+	// Комментарием, а не ключом: разбор AmneziaWG отвергает всё, чего не
+	// знает, а маршруты — забота контейнера awg, который эти строки и
+	// читает. Комментарии до разбора не доходят: их снимает и awg-quick, и
+	// наш фильтр перед syncconf.
+	if server.ClientMTU != 0 {
+		b.WriteString(routeMTUComment)
+		b.WriteString(" = ")
+		b.WriteString(strconv.FormatUint(uint64(server.ClientMTU), 10))
+		b.WriteByte('\n')
+	}
 	if server.DNS != "" {
 		line("DNS", server.DNS)
 	}
@@ -516,6 +547,12 @@ func Render(server ServerConfig, peers []PeerConfig) string {
 			line("PresharedKey", peer.PresharedKey)
 		}
 		line("AllowedIPs", joinFamilies(peer.AllowedIPs, peer.AllowedIPs6))
+		if peer.MTU != 0 {
+			b.WriteString(routeMTUComment)
+			b.WriteString(" = ")
+			b.WriteString(strconv.FormatUint(uint64(peer.MTU), 10))
+			b.WriteByte('\n')
+		}
 	}
 	return b.String()
 }

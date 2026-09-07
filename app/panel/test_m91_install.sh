@@ -2635,6 +2635,28 @@ test_watchdog_can_be_declined() {
 # копия установщика, без которой откат нечем поднимать.
 # Факты о развёртывании (amnezia-vpn-server-8bt5): панель в контейнере и про
 # хост знать не может, поэтому про хост записывает установщик.
+# Потолок устройства (amnezia-vpn-server-wc2l): интерфейс поднимается до
+# того, что тянет сервер, а осторожное значение раздаётся маршрутами.
+test_device_mtu_recorded() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "device mtu: exit $rc"
+    local mtu max
+    mtu="$(env_value TUNNEL_MTU)"
+    max="$(env_value TUNNEL_MTU_MAX)"
+    [ -n "$max" ] && pass "the measured ceiling is stored ($max)" \
+        || fail "TUNNEL_MTU_MAX missing from .env"
+    # Потолок ниже осторожного значения сделал бы хуже всем сразу.
+    [ "$max" -ge "$mtu" ] \
+        && pass "the ceiling is never below what clients get ($max >= $mtu)" \
+        || fail "ceiling $max is below the client value $mtu"
+    # На чистом пути 1500 сервер тянет больше, чем осторожные 1340 — иначе
+    # раздавать маршрутами было бы нечего.
+    [ "$max" -gt "$mtu" ] \
+        && pass "a clean uplink leaves room to hand out ($max > $mtu)" \
+        || fail "the ceiling equals the client value on a 1500-byte path"
+}
+
 test_deployment_facts_written() {
     fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
@@ -2966,6 +2988,7 @@ test_update_check_runs_once_at_install
 test_unreachable_github_does_not_break_the_install
 test_update_check_can_be_declined
 test_update_check_removed_on_rerun_with_flag
+test_device_mtu_recorded
 test_deployment_facts_written
 test_deployment_facts_follow_the_flags
 test_on_demand_check_armed

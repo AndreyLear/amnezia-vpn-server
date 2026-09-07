@@ -1495,6 +1495,19 @@ tunnel_mtu_preflight() {
     fi
     log "tunnel MTU $mtu (a full packet costs $((mtu + TUNNEL_ENCAP_OVERHEAD)) bytes on a $pmtu-byte path)"
     env_set TUNNEL_MTU "$mtu"
+
+    # Потолок самого сервера — без оглядки на мобильную последнюю милю
+    # (amnezia-vpn-server-wc2l). Интерфейс awg0 поднимается до него, а
+    # осторожное значение выше раздаётся маршрутами каждому клиенту.
+    # Раньше интерфейс был осторожным, и клиент с поднятым MTU получал
+    # половину выигрыша: быструю отдачу и прежнее скачивание.
+    local device=$(( pmtu - TUNNEL_ENCAP_OVERHEAD ))
+    [ "$device" -lt "$mtu" ] && device="$mtu"
+    [ "$device" -gt 1500 ] && device=1500
+    env_set TUNNEL_MTU_MAX "$device"
+    if [ "$device" -gt "$mtu" ]; then
+        log "tunnel device MTU $device (clients keep $mtu unless given their own)"
+    fi
 }
 
 tunnel_mtu_preflight

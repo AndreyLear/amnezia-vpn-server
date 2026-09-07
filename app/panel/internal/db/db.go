@@ -417,6 +417,10 @@ type ClientRow struct {
 	Address      string
 	// ExpiresAt is empty when clients.expires_at is NULL (no expiry).
 	ExpiresAt string
+	// MTU — собственный размер клиента, 0 означает «как у всех». Нужен
+	// генератору, чтобы выписать маршрут этому клиенту
+	// (amnezia-vpn-server-wc2l).
+	MTU int64
 }
 
 // ClientsForConfig returns the clients active for the server AWG config,
@@ -426,7 +430,7 @@ type ClientRow struct {
 // (fail-closed).
 func ClientsForConfig(handle *sql.DB) ([]ClientRow, error) {
 	rows, err := handle.Query(
-		`SELECT id, public_key, preshared_key, address, expires_at
+		`SELECT id, public_key, preshared_key, address, expires_at, mtu
 		   FROM clients WHERE enabled = 1 ORDER BY id`,
 	)
 	if err != nil {
@@ -442,7 +446,7 @@ func ClientsForConfig(handle *sql.DB) ([]ClientRow, error) {
 			psk sql.NullString
 			exp sql.NullString
 		)
-		if err := rows.Scan(&c.ID, &c.PublicKey, &psk, &c.Address, &exp); err != nil {
+		if err := rows.Scan(&c.ID, &c.PublicKey, &psk, &c.Address, &exp, &c.MTU); err != nil {
 			return nil, fmt.Errorf("db: scan client: %w", err)
 		}
 		c.PresharedKey = psk.String
