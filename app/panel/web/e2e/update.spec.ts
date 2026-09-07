@@ -7,13 +7,41 @@ import { expect, test, type Page } from "@playwright/test";
 const user = "e2e";
 const password = "e2e-password-correct-horse";
 
-async function login(page: Page) {
+// Вход без разбора итога. Окно с итогом обновления модальное и перекрывает
+// панель до подтверждения — это и задумано, поэтому помощник его закрывает,
+// как закрыл бы человек. Сам итог проверяется отдельным тестом, который
+// входит без этого помощника.
+async function signIn(page: Page) {
   await page.goto("/login");
   await page.getByLabel("Имя пользователя").fill(user);
   await page.getByLabel("Пароль").fill(password);
   await page.getByRole("button", { name: "Войти" }).click();
+}
+
+async function login(page: Page) {
+  await signIn(page);
+  const acknowledge = page.getByRole("button", { name: "Понятно" });
+  if (await acknowledge.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await acknowledge.click();
+  }
   await expect(page.getByRole("button", { name: "Добавить клиента" })).toBeVisible();
 }
+
+// Итог прошлого обновления встречает человека сам: обновление перезапускает
+// саму панель, и если итог не показать — он не узнает ничего.
+test("итог прошлого обновления показывается сам", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await signIn(page);
+  await expect(page.getByRole("heading", { name: "Обновление завершено" })).toBeVisible();
+  await expect(page.getByText("обновление до 99.9.9 завершено")).toBeVisible();
+  // Закрыли — и он не возвращается: сервер помнит, какой итог показали.
+  await page.getByRole("button", { name: "Понятно" }).click();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Добавить клиента" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Обновление завершено" })).toHaveCount(0);
+  // И полоса под ним никуда не делась: итог её перекрывал, а не отменял.
+  await expect(page.getByText("Вышла версия 99.9.9")).toBeVisible();
+});
 
 test("полоса называет вышедшую версию", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });

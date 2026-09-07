@@ -231,3 +231,30 @@ func TestUpdateRoutesRefuseAMutationWithoutCSRF(t *testing.T) {
 		}
 	}
 }
+
+// Итог обновления должен найти человека сам — в том числе после перезапуска
+// панели, который делает само обновление (amnezia-vpn-server-tjoq).
+func TestOutcomeIsRememberedOnceItHasBeenShown(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("AMNEZIA_VERSION", "2.9.0")
+	writeStatusFile(t, f, "update-state.json",
+		`{"schema":"v1","state":"ok","from":"2.8.2","to":"2.9.0","step":"готово","message":"готово","at_utc":"2026-09-08T10:00:00Z"}`)
+
+	got := decodeAPI(t, f.get("/api/update"))
+	if got["outcome_seen"] != "" {
+		t.Fatalf("итог помечен показанным до того, как его показали: %v", got)
+	}
+
+	if rec := f.postBody("/api/update/dismiss", `{"outcome":"2026-09-08T10:00:00Z"}`); rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	got = decodeAPI(t, f.get("/api/update"))
+	if got["outcome_seen"] != "2026-09-08T10:00:00Z" {
+		t.Fatalf("outcome_seen = %v", got["outcome_seen"])
+	}
+	// Закрытая полоса и показанный итог живут порознь: закрыть одно не
+	// значит убрать другое.
+	if got["dismissed"] != "" {
+		t.Fatalf("подтверждение итога заодно закрыло полосу: %v", got)
+	}
+}

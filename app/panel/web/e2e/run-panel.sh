@@ -42,6 +42,10 @@ JSON
 JSON
     printf '{"schema":"v1","os":"ubuntu 24.04 (noble)","docker":"27.3.1","watchdog":true,"fail2ban":true,"update_check":true}\n' \
         > "$DIR/deployment.json"
+    # Итог прошлого обновления: панель обязана показать его сама, потому что
+    # обновление перезапускает её саму (amnezia-vpn-server-tjoq).
+    printf '{"schema":"v1","state":"ok","from":"1.0.0","to":"99.9.9","step":"готово","message":"обновление до 99.9.9 завершено","at_utc":"2026-09-08T10:00:00Z"}\n' \
+        > "$DIR/update-state.json"
 fi
 
 exec go run . serve --addr "127.0.0.1:${AMNEZIA_E2E_PORT:-18787}"
