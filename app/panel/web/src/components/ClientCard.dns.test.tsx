@@ -41,7 +41,7 @@ describe("отметка об обходе резолвера", () => {
     wideScreen();
     render(<ClientCard client={base} />);
 
-    expect(screen.queryByLabelText("Имена разрешаются мимо туннеля")).toBeNull();
+    expect(screen.queryByLabelText("Нет запросов к нашему резолверу")).toBeNull();
     window.matchMedia = originalMatchMedia;
   });
 
@@ -50,7 +50,7 @@ describe("отметка об обходе резолвера", () => {
     render(<ClientCard client={{ ...base, dns_bypass: true }} />);
 
     expect(
-      screen.getByLabelText("Имена разрешаются мимо туннеля"),
+      screen.getByLabelText("Нет запросов к нашему резолверу"),
     ).toBeInTheDocument();
     window.matchMedia = originalMatchMedia;
   });

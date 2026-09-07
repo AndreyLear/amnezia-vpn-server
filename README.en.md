@@ -246,8 +246,8 @@ The answer should be your server's address. The provider's address means part
 of the traffic goes around the tunnel.
 
 **The panel says it about DNS itself.** When a client moves data through the
-tunnel but asks somebody else for names, an amber mark appears in its row,
-labelled "names are resolved around the tunnel". Nothing has to be configured
+tunnel but does not ask us for names, an amber mark appears in its row: "no
+queries to our resolver in the last 10 minutes". Nothing has to be configured
 for that: the server sees who talks to it, and silence is as visible as a
 query.
 

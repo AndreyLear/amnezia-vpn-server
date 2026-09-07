@@ -215,13 +215,14 @@ export function ClientCard({
                 <TooltipTrigger asChild>
                   <span
                     className="shrink-0 text-amber-500"
-                    aria-label="Имена разрешаются мимо туннеля"
+                    aria-label="Нет запросов к нашему резолверу"
                   >
                     <ShieldAlertIcon className="size-4" aria-hidden />
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>
-                  Имена разрешаются мимо туннеля: запросов к нашему серверу нет
+                  Нет запросов к нашему резолверу за последние 10 минут: имена
+                  разрешаются мимо туннеля
                 </TooltipContent>
               </Tooltip>
             ) : null}
