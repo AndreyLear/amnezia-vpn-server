@@ -245,7 +245,11 @@ if command -v flock >/dev/null 2>&1; then
     sleep 1
     run_agent RELEASE_BODY="$BODY" ASSET_FILE="$ASSET" >/dev/null 2>&1; rc=$?
     check "a second request during an update is refused" test "$rc" != "0"
-    check "and the running update keeps its request" \
+    # Запрос убирается, хотя выполнен не будет. Оставленный, он дождался бы
+    # конца текущего прогона и запустил бы обновление снова — а после
+    # неудачной попытки с откатом это значит, что сервер повторит её сам,
+    # никого не спросив.
+    check_not "и отклонённый запрос не ждёт своего часа" \
         test -f "$ROOT/data/update-request.json"
     check_not "nothing was installed by the second run" \
         grep -q "new-installer" "$CALLS"

@@ -30,7 +30,12 @@ set -u
 STATUS_DIR="${AMNEZIA_UPDATE_STATUS_DIR:-${AMNEZIA_UPDATE_ROOT:-/opt/amnezia-vpn}/status}"
 LATEST_FILE="${STATUS_DIR}/update-latest.json"
 CHECK_FILE="${STATUS_DIR}/update-check.json"
-RELEASE_URL="${AMNEZIA_UPDATE_URL:-https://api.github.com/repos/AndreyLear/amnezia-vpn-server/releases/latest}"
+# Список, а не один последний выпуск: человеку перед обновлением надо
+# прочитать всё, что изменилось между его версией и свежей, а не только
+# последнюю запись. Двадцати хватает с большим запасом — сервер, отставший
+# на двадцать выпусков, всё равно обновляется мастером
+# (amnezia-vpn-server-tjoq).
+RELEASE_URL="${AMNEZIA_UPDATE_URL:-https://api.github.com/repos/AndreyLear/amnezia-vpn-server/releases?per_page=20}"
 CURL_BIN="${AMNEZIA_UPDATE_CURL:-curl}"
 
 log() { printf 'update-check: %s\n' "$*"; }

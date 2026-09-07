@@ -24,8 +24,9 @@ func (s *Server) apiUpdateStart(w http.ResponseWriter, r *http.Request) {
 	dir := s.statusDir()
 	installed := productVersion()
 
-	rel, err := status.ReadRelease(filepath.Join(dir, "update-latest.json"))
-	if err != nil || rel == nil || !status.IsNewer(rel.Version(), installed) {
+	releases, err := status.ReadReleases(filepath.Join(dir, "update-latest.json"))
+	latest, _ := status.NotesSince(releases, installed)
+	if err != nil || latest == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"ok": false, "message": "Обновляться не на что",
 		})
@@ -42,7 +43,7 @@ func (s *Server) apiUpdateStart(w http.ResponseWriter, r *http.Request) {
 
 	body := fmt.Sprintf(
 		`{"schema":"v1","version":%q,"requested_at_utc":%q}`+"\n",
-		rel.Version(), time.Now().UTC().Format(time.RFC3339),
+		latest, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err := writeRequest(filepath.Join(s.dataDir(), "update-request.json"), body); err != nil {
 		s.cfg.Logger.Printf("update request: %v", err)
@@ -57,22 +58,33 @@ func (s *Server) apiUpdateStart(w http.ResponseWriter, r *http.Request) {
 // apiUpdateDismiss hides the banner until the next release. Stored on the
 // server: the same owner opens the panel from a laptop and from a phone,
 // and closing it in one place has to hold in the other.
+// apiUpdateDismiss убирает с глаз либо полосу о выпуске, либо показанный
+// итог обновления — смотря что прислали. Оба хранятся на сервере по одной
+// причине: владелец один и тот же на компьютере и на телефоне, и убирать
+// одно и то же дважды — работа без причины.
+//
+// Хранится не флаг, а то, ДЛЯ ЧЕГО убрали: версия у полосы, время у итога.
+// Следующий выпуск и следующее обновление возвращаются сами.
 func (s *Server) apiUpdateDismiss(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Version string `json:"version"`
+		Outcome string `json:"outcome"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	version := strings.TrimSpace(req.Version)
-	if version == "" {
+	setting, value := dismissedSetting, strings.TrimSpace(req.Version)
+	if outcome := strings.TrimSpace(req.Outcome); outcome != "" {
+		setting, value = outcomeSeenSetting, outcome
+	}
+	if value == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok": false, "message": "Не указана версия",
+			"ok": false, "message": "Нечего убирать",
 		})
 		return
 	}
-	if err := db.SetSetting(s.db(), dismissedSetting, version); err != nil {
-		s.cfg.Logger.Printf("dismiss banner: %v", err)
+	if err := db.SetSetting(s.db(), setting, value); err != nil {
+		s.cfg.Logger.Printf("dismiss %s: %v", setting, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"ok": false, "message": "Не удалось сохранить",
 		})

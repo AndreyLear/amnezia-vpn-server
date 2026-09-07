@@ -28,8 +28,10 @@ if [ "${AMNEZIA_E2E_UPDATE:-0}" = "1" ]; then
     # версия N» тому, кто её, может быть, уже поставил, — хуже, чем промолчать.
     # На развёртывании версию задаёт compose из versions.lock.
     export AMNEZIA_VERSION="1.0.0"
+    # Список выпусков: человек, отставший на два, должен прочитать оба.
     cat > "$DIR/update-latest.json" <<'JSON'
-{"tag_name":"v99.9.9","body":"- Первое изменение\n- Второе изменение\n\namnezia-sha256: 0000000000000000000000000000000000000000000000000000000000000000\n"}
+[{"tag_name":"v99.9.9","body":"- Первое изменение\n\namnezia-sha256: 0000000000000000000000000000000000000000000000000000000000000000\n"},
+ {"tag_name":"v99.9.8","body":"- Второе изменение\n"}]
 JSON
     printf '{"schema":"v1","checked_at_utc":"2026-09-07T09:00:00Z","result":"ok"}\n' \
         > "$DIR/update-check.json"
@@ -42,6 +44,10 @@ JSON
 JSON
     printf '{"schema":"v1","os":"ubuntu 24.04 (noble)","docker":"27.3.1","watchdog":true,"fail2ban":true,"update_check":true}\n' \
         > "$DIR/deployment.json"
+    # Итог прошлого обновления: панель обязана показать его сама, потому что
+    # обновление перезапускает её саму (amnezia-vpn-server-tjoq).
+    printf '{"schema":"v1","state":"ok","from":"1.0.0","to":"99.9.9","step":"готово","message":"обновление до 99.9.9 завершено","at_utc":"2026-09-08T10:00:00Z"}\n' \
+        > "$DIR/update-state.json"
 fi
 
 exec go run . serve --addr "127.0.0.1:${AMNEZIA_E2E_PORT:-18787}"

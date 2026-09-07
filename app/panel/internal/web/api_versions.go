@@ -88,8 +88,12 @@ func (s *Server) apiVersions(w http.ResponseWriter, r *http.Request) {
 		out.AmneziaWGGo = v.AmneziaWGGo
 		out.AmneziaWGTools = v.AmneziaWGTools
 	}
-	if rel, err := status.ReadRelease(filepath.Join(dir, "update-latest.json")); err == nil && rel != nil {
-		out.Latest = rel.Version()
+	if releases, err := status.ReadReleases(filepath.Join(dir, "update-latest.json")); err == nil {
+		for i := range releases {
+			if v := releases[i].Version(); v != "" && (out.Latest == "" || status.IsNewer(v, out.Latest)) {
+				out.Latest = v
+			}
+		}
 	}
 	if d, err := status.ReadDeployment(filepath.Join(dir, "deployment.json")); err == nil && d != nil {
 		out.OS = d.OS

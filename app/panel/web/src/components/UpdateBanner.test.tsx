@@ -23,6 +23,7 @@ function info(overrides: Partial<UpdateInfo> = {}): UpdateInfo {
     state_message: "",
     state_at_utc: "",
     dismissed: "",
+    outcome_seen: "",
     ...overrides,
   };
 }
@@ -100,6 +101,90 @@ describe("полоса о новом выпуске", () => {
   });
 });
 
+// Критерий 5 задачи: «Итог виден, даже если браузер был закрыт всё
+// обновление». Обновление перезапускает саму панель, поэтому итог обязан
+// найтись сам, а не ждать, пока человек куда-то нажмёт.
+describe("итог обновления", () => {
+  it("показывается сам после удачного обновления", async () => {
+    render(
+      <UpdateBanner
+        info={info({
+          installed: "2.9.0",
+          latest: "2.9.0",
+          available: false,
+          state: "ok",
+          state_to: "2.9.0",
+          state_message: "обновление до 2.9.0 завершено",
+          state_at_utc: "2026-09-08T10:00:00Z",
+        })}
+        onChanged={() => {}}
+      />,
+    );
+    expect(await screen.findByText("Обновление завершено")).toBeInTheDocument();
+    expect(screen.getByText("обновление до 2.9.0 завершено")).toBeInTheDocument();
+  });
+
+  it("показывается сам и когда обновление не удалось", async () => {
+    render(
+      <UpdateBanner
+        info={info({
+          state: "rolled-back",
+          state_message: "не удалось; сервер работает на 2.8.2",
+          state_at_utc: "2026-09-08T10:00:00Z",
+        })}
+        onChanged={() => {}}
+      />,
+    );
+    expect(await screen.findByText("Обновиться не удалось")).toBeInTheDocument();
+  });
+
+  // Показали один раз — больше не показываем: сервер помнит, какой именно
+  // итог человек уже видел.
+  it("не возвращается после того, как его закрыли", () => {
+    render(
+      <UpdateBanner
+        info={info({
+          available: false,
+          state: "ok",
+          state_at_utc: "2026-09-08T10:00:00Z",
+          outcome_seen: "2026-09-08T10:00:00Z",
+        })}
+        onChanged={() => {}}
+      />,
+    );
+    expect(screen.queryByText("Обновление завершено")).not.toBeInTheDocument();
+  });
+
+  it("закрытие сообщает серверу, какой итог показали", async () => {
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    render(
+      <UpdateBanner
+        info={info({ available: false, state: "ok", state_at_utc: "2026-09-08T10:00:00Z" })}
+        onChanged={onChanged}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Понятно" }));
+    await waitFor(() => expect(posted).toContain("/api/update/dismiss"));
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  // Агент умеет отказать, и панель обязана это состояние знать.
+  it("объясняет отказ, а не молчит", async () => {
+    render(
+      <UpdateBanner
+        info={info({
+          state: "refused",
+          state_message: "версия 2.7.0 не новее установленной 2.9.0",
+          state_at_utc: "2026-09-08T10:00:00Z",
+        })}
+        onChanged={() => {}}
+      />,
+    );
+    expect(await screen.findByText(/не новее установленной/)).toBeInTheDocument();
+  });
+});
+
 describe("ход обновления", () => {
   // Окно проверяется напрямую: щёлкать по полосе, чтобы добраться до
   // прогресса, значило бы проверять заодно и открытие окна, которое проверено
@@ -146,10 +231,13 @@ describe("ход обновления", () => {
     expect(screen.getByText(/Окно можно закрыть/)).toBeInTheDocument();
   });
 
-  // Итог лежит на сервере: браузер мог быть закрыт всё обновление.
-  it("показывает итог, чем бы обновление ни кончилось", () => {
-    openDialog({ state: "rolled-back", state_message: "не удалось; сервер работает на 2.8.2" });
-    expect(screen.getByText("не удалось; сервер работает на 2.8.2")).toBeInTheDocument();
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  // Итог рассказывает не это окно, а попап: он должен найти человека сам,
+  // в том числе после перезапуска панели. Здесь остаётся то, что читают
+  // ПЕРЕД нажатием, — иначе окно путало бы «обновление когда-то кончилось»
+  // с «моё обновление кончилось».
+  it("после обновления снова показывает изменения, а не итог", () => {
+    openDialog({ state: "ok", state_message: "обновление до 2.9.0 завершено" });
+    expect(screen.queryByText("обновление до 2.9.0 завершено")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Обновить" })).toBeInTheDocument();
   });
 });

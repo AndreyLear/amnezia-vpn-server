@@ -13,6 +13,11 @@ import { api, mutationOk, type MutationResponse, type UpdateInfo } from "@/lib/a
 /**
  * Окно изменений и ход обновления (amnezia-vpn-server-tjoq).
  *
+ * Чем обновление кончилось, рассказывает не это окно, а UpdateOutcomeDialog:
+ * итог должен найти человека сам, в том числе после перезапуска панели,
+ * который делает само обновление. Здесь же — то, что человек пришёл прочитать
+ * ПЕРЕД тем, как нажать (amnezia-vpn-server-tjoq).
+ *
  * ПОЛОСА ПРОГРЕССА НЕ ПРИВЯЗАНА КО ВРЕМЕНИ. Панель в середине обновления
  * перезапускается, и живой ход отдавать некому. Полоса идёт к 99% и там
  * замирает, дожидаясь настоящего итога из файла состояния: иначе она соврала
@@ -94,8 +99,6 @@ export function UpdateDialog({
     setStarting(false);
   }
 
-  const finished = info?.state === "ok" || info?.state === "rolled-back" || info?.state === "failed";
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-6">
@@ -124,8 +127,6 @@ export function UpdateDialog({
               Окно можно закрыть — обновление от этого не остановится, а итог дождётся
             </p>
           </div>
-        ) : finished ? (
-          <p>{info?.state_message}</p>
         ) : (
           <>
             <Notes notes={info?.notes ?? ""} />
@@ -136,7 +137,7 @@ export function UpdateDialog({
           </>
         )}
 
-        {running || finished ? null : (
+        {running ? null : (
           <DialogFooter>
             <Button type="button" disabled={starting} onClick={() => void start()}>
               Обновить

@@ -12,6 +12,7 @@
 package status
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -89,14 +90,56 @@ func readJSONFile(path string, out any) (bool, error) {
 	return true, nil
 }
 
-// ReadRelease loads the snapshot of the latest release. Missing file → nil.
-func ReadRelease(path string) (*Release, error) {
-	var out Release
-	found, err := readJSONFile(path, &out)
-	if err != nil || !found {
-		return nil, err
+// ReadReleases loads the snapshot of what GitHub published. Missing file →
+// nil, which is what a server that has never checked looks like.
+//
+// Терпит обе формы. Хост кладёт список выпусков, но развёртывание, где
+// проверка старше этой возможности, оставило после себя один объект — и во
+// время обновления панель новая, а файл ещё прежний. Разбирать по первому
+// значащему символу дешевле, чем заводить второй файл ради одного дня.
+func ReadReleases(path string) ([]Release, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
 	}
-	return &out, nil
+	if err != nil {
+		return nil, fmt.Errorf("status: read %s: %w", path, err)
+	}
+	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("[")) {
+		var out []Release
+		if err := json.Unmarshal(data, &out); err != nil {
+			return nil, fmt.Errorf("status: parse %s: %w", path, err)
+		}
+		return out, nil
+	}
+	var one Release
+	if err := json.Unmarshal(data, &one); err != nil {
+		return nil, fmt.Errorf("status: parse %s: %w", path, err)
+	}
+	return []Release{one}, nil
+}
+
+// NotesSince собирает описания всех выпусков новее installed, от свежего к
+// старому. Человек, отставший на три выпуска, должен прочитать все три: он
+// решает, стоит ли обновляться, по тому, что изменится у него, а не по
+// последней записи.
+func NotesSince(releases []Release, installed string) (latest string, notes string) {
+	var parts []string
+	for i := range releases {
+		version := releases[i].Version()
+		if !IsNewer(version, installed) {
+			continue
+		}
+		if latest == "" || IsNewer(version, latest) {
+			latest = version
+		}
+		if body := releases[i].Notes(); body != "" {
+			parts = append(parts, body)
+		}
+	}
+	// Ни одного новее — значит показывать нечего, и «свежая версия» здесь
+	// определяется тем же сравнением, что и предложение обновиться.
+	return latest, strings.Join(parts, "\n")
 }
 
 // ReadUpdateCheck loads the record of the last check. Missing file → nil.

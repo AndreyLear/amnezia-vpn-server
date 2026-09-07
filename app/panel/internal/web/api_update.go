@@ -39,6 +39,11 @@ type updateJSON struct {
 	StateMessage string `json:"state_message"`
 	StateAtUTC   string `json:"state_at_utc"`
 
+	// OutcomeSeen — время итога, который уже показали. Итог лежит в файле и
+	// дожидается: обновление перезапускает саму панель, и браузер мог быть
+	// закрыт всё это время.
+	OutcomeSeen string `json:"outcome_seen"`
+
 	// Какую версию владелец убрал с глаз крестиком. Хранится на сервере, а
 	// не в браузере: владелец один и тот же на компьютере и на телефоне, и
 	// закрытая полоса должна остаться закрытой в обоих
@@ -50,6 +55,11 @@ type updateJSON struct {
 // the version it was closed for, not a flag: the next release must bring
 // the banner back by itself.
 const dismissedSetting = "update_banner_dismissed"
+
+// outcomeSeenSetting запоминает, какой итог обновления человеку уже
+// показали. Значение — время итога, а не флаг: следующее обновление
+// закончится в другую секунду и покажется само (amnezia-vpn-server-tjoq).
+const outcomeSeenSetting = "update_outcome_seen"
 
 func (s *Server) statusDir() string {
 	return filepath.Dir(s.cfg.StatusPath)
@@ -65,9 +75,11 @@ func (s *Server) apiUpdate(w http.ResponseWriter, r *http.Request) {
 	out := updateJSON{Installed: productVersion()}
 	dir := s.statusDir()
 
-	if rel, err := status.ReadRelease(filepath.Join(dir, "update-latest.json")); err == nil && rel != nil {
-		out.Latest = rel.Version()
-		out.Notes = rel.Notes()
+	// Все записи между установленной версией и свежей, а не только
+	// последняя: человек решает, стоит ли обновляться, по тому, что
+	// изменится у него (amnezia-vpn-server-tjoq).
+	if releases, err := status.ReadReleases(filepath.Join(dir, "update-latest.json")); err == nil {
+		out.Latest, out.Notes = status.NotesSince(releases, out.Installed)
 	}
 	out.Available = status.IsNewer(out.Latest, out.Installed)
 
@@ -78,6 +90,9 @@ func (s *Server) apiUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if v, ok, err := db.GetSetting(s.db(), dismissedSetting); err == nil && ok {
 		out.Dismissed = v
+	}
+	if v, ok, err := db.GetSetting(s.db(), outcomeSeenSetting); err == nil && ok {
+		out.OutcomeSeen = v
 	}
 	if st, err := status.ReadUpdateState(filepath.Join(dir, "update-state.json")); err == nil && st != nil {
 		out.State = st.State
