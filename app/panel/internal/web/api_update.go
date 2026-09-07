@@ -75,9 +75,11 @@ func (s *Server) apiUpdate(w http.ResponseWriter, r *http.Request) {
 	out := updateJSON{Installed: productVersion()}
 	dir := s.statusDir()
 
-	if rel, err := status.ReadRelease(filepath.Join(dir, "update-latest.json")); err == nil && rel != nil {
-		out.Latest = rel.Version()
-		out.Notes = rel.Notes()
+	// Все записи между установленной версией и свежей, а не только
+	// последняя: человек решает, стоит ли обновляться, по тому, что
+	// изменится у него (amnezia-vpn-server-tjoq).
+	if releases, err := status.ReadReleases(filepath.Join(dir, "update-latest.json")); err == nil {
+		out.Latest, out.Notes = status.NotesSince(releases, out.Installed)
 	}
 	out.Available = status.IsNewer(out.Latest, out.Installed)
 

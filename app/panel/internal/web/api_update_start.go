@@ -24,8 +24,9 @@ func (s *Server) apiUpdateStart(w http.ResponseWriter, r *http.Request) {
 	dir := s.statusDir()
 	installed := productVersion()
 
-	rel, err := status.ReadRelease(filepath.Join(dir, "update-latest.json"))
-	if err != nil || rel == nil || !status.IsNewer(rel.Version(), installed) {
+	releases, err := status.ReadReleases(filepath.Join(dir, "update-latest.json"))
+	latest, _ := status.NotesSince(releases, installed)
+	if err != nil || latest == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"ok": false, "message": "Обновляться не на что",
 		})
@@ -42,7 +43,7 @@ func (s *Server) apiUpdateStart(w http.ResponseWriter, r *http.Request) {
 
 	body := fmt.Sprintf(
 		`{"schema":"v1","version":%q,"requested_at_utc":%q}`+"\n",
-		rel.Version(), time.Now().UTC().Format(time.RFC3339),
+		latest, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err := writeRequest(filepath.Join(s.dataDir(), "update-request.json"), body); err != nil {
 		s.cfg.Logger.Printf("update request: %v", err)

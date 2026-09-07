@@ -63,7 +63,9 @@ FAKE
 chmod +x "$FAKE_DIR/curl"
 
 RELEASE="$TMP/release.json"
-printf '{"tag_name":"v2.9.0","body":"Первая строка\\nвторая строка с \\"кавычками\\""}\n' > "$RELEASE"
+# Список выпусков, как отдаёт GitHub: человеку перед обновлением надо
+# прочитать всё между его версией и свежей (amnezia-vpn-server-tjoq).
+printf '[{"tag_name":"v2.9.0","body":"Первая строка\\nвторая строка с \\"кавычками\\""},{"tag_name":"v2.8.2","body":"Прошлая"}]\n' > "$RELEASE"
 BLOCKPAGE="$TMP/blockpage.html"
 printf '<html><body>Доступ ограничен</body></html>\n' > "$BLOCKPAGE"
 
@@ -77,8 +79,10 @@ run() { # run [env assignments...]
 # --- a good answer -----------------------------------------------------
 out="$(run CURL_BODY="$RELEASE" 2>&1)"; rc=$?
 check "a successful check exits 0" test "$rc" = "0"
-check "it stores the release GitHub returned" \
+check "it stores the releases GitHub returned" \
     grep -q '"tag_name":"v2.9.0"' "$STATUS_DIR/update-latest.json"
+check "and the ones before it too" \
+    grep -q '"tag_name":"v2.8.2"' "$STATUS_DIR/update-latest.json"
 # Кавычки и переносы в описании выпуска — обычное дело; скрипт их не
 # пересобирает, а значит и не порвёт.
 check "the release notes survive quotes and newlines untouched" \

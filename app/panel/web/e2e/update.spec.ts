@@ -54,6 +54,9 @@ test("подробности показывают изменения и пред
   await login(page);
   await page.getByRole("button", { name: "Показать подробности" }).click();
   await expect(page.getByText("Первое изменение")).toBeVisible();
+  // И то, что вышло между установленной версией и свежей, тоже: человек
+  // решает по тому, что изменится у него, а не по последней записи.
+  await expect(page.getByText("Второе изменение")).toBeVisible();
   await expect(page.getByText(/клиенты остаются без связи/)).toBeVisible();
   // Контрольная сумма предназначена агенту обновления, а не человеку.
   await expect(page.getByText(/amnezia-sha256/)).toHaveCount(0);
