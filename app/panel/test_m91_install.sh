@@ -99,6 +99,7 @@ FAKE_PMTU=1500
 DEFAULT_IFACE=ens3
 TC_RC=0
 GITHUB_RELEASE_RC=0
+GITHUB_RELEASE_HTTP=200
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -537,8 +538,14 @@ fi
 # (amnezia-vpn-server-zklt).
 if printf '%s' "$*" | grep -q "api.github.com"; then
     . "${FAKE_STATE:?}"
-    [ "${GITHUB_RELEASE_RC:-0}" = "0" ] || exit "${GITHUB_RELEASE_RC}"
+    # Код ответа печатается так же, как это делает -w %{http_code}: без него
+    # скрипт не отличит молчание сети от честного 404.
+    if [ "${GITHUB_RELEASE_RC:-0}" != "0" ]; then
+        printf '000'
+        exit "${GITHUB_RELEASE_RC}"
+    fi
     [ -n "$oarg" ] && printf '{"tag_name":"v9.9.9","body":"note"}\n' > "$oarg"
+    printf '%s' "${GITHUB_RELEASE_HTTP:-200}"
     exit 0
 fi
 if [ -n "$oarg" ]; then

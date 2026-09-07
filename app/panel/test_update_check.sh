@@ -39,8 +39,12 @@ STATUS_DIR="$TMP/status"
 FAKE_DIR="$TMP/bin"
 mkdir -p "$STATUS_DIR" "$FAKE_DIR"
 
-# curl shim: RC comes from the environment, the body from a file, so each
-# case sets up what GitHub "said" without touching the script.
+# curl shim: the transport result comes from CURL_RC, the HTTP status from
+# CURL_HTTP and the body from a file, so each case sets up what happened
+# without touching the script. It prints the status the way `-w %{http_code}`
+# does — including the 000 real curl prints when it never got an answer,
+# which is the whole difference between «did not reach GitHub» and «reached
+# it, got a 404».
 cat > "$FAKE_DIR/curl" <<'FAKE'
 #!/bin/bash
 oarg=""; prev=""
@@ -48,8 +52,12 @@ for a in "$@"; do
     [ "$prev" = "-o" ] && oarg="$a"
     prev="$a"
 done
-[ "${CURL_RC:-0}" = "0" ] || exit "${CURL_RC}"
+if [ "${CURL_RC:-0}" != "0" ]; then
+    printf '000'
+    exit "${CURL_RC}"
+fi
 [ -n "$oarg" ] && cat "${CURL_BODY:?}" > "$oarg"
+printf '%s' "${CURL_HTTP:-200}"
 exit 0
 FAKE
 chmod +x "$FAKE_DIR/curl"
@@ -97,6 +105,18 @@ check "the failure is recorded" \
 # первое про его сеть, второе про нас.
 check "and it says the server could not reach GitHub" \
     grep -q '"reason":"unreachable"' "$STATUS_DIR/update-check.json"
+
+# --- GitHub answers, with nothing to offer -----------------------------
+# Ровно этот случай перепутал живой сервер: выпусков в репозитории нет,
+# releases/latest отвечает 404, а файл советовал чинить сеть.
+out="$(run CURL_HTTP=404 CURL_BODY="$RELEASE" 2>&1)"; rc=$?
+check "a 404 from GitHub is not a failure of the script" test "$rc" = "0"
+check "a 404 is recorded as GitHub having no release" \
+    grep -q '"reason":"no-release"' "$STATUS_DIR/update-check.json"
+check_not "a 404 never reads as an unreachable server" \
+    grep -q '"reason":"unreachable"' "$STATUS_DIR/update-check.json"
+check "a 404 does not replace the release we already knew about" \
+    grep -q '"tag_name":"v2.9.0"' "$STATUS_DIR/update-latest.json"
 
 # --- something that is not a release -----------------------------------
 out="$(run CURL_BODY="$BLOCKPAGE" 2>&1)"; rc=$?
