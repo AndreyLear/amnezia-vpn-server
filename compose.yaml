@@ -32,6 +32,12 @@ services:
         ALPINE_VERSION: ${ALPINE_VERSION:?ALPINE_VERSION must be set via versions.lock}
     image: ${IMAGE_REGISTRY:?IMAGE_REGISTRY must be set via versions.lock}/panel:${IMAGE_VERSION:?IMAGE_VERSION must be set via versions.lock}
     command: ["/app/panel", "serve"]
+    environment:
+      # Панель должна знать, что на сервере стоит: без этого она не может ни
+      # показать версию, ни сравнить её с вышедшей (amnezia-vpn-server-rdcz).
+      # Значение то же, что в теге образа, из versions.lock — одно место, а не
+      # два, которые могут разойтись.
+      AMNEZIA_VERSION: ${IMAGE_VERSION:?IMAGE_VERSION must be set via versions.lock}
     depends_on:
       panel-init:
         condition: service_completed_successfully

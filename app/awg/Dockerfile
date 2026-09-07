@@ -85,6 +85,14 @@ FROM alpine:${ALPINE_VERSION}
 # это у него уже есть (NET_ADMIN, сеть хоста), а у панели нет и не будет.
 RUN apk add --no-cache bash iproute2 iptables nftables openresolv
 
+# Версии в образ, чтобы панель могла ответить на вопрос «что у меня стоит».
+# Раньше они существовали только как аргументы сборки и внутрь не попадали
+# (amnezia-vpn-server-rdcz).
+ARG AMNEZIAWG_GO_VERSION
+ARG AMNEZIAWG_TOOLS_VERSION
+ENV AMNEZIAWG_GO_VERSION=${AMNEZIAWG_GO_VERSION} \
+    AMNEZIAWG_TOOLS_VERSION=${AMNEZIAWG_TOOLS_VERSION}
+
 COPY --from=amneziawg-go-build /out/amneziawg-go /usr/bin/amneziawg-go
 COPY --from=amneziawg-tools-build /out/awg /out/awg-quick /usr/bin/
 COPY --from=awgstatus-build /out/awgstatus /opt/awg/awgstatus

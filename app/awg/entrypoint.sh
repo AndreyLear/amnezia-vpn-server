@@ -85,6 +85,28 @@ generate_dns_seen() {
     return 0
 }
 
+# Версии, которые несёт этот образ. Пишутся один раз при старте: они не
+# меняются, пока не сменится образ, а панель должна уметь ответить, что стоит
+# на сервере (amnezia-vpn-server-rdcz). Как и снимок dns-seen, файл лежит в
+# каталоге, который панель читает только на чтение, и его отсутствие для неё
+# означает «неизвестно», а не поломку.
+VERSIONS_FILE="${VERSIONS_FILE:-$(dirname "${STATUS_FILE}")/versions.json}"
+
+generate_versions() {
+    local dir tmp
+    dir="$(dirname "${VERSIONS_FILE}")"
+    [ -d "${dir}" ] || return 0
+    tmp="${VERSIONS_FILE}.tmp"
+    {
+        printf '{"schema":"v1","amneziawg_go":"%s","amneziawg_tools":"%s"}\n' \
+            "${AMNEZIAWG_GO_VERSION:-}" "${AMNEZIAWG_TOOLS_VERSION:-}"
+    } > "${tmp}" 2>/dev/null && mv -f "${tmp}" "${VERSIONS_FILE}" || {
+        log "warning: could not write ${VERSIONS_FILE}; the tunnel is unaffected"
+        rm -f "${tmp}" 2>/dev/null || true
+    }
+    return 0
+}
+
 wait_for_config() {
     local deadline=$((SECONDS + CONFIG_TIMEOUT))
     while [ ! -f "${CONFIG_SRC}" ]; do
@@ -239,6 +261,8 @@ LAST_MTIME="$(config_mtime)" || {
     log "error: cannot stat ${CONFIG_SRC}"
     exit 1
 }
+
+generate_versions || true
 
 trap signal_handler TERM INT
 

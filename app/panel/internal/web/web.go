@@ -235,6 +235,7 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("POST /api/backups/download", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiBackupDownload))))
 	s.mux.Handle("POST /api/backups/restore", s.auth.RequireAPI(http.HandlerFunc(s.apiBackupRestore)))
 	s.mux.Handle("GET /api/stats/host", s.auth.RequireAPI(http.HandlerFunc(s.apiStatsHost)))
+	s.mux.Handle("GET /api/versions", s.auth.RequireAPI(http.HandlerFunc(s.apiVersions)))
 	s.mux.Handle("GET /api/clients", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsList)))
 	s.mux.Handle("POST /api/clients", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsCreate))))
 	s.mux.Handle("GET /api/clients/{id}", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsGet)))
