@@ -15,11 +15,41 @@
 set -u
 
 M92_ERRORS=0
-M92_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+M92_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Дерево снимается один раз, и все запуски идут по копии. Установщик копирует
+# репозиторий к себе на каждом запуске, и пока он это делает, `npm run build`
+# переписывает бандл панели: cp натыкается на пропавший файл и падает, а
+# провалившимся объявляется тот тест, которому не повезло оказаться в этот
+# момент (amnezia-vpn-server-f85b).
+M92_HOME="$(mktemp -d /tmp/m92-tree.XXXXXX)"
+snapshot_repo() {
+    tar -cf - -C "$M92_REPO" \
+        --exclude=./.git --exclude=./.beads --exclude=./.worktrees \
+        --exclude=./node_modules --exclude=./app/panel/web/node_modules \
+        --exclude=./app/panel/web/test-results . 2>/dev/null \
+        | tar -xf - -C "$M92_HOME" 2>/dev/null
+}
+if ! snapshot_repo || [ ! -f "$M92_HOME/install.sh" ]; then
+    sleep 2
+    if ! snapshot_repo || [ ! -f "$M92_HOME/install.sh" ]; then
+        printf 'M9.2: не удалось снять копию дерева %s.\n' "$M92_REPO" >&2
+        printf 'M9.2: похоже, дерево меняется прямо сейчас — идёт сборка панели?\n' >&2
+        printf 'M9.2: дождитесь её окончания и запустите прогон снова.\n' >&2
+        rm -rf "$M92_HOME"
+        exit 2
+    fi
+fi
 INSTALL_SH="$M92_HOME/install.sh"
 
 pass() { printf 'PASS  %s\n' "$1"; }
-fail() { printf 'FAIL  %s\n' "$1"; M92_ERRORS=$((M92_ERRORS + 1)); }
+fail() {
+    printf 'FAIL  %s\n' "$1"
+    local last
+    last="$(ls -t "$TMP_TEST/failures/" 2>/dev/null | head -1)"
+    [ -n "$last" ] && printf '      вывод неудачного запуска: %s\n' "$TMP_TEST/failures/$last"
+    M92_ERRORS=$((M92_ERRORS + 1))
+}
 
 # --- fakes -------------------------------------------------------------
 
@@ -29,7 +59,17 @@ FAKE_CALLS="$FAKE_DIR/calls.log"
 FAKE_FS="$FAKE_DIR/fs"
 TMP_TEST="$(mktemp -d /tmp/m92-run.XXXXXX)"
 export FAKE_DIR FAKE_STATE FAKE_CALLS FAKE_FS
-trap 'rm -rf "$FAKE_DIR" "$TMP_TEST"' EXIT
+# Вывод упавшего запуска остаётся на диске: без него отказ неотличим от
+# настоящей поломки (amnezia-vpn-server-f85b).
+m92_cleanup() {
+    rm -rf "$FAKE_DIR" "$M92_HOME"
+    if [ "$M92_ERRORS" -gt 0 ]; then
+        printf 'M9.2: вывод упавших запусков оставлен в %s\n' "$TMP_TEST" >&2
+        return
+    fi
+    rm -rf "$TMP_TEST"
+}
+trap m92_cleanup EXIT
 
 setstate() { # portable in-place update: sed(1) -i differs on BSD/GNU
     local key="$1" value="$2" file="$3"
@@ -441,6 +481,15 @@ SYSTEMD_DIR_TEST="$TMP_TEST/systemd"
 NFT_SYS_FILE="$NFTABLES_DIR_TEST/amnezia-vpn.nft"
 NFT_DEPLOY_FILE="$ROOT/nftables/amnezia-vpn.nft"
 
+# Ожидания обнулены, как в харнессе установщика (amnezia-vpn-server-xyxk).
+# Установщик ждёт, пока появится статус туннеля (до 10 с) и пока перезапущенный
+# awg снова займёт порт (до 30 с). Заглушки этих состояний не создают, поэтому
+# каждый запуск досиживал оба предела до конца: 36 секунд вместо 6, и это
+# единственная причина, по которой прогон занимал полчаса. Умножено на 41 тест
+# — двадцать минут ожидания того, чего в этом харнессе не бывает.
+#
+# Значения переопределяемы: тест, которому нужно настоящее ожидание, задаёт
+# своё.
 run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_TEST=1 \
     AMNEZIA_INSTALL_FAKE_DIR="$FAKE_DIR" \
@@ -454,10 +503,22 @@ run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
     AMNEZIA_INSTALL_MODULES_DIR="$TMP_TEST/modules-load.d" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
+    AMNEZIA_INSTALL_FAIL2BAN_JAIL="${AMNEZIA_INSTALL_FAIL2BAN_JAIL:-$TMP_TEST/fail2ban/jail.d/amnezia-vpn-sshd.conf}" \
     AMNEZIA_INSTALL_VERIFY_WAIT_SEC="${VERIFY_WAIT_SEC:-0}" \
+    AMNEZIA_INSTALL_STATUS_WAIT_SEC="${AMNEZIA_INSTALL_STATUS_WAIT_SEC:-0}" \
+    AMNEZIA_INSTALL_RESTART_VERIFY_SEC="${AMNEZIA_INSTALL_RESTART_VERIFY_SEC:-0}" \
     PATH="${M92_PATH:-$FAKE_DIR:$PATH}" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
+    if [ "$rc" != "0" ]; then
+        mkdir -p "$TMP_TEST/failures"
+        {
+            printf '=== install.sh --root %s %s\n=== exit %s\n--- stdout\n' "$ROOT" "$*" "$rc"
+            cat "$TMP_TEST/out"
+            printf -- '--- stderr\n'
+            cat "$TMP_TEST/err"
+        } > "$TMP_TEST/failures/run-$(date +%s)-$$.log" 2>/dev/null
+    fi
     if [ -n "${M92_DEBUG:-}" ] && [ "$rc" != "0" ]; then
         echo "=== DEBUG run rc=$rc ===" >&2
         cat "$TMP_TEST/out" "$TMP_TEST/err" >&2

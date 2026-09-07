@@ -33,6 +33,15 @@ if [ "${AMNEZIA_E2E_UPDATE:-0}" = "1" ]; then
 JSON
     printf '{"schema":"v1","checked_at_utc":"2026-09-07T09:00:00Z","result":"ok"}\n' \
         > "$DIR/update-check.json"
+    # Снимок сторожа: без него окно «Состояние служб» проверялось бы только
+    # на сервере, где сторож успел отработать (amnezia-vpn-server-eq82).
+    cat > "$DIR/services.json" <<'JSON'
+{"schema":"v1","checked_at_utc":"2026-09-07T09:00:00Z","services":[
+{"name":"dns","state":"ok","reason":"","fails":0,"restarted_at_utc":"2026-09-07T08:40:00Z","restart_reason":"не отвечает на 10.8.0.1"},
+{"name":"awg","state":"ok","reason":"","fails":0,"restarted_at_utc":"","restart_reason":""}]}
+JSON
+    printf '{"schema":"v1","os":"ubuntu 24.04 (noble)","docker":"27.3.1","watchdog":true,"fail2ban":true,"update_check":true}\n' \
+        > "$DIR/deployment.json"
 fi
 
 exec go run . serve --addr "127.0.0.1:${AMNEZIA_E2E_PORT:-18787}"

@@ -61,3 +61,19 @@ test("окно «О версиях» не оставляет пустых мес
   // сказать именно это, а не оставить пустоту.
   await expect(page.getByText("неизвестно").first()).toBeVisible();
 });
+
+// Состояние служб (amnezia-vpn-server-eq82): отказ, который чинится сам,
+// невидим, пока о нём негде прочитать.
+test("окно «Состояние служб» показывает, что сервер сам себя чинил", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await login(page);
+  await page.getByRole("button", { name: "Ещё" }).click();
+  await page.getByRole("menuitem", { name: "Состояние служб" }).click();
+
+  await expect(page.getByRole("heading", { name: "Состояние служб" })).toBeVisible();
+  await expect(page.getByText("Резолвер в туннеле")).toBeVisible();
+  await expect(page.getByText("Туннель")).toBeVisible();
+  // Сейчас всё работает — и при этом видно, что резолвер перезапускали.
+  await expect(page.getByText(/Перезапускался/)).toBeVisible();
+  await expect(page.getByText(/не отвечает на 10\.8\.0\.1/)).toBeVisible();
+});
