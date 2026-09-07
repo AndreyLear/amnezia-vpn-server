@@ -254,6 +254,12 @@ query.
 No mark means either all is well or there is nothing to say yet: the client is
 offline or has only just connected.
 
+On a router client the mark speaks about the router alone. The devices at home
+are hidden behind it — all their queries leave from one address — so a router
+that occasionally asks us about its own business shows no mark even while a
+laptop behind it uses somebody else's DNS. For the household, the `curl` check
+above is the reliable one.
+
 **MTU.** A router on a wire usually carries larger packets than a phone on a
 mobile network, and the server default is sized for the phone. Raising it for
 one client is done in the panel: client card → MTU → Change. That speeds up
