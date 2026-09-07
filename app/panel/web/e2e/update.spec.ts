@@ -77,3 +77,20 @@ test("окно «Состояние служб» показывает, что с
   await expect(page.getByText(/Перезапускался/)).toBeVisible();
   await expect(page.getByText(/не отвечает на 10\.8\.0\.1/)).toBeVisible();
 });
+
+// Журнал (amnezia-vpn-server-gqep): защита от «я такого не делал».
+test("журнал показывает вход и изменения", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await login(page);
+  // Само изменение: включаем и выключаем клиента, чтобы записи было чему
+  // появиться.
+  await page.getByRole("button", { name: /Действия для/ }).first().click();
+  await page.getByRole("menuitem", { name: /Отключить|Включить/ }).click();
+
+  await page.getByRole("button", { name: "Ещё" }).click();
+  await page.getByRole("menuitem", { name: "Журнал" }).click();
+
+  await expect(page.getByRole("heading", { name: "Журнал" })).toBeVisible();
+  await expect(page.getByText(/^клиент/).first()).toBeVisible();
+  await expect(page.getByText("вход").first()).toBeVisible();
+});

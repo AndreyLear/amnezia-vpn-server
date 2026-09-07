@@ -220,6 +220,16 @@ export type ServicesInfo = {
   services: ServiceState[];
 };
 
+/** Строка журнала панели (amnezia-vpn-server-gqep). */
+export type AuditEntry = {
+  at_utc: string;
+  actor: string;
+  /** Машинная строка: «client.add», «login.failed» и подобные. */
+  action: string;
+  subject: string;
+  detail: string;
+};
+
 export type MutationResponse = {
   ok?: boolean;
   message?: string;

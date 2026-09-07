@@ -48,7 +48,7 @@ func mapNameConstraint(err error) error {
 // which cannot be derived (amnezia-vpn-server-xy6j). Archives written
 // by older releases are still accepted by restore and migrated here at
 // apply time (T-110 backward compatibility).
-const SchemaVersion = "8"
+const SchemaVersion = "9"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS server (
@@ -90,6 +90,22 @@ var schemaStatements = []string{
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	);`,
+	// Журнал панели (amnezia-vpn-server-gqep). При одном администраторе
+	// это защита от «я такого не делал»: с записью видно, было действие
+	// или не было. При появлении второго администратора — необходимость.
+	//
+	// Секретам здесь не место: ни ключей, ни паролей. Запись должна
+	// пережить кражу базы, не добавив вору ничего сверх того, что он и так
+	// в ней нашёл.
+	`CREATE TABLE IF NOT EXISTS audit (
+		id INTEGER PRIMARY KEY,
+		at_utc TEXT NOT NULL,
+		actor TEXT NOT NULL,
+		action TEXT NOT NULL,
+		subject TEXT NOT NULL DEFAULT '',
+		detail TEXT NOT NULL DEFAULT ''
+	);`,
+	`CREATE INDEX IF NOT EXISTS audit_at_idx ON audit (at_utc DESC, id DESC);`,
 }
 
 // Open creates a new SQLite database file (including parent directories)
@@ -158,6 +174,9 @@ func Migrate(handle *sql.DB) error {
 		return err
 	}
 	if err := migrateServerAddress6(handle); err != nil {
+		return err
+	}
+	if err := migrateAuditLog(handle); err != nil {
 		return err
 	}
 	if _, err := handle.Exec(
@@ -1146,4 +1165,92 @@ func mutateClient(handle *sql.DB, id int64, query string, args ...any) error {
 		return ErrClientNotFound
 	}
 	return nil
+}
+
+// migrateAuditLog (schema v9) adds the panel journal.
+//
+// Additive, like every migration here (docs/adr/0001): the table appears
+// where it was missing and nothing existing is touched, so a database can
+// still be opened by the previous release. A deployment that rolls back
+// simply stops writing to it (amnezia-vpn-server-gqep).
+func migrateAuditLog(handle *sql.DB) error {
+	if _, err := handle.Exec(`CREATE TABLE IF NOT EXISTS audit (
+		id INTEGER PRIMARY KEY,
+		at_utc TEXT NOT NULL,
+		actor TEXT NOT NULL,
+		action TEXT NOT NULL,
+		subject TEXT NOT NULL DEFAULT '',
+		detail TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		return fmt.Errorf("db: create audit: %w", err)
+	}
+	if _, err := handle.Exec(
+		`CREATE INDEX IF NOT EXISTS audit_at_idx ON audit (at_utc DESC, id DESC)`,
+	); err != nil {
+		return fmt.Errorf("db: index audit: %w", err)
+	}
+	return nil
+}
+
+// AuditRecord is one line of the panel journal.
+type AuditRecord struct {
+	ID      int64
+	AtUTC   string
+	Actor   string
+	Action  string
+	Subject string
+	Detail  string
+}
+
+// AuditKeep — сколько записей журнала хранится. Журнал, растущий без
+// предела, однажды становится проблемой сам по себе, а разбирают по нему
+// недавнее: «я такого не делал» — это про вчера, не про позапрошлый год.
+const AuditKeep = 2000
+
+// AuditAppend writes one line and trims the journal to AuditKeep entries.
+//
+// Ошибка записи НЕ должна срывать само действие: журнал существует ради
+// разбирательств, а не вместо работы. Клиент, которого не смогли записать,
+// всё равно должен быть создан — иначе отказ журнала превратился бы в
+// отказ панели.
+func AuditAppend(handle *sql.DB, actor, action, subject, detail string) error {
+	if _, err := handle.Exec(
+		`INSERT INTO audit (at_utc, actor, action, subject, detail) VALUES (?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339), actor, action, subject, detail,
+	); err != nil {
+		return fmt.Errorf("db: append audit: %w", err)
+	}
+	if _, err := handle.Exec(
+		`DELETE FROM audit WHERE id <= (
+			SELECT MAX(id) FROM audit
+		) - ?`, AuditKeep,
+	); err != nil {
+		return fmt.Errorf("db: trim audit: %w", err)
+	}
+	return nil
+}
+
+// AuditTail returns the most recent entries, newest first.
+func AuditTail(handle *sql.DB, limit int) ([]AuditRecord, error) {
+	if limit <= 0 || limit > AuditKeep {
+		limit = 200
+	}
+	rows, err := handle.Query(
+		`SELECT id, at_utc, actor, action, subject, detail
+		   FROM audit ORDER BY id DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("db: query audit: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AuditRecord
+	for rows.Next() {
+		var r AuditRecord
+		if err := rows.Scan(&r.ID, &r.AtUTC, &r.Actor, &r.Action, &r.Subject, &r.Detail); err != nil {
+			return nil, fmt.Errorf("db: scan audit: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
