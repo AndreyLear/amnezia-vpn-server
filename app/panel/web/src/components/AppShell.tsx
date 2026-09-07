@@ -5,6 +5,7 @@ import { Moon, PlusIcon, Sun } from "lucide-react";
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { BackupMenu, BackupProvider } from "@/components/BackupMenu";
 import { BrandMark } from "@/components/BrandMark";
+import { HeaderMenu } from "@/components/HeaderMenu";
 import { HeaderStats } from "@/components/HeaderStats";
 import { Button } from "@/components/ui/button";
 import type { HostSnapshot } from "@/lib/api";
@@ -16,12 +17,15 @@ export function AppShell({
   onAddClient,
   host = null,
   empty = false,
+  pendingUpdate = false,
 }: {
   children: ReactNode;
   restorePending?: boolean;
   onAddClient: () => void;
   host?: HostSnapshot | null;
   empty?: boolean;
+  /** Напоминание о невзятом выпуске: значок на кнопке меню. */
+  pendingUpdate?: boolean;
 }) {
   const [theme, setThemeState] = useState<Theme>(() =>
     typeof window === "undefined" ? "dark" : getTheme(),
@@ -75,6 +79,7 @@ export function AppShell({
                   >
                     {theme === "dark" ? <Moon /> : <Sun />}
                   </Button>
+                  <HeaderMenu pendingUpdate={pendingUpdate} />
                 </div>
               </>
             )}

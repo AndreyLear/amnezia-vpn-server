@@ -1115,6 +1115,24 @@ WantedBy=paths.target
 EOF
 chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-update.path"
 log "update agent units written (ExecStart=$ROOT_DIR/update-agent.sh, on request)"
+
+# Пункт «Проверить обновления» в панели (amnezia-vpn-server-8bt5): та же
+# дорожка по файлу, что и у обновления, и та же причина — панель наружу не
+# ходит. Она кладёт пустой файл, а спрашивает GitHub хост.
+cat > "$SYSTEMD_DIR/amnezia-vpn-update-check-request.path" <<EOF
+# amnezia-vpn managed: run the update check when the panel asks.
+[Unit]
+Description=Amnezia VPN update check request
+
+[Path]
+PathExists=${ROOT_DIR}/data/update-check-request
+Unit=amnezia-vpn-update-check.service
+
+[Install]
+WantedBy=paths.target
+EOF
+chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-update-check-request.path"
+log "on-demand update check armed (watching $ROOT_DIR/data/update-check-request)"
 cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed (prune timer)"
 log "weekly docker-prune units written (enable --now after compose up; ExecStart=$ROOT_DIR/docker-prune.sh)"
 
@@ -2483,11 +2501,46 @@ if [ "$UPDATE_CHECK_ENABLED" = "1" ]; then
     log "update check enabled (ExecStart=$ROOT_DIR/update-check.sh, once a day)"
 fi
 
+# Что за развёртывание получилось (amnezia-vpn-server-8bt5). Панель живёт в
+# контейнере и про хост знать не может: ни какая тут система, ни какой Docker,
+# ни включён ли сторож. Всё это решается здесь, поэтому здесь и записывается —
+# рядом со статусом туннеля, откуда панель уже читает, и только на чтение.
+#
+# Файл пишется в конце: раньше половина ответов ещё не была бы правдой.
+deployment_facts() {
+    local file="$ROOT_DIR/status/deployment.json" tmp docker_version
+    [ -d "$ROOT_DIR/status" ] || return 0
+    tmp="${file}.tmp"
+    docker_version="$(cmd docker version --format '{{.Server.Version}}' 2>/dev/null | tr -d '\r')"
+    printf '{"schema":"v1","os":"%s %s (%s)","docker":"%s","installer":"%s","fail2ban":%s,"watchdog":%s,"update_check":%s,"installed_at_utc":"%s"}\n' \
+        "$os_id" "$os_version" "$os_codename" "$docker_version" \
+        "$(sed -n 's/^IMAGE_VERSION=//p' "$ROOT_DIR/versions.lock" 2>/dev/null | tail -1)" \
+        "$([ "$FAIL2BAN_ENABLED" = "1" ] && echo true || echo false)" \
+        "$([ "$WATCHDOG_ENABLED" = "1" ] && echo true || echo false)" \
+        "$([ "$UPDATE_CHECK_ENABLED" = "1" ] && echo true || echo false)" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" \
+        && chmod 0644 "$tmp" \
+        && mv -f "$tmp" "$file" \
+        && log "deployment facts written ($file)"
+    return 0
+}
+deployment_facts
+
 # Дорожка запроса включается последней: до этого момента стека, который она
 # стала бы обновлять, ещё не было.
 cmd systemctl enable --now amnezia-vpn-update.path \
     || die_op "systemctl enable --now amnezia-vpn-update.path failed"
 log "update agent armed (watching $ROOT_DIR/data/update-request.json)"
+
+# Дорожка проверки по требованию идёт следом, но только когда проверка вообще
+# разрешена: иначе кнопка в панели обходила бы --no-update-check.
+if [ "$UPDATE_CHECK_ENABLED" = "1" ]; then
+    cmd systemctl enable --now amnezia-vpn-update-check-request.path \
+        || die_op "systemctl enable --now amnezia-vpn-update-check-request.path failed"
+else
+    cmd systemctl disable --now amnezia-vpn-update-check-request.path >/dev/null 2>&1 || true
+    rm -f "$SYSTEMD_DIR/amnezia-vpn-update-check-request.path"
+fi
 
 # --- 13b. panel domain: reverse proxy + Let's Encrypt (T-121) ---------
 # Optional --domain mode: nginx terminates TLS in front of the

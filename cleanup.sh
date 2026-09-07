@@ -283,7 +283,8 @@ done
 # Агент обновления (amnezia-vpn-server-nukf): дорожка по файлу и её юнит.
 # Оставленная дорожка ждала бы файл в удалённом каталоге, а появление такого
 # файла запустило бы отсутствующий скрипт от root.
-for unit in amnezia-vpn-update.path amnezia-vpn-update.service; do
+for unit in amnezia-vpn-update.path amnezia-vpn-update.service \
+            amnezia-vpn-update-check-request.path; do
     if [ -f "$SYSTEMD_DIR/$unit" ]; then
         if [ "$DO_IT" -eq 1 ]; then
             systemctl disable --now "$unit" >/dev/null 2>&1 || true

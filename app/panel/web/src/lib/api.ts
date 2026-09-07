@@ -159,6 +159,26 @@ export type Client = {
   dns_bypass: boolean;
 };
 
+/** Что стоит на сервере (amnezia-vpn-server-rdcz, -8bt5). */
+export type Versions = {
+  product: string;
+  /** Последняя версия, о которой знает хост; пусто — не спрашивали. */
+  latest: string;
+  amneziawg_go: string;
+  amneziawg_tools: string;
+  /** «AmneziaWG 2.0» — выводится из набора параметров, а не хранится. */
+  protocol: string;
+  schema: string;
+  /** null означает «неизвестно» и отличается от false («выключено»). */
+  tunnel_ipv6: boolean | null;
+  tunnel_dns: boolean | null;
+  watchdog: boolean | null;
+  fail2ban: boolean | null;
+  update_check: boolean | null;
+  os: string;
+  docker: string;
+};
+
 export type MutationResponse = {
   ok?: boolean;
   message?: string;
