@@ -481,6 +481,15 @@ SYSTEMD_DIR_TEST="$TMP_TEST/systemd"
 NFT_SYS_FILE="$NFTABLES_DIR_TEST/amnezia-vpn.nft"
 NFT_DEPLOY_FILE="$ROOT/nftables/amnezia-vpn.nft"
 
+# Ожидания обнулены, как в харнессе установщика (amnezia-vpn-server-xyxk).
+# Установщик ждёт, пока появится статус туннеля (до 10 с) и пока перезапущенный
+# awg снова займёт порт (до 30 с). Заглушки этих состояний не создают, поэтому
+# каждый запуск досиживал оба предела до конца: 36 секунд вместо 6, и это
+# единственная причина, по которой прогон занимал полчаса. Умножено на 41 тест
+# — двадцать минут ожидания того, чего в этом харнессе не бывает.
+#
+# Значения переопределяемы: тест, которому нужно настоящее ожидание, задаёт
+# своё.
 run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_TEST=1 \
     AMNEZIA_INSTALL_FAKE_DIR="$FAKE_DIR" \
@@ -496,6 +505,8 @@ run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
     AMNEZIA_INSTALL_FAIL2BAN_JAIL="${AMNEZIA_INSTALL_FAIL2BAN_JAIL:-$TMP_TEST/fail2ban/jail.d/amnezia-vpn-sshd.conf}" \
     AMNEZIA_INSTALL_VERIFY_WAIT_SEC="${VERIFY_WAIT_SEC:-0}" \
+    AMNEZIA_INSTALL_STATUS_WAIT_SEC="${AMNEZIA_INSTALL_STATUS_WAIT_SEC:-0}" \
+    AMNEZIA_INSTALL_RESTART_VERIFY_SEC="${AMNEZIA_INSTALL_RESTART_VERIFY_SEC:-0}" \
     PATH="${M92_PATH:-$FAKE_DIR:$PATH}" \
     bash "$INSTALL_SH" --root "$ROOT" "$@" > "$TMP_TEST/out" 2> "$TMP_TEST/err"
     rc=$?
