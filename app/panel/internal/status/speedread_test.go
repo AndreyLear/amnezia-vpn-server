@@ -40,24 +40,29 @@ func TestReadSpeedSeriesDerivesRates(t *testing.T) {
 		sampleLine(base.Add(5*time.Second), 625_000, 6_250_000),
 	)
 
-	series, err := ReadSpeedSeries(path, testKey, base, base.Add(10*time.Second), 2)
+	series, err := ReadSpeedSeries(path, testKey, base, base.Add(20*time.Second), 4)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	// The rate lands in the column its interval ENDED in: the interval
-	// [base, base+5s] belongs to the second half of a ten-second window.
-	col := series.Columns[1]
-	if !col.HasData {
-		t.Fatalf("the rate did not land in the column its interval ended in")
+	// The rate belongs to the INTERVAL [a, b], so it paints every column
+	// that interval touches — here the first two of four.
+	for _, i := range []int{0, 1} {
+		col := series.Columns[i]
+		if !col.HasData {
+			t.Fatalf("column %d is empty; the interval covers it", i)
+		}
+		if col.DownMax != 10_000_000 {
+			t.Errorf("column %d: down = %d bit/s, want 10 000 000", i, col.DownMax)
+		}
+		if col.UpMax != 1_000_000 {
+			t.Errorf("column %d: up = %d bit/s, want 1 000 000", i, col.UpMax)
+		}
 	}
-	if col.DownMax != 10_000_000 {
-		t.Errorf("down = %d bit/s, want 10 000 000", col.DownMax)
-	}
-	if col.UpMax != 1_000_000 {
-		t.Errorf("up = %d bit/s, want 1 000 000", col.UpMax)
-	}
-	if series.Columns[0].HasData {
-		t.Errorf("first column has data; nothing had been differenced yet when it started")
+	// And nothing beyond it: no interval reached there.
+	for _, i := range []int{2, 3} {
+		if series.Columns[i].HasData {
+			t.Errorf("column %d has data; no interval reached it", i)
+		}
 	}
 }
 
@@ -128,9 +133,12 @@ func TestReadSpeedSeriesTreatsCounterResetAsGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if series.Columns[1].HasData {
+	// Отрезок со сбросом счётчика не даёт скорости вовсе, поэтому столбец,
+	// который занимает только он, остаётся пустым.
+	if series.Columns[0].HasData {
 		t.Errorf("the reset interval produced a rate; it must be a gap")
 	}
+	// А следующий за ним отрезок считается как обычно.
 	if !series.Columns[2].HasData {
 		t.Errorf("the interval after the reset must count again")
 	}
@@ -151,6 +159,32 @@ func TestReadSpeedSeriesIgnoresOtherPeers(t *testing.T) {
 	}
 	if got := series.Columns[0].DownMax; got != 1_000_000 {
 		t.Errorf("down = %d, want only this peer's 1 000 000", got)
+	}
+}
+
+// Производитель пишет замер раз в пять секунд, но иногда раз в шесть, а
+// столбец десятиминутного окна — ровно пять секунд. Пока красился только
+// столбец, где отрезок кончился, такой отрезок перепрыгивал через столбец, и
+// график показывал «замеров нет» посреди сплошной загрузки
+// (amnezia-vpn-server-bwp3).
+func TestReadSpeedSeriesSurvivesLateSample(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "speed.log")
+	base := time.Date(2026, 9, 9, 1, 45, 0, 0, time.UTC)
+	// Замер опоздал на секунду: шесть секунд вместо пяти.
+	writeLog(t, path,
+		sampleLine(base, 0, 0),
+		sampleLine(base.Add(6*time.Second), 0, 60_000_000),
+	)
+
+	// Окно 20 секунд на 4 столбца — по пять секунд, как в десятиминутном.
+	series, err := ReadSpeedSeries(path, testKey, base, base.Add(20*time.Second), 4)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for _, i := range []int{0, 1} {
+		if !series.Columns[i].HasData {
+			t.Fatalf("столбец %d пуст, хотя отрезок его накрывает: опоздание замера рисует ложную дырку", i)
+		}
 	}
 }
 

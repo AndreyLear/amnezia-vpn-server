@@ -243,28 +243,51 @@ func foldSpeed(samples []speedSample, from, to time.Time, columns int) *SpeedSer
 		if b.at.Before(from) || b.at.After(to) {
 			continue
 		}
-		idx := int(b.at.Sub(from) / width)
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= columns {
-			idx = columns - 1
-		}
 		down := bitsPerSecond(b.tx-a.tx, dt)
 		up := bitsPerSecond(b.rx-a.rx, dt)
-		col := &out.Columns[idx]
-		if !col.HasData {
-			col.HasData = true
-			col.DownMin, col.DownMax = down, down
-			col.UpMin, col.UpMax = up, up
-			continue
+		// Скорость принадлежит ОТРЕЗКУ [a, b], а не мгновению, поэтому
+		// красится каждый столбец, которого этот отрезок касается.
+		//
+		// Пока красился только столбец, где отрезок кончился, дрожание такта
+		// рисовало ложные дырки: производитель пишет замер раз в пять секунд,
+		// но иногда раз в шесть, а столбец десятиминутного окна — ровно пять
+		// секунд. Шестисекундный отрезок перепрыгивал через столбец, и тот
+		// оставался пустым. График показывал «замеров нет» посреди сплошной
+		// загрузки — враньё в форме данных, ровно то, от чего разрывы и
+		// заведены (amnezia-vpn-server-bwp3).
+		//
+		// Настоящие разрывы это не трогает: отрезок длиннее SpeedMaxGap сюда
+		// не доходит вовсе, он отсеян выше.
+		first := columnAt(a.at, from, width, columns)
+		last := columnAt(b.at, from, width, columns)
+		for idx := first; idx <= last; idx++ {
+			col := &out.Columns[idx]
+			if !col.HasData {
+				col.HasData = true
+				col.DownMin, col.DownMax = down, down
+				col.UpMin, col.UpMax = up, up
+				continue
+			}
+			col.DownMin = min(col.DownMin, down)
+			col.DownMax = max(col.DownMax, down)
+			col.UpMin = min(col.UpMin, up)
+			col.UpMax = max(col.UpMax, up)
 		}
-		col.DownMin = min(col.DownMin, down)
-		col.DownMax = max(col.DownMax, down)
-		col.UpMin = min(col.UpMin, up)
-		col.UpMax = max(col.UpMax, up)
 	}
 	return out
+}
+
+// columnAt — номер столбца, в который попадает момент, с зажимом в границы
+// окна: у первого отрезка начало может лежать до окна, и это нормально.
+func columnAt(at, from time.Time, width time.Duration, columns int) int {
+	idx := int(at.Sub(from) / width)
+	if idx < 0 {
+		return 0
+	}
+	if idx >= columns {
+		return columns - 1
+	}
+	return idx
 }
 
 // bitsPerSecond is what a person reads a chart in; bytes would make every
