@@ -351,18 +351,25 @@ config_device_mtu() {
 RATE_STATE="${AWG_RATE_STATE:-/run/amnezia-awg-rates}"
 TC_BIN="${AWG_TC_BIN:-tc}"
 
-# rate_plan: печатает «сеть мегабиты» для каждого адреса ограниченного пира.
-# Общего предела нет, поэтому и разбирать в [Interface] нечего.
+# rate_plan: печатает «мегабиты адрес адрес…» — ОДНУ строку на пира, а не на
+# адрес.
+#
+# Предел принадлежит клиенту, а не адресу. Пока строка была на адрес, клиент с
+# IPv4 и IPv6 получал два класса по 50 мегабит и вместе с ними сто: замер
+# показал 72 Мбит/с там, где стояло ограничение в 50
+# (amnezia-vpn-server-tv8v).
 rate_plan() {
     awk '
-        function flush_peer(   i, n, parts, entry) {
+        function flush_peer(   i, n, parts, entry, list) {
             if (!in_peer || allowed == "" || rate == "") { allowed=""; rate=""; return }
             n = split(allowed, parts, ",")
+            list = ""
             for (i = 1; i <= n; i++) {
                 entry = parts[i]
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", entry)
-                if (entry != "") print entry, rate
+                if (entry != "") list = list " " entry
             }
+            if (list != "") print rate list
             allowed = ""; rate = ""
         }
         /^[[:space:]]*#[[:space:]]*amnezia-rate[[:space:]]*=/ {
@@ -390,7 +397,7 @@ rate_plan() {
 # её не было (awg0 живёт с noqueue), и ставить её ради никого значит менять
 # поведение всем сразу.
 sync_rates() {
-    local plan cidr rate family classid n=0
+    local plan cidr rate addresses family classid n=0
     plan="$(rate_plan "${CONFIG_DEST}")" || return 0
 
     if [ -z "${plan}" ]; then
@@ -420,26 +427,30 @@ sync_rates() {
     # заметить разницы.
     ${TC_BIN} class add dev "${IFACE}" parent 1: classid 1:99 htb rate 10gbit ceil 10gbit >/dev/null 2>&1 || true
 
-    printf '%s\n' "${plan}" | while read -r cidr rate; do
-        [ -n "${cidr}" ] && [ -n "${rate}" ] || continue
+    # Один класс на клиента, сколько бы адресов у него ни было: предел
+    # принадлежит клиенту, и обе его семьи адресов делят одну очередь.
+    printf '%s\n' "${plan}" | while read -r rate addresses; do
+        [ -n "${rate}" ] && [ -n "${addresses}" ] || continue
         n=$((n + 1))
         classid="1:$((n + 100))"
-        family="$(route_family "${cidr}")"
         if ! ${TC_BIN} class add dev "${IFACE}" parent 1: classid "${classid}" \
                 htb rate "${rate}mbit" ceil "${rate}mbit" burst 64k >/dev/null 2>&1; then
-            log "error: не удалось задать предел ${rate} Мбит для ${cidr}"
+            log "error: не удалось задать предел ${rate} Мбит для ${addresses}"
             exit 1
         fi
-        # fq_codel под каждым классом: очередь должна быть короткой, иначе
-        # выигрыш по задержке съедается ею же.
+        # fq_codel под классом: очередь должна быть короткой, иначе выигрыш по
+        # задержке съедается ею же.
         ${TC_BIN} qdisc add dev "${IFACE}" parent "${classid}" fq_codel >/dev/null 2>&1 || true
-        case "${family}" in
-            -6) ${TC_BIN} filter add dev "${IFACE}" protocol ipv6 parent 1:0 prio 2 \
-                    u32 match ip6 dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 || true ;;
-            *)  ${TC_BIN} filter add dev "${IFACE}" protocol ip parent 1:0 prio 1 \
-                    u32 match ip dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 || true ;;
-        esac
-        log "предел ${rate} Мбит для ${cidr}"
+        for cidr in ${addresses}; do
+            family="$(route_family "${cidr}")"
+            case "${family}" in
+                -6) ${TC_BIN} filter add dev "${IFACE}" protocol ipv6 parent 1:0 prio 2 \
+                        u32 match ip6 dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 || true ;;
+                *)  ${TC_BIN} filter add dev "${IFACE}" protocol ip parent 1:0 prio 1 \
+                        u32 match ip dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 || true ;;
+            esac
+        done
+        log "предел ${rate} Мбит для ${addresses}"
     done || {
         # Полумера хуже отсутствия: часть клиентов ограничена, часть нет, и
         # объяснить разницу потом нечем.
