@@ -338,6 +338,115 @@ config_device_mtu() {
         | head -1 | tr -d '[:space:]'
 }
 
+# --- предел скорости на клиента (amnezia-vpn-server-jzzu) --------------
+#
+# Плечо до клиента может терять пакеты под нагрузкой: измерено 12-18% там, где
+# норма меньше 0.1%. Причина вне сервера, но следствие лечится здесь. Предел
+# вдвое сокращает потери при той же полезной скорости — то есть перестаёт
+# тратиться седьмая часть канала, и вместе с ней уходят задержка и дрожание.
+# Скорость он НЕ увеличивает, и обещать этого нельзя.
+#
+# Предел на клиента, а не общий: канал сервера здоров, а плохо конкретному
+# плечу. Общий наказал бы всех за одного.
+RATE_STATE="${AWG_RATE_STATE:-/run/amnezia-awg-rates}"
+TC_BIN="${AWG_TC_BIN:-tc}"
+
+# rate_plan: печатает «сеть мегабиты» для каждого адреса ограниченного пира.
+# Общего предела нет, поэтому и разбирать в [Interface] нечего.
+rate_plan() {
+    awk '
+        function flush_peer(   i, n, parts, entry) {
+            if (!in_peer || allowed == "" || rate == "") { allowed=""; rate=""; return }
+            n = split(allowed, parts, ",")
+            for (i = 1; i <= n; i++) {
+                entry = parts[i]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", entry)
+                if (entry != "") print entry, rate
+            }
+            allowed = ""; rate = ""
+        }
+        /^[[:space:]]*#[[:space:]]*amnezia-rate[[:space:]]*=/ {
+            value = $0
+            sub(/.*=[[:space:]]*/, "", value)
+            gsub(/[[:space:]]/, "", value)
+            if (in_peer) rate = value
+            next
+        }
+        /^[[:space:]]*\[Peer\][[:space:]]*$/ { flush_peer(); in_peer = 1; next }
+        /^[[:space:]]*\[/ { flush_peer(); in_peer = 0; next }
+        /^[[:space:]]*[Aa][Ll][Ll][Oo][Ww][Ee][Dd][Ii][Pp][Ss][[:space:]]*=/ {
+            value = $0
+            sub(/.*=[[:space:]]*/, "", value)
+            allowed = value
+            next
+        }
+        END { flush_peer() }
+    ' "$1"
+}
+
+# sync_rates: приводит очереди к плану.
+#
+# ПЛАН ПУСТ — НЕ ТРОГАЕМ НИЧЕГО. Корневая дисциплина заводит очередь там, где
+# её не было (awg0 живёт с noqueue), и ставить её ради никого значит менять
+# поведение всем сразу.
+sync_rates() {
+    local plan cidr rate family classid n=0
+    plan="$(rate_plan "${CONFIG_DEST}")" || return 0
+
+    if [ -z "${plan}" ]; then
+        if [ -s "${RATE_STATE}" ]; then
+            ${TC_BIN} qdisc del dev "${IFACE}" root >/dev/null 2>&1 \
+                && log "пределы скорости сняты: их больше никому не задано"
+            : > "${RATE_STATE}" 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    # Дисциплина пересобирается целиком: классы и фильтры дешевле выписать
+    # заново, чем выяснять, чем нынешний набор отличается от нужного.
+    ${TC_BIN} qdisc del dev "${IFACE}" root >/dev/null 2>&1
+    if ! ${TC_BIN} qdisc add dev "${IFACE}" root handle 1: htb default 99 r2q 100 >/dev/null 2>&1; then
+        log "error: не удалось завести очередь на ${IFACE}; пределы скорости не применены"
+        : > "${RATE_STATE}" 2>/dev/null || true
+        return 1
+    fi
+    # Класс по умолчанию — без предела: те, кому ничего не задано, не должны
+    # заметить разницы.
+    ${TC_BIN} class add dev "${IFACE}" parent 1: classid 1:99 htb rate 10gbit ceil 10gbit >/dev/null 2>&1
+
+    printf '%s\n' "${plan}" | while read -r cidr rate; do
+        [ -n "${cidr}" ] && [ -n "${rate}" ] || continue
+        n=$((n + 1))
+        classid="1:$((n + 100))"
+        family="$(route_family "${cidr}")"
+        if ! ${TC_BIN} class add dev "${IFACE}" parent 1: classid "${classid}" \
+                htb rate "${rate}mbit" ceil "${rate}mbit" burst 64k >/dev/null 2>&1; then
+            log "error: не удалось задать предел ${rate} Мбит для ${cidr}"
+            exit 1
+        fi
+        # fq_codel под каждым классом: очередь должна быть короткой, иначе
+        # выигрыш по задержке съедается ею же.
+        ${TC_BIN} qdisc add dev "${IFACE}" parent "${classid}" fq_codel >/dev/null 2>&1
+        case "${family}" in
+            -6) ${TC_BIN} filter add dev "${IFACE}" protocol ipv6 parent 1:0 prio 2 \
+                    u32 match ip6 dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 ;;
+            *)  ${TC_BIN} filter add dev "${IFACE}" protocol ip parent 1:0 prio 1 \
+                    u32 match ip dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 ;;
+        esac
+        log "предел ${rate} Мбит для ${cidr}"
+    done || {
+        # Полумера хуже отсутствия: часть клиентов ограничена, часть нет, и
+        # объяснить разницу потом нечем.
+        log "WARNING: пределы разошлись не полностью; снимаю очередь целиком"
+        ${TC_BIN} qdisc del dev "${IFACE}" root >/dev/null 2>&1
+        : > "${RATE_STATE}" 2>/dev/null || true
+        return 1
+    }
+
+    printf '%s\n' "${plan}" > "${RATE_STATE}" 2>/dev/null || true
+    return 0
+}
+
 # safe_device_mtu: общее осторожное значение из конфигурации. Оно и есть то,
 # на что опускается интерфейс, если раздать маршруты не вышло.
 safe_device_mtu() {
@@ -394,6 +503,7 @@ reload_config() {
     install_config
     # Набор клиентов мог измениться, значит и набор маршрутов тоже.
     sync_routes
+    sync_rates
     log "configuration reloaded via awg syncconf"
 }
 
@@ -413,6 +523,7 @@ LAST_MTIME="$(config_mtime)" || {
 # Только после подъёма: размер маршрута не может быть больше размера
 # устройства, а устройство появляется здесь.
 sync_routes
+sync_rates
 
 generate_versions || true
 

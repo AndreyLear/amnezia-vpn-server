@@ -80,6 +80,10 @@ func Generate(handle *sql.DB, path string) error {
 		// Строка нужна каждому, у кого размер свой. Тому, у кого своего
 		// нет, хватает общего значения, выписанного один раз выше.
 		peer.MTU = PeerRouteMTU(uint16(c.MTU), mtu, device)
+		// Предел скорости — только тому, кому он задан. Общего предела нет
+		// и не задумано: он ограничивал бы канал сервера, который здоров,
+		// вместо плеча конкретного клиента (amnezia-vpn-server-jzzu).
+		peer.RateLimit = uint16(c.RateLimit)
 		if err := ValidatePeer(peer); err != nil {
 			return fmt.Errorf("client %d: %w", c.ID, err)
 		}

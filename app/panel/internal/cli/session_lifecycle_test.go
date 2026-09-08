@@ -8,8 +8,8 @@ package cli
 
 import (
 	"bytes"
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	lifeAdmin     = "life-admin"
-	lifePassword  = "life-password-for-m77"
+	lifeAdmin    = "life-admin"
+	lifePassword = "life-password-for-m77"
 )
 
 // jarClient returns an HTTP client with a cookie jar (a real browser:

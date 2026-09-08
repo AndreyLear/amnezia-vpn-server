@@ -186,7 +186,6 @@ func TestRestoreSymlinkRejected(t *testing.T) {
 	}
 }
 
-
 func TestRestorePendingBlocksSecondRun(t *testing.T) {
 	c, _, name, pendingDir := seedRestoreState(t)
 	if code, _, errb := c.run("restore", name); code != 0 {

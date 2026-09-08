@@ -60,6 +60,10 @@ type PeerConfig struct {
 	// Уезжает комментарием: ключа для него в конфигурации AmneziaWG нет и
 	// быть не должно — это не свойство пира, а свойство маршрута к нему.
 	MTU uint16
+	// RateLimit — предел скорости к этому клиенту в мегабитах; 0 означает
+	// «без предела». Тоже комментарием и по той же причине: это свойство
+	// очереди, а не пира (amnezia-vpn-server-jzzu).
+	RateLimit uint16
 }
 
 // joinFamilies renders "v4" or "v4, v6" for the config keys that take a
@@ -494,6 +498,11 @@ func validKey(s string) bool {
 	return len(raw) == keyLen
 }
 
+// rateComment вводит строку с пределом скорости. Начало постоянное и
+// обыскиваемое, как у размера маршрута: это метка для контейнера awg, а не
+// заметка для человека (amnezia-vpn-server-jzzu).
+const rateComment = "# amnezia-rate"
+
 // routeMTUComment вводит строку с размером для маршрута. Начало постоянное
 // и обыскиваемое: это метка для контейнера awg, а не заметка для человека,
 // и удалять её нельзя (amnezia-vpn-server-wc2l).
@@ -551,6 +560,12 @@ func Render(server ServerConfig, peers []PeerConfig) string {
 			b.WriteString(routeMTUComment)
 			b.WriteString(" = ")
 			b.WriteString(strconv.FormatUint(uint64(peer.MTU), 10))
+			b.WriteByte('\n')
+		}
+		if peer.RateLimit != 0 {
+			b.WriteString(rateComment)
+			b.WriteString(" = ")
+			b.WriteString(strconv.FormatUint(uint64(peer.RateLimit), 10))
 			b.WriteByte('\n')
 		}
 	}

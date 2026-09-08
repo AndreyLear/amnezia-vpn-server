@@ -25,6 +25,19 @@ func (f *fixture) postBody(path, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
+// patchBody отправляет PATCH так же, как это делает панель: телом JSON.
+func (f *fixture) patchBody(path, body string) *httptest.ResponseRecorder {
+	f.t.Helper()
+	req := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Requested-With", "fetch")
+	req.Header.Set(auth.CSRFHeaderName, f.csrf)
+	rec := httptest.NewRecorder()
+	f.serve(rec, req)
+	return rec
+}
+
 func writeStatusFile(t *testing.T, f *fixture, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(filepath.Dir(f.statusPath), name), []byte(body), 0o600); err != nil {

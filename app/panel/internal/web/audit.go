@@ -27,6 +27,7 @@ const (
 	auditClientAdd    = "client.add"
 	auditClientEdit   = "client.edit"
 	auditClientMTU    = "client.mtu"
+	auditClientRate   = "client.rate"
 	auditClientToggle = "client.toggle"
 	auditClientDelete = "client.delete"
 	auditRestore      = "backup.restore"

@@ -228,9 +228,10 @@ func TestMigrateAddsClientDescription(t *testing.T) {
 	// to bump the version fails here. Raised to 7 by
 	// amnezia-vpn-server-xy6j (server.address6), to 8 by
 	// amnezia-vpn-server-h2pg (clients.mtu), to 9 by
-	// amnezia-vpn-server-gqep (audit).
-	if SchemaVersion != "9" {
-		t.Fatalf("SchemaVersion = %q, want 9", SchemaVersion)
+	// amnezia-vpn-server-gqep (audit), to 10 by
+	// amnezia-vpn-server-jzzu (clients.rate_limit).
+	if SchemaVersion != "10" {
+		t.Fatalf("SchemaVersion = %q, want 10", SchemaVersion)
 	}
 	if err := Migrate(handle); err != nil {
 		t.Fatalf("second Migrate legacy v5: %v", err)
@@ -1592,5 +1593,85 @@ func TestAuditMigrationIsAdditive(t *testing.T) {
 	got, err := AuditTail(handle, 10)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("после повторной миграции записей = %d (err %v)", len(got), err)
+	}
+}
+
+// Предел скорости на клиента (amnezia-vpn-server-jzzu).
+func TestClientRateLimitRefusesOutOfRange(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	c, err := CreateClient(handle, "10.8.0.1/24", NewClient{
+		Name: "alice", PrivateKey: testPriv, PublicKey: testPub,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := c.ID
+
+	// Ноль снимает предел и допустим всегда.
+	if err := UpdateClientRateLimit(handle, id, 0); err != nil {
+		t.Fatalf("ноль отвергнут: %v", err)
+	}
+	if err := UpdateClientRateLimit(handle, id, 50); err != nil {
+		t.Fatalf("обычное значение отвергнуто: %v", err)
+	}
+	// Вне границ — отказ, а не зажим: человек вводил это руками. Ноль в
+	// список не входит: он и есть «без предела», а не значение ниже нижней
+	// границы.
+	for _, bad := range []int64{-1, -100, ClientRateCeiling + 1, 100000} {
+		if err := UpdateClientRateLimit(handle, id, bad); err == nil {
+			t.Fatalf("%d принято, хотя вне границ [%d, %d]", bad, ClientRateFloor, ClientRateCeiling)
+		}
+	}
+	// Отказ ничего не поменял.
+	var got int64
+	if err := handle.QueryRow(`SELECT rate_limit FROM clients WHERE id = ?`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 50 {
+		t.Fatalf("rate_limit = %d, ожидалось 50", got)
+	}
+}
+
+// Неизвестный клиент — не молчаливый успех.
+func TestClientRateLimitUnknownClient(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateClientRateLimit(handle, 999, 50); !errors.Is(err, ErrClientNotFound) {
+		t.Fatalf("err = %v, ожидалось ErrClientNotFound", err)
+	}
+}
+
+// База прошлого выпуска открывается и получает колонку, ничего не теряя
+// (docs/adr/0001).
+func TestClientRateLimitMigrationIsAdditive(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	c, err := CreateClient(handle, "10.8.0.1/24", NewClient{
+		Name: "alice", PrivateKey: testPriv, PublicKey: testPub,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := c.ID
+	if err := UpdateClientRateLimit(handle, id, 70); err != nil {
+		t.Fatal(err)
+	}
+	// Повторная миграция ничего не теряет: так выглядит откат и возврат.
+	if err := Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	var got int64
+	if err := handle.QueryRow(`SELECT rate_limit FROM clients WHERE id = ?`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 70 {
+		t.Fatalf("после повторной миграции rate_limit = %d, ожидалось 70", got)
 	}
 }

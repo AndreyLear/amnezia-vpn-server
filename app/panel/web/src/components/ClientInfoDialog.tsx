@@ -34,6 +34,13 @@ import { cn } from "@/lib/utils";
 const mtuFloor = 1280;
 const mtuCeiling = 1440;
 
+// Границы предела скорости повторяют серверные (db.ClientRateFloor/Ceiling):
+// ниже мегабита ограничение перестаёт быть ограничением и становится обрывом
+// связи, выше гигабита его не выдержит ни одно плечо, ради которого оно
+// заводилось (amnezia-vpn-server-jzzu).
+const rateFloor = 1;
+const rateCeiling = 1000;
+
 const confirmButtonClass = "max-sm:h-12 max-sm:w-full";
 const saveButtonClass = "max-sm:h-12 max-sm:w-full";
 
@@ -42,7 +49,7 @@ type ClientInfoDialogProps = {
   pending?: boolean;
   onOpenChange: (open: boolean) => void;
   onSave?: (
-    payload: { name: string; description: string; mtu?: number },
+    payload: { name: string; description: string; mtu?: number; rate_limit?: number },
   ) => boolean | void | Promise<boolean | void>;
   onQr?: () => void;
   onDownload?: () => void;
@@ -111,6 +118,9 @@ export function ClientInfoDialog({
   const [viewMTU, setViewMTU] = useState(0);
   const [editingMTU, setEditingMTU] = useState(false);
   const [mtuDraft, setMTUDraft] = useState("");
+  const [viewRate, setViewRate] = useState(0);
+  const [editingRate, setEditingRate] = useState(false);
+  const [rateDraft, setRateDraft] = useState("");
   const [nameDraft, setNameDraft] = useState("");
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [editingName, setEditingName] = useState(false);
@@ -119,6 +129,7 @@ export function ClientInfoDialog({
   useEffect(() => {
     setViewName(client?.name ?? "");
     setViewMTU(client?.mtu ?? 0);
+    setViewRate(client?.rate_limit ?? 0);
     setViewDescription(client?.description ?? "");
     setNameDraft(client?.name ?? "");
     setDescriptionDraft(client?.description ?? "");
@@ -182,6 +193,13 @@ export function ClientInfoDialog({
   }
 
   // Пустое поле — снятие своего значения, поэтому оно допустимо.
+  const rateDraftValue = rateDraft.trim();
+  const rateOutOfRange =
+    rateDraftValue !== "" &&
+    (!/^\d+$/.test(rateDraftValue) ||
+      Number(rateDraftValue) < rateFloor ||
+      Number(rateDraftValue) > rateCeiling);
+
   const mtuDraftValue = mtuDraft.trim();
   const mtuOutOfRange =
     mtuDraftValue !== "" &&
@@ -207,6 +225,37 @@ export function ClientInfoDialog({
     if (saved) {
       setViewMTU(next);
       setEditingMTU(false);
+    }
+  }
+
+  function startRateEdit() {
+    setRateDraft(viewRate === 0 ? "" : String(viewRate));
+    setEditingRate(true);
+  }
+
+  function cancelRateEdit() {
+    setRateDraft(viewRate === 0 ? "" : String(viewRate));
+    setEditingRate(false);
+  }
+
+  async function saveRate() {
+    if (!client) return;
+    // Пустое поле — «без предела»: снять и задать одним действием нельзя,
+    // поэтому пустота и есть снятие.
+    if (rateOutOfRange) return;
+    const next = rateDraftValue === "" ? 0 : Number(rateDraftValue);
+    if (next === viewRate) {
+      setEditingRate(false);
+      return;
+    }
+    const saved = await onSave?.({
+      name: client.name,
+      description: committedDescription,
+      rate_limit: next,
+    });
+    if (saved) {
+      setViewRate(next);
+      setEditingRate(false);
     }
   }
 
@@ -295,6 +344,23 @@ export function ClientInfoDialog({
                     <dd>
                       {viewMTU === 0 ? "как у сервера" : viewMTU}
                     </dd>
+                  </ReadOnlyProperty>
+                  <ReadOnlyProperty
+                    label="Предел скорости"
+                    actions={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        aria-label="Изменить предел скорости"
+                        disabled={pending}
+                        onClick={startRateEdit}
+                      >
+                        <Pencil data-icon="inline-start" aria-hidden />
+                        Изменить
+                      </Button>
+                    }
+                  >
+                    <dd>{viewRate === 0 ? "без предела" : `${viewRate} Мбит/с`}</dd>
                   </ReadOnlyProperty>
                   <PropertyRow
                     actions={
@@ -487,6 +553,65 @@ export function ClientInfoDialog({
                 className={saveButtonClass}
                 aria-label="Сохранить MTU"
                 disabled={pending || mtuOutOfRange}
+              >
+                Сохранить
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={editingRate}
+        onOpenChange={(open) => {
+          if (!open) cancelRateEdit();
+        }}
+      >
+        <DialogContent className="gap-6 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Предел скорости</DialogTitle>
+          </DialogHeader>
+          <form
+            className="grid gap-6"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveRate();
+            }}
+          >
+            <div className="grid gap-2">
+              <Label htmlFor="info-rate">Мегабит в секунду</Label>
+              <Input
+                id="info-rate"
+                type="number"
+                min={rateFloor}
+                max={rateCeiling}
+                inputMode="numeric"
+                placeholder="без предела"
+                value={rateDraft}
+                onChange={(e) => setRateDraft(e.target.value)}
+                disabled={pending}
+              />
+              {/* Текст обязан говорить, чего предел НЕ делает: иначе он будет
+                  обещать ускорение, которого не будет. */}
+              <p className="text-sm text-muted-foreground">
+                Предел не ускоряет — он сокращает потери. Когда сервер отдаёт
+                быстрее, чем выдерживает путь до клиента, часть пакетов
+                теряется и шлётся заново; на замерах впустую уходила седьмая
+                часть канала. С пределом потери падают примерно вдвое при той
+                же скорости, а вместе с ними уходят задержка и рывки. Заметно
+                на видео, не заметно на загрузках
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Пусто — без предела, и это обычное состояние. Ограничивает
+                только то, что клиент получает: то, что он отправляет, ему
+                задаёт его собственное устройство
+              </p>
+            </div>
+            <DialogFooter>
+              <Button
+                type="submit"
+                className={saveButtonClass}
+                aria-label="Сохранить предел скорости"
+                disabled={pending || rateOutOfRange}
               >
                 Сохранить
               </Button>
