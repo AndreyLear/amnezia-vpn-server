@@ -71,6 +71,23 @@ describe("меню в шапке", () => {
     ]);
   });
 
+  // Названия пунктов ломались на две строки: меню наследовало ширину кнопки,
+  // а кнопка — квадратная иконка (amnezia-vpn-server-n8w3). В jsdom нет
+  // раскладки, поэтому проверяем то, чем перенос запрещён.
+  it("не переносит названия пунктов на две строки", async () => {
+    const user = userEvent.setup();
+    render(<HeaderMenu />);
+
+    await user.click(screen.getByRole("button", { name: "Ещё" }));
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveClass("min-w-max");
+    // Ширина по кнопке — это и есть причина переносов.
+    expect(menu.className).not.toContain("--radix-dropdown-menu-trigger-width");
+    for (const item of screen.getAllByRole("menuitem")) {
+      expect(item).toHaveClass("whitespace-nowrap");
+    }
+  });
+
   it("открывается с клавиатуры", async () => {
     const user = userEvent.setup();
     render(<HeaderMenu />);
