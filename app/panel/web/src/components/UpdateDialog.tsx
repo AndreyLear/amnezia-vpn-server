@@ -62,16 +62,92 @@ function useCreepingProgress(running: boolean, visible: boolean) {
   return percent;
 }
 
+/**
+ * Описание выпуска приходит текстом тела релиза с GitHub — тем же, что лежит
+ * в RELEASES.md, где пункты записаны переносами по ширине. Физическая строка
+ * там не равна пункту: один пункт занимает три-четыре строки, и отрисовка
+ * «строка = абзац» превращала его в четыре абзаца с провалами между ними.
+ * Владелец назвал это кашей и проблемой с интерлиньяжем — а это был не
+ * межстрочный интервал, а межабзацный (amnezia-vpn-server-u1fv).
+ */
+type NotesBlock = { kind: "list"; items: string[] } | { kind: "text"; text: string };
+
+// Дефис или звёздочка с пробелом — так GitHub записывает пункт. Всё
+// остальное, что начинается без отступа, пунктом не является.
+const bulletMark = /^[-*]\s+/;
+
+/**
+ * Складывает физические строки в логические куски.
+ *
+ * Пункт открывает строка с дефисом; строка с отступом продолжает открытый
+ * пункт и приклеивается через пробел — это и есть перенос по ширине. Пустая
+ * строка закрывает всё открытое. Строка без отступа и без дефиса — обычный
+ * текст: в описании выпуска так пишут вступление и приписку, и списком они
+ * притворяться не должны.
+ */
+function parseNotes(notes: string): NotesBlock[] {
+  const blocks: NotesBlock[] = [];
+  let open: { bullet: boolean; text: string } | null = null;
+
+  // Строка дописывается в последний кусок на месте: собирать пункт в
+  // отдельной переменной, а потом класть, значило бы держать два источника
+  // правды об одном и том же пункте.
+  const append = (text: string) => {
+    const last = blocks[blocks.length - 1];
+    if (last === undefined) return;
+    if (last.kind === "list") last.items[last.items.length - 1] += " " + text;
+    else last.text += " " + text;
+  };
+
+  for (const raw of notes.split("\n")) {
+    const line = raw.trim();
+    if (line === "") {
+      open = null;
+      continue;
+    }
+    const mark = bulletMark.exec(line);
+    if (mark !== null) {
+      const text = line.slice(mark[0].length);
+      const last = blocks[blocks.length - 1];
+      if (last !== undefined && last.kind === "list") last.items.push(text);
+      else blocks.push({ kind: "list", items: [text] });
+      open = { bullet: true, text };
+      continue;
+    }
+    // Отступ продолжает то, что открыто; абзац продолжается и без отступа.
+    // А пункт без отступа не продолжается: иначе приписка, набранная сразу
+    // за списком, прилипла бы к последнему пункту.
+    if (open !== null && (/^\s/.test(raw) || !open.bullet)) {
+      append(line);
+      open = { bullet: open.bullet, text: open.text + " " + line };
+      continue;
+    }
+    blocks.push({ kind: "text", text: line });
+    open = { bullet: false, text: line };
+  }
+  return blocks;
+}
+
 function Notes({ notes }: { notes: string }) {
-  const lines = notes.split("\n").filter((line) => line.trim() !== "");
-  if (lines.length === 0) {
+  const blocks = parseNotes(notes);
+  if (blocks.length === 0) {
     return <p className="text-muted-foreground">Описание выпуска не пришло</p>;
   }
   return (
     <div className="flex flex-col gap-2 text-sm">
-      {lines.map((line, index) => (
-        <p key={index}>{line.replace(/^[-*]\s*/, "")}</p>
-      ))}
+      {blocks.map((block, index) =>
+        block.kind === "list" ? (
+          // Маркеры владелец попросил прямо. Список не flex: display:flex
+          // отнял бы у пунктов display:list-item, а вместе с ним и маркеры.
+          <ul key={index} className="list-disc space-y-2 pl-5">
+            {block.items.map((item, itemIndex) => (
+              <li key={itemIndex}>{item}</li>
+            ))}
+          </ul>
+        ) : (
+          <p key={index}>{block.text}</p>
+        ),
+      )}
     </div>
   );
 }
@@ -101,7 +177,13 @@ export function UpdateDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-6">
+      {/*
+        Стандартные sm:max-w-sm — это ~55 знаков в строке при text-sm, и
+        собранный пункт описания выпуска в них ломается через слово.
+        sm:max-w-lg даёт около семидесяти: столько же читается спокойно, но
+        окно всё ещё окно, а не страница (amnezia-vpn-server-u1fv).
+      */}
+      <DialogContent className="gap-6 sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{running ? "Обновление идёт" : `Версия ${info?.latest ?? ""}`}</DialogTitle>
         </DialogHeader>
