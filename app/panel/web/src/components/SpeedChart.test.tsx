@@ -39,14 +39,13 @@ function bands(): SVGPathElement[] {
   return areas("down-max");
 }
 
-/** Отдельная строка про разрывы — она есть только когда разрывы есть. */
-function gapsText(): string {
-  return document.querySelector("[data-slot='speed-gaps']")?.textContent ?? "";
-}
-
-/** Метка времени так, как её печатает браузер в часовом окне. */
+/** Метка времени так, как её печатает браузер, — с секундами. */
 function clock(utc: string): string {
-  return new Date(utc).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  return new Date(utc).toLocaleTimeString("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 /** Все координаты y из фигуры — чтобы проверять высоту полосы. */
@@ -232,27 +231,20 @@ describe("шкала", () => {
 });
 
 describe("легенда", () => {
-  // Про пропуски написано всегда, и читатель ищет в графике то, чего в нём
-  // не было (amnezia-vpn-server-dbmm).
-  it("молчит о разрывах, когда их нет", async () => {
-    const v = Array.from({ length: 10 }, () => 20_000_000);
-    fetchSpeed.mockResolvedValue(
-      series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
-    );
-    render(<SpeedChart clientId={1} />);
-
-    await waitFor(() => expect(bands()).toHaveLength(1));
-    expect(gapsText()).toBe("");
-  });
-
-  it("называет их, когда они есть", async () => {
+  // Владелец: строка «разрывы — время, за которое замеров нет» под
+  // графиком — лишняя, убрать её совсем. Разрывы по-прежнему видны в самой
+  // заливке и в подсказке при наведении — эта проверка стережёт только то,
+  // что поясняющий абзац больше не появляется, даже когда пропуски есть.
+  it("не пишет отдельной строкой про разрывы, даже когда они есть", async () => {
     const v: (number | null)[] = [20_000_000, null, 20_000_000];
     fetchSpeed.mockResolvedValue(
       series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
     );
     render(<SpeedChart clientId={1} />);
 
-    await waitFor(() => expect(gapsText()).toMatch(/разрывы/));
+    await waitFor(() => expect(areas("down-max")).toHaveLength(2));
+    expect(document.querySelector("[data-slot='speed-gaps']")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/разрывы/);
   });
 
   // Владелец: «нужно хотя бы цвет добавить», синий и оранжевый. Ряды
@@ -469,6 +461,28 @@ describe("чтение значения в точке", () => {
     expect(box.textContent).toMatch(/500 Кбит\/с/);
   });
 
+  // Владелец: секунды нужны и в подсказке, тем же порядком, что и по краям
+  // графика — иначе подсказка называет минуту, а не тот замер под курсором.
+  it("называет время подсказки с секундами", async () => {
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_min_bps: [2_000_000, 2_000_000],
+        down_max_bps: [7_000_000, 7_000_000],
+        up_min_bps: [500_000, 500_000],
+        up_max_bps: [500_000, 500_000],
+        from_utc: "2026-09-08T12:00:00Z",
+        to_utc: "2026-09-08T13:00:00Z",
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(bands()).toHaveLength(1));
+
+    hover(10);
+    const box = await screen.findByRole("status");
+    const time = box.querySelector(".text-muted-foreground")?.textContent ?? "";
+    expect(time).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+
   // Разрыв обязан читаться и здесь, а не выглядеть нулём.
   it("на разрыве говорит, что замеров нет", async () => {
     fetchSpeed.mockResolvedValue(
@@ -583,12 +597,8 @@ describe("оси", () => {
     expect(screen.getByText("20.0")).toBeInTheDocument();
     expect(screen.getByText("10.0")).toBeInTheDocument();
     expect(screen.getByText("0")).toBeInTheDocument();
-    // Начало и конец окна.
-    const start = new Date("2026-09-08T12:00:00Z").toLocaleTimeString("ru-RU", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-    expect(screen.getByText(start)).toBeInTheDocument();
+    // Начало и конец окна — с секундами, а не только часом и минутой.
+    expect(screen.getByText(clock("2026-09-08T12:00:00Z"))).toBeInTheDocument();
   });
 
   it("рисует линии сетки", async () => {
@@ -601,6 +611,54 @@ describe("оси", () => {
     await waitFor(() =>
       expect(document.querySelectorAll("svg line.text-border")).toHaveLength(3),
     );
+  });
+
+  // Владелец: по краям графика видны только часы и минуты, а нужны секунды.
+  it("подписывает секунды по краям, а не только часы и минуты", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_max_bps: v,
+        down_min_bps: v,
+        up_max_bps: [],
+        up_min_bps: [],
+        from_utc: "2026-09-08T12:00:07Z",
+        to_utc: "2026-09-08T13:00:00Z",
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(bands()).toHaveLength(1));
+    const row = document.querySelector("[data-slot='speed-legend']");
+    const parts = Array.from(row!.children).map((el) => el.textContent ?? "");
+    expect(parts[0]).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    expect(parts[2]).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+
+  // В сутках секунды нужны там же, где дата: формат один на оба края, чтобы
+  // подписи не разъезжались по ширине.
+  it("в сутках тоже подписывает секунды, и обе метки одной длины", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({
+        window: "day",
+        down_max_bps: v,
+        down_min_bps: v,
+        up_max_bps: [],
+        up_min_bps: [],
+        from_utc: "2026-09-07T13:00:07Z",
+        to_utc: "2026-09-08T09:05:00Z",
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(bands()).toHaveLength(1));
+    const row = document.querySelector("[data-slot='speed-legend']");
+    const parts = Array.from(row!.children).map((el) => el.textContent ?? "");
+    expect(parts[0]).toMatch(/^\d{2}\.\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(parts[2]).toMatch(/^\d{2}\.\d{2} \d{2}:\d{2}:\d{2}$/);
+    // Одинаковая длина — ширина подписи не гуляет между краями графика.
+    expect(parts[0].length).toBe(parts[2].length);
   });
 });
 
