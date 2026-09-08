@@ -52,14 +52,28 @@ check() {
 
 make_stubs() {
     mkdir -p "${TMP}/bin"
+    # awg-quick держит признак существования интерфейса файлом и отказывается
+    # поднимать уже существующий — как настоящий. Заглушка, которая молча
+    # поднимает что угодно, не знала бы про «already exists», а это и есть та
+    # поломка, из-за которой сервер не вставал (amnezia-vpn-server-544c).
     cat > "${TMP}/bin/awg-quick" <<'SH'
 #!/bin/bash
 echo "awg-quick $*" >> "${AWG_STUB_LOG}"
-if [ "${1:-}" = "up" ]; then
-    echo up >> "${AWG_STUB_STATE}"
-elif [ "${1:-}" = "down" ]; then
-    echo down >> "${AWG_STUB_STATE}"
-fi
+IFACE_STATE="${AWG_STUB_IFACE:-/dev/null}"
+case "${1:-}" in
+    up)
+        if [ -f "$IFACE_STATE" ]; then
+            echo "awg-quick: \`awg0' already exists" >&2
+            exit 1
+        fi
+        : > "$IFACE_STATE"
+        echo up >> "${AWG_STUB_STATE}"
+        ;;
+    down)
+        rm -f "$IFACE_STATE"
+        echo down >> "${AWG_STUB_STATE}"
+        ;;
+esac
 exit 0
 SH
     # ip держит игрушечную таблицу маршрутов в файле: проверка «маршрут
@@ -68,9 +82,16 @@ SH
     cat > "${TMP}/bin/ip" <<'SH'
 #!/bin/bash
 echo "ip $*" >> "${AWG_STUB_LOG}"
-if [ "${1:-}" = "link" ] && [ "${2:-}" = "show" ] && [ -f "${AWG_STUB_FLAG_IP_GONE:-}" ]; then
-    echo "no such interface" >&2
-    exit 1
+IFACE_STATE="${AWG_STUB_IFACE:-/dev/null}"
+if [ "${1:-}" = "link" ] && [ "${2:-}" = "show" ]; then
+    # Флаг сильнее состояния: им тесты изображают пропавший интерфейс.
+    [ -f "${AWG_STUB_FLAG_IP_GONE:-}" ] && { echo "no such interface" >&2; exit 1; }
+    [ -f "$IFACE_STATE" ] || { echo "no such interface" >&2; exit 1; }
+    exit 0
+fi
+if [ "${1:-}" = "link" ] && [ "${2:-}" = "del" ]; then
+    rm -f "$IFACE_STATE"
+    exit 0
 fi
 TABLE="${AWG_STUB_ROUTES:-/dev/null}"
 [ -f "$TABLE" ] || : > "$TABLE"
@@ -187,6 +208,7 @@ export AWG_STUB_FLAG_SYNCONF_FAIL="${STUB_FLAG_DIR}/syncconf-fail"
 export AWG_STUB_FLAG_ROUTE_FAIL="${STUB_FLAG_DIR}/route-fail"
 export AWG_STUB_FLAG_TC_FAIL="${STUB_FLAG_DIR}/tc-fail"
 export AWG_STUB_QDISC="${dir}/qdisc.state"
+export AWG_STUB_IFACE="${dir}/iface.state"
 export AWG_RATE_STATE="${dir}/rates.state"
 export AWG_STUB_ROUTES="${dir}/routes.table"
 export AWG_ROUTE_STATE="${dir}/routes.state"
@@ -797,6 +819,45 @@ check "flow-l: неудача замечена" \
     wait_for_line "${TMP}/flow-l.out" "пределы скорости не применены"
 check "flow-l: туннель при этом жив" not grep -q "^down$" "${STUB_STATE}"
 stop_pid "${PID_L}"
+
+# --- 3.13 осиротевший интерфейс (amnezia-vpn-server-544c) --------------
+#
+# Интерфейс переживает смерть контейнера: сеть у него хостовая. Тогда
+# awg-quick отказывается — «already exists», — и сервер не поднимается НИКОГДА:
+# сторож перезапускает контейнер, а перезапуск и есть то, что не работает.
+DIR_M="${TMP}/flow-m"
+mkdir -p "${DIR_M}/config" "${DIR_M}/etc"
+printf '100\n' > "${STUB_MTIME}"
+cp "${DIR_A}/config/awg0.conf" "${DIR_M}/config/awg0.conf"
+: > "${STUB_LOG}"; : > "${STUB_STATE}"
+rm -f "${STUB_FLAG_DIR}"/*
+# Интерфейс уже есть — так выглядит хост после смерти прошлого контейнера.
+: > "${DIR_M}/iface.state"
+run_entrypoint "${DIR_M}" "flow-m"
+PID_M=$!
+check "flow-m: сирота замечен" \
+    wait_for_line "${TMP}/flow-m.out" "остался от прошлого запуска"
+check "flow-m: и снят" wait_for_line "${TMP}/flow-m.out" "снят; поднимаю заново"
+check "flow-m: туннель поднялся" wait_for_line "${STUB_STATE}" "^up$"
+# Без уборки awg-quick отказался бы, и контейнер ушёл бы в вечный перезапуск.
+check "flow-m: подъём не отказал" not grep -q "already exists" "${TMP}/flow-m.out"
+stop_pid "${PID_M}"
+
+# --- 3.14 чистый старт сироту не выдумывает ----------------------------
+DIR_N="${TMP}/flow-n"
+mkdir -p "${DIR_N}/config" "${DIR_N}/etc"
+printf '100\n' > "${STUB_MTIME}"
+cp "${DIR_A}/config/awg0.conf" "${DIR_N}/config/awg0.conf"
+: > "${STUB_LOG}"; : > "${STUB_STATE}"
+rm -f "${STUB_FLAG_DIR}"/*
+run_entrypoint "${DIR_N}" "flow-n"
+PID_N=$!
+check "flow-n: туннель поднялся" wait_for_line "${STUB_STATE}" "^up$"
+check "flow-n: интерфейс не сносился зря" \
+    not grep -q "остался от прошлого запуска" "${TMP}/flow-n.out"
+# Лишний down при чистом старте оборвал бы связь на ровном месте.
+check "flow-n: и не опускался" not grep -q "^down$" "${STUB_STATE}"
+stop_pid "${PID_N}"
 
 # =====================================================================
 echo
