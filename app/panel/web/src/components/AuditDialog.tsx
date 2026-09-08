@@ -27,7 +27,7 @@ const actions: Record<string, string> = {
   "client.add": "клиент добавлен",
   "client.edit": "клиент изменён",
   "client.mtu": "MTU клиента",
-  "client.rate": "предел скорости",
+  "client.rate": "ограничение скорости",
   "client.toggle": "клиент",
   "client.delete": "клиент удалён",
   "backup.restore": "восстановление из копии",
