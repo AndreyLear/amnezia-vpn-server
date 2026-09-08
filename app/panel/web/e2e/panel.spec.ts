@@ -98,8 +98,8 @@ test("карточка клиента показывает график скор
   // сплошная фигура на весь график означала бы, что разрывы залиты нулём.
   await expect.poll(async () => chart.locator("path").count()).toBeGreaterThan(0);
   // Три линии сетки — то, по чему читаются значения.
-  await expect.poll(async () => chart.locator("line").count()).toBe(3);
-  await expect(page.getByText(/Пик .*Мбит\/с/)).toBeVisible();
+  await expect.poll(async () => chart.locator("line.text-border").count()).toBe(3);
+  await expect(page.getByText(/пик .*Мбит\/с/)).toBeVisible();
   // Ось: верх шкалы, середина, ноль.
   await expect(page.getByText("0", { exact: true })).toBeVisible();
 
