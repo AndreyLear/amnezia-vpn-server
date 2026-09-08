@@ -58,10 +58,17 @@ test("подробности показывают изменения и пред
   await page.setViewportSize({ width: 1280, height: 720 });
   await login(page);
   await page.getByRole("button", { name: "Показать подробности" }).click();
-  await expect(page.getByText("Первое изменение")).toBeVisible();
+  // Пункт, перенесённый в теле выпуска по ширине, собирается обратно в один
+  // буллит: прежде каждая физическая строка становилась своим абзацем, и
+  // фраза разрывалась посреди себя (amnezia-vpn-server-u1fv).
+  const items = page.getByRole("dialog").getByRole("listitem");
+  await expect(items).toHaveCount(2);
+  await expect(items.first()).toHaveText(
+    "Первое изменение заняло столько слов, что тело выпуска перенесло его на вторую строку с отступом.",
+  );
   // И то, что вышло между установленной версией и свежей, тоже: человек
   // решает по тому, что изменится у него, а не по последней записи.
-  await expect(page.getByText("Второе изменение")).toBeVisible();
+  await expect(items.nth(1)).toHaveText("Второе изменение");
   await expect(page.getByText(/клиенты остаются без связи/)).toBeVisible();
   // Контрольная сумма предназначена агенту обновления, а не человеку.
   await expect(page.getByText(/amnezia-sha256/)).toHaveCount(0);
