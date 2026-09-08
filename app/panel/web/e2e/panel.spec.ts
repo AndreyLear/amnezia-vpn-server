@@ -94,10 +94,14 @@ test("карточка клиента показывает график скор
 
   const chart = page.getByRole("img", { name: /Скорость/ });
   await expect(chart).toBeVisible();
-  // Столбиков должно быть много: один на каждый замер, а не одна линия на
-  // весь график.
-  await expect.poll(async () => chart.locator("line").count()).toBeGreaterThan(50);
+  // Заливка приёма есть, и она разорвана там, где замеров не было: одна
+  // сплошная фигура на весь график означала бы, что разрывы залиты нулём.
+  await expect.poll(async () => chart.locator("path").count()).toBeGreaterThan(0);
+  // Три линии сетки — то, по чему читаются значения.
+  await expect.poll(async () => chart.locator("line").count()).toBe(3);
   await expect(page.getByText(/Пик .*Мбит\/с/)).toBeVisible();
+  // Ось: верх шкалы, середина, ноль.
+  await expect(page.getByText("0", { exact: true })).toBeVisible();
 
   // Сутки — то же окно, другой охват; данные фикстуры лежат в последних
   // минутах, поэтому график остаётся непустым.

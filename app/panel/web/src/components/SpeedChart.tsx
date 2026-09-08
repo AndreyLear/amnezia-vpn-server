@@ -4,32 +4,37 @@ import { Button } from "@/components/ui/button";
 import { fetchSpeed, type SpeedSeries } from "@/lib/api";
 
 /**
- * График скорости клиента (amnezia-vpn-server-tmjw).
+ * График скорости клиента (amnezia-vpn-server-tmjw, -0ypv).
  *
- * Своим svg, без библиотеки: одна область без легенды, зума и
- * переключателей осей — библиотека весила бы больше, чем весь график, а
- * прореживание всё равно делает сервер.
+ * Своим svg, без библиотеки: одна область без легенды и зума — библиотека
+ * весила бы больше, чем весь график, а прореживание делает сервер.
  *
- * Столбик рисуется от минимума до максимума столбца, и среднего здесь нет
- * вовсе. Усреднение прячет ровно то, ради чего график заводился: провал
- * длиной в секунду среди двадцати пяти замеров превращается в незаметную
- * рябь.
+ * Приём рисуется ПОЛОСОЙ между минимумом и максимумом столбца, а не
+ * средним и не отдельными штрихами. Среднее спрятало бы секундный провал —
+ * ровно то, ради чего график заводился; отдельные штрихи при трёхстах
+ * столбцах превращались в щетину, по которой не видно ни формы, ни
+ * значений. Тонкая полоса читается как «скорость держалась», широкая — как
+ * «прыгала».
  */
 
 type Range = "hour" | "day";
 
-/** Ширина в столбцах. Больше пикселей просить незачем: столбец уже пиксель. */
-const COLUMNS = 360;
+/**
+ * Ширина в столбцах. В часе это 720 замеров на 180 столбцов — по четыре на
+ * столбец: полоса остаётся честной, а щетины уже нет.
+ */
+const COLUMNS = 180;
 const HEIGHT = 120;
 /** Такт записи истории; в часе он и есть шаг обновления. */
 const REFRESH_MS = 5000;
 
 export function SpeedChart({ clientId }: { clientId: number }) {
   const [range, setRange] = useState<Range>("hour");
+  // Единицы стоят в заголовке, а не у засечек: «15.8 Мбит/с» в колонке оси
+  // не помещается и ломается на две строки посреди слова.
+  const [unit, setUnit] = useState("");
   const [series, setSeries] = useState<SpeedSeries | null>(null);
   const [failed, setFailed] = useState(false);
-  // Первая загрузка и обновление по таймеру — разные вещи для человека:
-  // «загружаю» показывается один раз, дальше линия просто дорисовывается.
   const [loading, setLoading] = useState(true);
   const alive = useRef(true);
 
@@ -43,6 +48,7 @@ export function SpeedChart({ clientId }: { clientId: number }) {
           return;
         }
         setSeries(data);
+        setUnit(speedUnit(speedScale(data)));
         setFailed(false);
       } catch {
         if (alive.current) setFailed(true);
@@ -71,7 +77,7 @@ export function SpeedChart({ clientId }: { clientId: number }) {
   return (
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-2">
-        <dt className="text-muted-foreground">Скорость</dt>
+        <dt className="text-muted-foreground">Скорость{unit ? `, ${unit}` : ""}</dt>
         <div className="flex gap-1">
           <RangeButton current={range} value="hour" onSelect={setRange}>
             час
@@ -119,80 +125,137 @@ function SpeedPlot({
   loading: boolean;
   failed: boolean;
 }) {
-  if (failed) {
-    return <Empty>историю прочитать не удалось</Empty>;
-  }
-  if (loading || !series) {
-    return <Empty>загружаю</Empty>;
-  }
-  const n = series.down_max_bps.length;
+  if (failed) return <Empty>историю прочитать не удалось</Empty>;
+  if (loading || !series) return <Empty>загружаю</Empty>;
+
   const peak = Math.max(
+    0,
     ...series.down_max_bps.map((v) => v ?? 0),
     ...series.up_max_bps.map((v) => v ?? 0),
-    1,
   );
-  const filled = series.down_max_bps.filter((v) => v !== null).length;
-  if (filled === 0) {
-    // Пусто и молчание — разные вещи, но человеку в обоих случаях нужно
-    // одно: понять, что смотреть не на что, и почему.
+  if (peak === 0 && series.down_max_bps.every((v) => v === null)) {
     return <Empty>за это время замеров нет</Empty>;
   }
-
-  const width = n;
-  const y = (bps: number) => HEIGHT - (bps / peak) * HEIGHT;
+  const scale = speedScale(series);
+  const n = series.down_max_bps.length;
+  const y = (bps: number) => HEIGHT - Math.min(bps / scale, 1) * HEIGHT;
 
   return (
     <div className="grid gap-1">
-      <svg
-        role="img"
-        aria-label={`Скорость: пик ${formatBits(peak)}`}
-        viewBox={`0 0 ${width} ${HEIGHT}`}
-        preserveAspectRatio="none"
-        className="h-[120px] w-full rounded-md bg-muted/40"
-      >
-        {series.down_max_bps.map((maxV, i) => {
-          const minV = series.down_min_bps[i];
-          // Разрыв не рисуется вовсе. Ноль означал бы «клиент ничего не
-          // получал» — диагноз, которого никто не ставил.
-          if (maxV === null || minV === null) return null;
-          return (
+      <div className="flex gap-2">
+        {/* Ось слева, а не внутри svg: там preserveAspectRatio растянул бы
+            текст вместе с картинкой. */}
+        {/* Только числа: единицы названы в заголовке, потому что полная
+            подпись в колонке оси не помещается и ломается на две строки. */}
+        <div className="flex h-[120px] w-10 shrink-0 flex-col justify-between text-right text-[10px] leading-none text-muted-foreground tabular-nums">
+          <span>{formatBitsBare(scale, scale)}</span>
+          <span>{formatBitsBare(scale / 2, scale)}</span>
+          <span>0</span>
+        </div>
+        <svg
+          role="img"
+          aria-label={`Скорость: шкала до ${formatBits(scale)}, пик ${formatBits(peak)}`}
+          viewBox={`0 0 ${n} ${HEIGHT}`}
+          preserveAspectRatio="none"
+          className="h-[120px] min-w-0 flex-1 rounded-md bg-muted/40"
+        >
+          {[0, 0.5, 1].map((f) => (
             <line
+              key={f}
+              x1={0}
+              x2={n}
+              y1={HEIGHT * f}
+              y2={HEIGHT * f}
+              stroke="currentColor"
+              strokeWidth={1}
+              className="text-border"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+          {/* Приём — заливка. Разрывы рвут заливку, а не рисуются нулём:
+              ноль означал бы «клиент ничего не получал», а это диагноз. */}
+          {bandRuns(series.down_min_bps, series.down_max_bps).map((run, i) => (
+            <path
               key={`d${i}`}
-              x1={i + 0.5}
-              x2={i + 0.5}
-              y1={y(minV)}
-              y2={y(maxV)}
-              stroke="currentColor"
-              strokeWidth={1}
-              className="text-primary"
-              vectorEffect="non-scaling-stroke"
+              d={bandPath(run, series.down_min_bps, series.down_max_bps, y)}
+              className="fill-foreground/70"
             />
-          );
-        })}
-        {series.up_max_bps.map((maxV, i) => {
-          const minV = series.up_min_bps[i];
-          if (maxV === null || minV === null) return null;
-          return (
-            <line
+          ))}
+          {/* Отдача — тонкий контур поверх: палитра панели одноцветная, и
+              различать ряды приходится не оттенком, а тем, что один залит, а
+              другой обведён. */}
+          {bandRuns(series.up_min_bps, series.up_max_bps).map((run, i) => (
+            <polyline
               key={`u${i}`}
-              x1={i + 0.5}
-              x2={i + 0.5}
-              y1={y(minV)}
-              y2={y(maxV)}
+              points={run
+                .map((c) => `${c + 0.5},${y(series.up_max_bps[c] ?? 0)}`)
+                .join(" ")}
+              fill="none"
               stroke="currentColor"
-              strokeWidth={1}
-              className="text-muted-foreground/70"
+              strokeWidth={1.5}
+              className="text-foreground"
               vectorEffect="non-scaling-stroke"
             />
-          );
-        })}
-      </svg>
+          ))}
+        </svg>
+      </div>
+      <div className="flex justify-between pl-12 text-[10px] leading-none text-muted-foreground tabular-nums">
+        <span>{formatClock(series.from_utc, series)}</span>
+        <span>{formatClock(series.to_utc, series)}</span>
+      </div>
       <p className="text-xs text-muted-foreground">
-        Пик {formatBits(peak)} · ↓ к клиенту, ↑ от него · пропуски — время, за
-        которое замеров нет
+        {peak > scale
+          ? `Пик ${formatBits(peak)} — выше шкалы · `
+          : `Пик ${formatBits(peak)} · `}
+        заливка — к клиенту, линия — от него · пропуски — время, за которое
+        замеров нет
       </p>
     </div>
   );
+}
+
+/**
+ * Шкала строится по 95-му процентилю, а не по максимуму. Одной секунды
+ * скачивания хватало, чтобы прижать весь остальной час к полу и спрятать
+ * провалы — то есть сделать ровно то, от чего мы отказались, отвергнув
+ * усреднение (amnezia-vpn-server-0ypv). Устойчивая нагрузка шкалу
+ * поднимает: она и есть 95-й процентиль.
+ */
+export function speedScale(series: SpeedSeries): number {
+  const values = [...series.down_max_bps, ...series.up_max_bps]
+    .filter((v): v is number => v !== null && v > 0)
+    .sort((a, b) => a - b);
+  if (values.length === 0) return 1_000_000;
+  const at = values[Math.min(values.length - 1, Math.floor(values.length * 0.95))];
+  return Math.max(at, 1_000);
+}
+
+/** Непрерывные куски без разрывов: каждый рисуется отдельной фигурой. */
+function bandRuns(mins: (number | null)[], maxs: (number | null)[]): number[][] {
+  const runs: number[][] = [];
+  let run: number[] = [];
+  for (let i = 0; i < maxs.length; i++) {
+    if (mins[i] === null || maxs[i] === null) {
+      if (run.length) runs.push(run);
+      run = [];
+      continue;
+    }
+    run.push(i);
+  }
+  if (run.length) runs.push(run);
+  return runs;
+}
+
+/** Полоса: по верхам вперёд, по низам назад. */
+function bandPath(
+  run: number[],
+  mins: (number | null)[],
+  maxs: (number | null)[],
+  y: (bps: number) => number,
+): string {
+  const top = run.map((c) => `${c + 0.5},${y(maxs[c] ?? 0)}`);
+  const bottom = [...run].reverse().map((c) => `${c + 0.5},${y(mins[c] ?? 0)}`);
+  return `M${top.join(" L")} L${bottom.join(" L")} Z`;
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
@@ -208,4 +271,31 @@ export function formatBits(bps: number): string {
   if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Мбит/с`;
   if (bps >= 1_000) return `${Math.round(bps / 1_000)} Кбит/с`;
   return `${Math.round(bps)} бит/с`;
+}
+
+/**
+ * В сутках время без даты обманывает: начало и конец окна показывают один и
+ * тот же час, и подписи выглядят одинаковыми.
+ */
+function formatClock(utc: string, series: SpeedSeries): string {
+  const d = new Date(utc);
+  if (Number.isNaN(d.getTime())) return "";
+  const clock = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  if (series.window !== "day") return clock;
+  const date = d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+  return `${date} ${clock}`;
+}
+
+/** Единицы шкалы: их называет заголовок, а не каждая засечка. */
+export function speedUnit(scale: number): string {
+  if (scale >= 1_000_000) return "Мбит/с";
+  if (scale >= 1_000) return "Кбит/с";
+  return "бит/с";
+}
+
+/** Число без единиц: они уже названы в заголовке. */
+function formatBitsBare(bps: number, scale: number): string {
+  if (scale >= 1_000_000) return (bps / 1_000_000).toFixed(1);
+  if (scale >= 1_000) return String(Math.round(bps / 1_000));
+  return String(Math.round(bps));
 }
