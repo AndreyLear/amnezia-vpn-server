@@ -177,6 +177,7 @@ export default function HomePage() {
       onAddClient={() => setAddOpen(true)}
       host={host}
       pendingUpdate={updateInfo?.available ?? false}
+      onUpdateChecked={reloadUpdate}
     >
       <UpdateBanner info={updateInfo} onChanged={reloadUpdate} />
       {clients === null ? null : clients.length === 0 ? (

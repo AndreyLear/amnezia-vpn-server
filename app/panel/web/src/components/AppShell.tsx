@@ -18,6 +18,7 @@ export function AppShell({
   host = null,
   empty = false,
   pendingUpdate = false,
+  onUpdateChecked,
 }: {
   children: ReactNode;
   restorePending?: boolean;
@@ -26,6 +27,8 @@ export function AppShell({
   empty?: boolean;
   /** Напоминание о невзятом выпуске: значок на кнопке меню. */
   pendingUpdate?: boolean;
+  /** Проверка обновлений принесла новый ответ: полосе пора перечитать своё. */
+  onUpdateChecked?: () => void;
 }) {
   const [theme, setThemeState] = useState<Theme>(() =>
     typeof window === "undefined" ? "dark" : getTheme(),
@@ -79,7 +82,7 @@ export function AppShell({
                   >
                     {theme === "dark" ? <Moon /> : <Sun />}
                   </Button>
-                  <HeaderMenu pendingUpdate={pendingUpdate} />
+                  <HeaderMenu pendingUpdate={pendingUpdate} onChecked={onUpdateChecked} />
                 </div>
               </>
             )}
