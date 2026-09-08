@@ -99,7 +99,11 @@ test("карточка клиента показывает график скор
   await expect.poll(async () => chart.locator("path").count()).toBeGreaterThan(0);
   // Три линии сетки — то, по чему читаются значения.
   await expect.poll(async () => chart.locator("line.text-border").count()).toBe(3);
-  await expect(page.getByText(/пик .*Мбит\/с/)).toBeVisible();
+  // Пика под графиком больше нет: шкала следует за данными, и верх оси
+  // называет почти то же число (amnezia-vpn-server-jyhb). Вместо него —
+  // легенда, стоящая в одной строке с метками времени.
+  await expect(page.getByText("скачал")).toBeVisible();
+  await expect(page.getByText("отдал")).toBeVisible();
   // Ось: верх шкалы, середина, ноль.
   await expect(page.getByText("0", { exact: true })).toBeVisible();
 

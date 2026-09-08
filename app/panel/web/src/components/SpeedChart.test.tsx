@@ -39,14 +39,14 @@ function bands(): SVGPathElement[] {
   return areas("down-max");
 }
 
-/** Подпись под графиком целиком: она собрана из нескольких узлов. */
-function legendText(): string {
-  return document.querySelector("[data-slot='speed-legend']")?.textContent ?? "";
-}
-
 /** Отдельная строка про разрывы — она есть только когда разрывы есть. */
 function gapsText(): string {
   return document.querySelector("[data-slot='speed-gaps']")?.textContent ?? "";
+}
+
+/** Метка времени так, как её печатает браузер в часовом окне. */
+function clock(utc: string): string {
+  return new Date(utc).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 }
 
 /** Все координаты y из фигуры — чтобы проверять высоту полосы. */
@@ -223,7 +223,7 @@ describe("легенда", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    await waitFor(() => expect(legendText()).toMatch(/пик/));
+    await waitFor(() => expect(bands()).toHaveLength(1));
     expect(gapsText()).toBe("");
   });
 
@@ -252,35 +252,88 @@ describe("легенда", () => {
     );
   });
 
-  // Кружок вместо слов «заливка» и «линия»: те объясняли приём отрисовки,
-  // а не называли вещи (amnezia-vpn-server-udas).
-  it("называет ряды словами при кружках, а не приёмом отрисовки", async () => {
+  // Слова называют действие, а не приём отрисовки: «заливка» и «линия»
+  // объясняли, как нарисовано, а не что это значит (amnezia-vpn-server-udas).
+  // Слова ровно те, что на наброске владельца (amnezia-vpn-server-jyhb).
+  it("называет ряды словами, а не приёмом отрисовки", async () => {
     const v = Array.from({ length: 10 }, () => 20_000_000);
     fetchSpeed.mockResolvedValue(
       series({ down_max_bps: v, down_min_bps: v, up_max_bps: v, up_min_bps: v }),
     );
     render(<SpeedChart clientId={1} />);
 
-    expect(await screen.findByText("скачивание")).toBeInTheDocument();
-    expect(screen.getByText("отдача")).toBeInTheDocument();
+    expect(await screen.findByText("скачал")).toBeInTheDocument();
+    expect(screen.getByText("отдал")).toBeInTheDocument();
     expect(screen.queryByText(/заливка|линия — от/)).toBeNull();
-    expect(document.querySelector("span.bg-sky-500")).not.toBeNull();
-    expect(document.querySelector("span.bg-orange-500")).not.toBeNull();
   });
 
-  // Пик вынесен отдельно, а не втиснут в строку легенды.
-  it("держит пик отдельно от легенды", async () => {
+  // Набросок владельца: «23:40 ↓ скачал ↑ отдал 00:40». Легенда своей
+  // строкой съедала высоту и без того длинной карточки
+  // (amnezia-vpn-server-jyhb).
+  it("держит легенду и обе метки времени в одной строке", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_max_bps: v,
+        down_min_bps: v,
+        up_max_bps: [],
+        up_min_bps: [],
+        from_utc: "2026-09-08T12:00:00Z",
+        to_utc: "2026-09-08T13:00:00Z",
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(bands()).toHaveLength(1));
+    const row = document.querySelector("[data-slot='speed-legend']");
+    // Обе метки времени лежат в той же строке, что и легенда, а не своей.
+    expect(screen.getByText(clock("2026-09-08T12:00:00Z")).parentElement).toBe(row);
+    expect(screen.getByText(clock("2026-09-08T13:00:00Z")).parentElement).toBe(row);
+    expect(screen.getByText("скачал").closest("[data-slot='speed-legend']")).toBe(row);
+    // Время по краям, легенда между ними.
+    const parts = Array.from(row!.children).map((el) => el.textContent ?? "");
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toBe(clock("2026-09-08T12:00:00Z"));
+    expect(parts[2]).toBe(clock("2026-09-08T13:00:00Z"));
+    expect(parts[1]).toMatch(/скачал.*отдал/);
+  });
+
+  // Шкала следует за данными, и верх оси называет почти то же число, что и
+  // пик: отдельная строка ради него не нужна (amnezia-vpn-server-jyhb).
+  it("не поминает пик словами", async () => {
     const v = Array.from({ length: 10 }, () => 20_000_000);
     fetchSpeed.mockResolvedValue(
       series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
     );
     render(<SpeedChart clientId={1} />);
 
-    // Пик стоит в конце строки легенды, а не среди кружков.
-    await waitFor(() => expect(legendText()).toMatch(/пик 20\.0 Мбит\/с/));
-    const bullets = screen.getByText("скачивание").closest("span.items-center.gap-4");
-    expect(bullets).not.toBeNull();
-    expect(bullets?.textContent).not.toMatch(/пик/);
+    await waitFor(() => expect(bands()).toHaveLength(1));
+    expect(document.body.textContent).not.toMatch(/пик/i);
+    // Кроме подписи у svg: незрячему читателю она заменяет обе убранные
+    // строки, поэтому пик обязан остаться в ней.
+    expect(document.querySelector("svg")?.getAttribute("aria-label")).toMatch(
+      /пик 20\.0 Мбит\/с/,
+    );
+  });
+
+  // Кружок держался на одном цвете и сам ничего не называл; стрелка
+  // показывает направление (amnezia-vpn-server-jyhb).
+  it("метит ряды стрелками, и цвет у них разный", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: v, up_min_bps: v }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(bands()).toHaveLength(1));
+    const down = document.querySelector("[data-slot='speed-legend'] [data-slot='legend-down']");
+    const up = document.querySelector("[data-slot='speed-legend'] [data-slot='legend-up']");
+    expect(down?.textContent?.trim()).toBe("↓");
+    expect(up?.textContent?.trim()).toBe("↑");
+    // Цвета те же, что у заливок в поле: иначе легенда объясняет не тот
+    // график.
+    expect(down).toHaveClass("text-sky-500");
+    expect(up).toHaveClass("text-orange-500");
   });
 });
 
@@ -361,7 +414,7 @@ describe("поле графика", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    await waitFor(() => expect(legendText()).toMatch(/пик/));
+    await waitFor(() => expect(bands()).toHaveLength(1));
     expect(document.querySelector("[data-slot='speed-legend']")).toHaveClass("pb-2");
   });
 });
