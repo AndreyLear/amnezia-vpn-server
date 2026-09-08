@@ -256,6 +256,10 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("GET /api/clients", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsList)))
 	s.mux.Handle("POST /api/clients", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsCreate))))
 	s.mux.Handle("GET /api/clients/{id}", s.auth.RequireAPI(http.HandlerFunc(s.apiClientsGet)))
+	// Что было со скоростью этого клиента: без этого жалоба «вчера
+	// вечером не грузило» разбиралась только по ssh и снимкам экрана с
+	// роутера (amnezia-vpn-server-8lnv).
+	s.mux.Handle("GET /api/clients/{id}/speed", s.auth.RequireAPI(http.HandlerFunc(s.apiClientSpeed)))
 	s.mux.Handle("PATCH /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsPatch))))
 	s.mux.Handle("DELETE /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsDelete))))
 	distRoot, err := fs.Sub(distFS, "dist")
