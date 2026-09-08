@@ -265,30 +265,40 @@ function SpeedPlot({
           <span>0</span>
         </div>
       </div>
-      <div className="flex justify-between py-1 pr-10 text-[10px] leading-none text-muted-foreground tabular-nums">
-        <span>{formatClock(series.from_utc, series)}</span>
-        <span>{formatClock(series.to_utc, series)}</span>
-      </div>
-      {/* Кружок вместо слов «заливка» и «линия»: те объясняли приём
-          отрисовки, и читателю приходилось сперва понять, что залито, а что
-          обведено, и только потом — что это значит. И слова называют
-          действие, а не направление: «к клиенту» тоже требовало
-          додумывания (amnezia-vpn-server-udas). */}
+      {/* Время и легенда — одной строкой: время по краям, легенда между
+          ними (amnezia-vpn-server-jyhb). Пика здесь больше нет вовсе: шкала
+          следует за данными, и верх оси называет почти то же число, так что
+          отдельная строка ради него только съедала высоту и без того
+          длинной карточки. Незрячему пик по-прежнему называет подпись у
+          svg — ему она заменяет обе убранные строки.
+
+          Стрелка вместо кружка: кружок ничего не называл сам и держался
+          только на цвете, а стрелка показывает направление. Слова же
+          называют действие, а не приём отрисовки: «заливка» и «линия»
+          заставляли сперва разобрать, что залито, а что обведено, и только
+          потом — что это значит (amnezia-vpn-server-udas). */}
       <div
         data-slot="speed-legend"
-        className="flex items-center justify-between gap-4 pb-2 text-xs text-muted-foreground"
+        className="flex items-center justify-between gap-4 pt-1 pb-2 pr-10 text-xs text-muted-foreground"
       >
+        <span className="tabular-nums">{formatClock(series.from_utc, series)}</span>
         <span className="flex items-center gap-4">
           <span className="flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-sky-500" aria-hidden />
-            скачивание
+            {/* Цвет тот же, что у заливки приёма: легенда обязана совпадать
+                с полем, иначе она объясняет не тот график. */}
+            <span data-slot="legend-down" className="text-sky-500" aria-hidden>
+              ↓
+            </span>
+            скачал
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-orange-500" aria-hidden />
-            отдача
+            <span data-slot="legend-up" className="text-orange-500" aria-hidden>
+              ↑
+            </span>
+            отдал
           </span>
         </span>
-        <span className="tabular-nums">пик {formatBits(peak)}</span>
+        <span className="tabular-nums">{formatClock(series.to_utc, series)}</span>
       </div>
       {/* Про разрывы — только когда они есть: иначе читатель ищет в графике
           то, чего в нём не было. */}
