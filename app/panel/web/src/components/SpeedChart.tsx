@@ -152,7 +152,6 @@ function SpeedPlot({
   }
   const scale = speedScale(series);
   const n = series.down_max_bps.length;
-  const hasGaps = series.down_max_bps.some((v) => v === null);
   const clipId = `speed-clip-${n}`;
   const y = (bps: number) => HEIGHT - Math.min(bps / scale, 1) * HEIGHT;
 
@@ -300,13 +299,6 @@ function SpeedPlot({
         </span>
         <span className="tabular-nums">{formatClock(series.to_utc, series)}</span>
       </div>
-      {/* Про разрывы — только когда они есть: иначе читатель ищет в графике
-          то, чего в нём не было. */}
-      {hasGaps ? (
-        <p data-slot="speed-gaps" className="text-xs text-muted-foreground">
-          разрывы — время, за которое замеров нет
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -398,9 +390,15 @@ function Readout({
   const from = new Date(series.from_utc).getTime();
   const to = new Date(series.to_utc).getTime();
   const moment = new Date(from + ((to - from) * (at + 0.5)) / n);
+  // Секунды тем же порядком, что и на краях графика (formatClock): без них
+  // подсказка называла бы минуту, а не тот самый замер под указателем.
   const time = Number.isNaN(moment.getTime())
     ? ""
-    : moment.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    : moment.toLocaleTimeString("ru-RU", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
   const gap = series.down_max_bps[at] === null;
   // Подсказка держится у своего края: у правого края поля она иначе
   // вылезала бы за карточку.
@@ -462,11 +460,20 @@ export function formatBits(bps: number): string {
 /**
  * В сутках время без даты обманывает: начало и конец окна показывают один и
  * тот же час, и подписи выглядят одинаковыми.
+ *
+ * Секунды нужны в обоих окнах: без них конец десятиминутного окна и начало
+ * следующего показывали бы одну и ту же минуту. Формат один на оба края
+ * графика, поэтому ширина не гуляет — `tabular-nums` держит цифры
+ * моноширинными, а секунды добавляют ровно два знака к обеим меткам сразу.
  */
 function formatClock(utc: string, series: SpeedSeries): string {
   const d = new Date(utc);
   if (Number.isNaN(d.getTime())) return "";
-  const clock = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const clock = d.toLocaleTimeString("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
   if (series.window !== "day") return clock;
   const date = d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
   return `${date} ${clock}`;
