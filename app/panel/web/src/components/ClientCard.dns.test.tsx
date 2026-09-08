@@ -4,9 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import { ClientCard } from "@/components/ClientCard";
 import type { Client } from "@/lib/api";
 
-// Отметка «имена разрешаются мимо туннеля» (amnezia-vpn-server-g0vd).
-// Так выглядит подключение с роутера: устройства дома берут DNS у роутера, до
-// нас запрос не доходит, и подмена ответа провайдером остаётся невидимой.
+// Раньше карточка вешала жёлтый щит на клиента, чей DNS шёл мимо туннеля
+// (amnezia-vpn-server-g0vd). Владелец за один вечер трижды положил себе
+// домашнюю сеть, пытаясь заставить этот щит погаснуть, — постоянно горящий
+// значок пугал, хотя ничего не было сломано: так выглядит подключение с
+// роутера. Щит убран без замены (amnezia-vpn-server-m2cq): в списке клиентов
+// об этом больше не сказано ни словом, ни цветом, ни иконкой — сам факт
+// остаётся честным и дешёвым в dns_seen/status.json/API, но список клиентов
+// его не показывает.
 const base: Client = {
   id: 1,
   name: "router",
@@ -36,22 +41,23 @@ function wideScreen() {
   })) as unknown as typeof window.matchMedia;
 }
 
-describe("отметка об обходе резолвера", () => {
-  it("клиент, спрашивающий у нас, отметки не получает", () => {
+describe("щит обхода резолвера убран без замены", () => {
+  it("клиент, спрашивающий у нас, значка не получает", () => {
     wideScreen();
     render(<ClientCard client={base} />);
 
     expect(screen.queryByLabelText("Нет запросов к нашему резолверу")).toBeNull();
+    expect(document.querySelector("svg.lucide-shield-alert")).toBeNull();
     window.matchMedia = originalMatchMedia;
   });
 
-  it("клиент, спрашивающий мимо, получает отметку", () => {
+  it("клиент, спрашивающий мимо, тоже значка не получает", () => {
     wideScreen();
     render(<ClientCard client={{ ...base, dns_bypass: true }} />);
 
-    expect(
-      screen.getByLabelText("Нет запросов к нашему резолверу"),
-    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Нет запросов к нашему резолверу")).toBeNull();
+    expect(document.querySelector("svg.lucide-shield-alert")).toBeNull();
+    expect(screen.queryByText(/резолвер/i)).toBeNull();
     window.matchMedia = originalMatchMedia;
   });
 });
