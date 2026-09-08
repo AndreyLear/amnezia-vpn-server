@@ -12,8 +12,10 @@ import { api, type Versions } from "@/lib/api";
  * Окно «О версиях» (amnezia-vpn-server-8bt5).
  *
  * До него на вопрос «что у меня стоит» отвечал только ssh. Здесь всё, что
- * определяет поведение сервера: версии, уровень протокола, схема базы, режим
- * туннеля и система, на которой это работает.
+ * определяет поведение сервера: версии, уровень протокола, режим туннеля и
+ * система, на которой это работает. Версия схемы SQLite сюда не выводится —
+ * оператору она ничего не говорит, а сбой миграции панель показывает
+ * отдельно; разработчику номер доступен через CLI.
  *
  * Неизвестное пишется словом «неизвестно», а не пустотой. Пустая строка
  * читается как «ничего нет», и это разные вещи: панель на развёртывании
@@ -69,7 +71,7 @@ export function AboutDialog({
     if (versions?.latest && versions.latest !== versions.product) {
       return `${installed} — вышла ${versions.latest}`;
     }
-    if (versions?.latest) return `${installed} — свежая`;
+    if (versions?.latest) return `${installed} — последняя`;
     return installed;
   })();
 
@@ -84,7 +86,6 @@ export function AboutDialog({
           <Row label="Протокол" value={text(versions?.protocol)} />
           <Row label="amneziawg-go" value={text(versions?.amneziawg_go)} />
           <Row label="amneziawg-tools" value={text(versions?.amneziawg_tools)} />
-          <Row label="Схема базы" value={text(versions?.schema)} />
           <Row label="IPv6 в туннеле" value={flag(versions?.tunnel_ipv6)} />
           <Row label="Резолвер в туннеле" value={flag(versions?.tunnel_dns)} />
           <Row label="Сторож" value={flag(versions?.watchdog)} />

@@ -95,4 +95,25 @@ describe("состояние служб", () => {
     render(<ServicesDialog open onOpenChange={() => {}} />);
     expect(await screen.findByText(/ещё не проверял/)).toBeInTheDocument();
   });
+
+  // Раньше строка стояла последней и читалась как примечание к последней
+  // службе в списке, хотя относится ко всему снимку (amnezia-vpn-server-4yo4).
+  it("ставит время проверки сразу под заголовком, а не последней строкой", async () => {
+    reply({
+      checked_at_utc: new Date().toISOString(),
+      services: [
+        { name: "dns", state: "ok", reason: "", fails: 0, restarted_at_utc: "", restart_reason: "" },
+        { name: "awg", state: "ok", reason: "", fails: 0, restarted_at_utc: "", restart_reason: "" },
+      ],
+    });
+    render(<ServicesDialog open onOpenChange={() => {}} />);
+
+    const checked = await screen.findByText(/Проверено/);
+    const lastService = screen.getByText("Туннель");
+    // «Проверено …» должно предшествовать службам в разметке — иначе оно
+    // либо читается как хвост последней службы, либо стоит после неё в DOM.
+    expect(
+      checked.compareDocumentPosition(lastService) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });

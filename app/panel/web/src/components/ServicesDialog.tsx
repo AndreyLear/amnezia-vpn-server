@@ -90,6 +90,13 @@ export function ServicesDialog({
         <DialogHeader>
           <DialogTitle>Состояние служб</DialogTitle>
         </DialogHeader>
+        {/* Относится ко всему снимку, а не к последней службе в списке —
+            поэтому стоит сразу под заголовком, а не последней строкой. */}
+        {info?.checked_at_utc ? (
+          <p className="text-sm text-muted-foreground">
+            Проверено {formatHandshakeAge(info.checked_at_utc)} назад
+          </p>
+        ) : null}
         {off ? (
           // Сервер без сторожа не сломан — за ним просто никто не следит.
           <p className="text-muted-foreground">
@@ -100,18 +107,11 @@ export function ServicesDialog({
             Сторож ещё не проверял службы — загляните через минуту
           </p>
         ) : (
-          <>
-            <div className="divide-y divide-border text-sm">
-              {services.map((service) => (
-                <Row key={service.name} service={service} />
-              ))}
-            </div>
-            {info?.checked_at_utc ? (
-              <p className="text-sm text-muted-foreground">
-                Проверено {formatHandshakeAge(info.checked_at_utc)} назад
-              </p>
-            ) : null}
-          </>
+          <div className="divide-y divide-border text-sm">
+            {services.map((service) => (
+              <Row key={service.name} service={service} />
+            ))}
+          </div>
         )}
       </DialogContent>
     </Dialog>

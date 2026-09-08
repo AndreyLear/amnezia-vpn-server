@@ -69,6 +69,37 @@ describe("журнал", () => {
     expect(screen.getByText(/1420/)).toBeInTheDocument();
   });
 
+  // Слитая фраза «ограничение скорости router test — 60 Мбит» ломалась
+  // посреди строки в узком окне; подробность должна стоять отдельной строкой
+  // под заголовком записи, а не хвостом того же span'а (amnezia-vpn-server-4yo4).
+  it("выносит подробность отдельной строкой от заголовка записи", async () => {
+    entries = [
+      {
+        at_utc: "2026-09-08T16:13:30Z",
+        actor: "admin",
+        action: "client.rate",
+        subject: "router test",
+        detail: "60 Мбит",
+      },
+    ];
+    render(<AuditDialog open onOpenChange={() => {}} />);
+
+    const title = await screen.findByText(/ограничение скорости/);
+    // Заголовок больше не содержит подробность в одной фразе с собой.
+    expect(title.textContent).not.toContain("60 Мбит");
+    const detail = screen.getByText("60 Мбит");
+    expect(detail).not.toBe(title);
+    expect(title.contains(detail)).toBe(false);
+  });
+
+  // Узкое окно (sm:max-w-sm) ломало заголовок записи и время посреди фразы —
+  // ширина должна быть увеличена, как у соседних диалогов (amnezia-vpn-server-4yo4).
+  it("открывается шире стандартного диалога", async () => {
+    render(<AuditDialog open onOpenChange={() => {}} />);
+    const content = await screen.findByRole("dialog");
+    expect(content.className).toContain("sm:max-w-md");
+  });
+
   it("пустой журнал не выглядит поломкой", async () => {
     render(<AuditDialog open onOpenChange={() => {}} />);
     expect(await screen.findByText("Записей пока нет")).toBeInTheDocument();

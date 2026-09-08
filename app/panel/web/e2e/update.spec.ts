@@ -92,7 +92,11 @@ test("окно «О версиях» не оставляет пустых мес
 
   await expect(page.getByRole("heading", { name: "О версиях" })).toBeVisible();
   await expect(page.getByText("AmneziaWG 2.0")).toBeVisible();
-  await expect(page.getByText("Схема базы")).toBeVisible();
+  // Система — то, что даёт deployment.json фикстуры; ряд не пустует.
+  await expect(page.getByText("ubuntu 24.04 (noble)")).toBeVisible();
+  // Номер схемы SQLite оператору ничего не говорит и убран из окна целиком
+  // (amnezia-vpn-server-4yo4): разработчику он доступен через CLI.
+  await expect(page.getByText("Схема базы")).toHaveCount(0);
   // Панель, запущенная без развёртывания, про хост не знает — и обязана
   // сказать именно это, а не оставить пустоту.
   await expect(page.getByText("неизвестно").first()).toBeVisible();
