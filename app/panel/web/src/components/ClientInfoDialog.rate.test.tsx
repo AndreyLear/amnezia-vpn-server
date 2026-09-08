@@ -48,8 +48,8 @@ describe("предел скорости в карточке клиента", () 
     // (amnezia-vpn-server-ouhb).
     expect(await screen.findByText(/Держит скорость ровной/)).toBeInTheDocument();
     expect(screen.getByText(/Видео не встаёт/)).toBeInTheDocument();
-    // И говорит, что придерживает только получаемое.
-    expect(screen.getByText(/только то, что клиент получает/)).toBeInTheDocument();
+    // И как ограничение снять.
+    expect(screen.getByText(/Оставьте поле пустым/)).toBeInTheDocument();
   });
 
   it("сохраняет заданное значение", async () => {
