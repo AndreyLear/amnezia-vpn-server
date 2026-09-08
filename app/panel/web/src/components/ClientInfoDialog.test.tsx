@@ -159,9 +159,10 @@ describe("ClientInfoDialog", () => {
     expect(
       trafficRow!.compareDocumentPosition(deleteRow!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    // Между ними встал график скорости (amnezia-vpn-server-tmjw), поэтому
-    // соседства уже нет. Правило же остаётся: «Удалить» — последняя строка
-    // списка, и отступ перед ней больше обычного.
+    // График уехал наверх карточки (amnezia-vpn-server-6kj9), и «Трафик»
+    // снова стоит вплотную перед «Удалить». Правило прежнее: «Удалить» —
+    // последняя строка списка, и отступ перед ней больше обычного.
+    expect(trafficRow!.nextElementSibling).toBe(deleteRow);
     expect(dl!.lastElementChild).toBe(deleteRow);
 
     expect(deleteRow).toHaveClass("pt-3");
@@ -170,6 +171,29 @@ describe("ClientInfoDialog", () => {
 
     expect(remove).not.toHaveClass("max-sm:h-12");
     expect(remove).not.toHaveClass("max-sm:w-full");
+  });
+
+  // Владелец: за графиком карточку и открывают, когда разбирают жалобу. Из
+  // хвоста списка свойств его приходилось выискивать прокруткой
+  // (amnezia-vpn-server-6kj9).
+  it("puts the speed chart at the top of the card, above the properties", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    const dl = document.querySelector("dl");
+    const speed = screen.getByText("Скорость");
+    expect(dl).not.toContainElement(speed);
+
+    const chart = speed.closest("div.grid");
+    expect(chart).not.toBeNull();
+    // График идёт раньше списка свойств.
+    expect(chart!.compareDocumentPosition(dl!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // И сразу за заголовком окна, а не где-то посреди карточки.
+    const title = screen.getByRole("heading", { name: "Клиент" });
+    expect(title.compareDocumentPosition(chart!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 
   it("opens as a mobile bottom sheet with property dividers", () => {

@@ -287,6 +287,13 @@ export function ClientInfoDialog({
                 <DialogTitle>Клиент</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
+                {/* Что было со скоростью. Накопленные байты в списке свойств
+                    не отвечают на «вчера вечером не грузило», а график —
+                    отвечает (amnezia-vpn-server-tmjw). Стоит он первым: за
+                    ним карточку и открывают, когда разбирают жалобу, а из
+                    хвоста списка его приходилось выискивать прокруткой
+                    (amnezia-vpn-server-6kj9). */}
+                <SpeedChart clientId={client.id} />
                 <dl className="grid divide-y divide-border gap-0 text-sm">
                   <ReadOnlyProperty
                     label="Имя"
@@ -444,14 +451,6 @@ export function ClientInfoDialog({
                       <dd>
                         ↓ {formatBytes(client.tx_bytes)} · ↑ {formatBytes(client.rx_bytes)}
                       </dd>
-                    </div>
-                  </PropertyRow>
-                  {/* Что было со скоростью. Накопленные байты выше не
-                      отвечают на «вчера вечером не грузило», а это —
-                      отвечает (amnezia-vpn-server-tmjw). */}
-                  <PropertyRow>
-                    <div className="grid w-full gap-0.5">
-                      <SpeedChart clientId={client.id} />
                     </div>
                   </PropertyRow>
                   <PropertyRow className="pt-3">
