@@ -24,16 +24,26 @@ function series(over: Partial<SpeedSeries> = {}): SpeedSeries {
   };
 }
 
-/** Куски заливки приёма: по одному на каждый непрерывный отрезок. */
-function bands(): SVGPathElement[] {
+/** Заливки приёма: до максимума («поднималось») и до минимума («держалось»). */
+function areas(series: "down-max" | "down-min"): SVGPathElement[] {
   const svg = document.querySelector("svg");
   if (!svg) return [];
-  return Array.from(svg.querySelectorAll("path"));
+  return Array.from(svg.querySelectorAll(`path[data-series="${series}"]`));
+}
+
+/** Любые заливки приёма — чтобы просто дождаться отрисовки. */
+function bands(): SVGPathElement[] {
+  return areas("down-max");
 }
 
 /** Подпись под графиком целиком: она собрана из нескольких узлов. */
 function legendText(): string {
-  return document.querySelector("p.text-xs")?.textContent ?? "";
+  return document.querySelector("[data-slot='speed-legend']")?.textContent ?? "";
+}
+
+/** Отдельная строка про разрывы — она есть только когда разрывы есть. */
+function gapsText(): string {
+  return document.querySelector("[data-slot='speed-gaps']")?.textContent ?? "";
 }
 
 /** Все координаты y из фигуры — чтобы проверять высоту полосы. */
@@ -65,10 +75,14 @@ describe("график скорости", () => {
     render(<SpeedChart clientId={1} />);
 
     await waitFor(() => expect(bands()).toHaveLength(1));
-    const heights = ys(bands()[0]);
-    // Полоса имеет высоту: верх — максимум, низ — минимум. Одна координата
-    // означала бы среднее, а среднее прячет провал.
-    expect(Math.max(...heights)).toBeGreaterThan(Math.min(...heights));
+    // Две заливки, и верх у них разный: максимум выше минимума. Одна
+    // заливка означала бы среднее, а среднее прячет провал.
+    const topOfMax = Math.min(...ys(areas("down-max")[0]));
+    const topOfMin = Math.min(...ys(areas("down-min")[0]));
+    expect(topOfMax).toBeLessThan(topOfMin);
+    // И обе доходят до основания: снизу сплошь, а не дырки
+    // (amnezia-vpn-server-b8kv).
+    expect(Math.max(...ys(areas("down-min")[0]))).toBe(120);
   });
 
   // Разрыв — это отсутствие столбика, а не столбик нулевой высоты. Ноль
@@ -85,7 +99,8 @@ describe("график скорости", () => {
     render(<SpeedChart clientId={1} />);
 
     // Разрыв рвёт заливку надвое, а не рисуется полосой нулевой высоты.
-    await waitFor(() => expect(bands()).toHaveLength(2));
+    await waitFor(() => expect(areas("down-max")).toHaveLength(2));
+    expect(areas("down-min")).toHaveLength(2);
   });
 
   it("говорит, когда замеров нет вовсе", async () => {
@@ -206,7 +221,7 @@ describe("легенда", () => {
     render(<SpeedChart clientId={1} />);
 
     await waitFor(() => expect(legendText()).toMatch(/пик/));
-    expect(legendText()).not.toMatch(/разрывы/);
+    expect(gapsText()).toBe("");
   });
 
   it("называет их, когда они есть", async () => {
@@ -216,7 +231,7 @@ describe("легенда", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    await waitFor(() => expect(legendText()).toMatch(/разрывы/));
+    await waitFor(() => expect(gapsText()).toMatch(/разрывы/));
   });
 
   // Владелец: «нужно хотя бы цвет добавить», синий и оранжевый. Ряды
@@ -228,7 +243,7 @@ describe("легенда", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    await waitFor(() => expect(document.querySelector("svg path.fill-sky-500\\/70")).not.toBeNull());
+    await waitFor(() => expect(document.querySelector("svg path.fill-sky-500\\/80")).not.toBeNull());
     expect(document.querySelector("svg polyline.text-orange-500")).not.toBeNull();
   });
 
@@ -256,8 +271,10 @@ describe("легенда", () => {
     );
     render(<SpeedChart clientId={1} />);
 
+    // Пик стоит в конце строки легенды, а не среди кружков.
     await waitFor(() => expect(legendText()).toMatch(/пик 20\.0 Мбит\/с/));
-    const bullets = screen.getByText("скачивание").closest("div");
+    const bullets = screen.getByText("скачивание").closest("span.items-center.gap-4");
+    expect(bullets).not.toBeNull();
     expect(bullets?.textContent).not.toMatch(/пик/);
   });
 });
