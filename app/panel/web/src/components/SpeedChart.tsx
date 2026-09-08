@@ -14,6 +14,9 @@ import { fetchSpeed, type SpeedSeries } from "@/lib/api";
  * поднималось». Ни среднего, ни отдельных штрихов: среднее спрятало бы
  * секундный провал, ради которого график заводился, а штрихи при трёхстах
  * столбцах превращались в щетину без формы и значений.
+ *
+ * Отдача — тоже заливка от нуля, полупрозрачная, поверх приёма: ломаная
+ * поверх фигуры превращала оба ряда в кашу (amnezia-vpn-server-6kj9).
  */
 
 type Range = "hour" | "day";
@@ -158,7 +161,7 @@ function SpeedPlot({
           aria-label={`Скорость: шкала до ${formatBits(scale)}, пик ${formatBits(peak)}`}
           viewBox={`0 0 ${n} ${HEIGHT}`}
           preserveAspectRatio="none"
-          className="h-[120px] w-full touch-none overflow-hidden rounded-md bg-black/10"
+          className="h-[120px] w-full touch-none overflow-hidden bg-black/10"
           onPointerMove={(e) => {
             const box = plot.current?.getBoundingClientRect();
             if (!box || box.width === 0) return;
@@ -213,8 +216,30 @@ function SpeedPlot({
               className="fill-sky-500/80"
             />
           ))}
+          {/* Отдача — такая же заливка от основания, только полупрозрачная и
+              поверх приёма. Раньше здесь была ломаная: проволока резала
+              фигуру приёма, и там, где ряды пересекались, не читался ни
+              один — глазу приходилось разбирать, где край заливки, а где
+              линия (amnezia-vpn-server-6kj9). Две фигуры перекрываются
+              цветом, и перекрытие читается смешением: сквозь оранжевую
+              видно синюю. Рисуется только максимум: нижняя граница дала бы
+              четвёртый полупрозрачный слой, и смешение, ради которого всё
+              и затевалось, перестало бы читаться. Доля 60% выбрана по
+              снимку: меньше — и сама отдача над пустым полем перестаёт
+              читаться оранжевой, больше — и приём под ней пропадает. */}
+          {bandRuns(series.up_min_bps, series.up_max_bps).map((run, i) => (
+            <path
+              key={`umax${i}`}
+              data-series="up-max"
+              d={areaPath(run, series.up_max_bps, y)}
+              clipPath={`url(#${clipId})`}
+              className="fill-orange-500/60"
+            />
+          ))}
           {/* Черта под указателем: без неё непонятно, к какому месту
-              относится подсказка (amnezia-vpn-server-cor5). */}
+              относится подсказка (amnezia-vpn-server-cor5). Она рисуется
+              последней, иначе полупрозрачная отдача ложилась бы поверх и
+              черта тускнела. */}
           {at !== null ? (
             <line
               x1={at + 0.5}
@@ -227,21 +252,6 @@ function SpeedPlot({
               vectorEffect="non-scaling-stroke"
             />
           ) : null}
-          {/* Отдача — линия поверх заливки. */}
-          {bandRuns(series.up_min_bps, series.up_max_bps).map((run, i) => (
-            <polyline
-              key={`u${i}`}
-              points={run
-                .map((c) => `${c + 0.5},${y(series.up_max_bps[c] ?? 0)}`)
-                .join(" ")}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              clipPath={`url(#${clipId})`}
-              className="text-orange-500"
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
         </svg>
         </div>
         {/* Ось справа: слева она отодвигала само поле, а поле важнее чисел.
@@ -266,7 +276,7 @@ function SpeedPlot({
           додумывания (amnezia-vpn-server-udas). */}
       <div
         data-slot="speed-legend"
-        className="flex items-center justify-between gap-4 text-xs text-muted-foreground"
+        className="flex items-center justify-between gap-4 pb-2 text-xs text-muted-foreground"
       >
         <span className="flex items-center gap-4">
           <span className="flex items-center gap-1.5">
@@ -426,7 +436,7 @@ function formatRange(lo: number | null, hi: number | null): string {
 
 function Empty({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-[120px] items-center justify-center rounded-md bg-black/10 text-xs text-muted-foreground">
+    <div className="flex h-[120px] items-center justify-center bg-black/10 text-xs text-muted-foreground">
       {children}
     </div>
   );

@@ -24,8 +24,11 @@ function series(over: Partial<SpeedSeries> = {}): SpeedSeries {
   };
 }
 
-/** Заливки приёма: до максимума («поднималось») и до минимума («держалось»). */
-function areas(series: "down-max" | "down-min"): SVGPathElement[] {
+/**
+ * Заливки: у приёма до максимума («поднималось») и до минимума
+ * («держалось»), у отдачи — до максимума.
+ */
+function areas(series: "down-max" | "down-min" | "up-max"): SVGPathElement[] {
   const svg = document.querySelector("svg");
   if (!svg) return [];
   return Array.from(svg.querySelectorAll(`path[data-series="${series}"]`));
@@ -244,7 +247,9 @@ describe("легенда", () => {
     render(<SpeedChart clientId={1} />);
 
     await waitFor(() => expect(document.querySelector("svg path.fill-sky-500\\/80")).not.toBeNull());
-    expect(document.querySelector("svg polyline.text-orange-500")).not.toBeNull();
+    expect(document.querySelector("svg path[data-series='up-max']")).toHaveClass(
+      "fill-orange-500/60",
+    );
   });
 
   // Кружок вместо слов «заливка» и «линия»: те объясняли приём отрисовки,
@@ -276,6 +281,88 @@ describe("легенда", () => {
     const bullets = screen.getByText("скачивание").closest("span.items-center.gap-4");
     expect(bullets).not.toBeNull();
     expect(bullets?.textContent).not.toMatch(/пик/);
+  });
+});
+
+describe("отдача", () => {
+  // Отзыв владельца: «появляется куча линий, и они начинают сливаться.
+  // Каша получается». Отдача была ломаной поверх заливки приёма: проволока
+  // резала фигуру, и в местах пересечения не читался ни один ряд
+  // (amnezia-vpn-server-6kj9).
+  it("рисуется заливкой от основания, а не ломаной", async () => {
+    const down = Array.from({ length: 10 }, () => 20_000_000);
+    const up = Array.from({ length: 10 }, () => 8_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: down, down_min_bps: down, up_max_bps: up, up_min_bps: up }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(areas("up-max")).toHaveLength(1));
+    // Ломаных в поле не осталось вовсе: два ряда — две фигуры.
+    expect(document.querySelector("svg polyline")).toBeNull();
+    // Фигура доходит до основания и замкнута, как у приёма.
+    const shape = areas("up-max")[0];
+    expect(Math.max(...ys(shape))).toBe(120);
+    expect(shape.getAttribute("d")).toMatch(/Z$/);
+  });
+
+  // Перекрытие обязано читаться смешением цвета: под верхней заливкой
+  // видна нижняя. Непрозрачная отдача просто закрыла бы приём.
+  it("лежит поверх приёма и просвечивает", async () => {
+    const down = Array.from({ length: 10 }, () => 20_000_000);
+    const up = Array.from({ length: 10 }, () => 8_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: down, down_min_bps: down, up_max_bps: up, up_min_bps: up }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(areas("up-max")).toHaveLength(1));
+    const up_ = areas("up-max")[0];
+    const downDense = areas("down-min")[0];
+    // Поверх — значит позже в порядке отрисовки.
+    expect(
+      downDense.compareDocumentPosition(up_) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    // И полупрозрачная: доля меньше сотни, иначе приём под ней пропадёт.
+    const alpha = /fill-orange-500\/(\d+)/.exec(up_.getAttribute("class") ?? "");
+    expect(alpha).not.toBeNull();
+    expect(Number(alpha![1])).toBeGreaterThan(0);
+    expect(Number(alpha![1])).toBeLessThan(100);
+  });
+});
+
+describe("поле графика", () => {
+  // Решение владельца: у поля не должно быть скруглённых углов.
+  it("рисуется без скругления", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(bands()).toHaveLength(1));
+    expect(document.querySelector("svg")?.getAttribute("class")).not.toMatch(/rounded/);
+  });
+
+  it("и без скругления, когда рисовать нечего", async () => {
+    fetchSpeed.mockRejectedValue(new Error("нет связи"));
+    render(<SpeedChart clientId={1} />);
+
+    const empty = await screen.findByText(/прочитать не удалось/);
+    expect(empty.getAttribute("class")).not.toMatch(/rounded/);
+  });
+
+  // Легенда упиралась в кнопку «Удалить» под карточкой: между ними нужен
+  // воздух (amnezia-vpn-server-6kj9).
+  it("оставляет отступ под легендой", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(legendText()).toMatch(/пик/));
+    expect(document.querySelector("[data-slot='speed-legend']")).toHaveClass("pb-2");
   });
 });
 
