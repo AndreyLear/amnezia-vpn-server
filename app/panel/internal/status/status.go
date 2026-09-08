@@ -305,16 +305,21 @@ type DumpRunner func(iface string) ([]byte, error)
 //   - success → the parsed status is serialized deterministically.
 //
 // A failed atomic write returns an error; the previous file stays put.
-func Generate(iface, outPath string, now func() time.Time, dump DumpRunner) error {
+//
+// The snapshot that was written is returned so the caller can record it
+// in the speed history (amnezia-vpn-server-aa9u) without reading
+// status.json back and racing the next tick.
+func Generate(iface, outPath string, now func() time.Time, dump DumpRunner) (*Status, error) {
 	raw, err := dump(iface)
 	if err != nil {
-		return WriteAtomic(outPath, mustMarshal(noInterface(iface, now())))
+		st := noInterface(iface, now())
+		return st, WriteAtomic(outPath, mustMarshal(st))
 	}
 	st, err := Parse(iface, raw, now())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return WriteAtomic(outPath, mustMarshal(st))
+	return st, WriteAtomic(outPath, mustMarshal(st))
 }
 
 // mustMarshal serializes a Status; the model is fully deterministic and

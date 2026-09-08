@@ -332,6 +332,56 @@ printf '%s\t%s\t51820\t3\t21\t31\t904\t737\t0\t0\t(null)\t(null)\t(null)\t(null)
 PATH="${TMP}/bin:$PATH" "${PRODUCER}" awg0 "${STATUS_C}" >/dev/null 2>&1
 check "producer: iface-only dump -> peers []" grep -q '"peers":\[\]' "${STATUS_C}"
 
+# --- история замеров (amnezia-vpn-server-aa9u) -------------------------
+#
+# status.json помнит только последний такт, поэтому ответить на жалобу
+# «полчаса назад не грузило» было нечем. Историю пишет тот же производитель
+# третьим доводом.
+SPEED_DIR="${TMP}/speed"
+mkdir -p "${SPEED_DIR}"
+STATUS_S="${SPEED_DIR}/status.json"
+SPEED_S="${SPEED_DIR}/speed.log"
+dump_v1 > "${STUB_DUMP}"
+PATH="${TMP}/bin:$PATH" "${PRODUCER}" awg0 "${STATUS_S}" "${SPEED_S}" >/dev/null 2>&1
+check "история: файл появился" [ -f "${SPEED_S}" ]
+check "история: первая строка — метка формата" \
+    [ "$(head -1 "${SPEED_S}")" = "#speed v1" ]
+check "история: один такт — одна строка" \
+    [ "$(wc -l < "${SPEED_S}" | tr -d ' ')" = "2" ]
+# Счётчики в строке — те же, что в status.json того же такта, и они
+# НАКОПЛЕННЫЕ: читатель получает скорость разностью соседних строк, а
+# производителю нечего помнить.
+check "история: счётчики совпадают со status.json" \
+    grep -q "AAAA-peer-a-:10:20 BBBB-peer-b-:100:200 ZZZZ-peer-z-:0:0" "${SPEED_S}"
+check "история: ключ укорочен" not grep -q "AAAA-peer-a-public-key" "${SPEED_S}"
+check "история: приватного ключа нет" not grep -q "${MARKED_PRIV}" "${SPEED_S}"
+check "история: общего ключа нет" not grep -q "${MARKED_PSK}" "${SPEED_S}"
+check "история: ключа интерфейса нет" not grep -q "${IFACE_PUB}" "${SPEED_S}"
+check "история: режим 0600" \
+    [ "$(stat -c %a "${SPEED_S}" 2>/dev/null || stat -f %Lp "${SPEED_S}")" = "600" ]
+# Второй такт дописывается, а не переписывает файл: переписывание суточного
+# файла каждые пять секунд стоило бы десятки гигабайт записи в день.
+PATH="${TMP}/bin:$PATH" "${PRODUCER}" awg0 "${STATUS_S}" "${SPEED_S}" >/dev/null 2>&1
+check "история: второй такт дописан" \
+    [ "$(wc -l < "${SPEED_S}" | tr -d ' ')" = "3" ]
+check "история: метка формата не повторяется" \
+    [ "$(grep -c '^#speed' "${SPEED_S}" | tr -d ' ')" = "1" ]
+# Такт без пиров — это разрыв, а не нулевая скорость. Строка про нули была бы
+# диагнозом, которого никто не ставил.
+SPEED_E="${SPEED_DIR}/empty.log"
+touch "${STUB_FLAG_DIR}/uapi-gone"
+PATH="${TMP}/bin:$PATH" "${PRODUCER}" awg0 "${SPEED_DIR}/status-e.json" "${SPEED_E}" >/dev/null 2>&1
+rm -f "${STUB_FLAG_DIR}/uapi-gone"
+check "история: такт без интерфейса не пишет строку" [ ! -f "${SPEED_E}" ]
+# Без третьего довода история не ведётся вовсе: обновление не должно завести
+# файл там, где его не просили.
+NOSPEED_DIR="${TMP}/nospeed"
+mkdir -p "${NOSPEED_DIR}"
+dump_v1 > "${STUB_DUMP}"
+PATH="${TMP}/bin:$PATH" "${PRODUCER}" awg0 "${NOSPEED_DIR}/status.json" >/dev/null 2>&1
+check "история: без третьего довода она не ведётся" \
+    [ "$(find "${NOSPEED_DIR}" -name '*.log' | wc -l | tr -d ' ')" = "0" ]
+
 # --- usage ---
 PRODUCER_OUT="$(PATH="${TMP}/bin:$PATH" "${PRODUCER}" 2>&1 >/dev/null)"
 check "producer: usage error exits 1" [ "$?" = "1" ]
@@ -484,6 +534,22 @@ sleep 1.5
 TS2="$(grep -o '"generated_at_utc":"[^"]*"' "${STATUS_A_FILE}" | cut -d'"' -f4)"
 check "flow-a: status regenerated every tick (timestamp advances)" [ "${TS1}" != "${TS2}" ] ||
     { echo "flow-a: generated_at_utc did not advance: ${TS1} vs ${TS2}" >&2; cat "${STATUS_A_FILE}" >&2; }
+
+# История ведётся сама, без отдельной настройки: путь entrypoint выводит из
+# пути status.json, как уже делает для dns-seen и versions
+# (amnezia-vpn-server-aa9u).
+SPEED_A_FILE="$(dirname "${STATUS_A_FILE}")/speed.log"
+check "flow-a: история заведена рядом со status.json" [ -f "${SPEED_A_FILE}" ]
+SPEED_N1="$(grep -c . "${SPEED_A_FILE}" 2>/dev/null || echo 0)"
+sleep 1.5
+SPEED_N2="$(grep -c . "${SPEED_A_FILE}" 2>/dev/null || echo 0)"
+check "flow-a: история растёт с каждым тактом" [ "${SPEED_N2}" -gt "${SPEED_N1}" ] ||
+    { echo "flow-a: строк было ${SPEED_N1}, стало ${SPEED_N2}" >&2; cat "${SPEED_A_FILE}" >&2; }
+# Пропущенный такт не дописывается задним числом: разрыв обязан остаться
+# разрывом, иначе читатель нарисует данные, которых не было.
+check "flow-a: такты не выдумываются" [ "$((SPEED_N2 - SPEED_N1))" -le 3 ]
+check "flow-a: ключей в истории нет" \
+    not grep -q "${MARKED_PRIV}\|${MARKED_PSK}" "${SPEED_A_FILE}"
 
 dump_v2 > "${STUB_DUMP}"
 sed -i '' 's/AAAA-peer-a-public-key/CCCC-peer-c-public-key/' "${DIR_A}/config/awg0.conf" 2>/dev/null \
