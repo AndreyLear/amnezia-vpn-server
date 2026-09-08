@@ -50,12 +50,16 @@ function Entry({ entry }: { entry: AuditEntry }) {
               <UserText>{entry.subject}</UserText>
             </>
           ) : null}
-          {entry.detail ? <span className="text-muted-foreground"> — {entry.detail}</span> : null}
         </span>
         <span className="shrink-0 text-sm text-muted-foreground">
           {formatHandshake(entry.at_utc)}
         </span>
       </div>
+      {/* Подробность — отдельной строкой, а не хвостом заголовка: слитая
+          фраза ломалась посередине на узких окнах (amnezia-vpn-server-4yo4). */}
+      {entry.detail ? (
+        <span className="text-sm text-muted-foreground">{entry.detail}</span>
+      ) : null}
       {entry.actor ? (
         <span className="text-sm text-muted-foreground">
           <UserText>{entry.actor}</UserText>
@@ -91,7 +95,12 @@ export function AuditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-6">
+      {/* Шире стандартного диалога (sm:max-w-sm): заголовок записи и время
+          в одной строке — «ограничение скорости router test» плюс полная
+          метка времени — переносились посреди фразы. sm:max-w-md — та же
+          ширина, что у ClientInfoDialog и BackupUploadDialog, и её хватает
+          с запасом (amnezia-vpn-server-4yo4). */}
+      <DialogContent className="gap-6 sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Журнал</DialogTitle>
         </DialogHeader>

@@ -200,7 +200,9 @@ export type Versions = {
   amneziawg_tools: string;
   /** «AmneziaWG 2.0» — выводится из набора параметров, а не хранится. */
   protocol: string;
-  schema: string;
+  // Версия схемы SQLite сюда намеренно не попадает: оператору она ничего
+  // не говорит, панель показывает сбой миграции отдельно, а разработчику
+  // номер доступен через CLI (amnezia-vpn-server-4yo4).
   /** null означает «неизвестно» и отличается от false («выключено»). */
   tunnel_ipv6: boolean | null;
   tunnel_dns: boolean | null;

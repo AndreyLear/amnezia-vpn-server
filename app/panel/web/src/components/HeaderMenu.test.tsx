@@ -122,13 +122,15 @@ describe("окно «О версиях»", () => {
     expect(screen.getByText("выключен")).toBeInTheDocument();
   });
 
-  it("говорит, свежая ли версия", async () => {
+  it("говорит, последняя ли версия", async () => {
     const user = userEvent.setup();
     render(<HeaderMenu />);
 
     await user.click(screen.getByRole("button", { name: "Ещё" }));
     await user.click(await screen.findByText("О версиях"));
 
-    expect(await screen.findByText("2.9.0 — свежая")).toBeInTheDocument();
+    // amnezia-vpn-server-4yo4: «свежая» переименовано в «последняя» —
+    // владелец принимал первое за отдельную, незнакомую версию.
+    expect(await screen.findByText("2.9.0 — последняя")).toBeInTheDocument();
   });
 });
