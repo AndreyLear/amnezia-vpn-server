@@ -141,7 +141,14 @@ case "$1:$2" in
         [ -f "${AWG_STUB_FLAG_TC_FAIL:-}" ] && exit 2
         echo root > "$STATE"
         ;;
-    qdisc:del) : > "$STATE" ;;
+    qdisc:del)
+        # Настоящая tc отвечает ошибкой, когда удалять нечего. Заглушка,
+        # которая всегда молчит успехом, проверяла бы замысел, а не
+        # поведение: именно на этом entrypoint и падал под set -e
+        # (amnezia-vpn-server-jzzu).
+        [ -s "$STATE" ] || exit 2
+        : > "$STATE"
+        ;;
     class:add|filter:add)
         [ -f "${AWG_STUB_FLAG_TC_FAIL:-}" ] && exit 2
         ;;
@@ -718,6 +725,12 @@ check "flow-j: правило на его адрес" \
 check "flow-j: обычному клиенту предел не выписан" \
     not grep -q "match ip dst 10.8.0.2/32" "${STUB_LOG}"
 check "flow-j: короткая очередь под классом" grep -q "fq_codel" "${STUB_LOG}"
+# Туннель обязан пережить первую же попытку: очереди ещё нет, и удалять
+# нечего. Настоящая tc отвечает на это ошибкой, а entrypoint живёт под
+# set -e — здесь он и падал, роняя связь.
+check "flow-j: туннель жив, хотя удалять было нечего" \
+    not grep -q "^down$" "${STUB_STATE}"
+check "flow-j: и продолжает работать" wait_for_line "${STUB_STATE}" "^up$"
 
 # Предел снят на горячую — очередь должна уйти целиком.
 cat > "${DIR_J}/config/awg0.conf" <<'CONF'
