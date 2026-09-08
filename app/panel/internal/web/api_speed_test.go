@@ -35,8 +35,8 @@ func TestAPIClientSpeedFoldsHistory(t *testing.T) {
 		speedLogLine(now.Add(-15*time.Second), c.PublicKey, 625_000, 6_250_000),
 	)
 
-	got := decodeAPI(t, f.get(fmt.Sprintf("/api/clients/%d/speed?window=hour&columns=60", c.ID)))
-	if got["window"] != "hour" {
+	got := decodeAPI(t, f.get(fmt.Sprintf("/api/clients/%d/speed?window=10min&columns=60", c.ID)))
+	if got["window"] != "10min" {
 		t.Fatalf("window = %v", got["window"])
 	}
 	down, _ := got["down_max_bps"].([]any)
@@ -107,7 +107,7 @@ func TestAPIClientSpeedWithoutHistory(t *testing.T) {
 	}
 }
 
-// Сутки берутся из двух файлов; час — только из текущего.
+// Сутки берутся из двух файлов; короткое окно — только из текущего.
 func TestAPIClientSpeedDayWindow(t *testing.T) {
 	f := newFixture(t)
 	c, _, _ := f.addClient("router")
@@ -129,11 +129,55 @@ func TestAPIClientSpeedDayWindow(t *testing.T) {
 		t.Fatalf("сутки не достали до вчерашнего файла: %v", day["down_max_bps"])
 	}
 
-	hour := decodeAPI(t, f.get(fmt.Sprintf("/api/clients/%d/speed?window=hour&columns=24", c.ID)))
-	for _, v := range hour["down_max_bps"].([]any) {
+	short := decodeAPI(t, f.get(fmt.Sprintf("/api/clients/%d/speed?window=10min&columns=24", c.ID)))
+	for _, v := range short["down_max_bps"].([]any) {
 		if v != nil {
-			t.Fatalf("час дотянулся до данных пятичасовой давности: %v", hour["down_max_bps"])
+			t.Fatalf("короткое окно дотянулось до данных пятичасовой давности: %v", short["down_max_bps"])
 		}
+	}
+}
+
+// Короткое окно — ровно десять минут (amnezia-vpn-server-teos). Час, что
+// стоял здесь раньше, вмещал 720 замеров, и на любой разумной ширине
+// графика они сворачивались по несколько в столбец: мелочь, ради которой
+// график открывают, усреднялась. Десять минут при такте записи в пять
+// секунд — это 120 замеров, то есть замер на столбец и никакой свёртки.
+func TestAPIClientSpeed10MinWindowSpansTenMinutes(t *testing.T) {
+	f := newFixture(t)
+	c, _, _ := f.addClient("router")
+	now := time.Now().UTC().Truncate(time.Second)
+	// Замеры двадцатиминутной давности за окно уже не попадают, а
+	// свежие — попадают.
+	writeSpeedLog(t, f,
+		speedLogLine(now.Add(-20*time.Minute), c.PublicKey, 0, 0),
+		speedLogLine(now.Add(-20*time.Minute+5*time.Second), c.PublicKey, 625_000, 6_250_000),
+		speedLogLine(now.Add(-15*time.Second), c.PublicKey, 0, 0),
+		speedLogLine(now.Add(-10*time.Second), c.PublicKey, 625_000, 6_250_000),
+	)
+
+	got := decodeAPI(t, f.get(fmt.Sprintf("/api/clients/%d/speed?window=10min&columns=120", c.ID)))
+	from, err := time.Parse(time.RFC3339, got["from_utc"].(string))
+	if err != nil {
+		t.Fatalf("from_utc = %v: %v", got["from_utc"], err)
+	}
+	to, err := time.Parse(time.RFC3339, got["to_utc"].(string))
+	if err != nil {
+		t.Fatalf("to_utc = %v: %v", got["to_utc"], err)
+	}
+	if span := to.Sub(from); span != 10*time.Minute {
+		t.Fatalf("окно = %v, ожидалось 10m0s", span)
+	}
+	// И оно действительно обрезает историю по этой границе, а не только
+	// подписывает края: двадцатиминутной давности в ответе быть не может.
+	down := got["down_max_bps"].([]any)
+	filled := 0
+	for _, v := range down {
+		if v != nil {
+			filled++
+		}
+	}
+	if filled != 1 {
+		t.Fatalf("заполненных столбцов = %d, ожидался ровно один свежий: %v", filled, down)
 	}
 }
 

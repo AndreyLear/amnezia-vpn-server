@@ -13,8 +13,8 @@ vi.mock("@/lib/api", async (orig) => ({
 
 function series(over: Partial<SpeedSeries> = {}): SpeedSeries {
   return {
-    window: "hour",
-    from_utc: "2026-09-08T12:00:00Z",
+    window: "10min",
+    from_utc: "2026-09-08T12:50:00Z",
     to_utc: "2026-09-08T13:00:00Z",
     down_min_bps: [],
     down_max_bps: [],
@@ -127,20 +127,35 @@ describe("график скорости", () => {
     expect(await screen.findByText(/прочитать не удалось/)).toBeInTheDocument();
   });
 
-  // Час — «жалуется прямо сейчас», сутки — «найди вчерашний вечер».
+  // Час заменён десятью минутами (amnezia-vpn-server-teos): в часе на
+  // столбец приходилось по четыре замера, и та самая мелочь, ради которой
+  // график открывают, усреднялась. Десять минут при такте в пять секунд —
+  // 120 замеров, и на 120 столбцах свёртки нет вовсе.
+  it("просит короткое окно ровно на 120 столбцов — по замеру на столбец", async () => {
+    fetchSpeed.mockResolvedValue(series({ down_min_bps: [1], down_max_bps: [1], up_min_bps: [0], up_max_bps: [0] }));
+    render(<SpeedChart clientId={7} />);
+
+    await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "10min", 120));
+  });
+
+  // Десять минут — «тормозит прямо сейчас», сутки — «найди вчерашний вечер».
   it("переключает окно", async () => {
     const user = userEvent.setup();
     fetchSpeed.mockResolvedValue(series({ down_min_bps: [1], down_max_bps: [1], up_min_bps: [0], up_max_bps: [0] }));
     render(<SpeedChart clientId={7} />);
 
-    await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "hour", expect.any(Number)));
+    await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "10min", expect.any(Number)));
     await user.click(screen.getByRole("button", { name: "сутки" }));
     await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "day", expect.any(Number)));
+    await user.click(screen.getByRole("button", { name: "10 минут" }));
+    await waitFor(() =>
+      expect(fetchSpeed.mock.calls.at(-1)?.[1]).toBe("10min"),
+    );
   });
 });
 
 describe("обновление по таймеру", () => {
-  it("в часе подтягивает новые замеры", async () => {
+  it("в коротком окне подтягивает новые замеры", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     fetchSpeed.mockResolvedValue(series({ down_min_bps: [1], down_max_bps: [1], up_min_bps: [0], up_max_bps: [0] }));
     render(<SpeedChart clientId={1} />);
@@ -148,6 +163,8 @@ describe("обновление по таймеру", () => {
     await vi.waitFor(() => expect(fetchSpeed).toHaveBeenCalledTimes(1));
     await vi.advanceTimersByTimeAsync(11_000);
     expect(fetchSpeed.mock.calls.length).toBeGreaterThan(1);
+    // И подтягивает именно короткое окно, а не что-то ещё.
+    expect(fetchSpeed.mock.calls.at(-1)?.[1]).toBe("10min");
   });
 
   // В сутках один новый замер из 17 280 не меняет ни пикселя, а запрос раз

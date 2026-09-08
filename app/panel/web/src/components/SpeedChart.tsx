@@ -19,19 +19,26 @@ import { fetchSpeed, type SpeedSeries } from "@/lib/api";
  * поверх фигуры превращала оба ряда в кашу (amnezia-vpn-server-6kj9).
  */
 
-type Range = "hour" | "day";
+type Range = "10min" | "day";
 
 /**
- * Ширина в столбцах. В часе это 720 замеров на 180 столбцов — по четыре на
- * столбец: полоса остаётся честной, а щетины уже нет.
+ * Ширина в столбцах — своя у каждого окна, а не одна общая
+ * (amnezia-vpn-server-teos).
+ *
+ * В десяти минутах это ровно 120: при такте записи в пять секунд окно
+ * содержит 120 замеров, значит на столбец приходится один замер и свёртки
+ * нет вовсе — график показывает сырые данные, лучше уже не сделать. Общая
+ * константа заставила бы сузить до 120 и сутки, где столбцов чем больше,
+ * тем подробнее (17 280 замеров всё равно сворачиваются), — то есть
+ * ухудшила бы второе окно ради первого.
  */
-const COLUMNS = 180;
+const COLUMNS: Record<Range, number> = { "10min": 120, day: 180 };
 const HEIGHT = 120;
-/** Такт записи истории; в часе он и есть шаг обновления. */
+/** Такт записи истории; в коротком окне он и есть шаг обновления. */
 const REFRESH_MS = 5000;
 
 export function SpeedChart({ clientId }: { clientId: number }) {
-  const [range, setRange] = useState<Range>("hour");
+  const [range, setRange] = useState<Range>("10min");
   // Единицы стоят в заголовке, а не у засечек: «15.8 Мбит/с» в колонке оси
   // не помещается и ломается на две строки посреди слова.
   const [unit, setUnit] = useState("");
@@ -43,7 +50,7 @@ export function SpeedChart({ clientId }: { clientId: number }) {
   const load = useCallback(
     async (r: Range) => {
       try {
-        const data = await fetchSpeed(clientId, r, COLUMNS);
+        const data = await fetchSpeed(clientId, r, COLUMNS[r]);
         if (!alive.current) return;
         if (!data || !Array.isArray(data.down_max_bps)) {
           setFailed(true);
@@ -65,10 +72,10 @@ export function SpeedChart({ clientId }: { clientId: number }) {
     alive.current = true;
     setLoading(true);
     void load(range);
-    // Обновление только в часе. В сутках один новый замер из 17 280 не
-    // меняет ни пикселя, и запрос раз в пять секунд был бы работой впустую
-    // на каждой открытой вкладке.
-    if (range !== "hour") return () => void (alive.current = false);
+    // Обновление только в коротком окне. В сутках один новый замер из
+    // 17 280 не меняет ни пикселя, и запрос раз в пять секунд был бы
+    // работой впустую на каждой открытой вкладке.
+    if (range !== "10min") return () => void (alive.current = false);
     const timer = setInterval(() => void load(range), REFRESH_MS);
     return () => {
       alive.current = false;
@@ -81,8 +88,8 @@ export function SpeedChart({ clientId }: { clientId: number }) {
       <div className="flex items-center justify-between gap-2">
         <dt className="text-muted-foreground">Скорость{unit ? `, ${unit}` : ""}</dt>
         <div className="flex gap-1">
-          <RangeButton current={range} value="hour" onSelect={setRange}>
-            час
+          <RangeButton current={range} value="10min" onSelect={setRange}>
+            10 минут
           </RangeButton>
           <RangeButton current={range} value="day" onSelect={setRange}>
             сутки
@@ -306,7 +313,7 @@ function SpeedPlot({
  * режется о верхний край.
  *
  * Была попытка строить её по 95-му процентилю, чтобы одиночный всплеск не
- * прижимал остальной час к полу. Владелец эту попытку отверг: срезанный пик
+ * прижимал остальное окно к полу. Владелец эту попытку отверг: срезанный пик
  * читается как поломка графика, а не как решение
  * (amnezia-vpn-server-0ypv, -dbmm). Мелочь внизу теперь читается не
  * масштабом, а подсказкой при наведении (amnezia-vpn-server-cor5).

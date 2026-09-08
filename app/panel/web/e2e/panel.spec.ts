@@ -108,4 +108,13 @@ test("карточка клиента показывает график скор
   await page.getByRole("button", { name: "сутки" }).click();
   await expect(page.getByRole("button", { name: "сутки" })).toHaveAttribute("aria-pressed", "true");
   await expect(chart).toBeVisible();
+
+  // И обратно в короткое окно: час заменён десятью минутами
+  // (amnezia-vpn-server-teos), и фикстура кладёт ровно этот отрезок.
+  await page.getByRole("button", { name: "10 минут" }).click();
+  await expect(page.getByRole("button", { name: "10 минут" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(chart).toBeVisible();
 });
