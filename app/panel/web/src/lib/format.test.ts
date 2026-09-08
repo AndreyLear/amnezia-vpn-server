@@ -17,6 +17,19 @@ describe("formatHandshake", () => {
 });
 
 describe("formatHandshakeAge", () => {
+  // Время приходит с сервера, а `now` — с устройства. Отстающие часы
+  // телефона делали разность отрицательной, и подпись читалась как
+  // «Проверено -34940 сек назад» (amnezia-vpn-server-qrgv).
+  it("не показывает отрицательный возраст при отстающих часах устройства", () => {
+    const now = Date.UTC(2026, 8, 9, 3, 0, 0);
+    const fromTheFuture = new Date(now + 10 * 60 * 60 * 1000).toISOString();
+    const got = formatHandshakeAge(fromTheFuture, now);
+    expect(got).not.toMatch(/-/);
+    // И остаётся длительностью: вызывающий дописывает к ней «назад», а
+    // наречие вроде «только что» дало бы «Проверено только что назад».
+    expect(got).toBe("0 сек");
+  });
+
   it("returns an em dash for null or invalid timestamps", () => {
     expect(formatHandshakeAge(null, now)).toBe("—");
     expect(formatHandshakeAge("not-a-date", now)).toBe("—");
