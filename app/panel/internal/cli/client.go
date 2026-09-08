@@ -407,7 +407,7 @@ func (a *app) cmdClientSetRate(args []string) int {
 		return a.ok(opClientSetRate, "client "+strconv.FormatInt(id, 10)+" has no rate limit again")
 	}
 	return a.ok(opClientSetRate, fmt.Sprintf(
-		"client %d limited to %d Mbit (steadier stream, lower peak speed)", id, rate))
+		"client %d limited to %d Mbit (steady stream for video and calls)", id, rate))
 }
 
 // cmdClientSetExpiry sets (RFC3339, canonicalized) or clears ("none")
