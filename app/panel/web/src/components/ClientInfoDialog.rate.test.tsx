@@ -37,18 +37,17 @@ describe("предел скорости в карточке клиента", () 
     expect(screen.getByText("50 Мбит/с")).toBeInTheDocument();
   });
 
-  // Самое важное в этом окне — не поле, а честность подписи.
-  it("окно правки не обещает ускорения и называет цену", async () => {
+  // Самое важное в этом окне — не поле, а подпись: для чего это и что даёт.
+  it("окно правки говорит, зачем предел нужен", async () => {
     const user = userEvent.setup();
     render(<ClientInfoDialog client={client()} onOpenChange={() => {}} />);
 
     await user.click(screen.getByRole("button", { name: "Изменить предел скорости" }));
-    expect(await screen.findByText(/не ускоряет/)).toBeInTheDocument();
-    // Цена названа прямо. Прежний текст обещал «ту же скорость», и замер это
-    // опроверг: 83 Мбит/с без предела против 48 с ним
+    // Польза названа тем, что человек увидит: ровный поток вместо рывков.
+    // Прежний текст обещал прежнюю скорость, и замер это опроверг
     // (amnezia-vpn-server-ouhb).
-    expect(screen.getByText(/скорость упадёт до\s+заданной/)).toBeInTheDocument();
-    expect(screen.getByText(/Загрузкам он невыгоден/)).toBeInTheDocument();
+    expect(await screen.findByText(/Держит скорость ровной/)).toBeInTheDocument();
+    expect(screen.getByText(/Видео не встаёт/)).toBeInTheDocument();
     // И говорит, что придерживает только получаемое.
     expect(screen.getByText(/только то, что клиент получает/)).toBeInTheDocument();
   });
