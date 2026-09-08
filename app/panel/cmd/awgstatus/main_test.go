@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
 var binPath string
@@ -55,13 +57,64 @@ func runWithPATH(t *testing.T, path string, args ...string) (string, error) {
 }
 
 func TestUsageErrors(t *testing.T) {
-	for _, args := range [][]string{nil, {"awg0"}, {"awg0", "a", "b"}, {"a", "b", "c"}} {
+	// Three arguments are valid since the speed history was added
+	// (amnezia-vpn-server-aa9u); four are not.
+	for _, args := range [][]string{nil, {"awg0"}, {"awg0", "a", "b", "c"}} {
 		out, err := runWithPATH(t, "/nonexistent", args...)
 		if err == nil {
 			t.Fatalf("args %v: exit 0, want 1", args)
 		}
 		if !strings.Contains(out, "usage: awgstatus <interface> <status-file>") {
 			t.Fatalf("args %v: stderr = %q, want usage", args, out)
+		}
+	}
+}
+
+// The history is a nicety; status.json is the product. A history that
+// cannot be written must not cost the caller its status file, because the
+// panel keeps working without the history and stops without the status.
+func TestUnwritableHistoryDoesNotFailTheRun(t *testing.T) {
+	dir := t.TempDir()
+	fakeAWG(t, dir, happyPathDump, false)
+	statusPath := filepath.Join(dir, "status.json")
+	speedPath := filepath.Join(dir, "nowhere", "speed.log")
+
+	out, err := runWithPATH(t, dir, "awg0", statusPath, speedPath)
+	if err != nil {
+		t.Fatalf("exit != 0 with an unwritable history: %v (%s)", err, out)
+	}
+	if _, err := os.Stat(statusPath); err != nil {
+		t.Fatalf("status.json missing: %v", err)
+	}
+	if !strings.Contains(out, "speed history") {
+		t.Errorf("stderr = %q, want the failure named", out)
+	}
+}
+
+// The history lands beside status.json and carries the same counters.
+func TestHistoryRecordsTheTick(t *testing.T) {
+	dir := t.TempDir()
+	fakeAWG(t, dir, happyPathDump, false)
+	statusPath := filepath.Join(dir, "status.json")
+	speedPath := filepath.Join(dir, "speed.log")
+
+	if out, err := runWithPATH(t, dir, "awg0", statusPath, speedPath); err != nil {
+		t.Fatalf("run: %v (%s)", err, out)
+	}
+	data, err := os.ReadFile(speedPath)
+	if err != nil {
+		t.Fatalf("read history: %v", err)
+	}
+	body := string(data)
+	if !strings.HasPrefix(body, status.SpeedSchema+"\n") {
+		t.Errorf("history = %q, want the schema marker first", body)
+	}
+	if strings.Count(strings.TrimSpace(body), "\n") != 1 {
+		t.Errorf("history = %q, want the marker and exactly one tick", body)
+	}
+	for _, secret := range []string{"PRIV0", "PSK1"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("history carries %q", secret)
 		}
 	}
 }

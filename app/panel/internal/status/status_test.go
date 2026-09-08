@@ -95,7 +95,7 @@ func ifaceDump29(pub, priv string, port int, fwmark string) string {
 		"3", "21", "31", "904", "737", "0", "0", // jc jmin jmax s1 s2 s3 s4
 		"(null)", "(null)", "(null)", "(null)", // h1..h4
 		"(null)", "(null)", "(null)", "(null)", "(null)", // i1..i5
-		markedHeaderProtectionKey, // index 19 — NOT fwmark
+		markedHeaderProtectionKey,                // index 19 — NOT fwmark
 		"<t>", "<t>", "<t>", "<t>", "<t>", "<t>", // padding / timing ranges
 		"off", "off", // random_trailers disable_cookies
 		fwmark, // index 28
@@ -247,7 +247,7 @@ func TestGenerate29FieldDumpWritesStatusJSON(t *testing.T) {
 		peerDump(peerPubB, markedPresharedKey, "192.0.2.10:51820", "10.8.0.3/32", hs, 100, 200, "25")
 	dir := t.TempDir()
 	target := filepath.Join(dir, "status.json")
-	if err := Generate("awg0", target, func() time.Time { return fixedNow },
+	if _, err := Generate("awg0", target, func() time.Time { return fixedNow },
 		func(string) ([]byte, error) { return dumpBytes(dump) }); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestGenerateDumpFailureWritesNoInterface(t *testing.T) {
 	fail := func(string) ([]byte, error) {
 		return nil, errors.New("exit status 1: Unable to access interface")
 	}
-	if err := Generate("awg0", target, func() time.Time { return fixedNow }, fail); err != nil {
+	if _, err := Generate("awg0", target, func() time.Time { return fixedNow }, fail); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	data, err := os.ReadFile(target)
@@ -436,7 +436,7 @@ func TestGenerateDumpFailureWritesNoInterface(t *testing.T) {
 func TestNoInterfaceJSONShape(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "status.json")
-	if err := Generate("awg0", target, func() time.Time { return fixedNow },
+	if _, err := Generate("awg0", target, func() time.Time { return fixedNow },
 		func(string) ([]byte, error) { return nil, errors.New("down") }); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -515,12 +515,12 @@ func TestGenerationDeterministic(t *testing.T) {
 
 	dir := t.TempDir()
 	target := filepath.Join(dir, "status.json")
-	if err := Generate("awg0", target, func() time.Time { return nowA },
+	if _, err := Generate("awg0", target, func() time.Time { return nowA },
 		func(string) ([]byte, error) { return dumpBytes(dump) }); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	first, _ := os.ReadFile(target)
-	if err := Generate("awg0", target, func() time.Time { return nowB },
+	if _, err := Generate("awg0", target, func() time.Time { return nowB },
 		func(string) ([]byte, error) { return dumpBytes(dump) }); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

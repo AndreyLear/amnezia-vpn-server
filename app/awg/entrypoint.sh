@@ -9,6 +9,10 @@ CONFIG_TIMEOUT=${AWG_CONFIG_TIMEOUT:-300}
 CHECK_INTERVAL=${AWG_CHECK_INTERVAL:-5}
 STATUS_FILE=${AWG_STATUS_FILE:-/status/status.json}
 AWGSTATUS_BIN=${AWGSTATUS_BIN:-/opt/awg/awgstatus}
+# История замеров скорости (amnezia-vpn-server-aa9u). Лежит рядом со
+# status.json и пишется тем же производителем: status.json помнит только
+# последний такт, и ответить на жалобу «полчаса назад не грузило» было нечем.
+SPEED_FILE=${AWG_SPEED_FILE:-$(dirname "${STATUS_FILE}")/speed.log}
 
 log() { echo "[awg] $*" >&2; }
 
@@ -32,7 +36,7 @@ generate_status() {
     if [ ! -x "${producer}" ]; then
         return 0
     fi
-    if ! "${producer}" "${IFACE}" "${STATUS_FILE}"; then
+    if ! "${producer}" "${IFACE}" "${STATUS_FILE}" "${SPEED_FILE}"; then
         log "warning: status generation failed; keeping the previous ${STATUS_FILE}"
     fi
 }
