@@ -28,7 +28,15 @@ export function formatHandshakeAge(iso: string | null, now = Date.now()): string
   if (!iso) return "—";
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return "—";
-  const sec = Math.floor((now - t) / 1000);
+  // Время приходит с сервера, а `now` берётся с устройства, где открыта
+  // панель. Отстающие часы телефона или ноутбука делали разность
+  // отрицательной, и подпись читалась как «Проверено -34940 сек назад»
+  // (amnezia-vpn-server-qrgv).
+  //
+  // Отсчёт зажимается в ноль, а не подменяется словом вроде «только что»:
+  // здесь возвращается ДЛИТЕЛЬНОСТЬ, и вызывающий вправе дописать к ней
+  // «назад». Наречие на этом месте дало бы «Проверено только что назад».
+  const sec = Math.max(0, Math.floor((now - t) / 1000));
   if (sec < 60) return `${sec} сек`;
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min} мин`;
