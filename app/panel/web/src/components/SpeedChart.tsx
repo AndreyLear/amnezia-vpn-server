@@ -138,16 +138,18 @@ function SpeedPlot({
   }
   const scale = speedScale(series);
   const n = series.down_max_bps.length;
+  const hasGaps = series.down_max_bps.some((v) => v === null);
+  const clipId = `speed-clip-${n}`;
   const y = (bps: number) => HEIGHT - Math.min(bps / scale, 1) * HEIGHT;
 
   return (
     <div className="grid gap-1">
-      <div className="flex gap-2">
+      <div className="flex gap-1">
         {/* Ось слева, а не внутри svg: там preserveAspectRatio растянул бы
             текст вместе с картинкой. */}
         {/* Только числа: единицы названы в заголовке, потому что полная
             подпись в колонке оси не помещается и ломается на две строки. */}
-        <div className="flex h-[120px] w-10 shrink-0 flex-col justify-between text-right text-[10px] leading-none text-muted-foreground tabular-nums">
+        <div className="flex h-[120px] w-9 shrink-0 flex-col justify-between text-right text-[10px] leading-none text-muted-foreground tabular-nums">
           <span>{formatBitsBare(scale, scale)}</span>
           <span>{formatBitsBare(scale / 2, scale)}</span>
           <span>0</span>
@@ -157,8 +159,13 @@ function SpeedPlot({
           aria-label={`Скорость: шкала до ${formatBits(scale)}, пик ${formatBits(peak)}`}
           viewBox={`0 0 ${n} ${HEIGHT}`}
           preserveAspectRatio="none"
-          className="h-[120px] min-w-0 flex-1 rounded-md bg-muted/40"
+          className="h-[120px] min-w-0 flex-1 overflow-hidden rounded-md bg-muted/40"
         >
+          {/* Рисовать только внутри поля: обрезка идёт по значению, но
+              фигура без этого вылезала за рамку. */}
+          <clipPath id={clipId}>
+            <rect x={0} y={0} width={n} height={HEIGHT} />
+          </clipPath>
           {[0, 0.5, 1].map((f) => (
             <line
               key={f}
@@ -178,9 +185,28 @@ function SpeedPlot({
             <path
               key={`d${i}`}
               d={bandPath(run, series.down_min_bps, series.down_max_bps, y)}
-              className="fill-foreground/70"
+              clipPath={`url(#${clipId})`}
+              className="fill-sky-500/70"
             />
           ))}
+          {/* Отметка обрезанного столбца. Без неё число пика висело в
+              воздухе: подпись говорила «40 Мбит/с», а верх шкалы был 7, и
+              в поле зрения этому числу не соответствовало ничего. */}
+          {series.down_max_bps.map((v, i) =>
+            v !== null && v > scale ? (
+              <line
+                key={`c${i}`}
+                x1={i + 0.5}
+                x2={i + 0.5}
+                y1={0}
+                y2={4}
+                stroke="currentColor"
+                strokeWidth={2}
+                className="text-sky-300"
+                vectorEffect="non-scaling-stroke"
+              />
+            ) : null,
+          )}
           {/* Отдача — тонкий контур поверх: палитра панели одноцветная, и
               различать ряды приходится не оттенком, а тем, что один залит, а
               другой обведён. */}
@@ -193,22 +219,26 @@ function SpeedPlot({
               fill="none"
               stroke="currentColor"
               strokeWidth={1.5}
-              className="text-foreground"
+              clipPath={`url(#${clipId})`}
+              className="text-amber-400"
               vectorEffect="non-scaling-stroke"
             />
           ))}
         </svg>
       </div>
-      <div className="flex justify-between pl-12 text-[10px] leading-none text-muted-foreground tabular-nums">
+      <div className="flex justify-between pl-10 text-[10px] leading-none text-muted-foreground tabular-nums">
         <span>{formatClock(series.from_utc, series)}</span>
         <span>{formatClock(series.to_utc, series)}</span>
       </div>
       <p className="text-xs text-muted-foreground">
+        <span className="text-sky-500">заливка</span> — к клиенту,{" "}
+        <span className="text-amber-500">линия</span> — от него
         {peak > scale
-          ? `Пик ${formatBits(peak)} — выше шкалы · `
-          : `Пик ${formatBits(peak)} · `}
-        заливка — к клиенту, линия — от него · пропуски — время, за которое
-        замеров нет
+          ? ` · пик ${formatBits(peak)}, отмечен засечками сверху`
+          : ` · пик ${formatBits(peak)}`}
+        {/* Про пропуски — только когда они есть: иначе читатель ищет в
+            графике то, чего в нём не было. */}
+        {hasGaps ? " · разрывы — время, за которое замеров нет" : ""}
       </p>
     </div>
   );

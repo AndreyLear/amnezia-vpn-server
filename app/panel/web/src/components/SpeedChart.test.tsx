@@ -31,6 +31,11 @@ function bands(): SVGPathElement[] {
   return Array.from(svg.querySelectorAll("path"));
 }
 
+/** Подпись под графиком целиком: она собрана из нескольких узлов. */
+function legendText(): string {
+  return document.querySelector("p.text-xs")?.textContent ?? "";
+}
+
 /** Все координаты y из фигуры — чтобы проверять высоту полосы. */
 function ys(el: Element): number[] {
   const d = el.getAttribute("d") ?? "";
@@ -179,7 +184,12 @@ describe("шкала", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    expect(await screen.findByText(/выше шкалы/)).toBeInTheDocument();
+    // Число пика обязано быть привязано к месту: иначе читатель видит
+    // «40 Мбит/с» при шкале до 7 и перестаёт верить графику.
+    await waitFor(() => expect(legendText()).toMatch(/отмечен засечками сверху/));
+    await waitFor(() =>
+      expect(document.querySelectorAll("svg line.text-sky-300").length).toBeGreaterThan(0),
+    );
   });
 
   it("не поминает шкалу, когда обрезать нечего", async () => {
@@ -189,8 +199,49 @@ describe("шкала", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    await screen.findByText(/Пик/);
-    expect(screen.queryByText(/выше шкалы/)).toBeNull();
+    // Подпись собрана из нескольких кусков (цветные слова), поэтому
+    // читаем её целиком, а не по одному узлу.
+    await waitFor(() => expect(legendText()).toMatch(/пик \d/i));
+    expect(legendText()).not.toMatch(/отмечен засечками/);
+    expect(document.querySelectorAll("svg line.text-sky-300")).toHaveLength(0);
+  });
+});
+
+describe("легенда", () => {
+  // Про пропуски написано всегда, и читатель ищет в графике то, чего в нём
+  // не было (amnezia-vpn-server-dbmm).
+  it("молчит о разрывах, когда их нет", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(legendText()).toMatch(/заливка/));
+    expect(legendText()).not.toMatch(/разрывы/);
+  });
+
+  it("называет их, когда они есть", async () => {
+    const v: (number | null)[] = [20_000_000, null, 20_000_000];
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(legendText()).toMatch(/разрывы/));
+  });
+
+  // Владелец: «нужно хотя бы цвет добавить». Ряды обязаны различаться
+  // сразу, а не при разглядывании.
+  it("разводит ряды цветом", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: v, up_min_bps: v }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(document.querySelector("svg path.fill-sky-500\\/70")).not.toBeNull());
+    expect(document.querySelector("svg polyline.text-amber-400")).not.toBeNull();
   });
 });
 
