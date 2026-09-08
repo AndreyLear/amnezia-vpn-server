@@ -122,21 +122,36 @@ dump_v2() {
 
 make_stubs() {
     mkdir -p "${TMP}/bin"
+    # awg-quick и ip держат общее состояние «интерфейс есть или нет».
+    # Заглушка, отвечающая успехом на любой «ip link show», изображает хост, на
+    # котором awg0 существует всегда, — и entrypoint, распознающий сироту
+    # (amnezia-vpn-server-544c), законно отказывался поднимать туннель. Проверять
+    # надо поведение, а не заглушку (amnezia-vpn-server-kp5a).
     cat > "${TMP}/bin/awg-quick" <<'SH'
 #!/bin/bash
 echo "awg-quick $*" >> "${AWG_STUB_LOG}"
+IFACE_STATE="${AWG_STUB_IFACE:-/dev/null}"
 if [ "${1:-}" = "up" ]; then
+    : > "$IFACE_STATE"
     echo up >> "${AWG_STUB_STATE}"
 elif [ "${1:-}" = "down" ]; then
+    rm -f "$IFACE_STATE"
     echo down >> "${AWG_STUB_STATE}"
 fi
 exit 0
 SH
     cat > "${TMP}/bin/ip" <<'SH'
 #!/bin/bash
-if [ "${1:-}" = "link" ] && [ -f "${AWG_STUB_FLAG_IP_GONE:-}" ]; then
-    echo "no such interface" >&2
-    exit 1
+IFACE_STATE="${AWG_STUB_IFACE:-/dev/null}"
+if [ "${1:-}" = "link" ] && [ "${2:-}" = "show" ]; then
+    # Флаг сильнее состояния: им тесты изображают пропавший интерфейс.
+    [ -f "${AWG_STUB_FLAG_IP_GONE:-}" ] && { echo "no such interface" >&2; exit 1; }
+    [ -f "$IFACE_STATE" ] || { echo "no such interface" >&2; exit 1; }
+    exit 0
+fi
+if [ "${1:-}" = "link" ] && [ "${2:-}" = "del" ]; then
+    rm -f "$IFACE_STATE"
+    exit 0
 fi
 exit 0
 SH
@@ -195,6 +210,7 @@ export AWG_STUB_MTIME_FILE="${STUB_MTIME}"
 export AWG_STUB_FLAG_IP_GONE="${STUB_FLAG_DIR}/ip-gone"
 export AWG_STUB_FLAG_UAPI_GONE="${STUB_FLAG_DIR}/uapi-gone"
 export AWG_STUB_FLAG_SYNCONF_FAIL="${STUB_FLAG_DIR}/syncconf-fail"
+export AWG_STUB_IFACE="${dir}/iface.state"
 export AWG_STUB_DUMP_FILE="${STUB_DUMP}"
 export CONFIG_SRC="${dir}/config/awg0.conf"
 export CONFIG_DEST="${dir}/etc/awg0.conf"
