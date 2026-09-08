@@ -20,8 +20,13 @@ async function signIn(page: Page) {
 
 async function login(page: Page) {
   await signIn(page);
+  // Итог приходит отдельным запросом уже после входа, и окно всплывает не
+  // мгновенно. Вопрос «окно есть?», заданный сразу после клика, отвечал «нет»,
+  // окно появлялось следом и перекрывало панель до конца теста. Дожидаемся
+  // тишины в сети и только потом спрашиваем (amnezia-vpn-server-y9wx).
+  await page.waitForLoadState("networkidle");
   const acknowledge = page.getByRole("button", { name: "Понятно" });
-  if (await acknowledge.isVisible({ timeout: 2000 }).catch(() => false)) {
+  if (await acknowledge.isVisible().catch(() => false)) {
     await acknowledge.click();
   }
   await expect(page.getByRole("button", { name: "Добавить клиента" })).toBeVisible();
@@ -117,6 +122,11 @@ test("журнал показывает вход и изменения", async (
   // появиться.
   await page.getByRole("button", { name: /Действия для/ }).first().click();
   await page.getByRole("menuitem", { name: /Отключить|Включить/ }).click();
+  // Ждём подтверждения от сервера, а не своего клика: всплывающее сообщение
+  // появляется только после ответа на PATCH. Без него журнал спрашивался
+  // раньше, чем запись в него попадала, и на медленной машине проверка падала
+  // (amnezia-vpn-server-y9wx).
+  await expect(page.getByText(/^Клиент (отключён|включён)$/)).toBeVisible();
 
   await page.getByRole("button", { name: "Ещё" }).click();
   await page.getByRole("menuitem", { name: "Журнал" }).click();
