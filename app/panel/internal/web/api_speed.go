@@ -16,13 +16,21 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
-// Окна: час — «жалуется прямо сейчас», сутки — «найди вчерашний вечер».
-// Третьего не нужно: недели у нас нет по данным, а десять минут ничем не
-// лучше часа.
+// Окна: десять минут — «тормозит прямо сейчас», сутки — «найди вчерашний
+// вечер». Третьего не нужно: недели у нас нет по данным.
+//
+// Час отсюда убран (amnezia-vpn-server-teos). Он вмещал 720 замеров, и на
+// любой разумной ширине графика они сворачивались по несколько в столбец —
+// та самая мелочь, ради которой график и открывают, усреднялась и
+// пропадала. Десять минут при такте записи в пять секунд — это ровно 120
+// замеров, то есть один замер на столбец и никакой свёртки.
 const (
-	speedWindowHour = "hour"
-	speedWindowDay  = "day"
+	speedWindow10Min = "10min"
+	speedWindowDay   = "day"
 )
+
+// speed10MinSpan — почему именно десять минут: см. комментарий к окнам.
+const speed10MinSpan = 10 * time.Minute
 
 // speedMaxColumns — потолок на число столбцов. Он не про красоту, а про
 // то, что запрос считает на сервере: ширины экрана хватает с запасом, а
@@ -67,9 +75,9 @@ func (s *Server) apiClientSpeed(w http.ResponseWriter, r *http.Request) {
 
 	window := r.URL.Query().Get("window")
 	if window != speedWindowDay {
-		window = speedWindowHour
+		window = speedWindow10Min
 	}
-	span := time.Hour
+	span := speed10MinSpan
 	if window == speedWindowDay {
 		span = 24 * time.Hour
 	}

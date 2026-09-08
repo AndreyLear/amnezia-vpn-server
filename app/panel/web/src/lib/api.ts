@@ -135,7 +135,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
  * открыли.
  */
 export type SpeedSeries = {
-  window: "hour" | "day";
+  window: "10min" | "day";
   from_utc: string;
   to_utc: string;
   down_min_bps: (number | null)[];
@@ -146,7 +146,7 @@ export type SpeedSeries = {
 
 export function fetchSpeed(
   id: number,
-  window: "hour" | "day",
+  window: "10min" | "day",
   columns: number,
 ): Promise<SpeedSeries> {
   return api<SpeedSeries>(`/api/clients/${id}/speed?window=${window}&columns=${columns}`);
