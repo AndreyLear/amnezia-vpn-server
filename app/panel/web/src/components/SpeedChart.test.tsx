@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -153,57 +153,45 @@ describe("обновление по таймеру", () => {
 });
 
 describe("шкала", () => {
-  // Отзыв владельца: один всплеск прижимал весь час к полу, и провалы
-  // пропадали — то самое, от чего мы отказались, отвергнув усреднение
-  // (amnezia-vpn-server-0ypv).
-  it("одиночный всплеск её не задирает", () => {
+  // Владелец отверг 95-й процентиль: срезанный пик читается как поломка
+  // графика (amnezia-vpn-server-dbmm). Шкала обязана вмещать самый высокий
+  // столбец целиком.
+  it("вмещает самый высокий столбец", () => {
     const quiet = Array.from({ length: 100 }, () => 10_000_000);
     const withSpike = [...quiet.slice(1), 200_000_000];
-    const base = speedScale(
-      series({ down_max_bps: quiet, down_min_bps: quiet, up_max_bps: [], up_min_bps: [] }),
-    );
-    const spiked = speedScale(
-      series({ down_max_bps: withSpike, down_min_bps: withSpike, up_max_bps: [], up_min_bps: [] }),
-    );
-    expect(spiked).toBeLessThan(base * 1.25);
-  });
-
-  // А устойчивая высокая нагрузка — задирает: она и есть 95-й процентиль.
-  it("устойчивая нагрузка её поднимает", () => {
-    const busy = Array.from({ length: 100 }, () => 200_000_000);
     expect(
-      speedScale(series({ down_max_bps: busy, down_min_bps: busy, up_max_bps: [], up_min_bps: [] })),
-    ).toBeGreaterThan(100_000_000);
+      speedScale(
+        series({ down_max_bps: withSpike, down_min_bps: withSpike, up_max_bps: [], up_min_bps: [] }),
+      ),
+    ).toBeGreaterThanOrEqual(200_000_000);
   });
 
-  it("говорит, что пик выше шкалы, когда его обрезало", async () => {
-    const quiet = Array.from({ length: 100 }, () => 10_000_000);
+  it("считает и отдачу тоже", () => {
+    const up = [5_000_000, 90_000_000];
+    expect(
+      speedScale(series({ down_max_bps: [1_000], down_min_bps: [1_000], up_max_bps: up, up_min_bps: up })),
+    ).toBeGreaterThanOrEqual(90_000_000);
+  });
+
+  // Ось с подписью «41.7» читается хуже, чем с «50».
+  it("округляет верх до круглого числа", () => {
+    const v = [41_700_000];
+    expect(
+      speedScale(series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] })),
+    ).toBe(50_000_000);
+  });
+
+  it("ничего не режет: все столбцы ниже верха шкалы", async () => {
+    const quiet = Array.from({ length: 20 }, () => 10_000_000);
     const withSpike = [...quiet.slice(1), 200_000_000];
     fetchSpeed.mockResolvedValue(
       series({ down_max_bps: withSpike, down_min_bps: withSpike, up_max_bps: [], up_min_bps: [] }),
     );
     render(<SpeedChart clientId={1} />);
 
-    // Число пика обязано быть привязано к месту: иначе читатель видит
-    // «40 Мбит/с» при шкале до 7 и перестаёт верить графику.
-    await waitFor(() => expect(legendText()).toMatch(/отмечен засечками сверху/));
-    await waitFor(() =>
-      expect(document.querySelectorAll("svg line.text-sky-300").length).toBeGreaterThan(0),
-    );
-  });
-
-  it("не поминает шкалу, когда обрезать нечего", async () => {
-    const quiet = Array.from({ length: 100 }, () => 10_000_000);
-    fetchSpeed.mockResolvedValue(
-      series({ down_max_bps: quiet, down_min_bps: quiet, up_max_bps: [], up_min_bps: [] }),
-    );
-    render(<SpeedChart clientId={1} />);
-
-    // Подпись собрана из нескольких кусков (цветные слова), поэтому
-    // читаем её целиком, а не по одному узлу.
-    await waitFor(() => expect(legendText()).toMatch(/пик \d/i));
-    expect(legendText()).not.toMatch(/отмечен засечками/);
-    expect(document.querySelectorAll("svg line.text-sky-300")).toHaveLength(0);
+    await waitFor(() => expect(bands()).toHaveLength(1));
+    // Верх поля — y = 0; ни одна точка не должна оказаться выше него.
+    expect(Math.min(...ys(bands()[0]))).toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -242,6 +230,108 @@ describe("легенда", () => {
 
     await waitFor(() => expect(document.querySelector("svg path.fill-sky-500\\/70")).not.toBeNull());
     expect(document.querySelector("svg polyline.text-amber-400")).not.toBeNull();
+  });
+});
+
+describe("чтение значения в точке", () => {
+  // Владелец: «пока не понятно как смотреть пики и провалы». По трём числам
+  // на оси провал в 200 Кбит/с не прочитать (amnezia-vpn-server-cor5).
+  function hover(x: number) {
+    const svg = document.querySelector("svg")!;
+    svg.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 120 }) as DOMRect;
+    const plot = svg.parentElement!;
+    plot.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 120 }) as DOMRect;
+    fireEvent.pointerMove(svg, { clientX: x, clientY: 60 });
+  }
+
+  it("показывает время и оба ряда", async () => {
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_min_bps: [2_000_000, 2_000_000],
+        down_max_bps: [7_000_000, 7_000_000],
+        up_min_bps: [500_000, 500_000],
+        up_max_bps: [500_000, 500_000],
+        from_utc: "2026-09-08T12:00:00Z",
+        to_utc: "2026-09-08T13:00:00Z",
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(bands()).toHaveLength(1));
+
+    hover(10);
+    const box = await screen.findByRole("status");
+    // Разброс, а не одно число: он и есть провал внутри столбца.
+    expect(box.textContent).toMatch(/2\.0\s*-\s*7\.0 Мбит\/с/);
+    expect(box.textContent).toMatch(/500 Кбит\/с/);
+  });
+
+  // Разрыв обязан читаться и здесь, а не выглядеть нулём.
+  it("на разрыве говорит, что замеров нет", async () => {
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_min_bps: [null, 2_000_000],
+        down_max_bps: [null, 2_000_000],
+        up_min_bps: [null, 0],
+        up_max_bps: [null, 0],
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(bands()).toHaveLength(1));
+
+    hover(10);
+    const box = await screen.findByRole("status");
+    expect(box.textContent).toMatch(/замеров нет/);
+    expect(box.textContent).not.toMatch(/0 бит/);
+  });
+
+  it("ставит черту там же, где указатель", async () => {
+    const v = Array.from({ length: 10 }, () => 5_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(bands()).toHaveLength(1));
+
+    hover(50);
+    await waitFor(() => {
+      const guide = Array.from(document.querySelectorAll("svg line")).find((el) =>
+        (el.getAttribute("class") ?? "").includes("text-foreground/50"),
+      );
+      expect(guide).toBeDefined();
+      // Черта стоит в том же столбце, что и указатель: половина ширины.
+      expect(Number(guide!.getAttribute("x1"))).toBeCloseTo(5.5, 0);
+    });
+  });
+
+  // На касании pointerleave не приходит, поэтому подсказка снимается и по
+  // pointerup.
+  // Наверху подсказка закрывала бы ровно то, на что человек смотрит.
+  it("уходит вниз, когда в столбце высокая скорость", async () => {
+    const hi = Array.from({ length: 10 }, () => 100_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: hi, down_min_bps: hi, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(bands()).toHaveLength(1));
+
+    hover(10);
+    const box = await screen.findByRole("status");
+    expect(box.style.bottom).toBe("0px");
+    expect(box.style.top).toBe("");
+  });
+
+  it("снимается по отпусканию касания", async () => {
+    const v = Array.from({ length: 10 }, () => 5_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(bands()).toHaveLength(1));
+
+    hover(30);
+    await screen.findByRole("status");
+    fireEvent.pointerUp(document.querySelector("svg")!);
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
   });
 });
 

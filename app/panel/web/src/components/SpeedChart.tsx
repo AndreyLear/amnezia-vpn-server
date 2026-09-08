@@ -125,6 +125,11 @@ function SpeedPlot({
   loading: boolean;
   failed: boolean;
 }) {
+  // Столбец под указателем. Без него по графику читались только три числа
+  // на оси, а «сколько было в провале» не читалось никак
+  // (amnezia-vpn-server-cor5).
+  const [at, setAt] = useState<number | null>(null);
+  const plot = useRef<HTMLDivElement>(null);
   if (failed) return <Empty>историю прочитать не удалось</Empty>;
   if (loading || !series) return <Empty>загружаю</Empty>;
 
@@ -154,12 +159,25 @@ function SpeedPlot({
           <span>{formatBitsBare(scale / 2, scale)}</span>
           <span>0</span>
         </div>
+        <div ref={plot} className="relative min-w-0 flex-1">
+        {at !== null && series !== null ? (
+          <Readout series={series} at={at} n={series.down_max_bps.length} scale={scale} />
+        ) : null}
         <svg
           role="img"
           aria-label={`Скорость: шкала до ${formatBits(scale)}, пик ${formatBits(peak)}`}
           viewBox={`0 0 ${n} ${HEIGHT}`}
           preserveAspectRatio="none"
-          className="h-[120px] min-w-0 flex-1 overflow-hidden rounded-md bg-muted/40"
+          className="h-[120px] w-full touch-none overflow-hidden rounded-md bg-muted/40"
+          onPointerMove={(e) => {
+            const box = plot.current?.getBoundingClientRect();
+            if (!box || box.width === 0) return;
+            const i = Math.floor(((e.clientX - box.left) / box.width) * n);
+            setAt(Math.min(n - 1, Math.max(0, i)));
+          }}
+          onPointerLeave={() => setAt(null)}
+          onPointerUp={() => setAt(null)}
+          onPointerCancel={() => setAt(null)}
         >
           {/* Рисовать только внутри поля: обрезка идёт по значению, но
               фигура без этого вылезала за рамку. */}
@@ -189,27 +207,21 @@ function SpeedPlot({
               className="fill-sky-500/70"
             />
           ))}
-          {/* Отметка обрезанного столбца. Без неё число пика висело в
-              воздухе: подпись говорила «40 Мбит/с», а верх шкалы был 7, и
-              в поле зрения этому числу не соответствовало ничего. */}
-          {series.down_max_bps.map((v, i) =>
-            v !== null && v > scale ? (
-              <line
-                key={`c${i}`}
-                x1={i + 0.5}
-                x2={i + 0.5}
-                y1={0}
-                y2={4}
-                stroke="currentColor"
-                strokeWidth={2}
-                className="text-sky-300"
-                vectorEffect="non-scaling-stroke"
-              />
-            ) : null,
-          )}
-          {/* Отдача — тонкий контур поверх: палитра панели одноцветная, и
-              различать ряды приходится не оттенком, а тем, что один залит, а
-              другой обведён. */}
+          {/* Черта под указателем: без неё непонятно, к какому месту
+              относится подсказка (amnezia-vpn-server-cor5). */}
+          {at !== null ? (
+            <line
+              x1={at + 0.5}
+              x2={at + 0.5}
+              y1={0}
+              y2={HEIGHT}
+              stroke="currentColor"
+              strokeWidth={1}
+              className="text-foreground/50"
+              vectorEffect="non-scaling-stroke"
+            />
+          ) : null}
+          {/* Отдача — линия поверх заливки. */}
           {bandRuns(series.up_min_bps, series.up_max_bps).map((run, i) => (
             <polyline
               key={`u${i}`}
@@ -225,6 +237,7 @@ function SpeedPlot({
             />
           ))}
         </svg>
+        </div>
       </div>
       <div className="flex justify-between pl-10 text-[10px] leading-none text-muted-foreground tabular-nums">
         <span>{formatClock(series.from_utc, series)}</span>
@@ -233,9 +246,7 @@ function SpeedPlot({
       <p className="text-xs text-muted-foreground">
         <span className="text-sky-500">заливка</span> — к клиенту,{" "}
         <span className="text-amber-500">линия</span> — от него
-        {peak > scale
-          ? ` · пик ${formatBits(peak)}, отмечен засечками сверху`
-          : ` · пик ${formatBits(peak)}`}
+        {` · пик ${formatBits(peak)}`}
         {/* Про пропуски — только когда они есть: иначе читатель ищет в
             графике то, чего в нём не было. */}
         {hasGaps ? " · разрывы — время, за которое замеров нет" : ""}
@@ -245,19 +256,35 @@ function SpeedPlot({
 }
 
 /**
- * Шкала строится по 95-му процентилю, а не по максимуму. Одной секунды
- * скачивания хватало, чтобы прижать весь остальной час к полу и спрятать
- * провалы — то есть сделать ровно то, от чего мы отказались, отвергнув
- * усреднение (amnezia-vpn-server-0ypv). Устойчивая нагрузка шкалу
- * поднимает: она и есть 95-й процентиль.
+ * Шкала следует за данными: она вмещает самый высокий столбец, и ничто не
+ * режется о верхний край.
+ *
+ * Была попытка строить её по 95-му процентилю, чтобы одиночный всплеск не
+ * прижимал остальной час к полу. Владелец эту попытку отверг: срезанный пик
+ * читается как поломка графика, а не как решение
+ * (amnezia-vpn-server-0ypv, -dbmm). Мелочь внизу теперь читается не
+ * масштабом, а подсказкой при наведении (amnezia-vpn-server-cor5).
+ *
+ * Верх округляется вверх до круглого числа: ось с подписью «41.7» читается
+ * хуже, чем с «50», а запас сверху не даёт пику упереться в рамку.
  */
 export function speedScale(series: SpeedSeries): number {
-  const values = [...series.down_max_bps, ...series.up_max_bps]
-    .filter((v): v is number => v !== null && v > 0)
-    .sort((a, b) => a - b);
-  if (values.length === 0) return 1_000_000;
-  const at = values[Math.min(values.length - 1, Math.floor(values.length * 0.95))];
-  return Math.max(at, 1_000);
+  const peak = Math.max(
+    0,
+    ...series.down_max_bps.map((v) => v ?? 0),
+    ...series.up_max_bps.map((v) => v ?? 0),
+  );
+  if (peak <= 0) return 1_000_000;
+  return roundUpNicely(peak);
+}
+
+/** Ближайшее сверху круглое: 1, 2, 2.5 или 5 на порядок величины. */
+function roundUpNicely(value: number): number {
+  const power = 10 ** Math.floor(Math.log10(value));
+  for (const step of [1, 2, 2.5, 5, 10]) {
+    if (value <= step * power) return step * power;
+  }
+  return 10 * power;
 }
 
 /** Непрерывные куски без разрывов: каждый рисуется отдельной фигурой. */
@@ -286,6 +313,71 @@ function bandPath(
   const top = run.map((c) => `${c + 0.5},${y(maxs[c] ?? 0)}`);
   const bottom = [...run].reverse().map((c) => `${c + 0.5},${y(mins[c] ?? 0)}`);
   return `M${top.join(" L")} L${bottom.join(" L")} Z`;
+}
+
+/**
+ * Что было в этом столбце. Столбец — это несколько замеров, поэтому
+ * показывается разброс, а не одно число: «2.1-7.6» и есть тот самый
+ * провал, ради которого график открывают.
+ */
+function Readout({
+  series,
+  at,
+  n,
+  scale,
+}: {
+  series: SpeedSeries;
+  at: number;
+  n: number;
+  scale: number;
+}) {
+  const from = new Date(series.from_utc).getTime();
+  const to = new Date(series.to_utc).getTime();
+  const moment = new Date(from + ((to - from) * (at + 0.5)) / n);
+  const time = Number.isNaN(moment.getTime())
+    ? ""
+    : moment.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const gap = series.down_max_bps[at] === null;
+  // Подсказка держится у своего края: у правого края поля она иначе
+  // вылезала бы за карточку.
+  const right = at > n / 2;
+  // И уходит вниз, когда в этом столбце высокая скорость: наверху она
+  // закрывала бы ровно то, на что человек смотрит.
+  const tall = (series.down_max_bps[at] ?? 0) > scale / 2;
+
+  return (
+    <div
+      role="status"
+      className="pointer-events-none absolute z-10 min-w-max rounded-md border border-border bg-popover px-2 py-1 text-[11px] leading-tight text-popover-foreground shadow-sm"
+      style={{
+        ...(right ? { right: 0 } : { left: 0 }),
+        ...(tall ? { bottom: 0 } : { top: 0 }),
+      }}
+    >
+      <div className="tabular-nums text-muted-foreground">{time}</div>
+      {gap ? (
+        // Разрыв обязан читаться и здесь: ноль означал бы «клиент ничего не
+        // получал», а это диагноз.
+        <div>замеров нет</div>
+      ) : (
+        <>
+          <div className="text-sky-500 tabular-nums">
+            ↓ {formatRange(series.down_min_bps[at], series.down_max_bps[at])}
+          </div>
+          <div className="text-amber-500 tabular-nums">
+            ↑ {formatRange(series.up_min_bps[at], series.up_max_bps[at])}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Разброс внутри столбца; при совпадении краёв — одно число. */
+function formatRange(lo: number | null, hi: number | null): string {
+  if (lo === null || hi === null) return "—";
+  if (lo === hi) return formatBits(hi);
+  return `${formatBitsBare(lo, hi)}\u2009-\u2009${formatBits(hi)}`;
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
