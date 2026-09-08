@@ -205,7 +205,7 @@ describe("легенда", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    await waitFor(() => expect(legendText()).toMatch(/заливка/));
+    await waitFor(() => expect(legendText()).toMatch(/пик/));
     expect(legendText()).not.toMatch(/разрывы/);
   });
 
@@ -219,8 +219,8 @@ describe("легенда", () => {
     await waitFor(() => expect(legendText()).toMatch(/разрывы/));
   });
 
-  // Владелец: «нужно хотя бы цвет добавить». Ряды обязаны различаться
-  // сразу, а не при разглядывании.
+  // Владелец: «нужно хотя бы цвет добавить», синий и оранжевый. Ряды
+  // обязаны различаться сразу, а не при разглядывании.
   it("разводит ряды цветом", async () => {
     const v = Array.from({ length: 10 }, () => 20_000_000);
     fetchSpeed.mockResolvedValue(
@@ -229,7 +229,36 @@ describe("легенда", () => {
     render(<SpeedChart clientId={1} />);
 
     await waitFor(() => expect(document.querySelector("svg path.fill-sky-500\\/70")).not.toBeNull());
-    expect(document.querySelector("svg polyline.text-amber-400")).not.toBeNull();
+    expect(document.querySelector("svg polyline.text-orange-500")).not.toBeNull();
+  });
+
+  // Кружок вместо слов «заливка» и «линия»: те объясняли приём отрисовки,
+  // а не называли вещи (amnezia-vpn-server-udas).
+  it("называет ряды словами при кружках, а не приёмом отрисовки", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: v, up_min_bps: v }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    expect(await screen.findByText("скачивание")).toBeInTheDocument();
+    expect(screen.getByText("отдача")).toBeInTheDocument();
+    expect(screen.queryByText(/заливка|линия — от/)).toBeNull();
+    expect(document.querySelector("span.bg-sky-500")).not.toBeNull();
+    expect(document.querySelector("span.bg-orange-500")).not.toBeNull();
+  });
+
+  // Пик вынесен отдельно, а не втиснут в строку легенды.
+  it("держит пик отдельно от легенды", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(legendText()).toMatch(/пик 20\.0 Мбит\/с/));
+    const bullets = screen.getByText("скачивание").closest("div");
+    expect(bullets?.textContent).not.toMatch(/пик/);
   });
 });
 
