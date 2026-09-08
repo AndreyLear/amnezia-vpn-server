@@ -20,6 +20,26 @@ if [ "${AMNEZIA_E2E_NO_CLIENTS:-0}" != "1" ]; then
     go run . client add "alice" >/dev/null
     go run . client add "bob" >/dev/null
 fi
+# История скорости: без неё график в карточке проверять нечем
+# (amnezia-vpn-server-tmjw). Кладём последние десять минут так, как их писал бы
+# контейнер awg, — с провалом посередине, потому что ровную линию график
+# нарисует и по ошибке.
+if [ "${AMNEZIA_E2E_NO_CLIENTS:-0}" != "1" ]; then
+    keys="$(awk '/^PublicKey/ {printf "%s ", substr($3, 1, 12)}' "$AMNEZIA_CONFIG_PATH")"
+    awk -v now="$(date -u +%s)" -v keys="$keys" 'BEGIN {
+        n = split(keys, k, " ")
+        print "#speed v1"
+        rx = 0; tx = 0
+        for (i = 0; i < 120; i++) {
+            step = (i >= 60 && i < 66) ? 1250000 : 62500000
+            tx += step; rx += step / 10
+            line = sprintf("%d", now - (120 - i) * 5)
+            for (j = 1; j <= n; j++) line = line sprintf(" %s:%d:%d", k[j], rx, tx)
+            print line
+        }
+    }' > "$DIR/speed.log"
+fi
+
 # Полоса о новом выпуске рисуется по файлу, который на живом сервере пишет
 # хост (amnezia-vpn-server-tjoq). Здесь его кладём мы: иначе проверить полосу
 # можно было бы только дождавшись настоящего выпуска.

@@ -12,6 +12,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { SpeedChart } from "@/components/SpeedChart";
 import {
   Dialog,
   DialogContent,
@@ -443,6 +444,14 @@ export function ClientInfoDialog({
                       <dd>
                         ↓ {formatBytes(client.tx_bytes)} · ↑ {formatBytes(client.rx_bytes)}
                       </dd>
+                    </div>
+                  </PropertyRow>
+                  {/* Что было со скоростью. Накопленные байты выше не
+                      отвечают на «вчера вечером не грузило», а это —
+                      отвечает (amnezia-vpn-server-tmjw). */}
+                  <PropertyRow>
+                    <div className="grid w-full gap-0.5">
+                      <SpeedChart clientId={client.id} />
                     </div>
                   </PropertyRow>
                   <PropertyRow className="pt-3">

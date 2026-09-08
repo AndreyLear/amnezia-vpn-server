@@ -133,7 +133,7 @@ describe("ClientInfoDialog", () => {
     ).toBeNull();
   });
 
-  it("puts Удалить inside the properties dl as the row after Трафик", () => {
+  it("puts Удалить inside the properties dl as its last row", () => {
     render(
       <ClientInfoDialog
         client={client}
@@ -159,7 +159,10 @@ describe("ClientInfoDialog", () => {
     expect(
       trafficRow!.compareDocumentPosition(deleteRow!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(trafficRow!.nextElementSibling).toBe(deleteRow);
+    // Между ними встал график скорости (amnezia-vpn-server-tmjw), поэтому
+    // соседства уже нет. Правило же остаётся: «Удалить» — последняя строка
+    // списка, и отступ перед ней больше обычного.
+    expect(dl!.lastElementChild).toBe(deleteRow);
 
     expect(deleteRow).toHaveClass("pt-3");
     expect(trafficRow).toHaveClass("py-2");
