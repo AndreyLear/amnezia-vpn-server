@@ -404,7 +404,13 @@ sync_rates() {
 
     # Дисциплина пересобирается целиком: классы и фильтры дешевле выписать
     # заново, чем выяснять, чем нынешний набор отличается от нужного.
-    ${TC_BIN} qdisc del dev "${IFACE}" root >/dev/null 2>&1
+    #
+    # `|| true` не для красоты: скрипт живёт под `set -e`, а удалять здесь
+    # обычно нечего — очереди ещё нет. Без этого первый же вызов убивал весь
+    # entrypoint, туннель падал, а awg0 оставался на хосте, и следующий
+    # подъём упирался в «уже существует». Один незакрытый возврат превращался
+    # в бесконечный перезапуск (amnezia-vpn-server-jzzu).
+    ${TC_BIN} qdisc del dev "${IFACE}" root >/dev/null 2>&1 || true
     if ! ${TC_BIN} qdisc add dev "${IFACE}" root handle 1: htb default 99 r2q 100 >/dev/null 2>&1; then
         log "error: не удалось завести очередь на ${IFACE}; пределы скорости не применены"
         : > "${RATE_STATE}" 2>/dev/null || true
@@ -412,7 +418,7 @@ sync_rates() {
     fi
     # Класс по умолчанию — без предела: те, кому ничего не задано, не должны
     # заметить разницы.
-    ${TC_BIN} class add dev "${IFACE}" parent 1: classid 1:99 htb rate 10gbit ceil 10gbit >/dev/null 2>&1
+    ${TC_BIN} class add dev "${IFACE}" parent 1: classid 1:99 htb rate 10gbit ceil 10gbit >/dev/null 2>&1 || true
 
     printf '%s\n' "${plan}" | while read -r cidr rate; do
         [ -n "${cidr}" ] && [ -n "${rate}" ] || continue
@@ -426,19 +432,19 @@ sync_rates() {
         fi
         # fq_codel под каждым классом: очередь должна быть короткой, иначе
         # выигрыш по задержке съедается ею же.
-        ${TC_BIN} qdisc add dev "${IFACE}" parent "${classid}" fq_codel >/dev/null 2>&1
+        ${TC_BIN} qdisc add dev "${IFACE}" parent "${classid}" fq_codel >/dev/null 2>&1 || true
         case "${family}" in
             -6) ${TC_BIN} filter add dev "${IFACE}" protocol ipv6 parent 1:0 prio 2 \
-                    u32 match ip6 dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 ;;
+                    u32 match ip6 dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 || true ;;
             *)  ${TC_BIN} filter add dev "${IFACE}" protocol ip parent 1:0 prio 1 \
-                    u32 match ip dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 ;;
+                    u32 match ip dst "${cidr}" flowid "${classid}" >/dev/null 2>&1 || true ;;
         esac
         log "предел ${rate} Мбит для ${cidr}"
     done || {
         # Полумера хуже отсутствия: часть клиентов ограничена, часть нет, и
         # объяснить разницу потом нечем.
         log "WARNING: пределы разошлись не полностью; снимаю очередь целиком"
-        ${TC_BIN} qdisc del dev "${IFACE}" root >/dev/null 2>&1
+        ${TC_BIN} qdisc del dev "${IFACE}" root >/dev/null 2>&1 || true
         : > "${RATE_STATE}" 2>/dev/null || true
         return 1
     }
@@ -503,7 +509,9 @@ reload_config() {
     install_config
     # Набор клиентов мог измениться, значит и набор маршрутов тоже.
     sync_routes
-    sync_rates
+    # Предел скорости — удобство, а не условие работы туннеля: его неудача не
+    # должна ронять связь.
+    sync_rates || true
     log "configuration reloaded via awg syncconf"
 }
 
@@ -523,7 +531,7 @@ LAST_MTIME="$(config_mtime)" || {
 # Только после подъёма: размер маршрута не может быть больше размера
 # устройства, а устройство появляется здесь.
 sync_routes
-sync_rates
+sync_rates || true
 
 generate_versions || true
 
