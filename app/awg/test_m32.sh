@@ -728,11 +728,14 @@ AllowedIPs = 10.8.0.2/32
 
 [Peer]
 PublicKey = bbb
-AllowedIPs = 10.8.0.3/32
+AllowedIPs = 10.8.0.3/32, fd00::3/128
 # amnezia-rate = 50
 CONF
 : > "${STUB_LOG}"; : > "${STUB_STATE}"
 rm -f "${STUB_FLAG_DIR}"/*
+# Двухстековому клиенту нужен хост, на котором IPv6 действительно жив: иначе
+# entrypoint законно вычистит IPv6 из конфига и проверять будет нечего.
+export AWG_PROC_ROOT="$(mmh6_proc 0 0)"
 run_entrypoint "${DIR_J}" "flow-j"
 PID_J=$!
 check "flow-j: awg-quick up invoked" wait_for_line "${STUB_STATE}" "^up$"
@@ -742,6 +745,17 @@ check "flow-j: предел ограниченному клиенту" \
     grep -q "tc class add dev awg0 parent 1: classid 1:101 htb rate 50mbit" "${STUB_LOG}"
 check "flow-j: правило на его адрес" \
     grep -q "match ip dst 10.8.0.3/32" "${STUB_LOG}"
+# Предел принадлежит клиенту, а не адресу. Пока класс заводился на адрес,
+# клиент с IPv4 и IPv6 получал два класса по 50 и вместе с ними сто: замер
+# показал 72 Мбит/с там, где стояло 50 (amnezia-vpn-server-tv8v).
+check "flow-j: у двухстекового клиента ОДИН класс" \
+    test "$(grep -c 'tc class add dev awg0 parent 1: classid 1:1[0-9][0-9] htb rate 50mbit' "${STUB_LOG}")" = 1
+check "flow-j: второй класс не заведён" \
+    not grep -q "classid 1:102" "${STUB_LOG}"
+check "flow-j: правило на его же адрес IPv6" \
+    grep -q "match ip6 dst fd00::3/128" "${STUB_LOG}"
+check "flow-j: оба семейства ведут в один класс" \
+    test "$(grep -c 'flowid 1:101' "${STUB_LOG}")" = 2
 # Тому, кому ничего не задано, отдельный класс не нужен: он идёт в класс по
 # умолчанию, который без предела.
 check "flow-j: обычному клиенту предел не выписан" \
@@ -768,13 +782,14 @@ AllowedIPs = 10.8.0.2/32
 
 [Peer]
 PublicKey = bbb
-AllowedIPs = 10.8.0.3/32
+AllowedIPs = 10.8.0.3/32, fd00::3/128
 CONF
 printf '200\n' > "${STUB_MTIME}"
 check "flow-j: перезагрузка прошла" wait_for_line "${STUB_STATE}" "^syncconf-ok$"
 check "flow-j: снятый предел убирает очередь" \
     wait_for_line "${TMP}/flow-j.out" "пределы скорости сняты"
 stop_pid "${PID_J}"
+unset AWG_PROC_ROOT
 
 # --- 3.11 никому не задано — очередь не заводится вовсе ----------------
 DIR_K="${TMP}/flow-k"
