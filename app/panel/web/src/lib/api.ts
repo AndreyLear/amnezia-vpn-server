@@ -125,6 +125,33 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+/**
+ * История скорости клиента (amnezia-vpn-server-8lnv). Ряды идут
+ * параллельно и читаются по индексу; `null` — это РАЗРЫВ, то есть «замеров
+ * не было», а не «скорость нулевая». Ноль — диагноз, разрыв — нет, и
+ * рисовать их одинаково нельзя.
+ *
+ * `down` — к клиенту, `up` — от него: названия от лица того, чью карточку
+ * открыли.
+ */
+export type SpeedSeries = {
+  window: "hour" | "day";
+  from_utc: string;
+  to_utc: string;
+  down_min_bps: (number | null)[];
+  down_max_bps: (number | null)[];
+  up_min_bps: (number | null)[];
+  up_max_bps: (number | null)[];
+};
+
+export function fetchSpeed(
+  id: number,
+  window: "hour" | "day",
+  columns: number,
+): Promise<SpeedSeries> {
+  return api<SpeedSeries>(`/api/clients/${id}/speed?window=${window}&columns=${columns}`);
+}
+
 export type LoginResponse = {
   ok: boolean;
   message?: string;

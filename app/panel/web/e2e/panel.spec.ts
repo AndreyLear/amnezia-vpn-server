@@ -83,3 +83,25 @@ test("overflow menu has no account item at 375px", async ({ page }) => {
   await expect(page.getByText("Выйти")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Тёмная тема" })).toBeVisible();
 });
+
+// График скорости в карточке клиента (amnezia-vpn-server-tmjw). Смысл —
+// разбирать жалобу «не грузит видео», поэтому проверяется не наличие
+// прямоугольника, а то, что провал в данных виден как разброс.
+test("карточка клиента показывает график скорости", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await login(page);
+  await page.getByRole("button", { name: "alice", exact: true }).click();
+
+  const chart = page.getByRole("img", { name: /Скорость/ });
+  await expect(chart).toBeVisible();
+  // Столбиков должно быть много: один на каждый замер, а не одна линия на
+  // весь график.
+  await expect.poll(async () => chart.locator("line").count()).toBeGreaterThan(50);
+  await expect(page.getByText(/Пик .*Мбит\/с/)).toBeVisible();
+
+  // Сутки — то же окно, другой охват; данные фикстуры лежат в последних
+  // минутах, поэтому график остаётся непустым.
+  await page.getByRole("button", { name: "сутки" }).click();
+  await expect(page.getByRole("button", { name: "сутки" })).toHaveAttribute("aria-pressed", "true");
+  await expect(chart).toBeVisible();
+});
