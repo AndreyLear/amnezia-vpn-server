@@ -241,7 +241,7 @@ export function ClientInfoDialog({
 
   async function saveRate() {
     if (!client) return;
-    // Пустое поле — «без предела»: снять и задать одним действием нельзя,
+    // Пустое поле — «без ограничений»: снять и задать одним действием нельзя,
     // поэтому пустота и есть снятие.
     if (rateOutOfRange) return;
     const next = rateDraftValue === "" ? 0 : Number(rateDraftValue);
@@ -354,12 +354,12 @@ export function ClientInfoDialog({
                     </dd>
                   </ReadOnlyProperty>
                   <ReadOnlyProperty
-                    label="Предел скорости"
+                    label="Ограничение скорости"
                     actions={
                       <Button
                         type="button"
                         variant="outline"
-                        aria-label="Изменить предел скорости"
+                        aria-label="Изменить ограничение скорости"
                         disabled={pending}
                         onClick={startRateEdit}
                       >
@@ -368,7 +368,7 @@ export function ClientInfoDialog({
                       </Button>
                     }
                   >
-                    <dd>{viewRate === 0 ? "без предела" : `${viewRate} Мбит/с`}</dd>
+                    <dd>{viewRate === 0 ? "Без ограничений" : `${viewRate} Мбит/с`}</dd>
                   </ReadOnlyProperty>
                   <PropertyRow
                     actions={
@@ -576,7 +576,7 @@ export function ClientInfoDialog({
       >
         <DialogContent className="gap-6 sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Предел скорости</DialogTitle>
+            <DialogTitle>Ограничение скорости</DialogTitle>
           </DialogHeader>
           <form
             className="grid gap-6"
@@ -593,7 +593,7 @@ export function ClientInfoDialog({
                 min={rateFloor}
                 max={rateCeiling}
                 inputMode="numeric"
-                placeholder="без предела"
+                placeholder="без ограничений"
                 value={rateDraft}
                 onChange={(e) => setRateDraft(e.target.value)}
                 disabled={pending}
@@ -613,7 +613,7 @@ export function ClientInfoDialog({
               <Button
                 type="submit"
                 className={saveButtonClass}
-                aria-label="Сохранить предел скорости"
+                aria-label="Сохранить ограничение скорости"
                 disabled={pending || rateOutOfRange}
               >
                 Сохранить

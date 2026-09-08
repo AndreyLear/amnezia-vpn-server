@@ -5,8 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import { ClientInfoDialog } from "@/components/ClientInfoDialog";
 import type { Client } from "@/lib/api";
 
-// Предел скорости на клиента (amnezia-vpn-server-jzzu). Он сокращает потери,
-// а не ускоряет, и текст обязан говорить именно это.
+// Ограничение скорости на клиента (amnezia-vpn-server-jzzu). Оно сокращает
+// потери, а не ускоряет, и текст обязан говорить именно это.
 function client(overrides: Partial<Client> = {}): Client {
   return {
     id: 1,
@@ -26,23 +26,23 @@ function client(overrides: Partial<Client> = {}): Client {
   };
 }
 
-describe("предел скорости в карточке клиента", () => {
-  it("без предела так и написано", () => {
+describe("ограничение скорости в карточке клиента", () => {
+  it("без ограничений так и написано", () => {
     render(<ClientInfoDialog client={client()} onOpenChange={() => {}} />);
-    expect(screen.getByText("без предела")).toBeInTheDocument();
+    expect(screen.getByText("Без ограничений")).toBeInTheDocument();
   });
 
-  it("заданный предел показан с единицами", () => {
+  it("заданное ограничение показано с единицами", () => {
     render(<ClientInfoDialog client={client({ rate_limit: 50 })} onOpenChange={() => {}} />);
     expect(screen.getByText("50 Мбит/с")).toBeInTheDocument();
   });
 
   // Самое важное в этом окне — не поле, а подпись: для чего это и что даёт.
-  it("окно правки говорит, зачем предел нужен", async () => {
+  it("окно правки говорит, зачем ограничение нужно", async () => {
     const user = userEvent.setup();
     render(<ClientInfoDialog client={client()} onOpenChange={() => {}} />);
 
-    await user.click(screen.getByRole("button", { name: "Изменить предел скорости" }));
+    await user.click(screen.getByRole("button", { name: "Изменить ограничение скорости" }));
     // Польза названа тем, что человек увидит: ровный поток вместо рывков.
     // Прежний текст обещал прежнюю скорость, и замер это опроверг
     // (amnezia-vpn-server-ouhb).
@@ -57,9 +57,9 @@ describe("предел скорости в карточке клиента", () 
     const onSave = vi.fn().mockResolvedValue(true);
     render(<ClientInfoDialog client={client()} onOpenChange={() => {}} onSave={onSave} />);
 
-    await user.click(screen.getByRole("button", { name: "Изменить предел скорости" }));
+    await user.click(screen.getByRole("button", { name: "Изменить ограничение скорости" }));
     await user.type(await screen.findByLabelText("Мегабит в секунду"), "50");
-    await user.click(screen.getByRole("button", { name: "Сохранить предел скорости" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить ограничение скорости" }));
 
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ rate_limit: 50 })),
@@ -73,21 +73,21 @@ describe("предел скорости в карточке клиента", () 
     const onSave = vi.fn().mockResolvedValue(true);
     render(<ClientInfoDialog client={client()} onOpenChange={() => {}} onSave={onSave} />);
 
-    await user.click(screen.getByRole("button", { name: "Изменить предел скорости" }));
+    await user.click(screen.getByRole("button", { name: "Изменить ограничение скорости" }));
     await user.type(await screen.findByLabelText("Мегабит в секунду"), "5000");
-    expect(screen.getByRole("button", { name: "Сохранить предел скорости" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Сохранить ограничение скорости" })).toBeDisabled();
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  // Пустое поле — снятие предела, а не ошибка.
-  it("пустое поле снимает предел", async () => {
+  // Пустое поле — снятие ограничения, а не ошибка.
+  it("пустое поле снимает ограничение", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(true);
     render(<ClientInfoDialog client={client({ rate_limit: 50 })} onOpenChange={() => {}} onSave={onSave} />);
 
-    await user.click(screen.getByRole("button", { name: "Изменить предел скорости" }));
+    await user.click(screen.getByRole("button", { name: "Изменить ограничение скорости" }));
     await user.clear(await screen.findByLabelText("Мегабит в секунду"));
-    await user.click(screen.getByRole("button", { name: "Сохранить предел скорости" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить ограничение скорости" }));
 
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ rate_limit: 0 })),
