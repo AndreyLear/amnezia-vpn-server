@@ -301,8 +301,6 @@ func TestBackupUsageErrors(t *testing.T) {
 	}
 }
 
-
-
 func TestBackupCreateClosedDatabaseFails(t *testing.T) {
 	c := newCtx(t)
 	setBackupsPath(t, c)

@@ -27,6 +27,7 @@ const (
 	auditClientAdd    = "client.add"
 	auditClientEdit   = "client.edit"
 	auditClientMTU    = "client.mtu"
+	auditClientRate   = "client.rate"
 	auditClientToggle = "client.toggle"
 	auditClientDelete = "client.delete"
 	auditRestore      = "backup.restore"
@@ -55,4 +56,14 @@ func (s *Server) auditAs(actor, action, subject, detail string) {
 	if err := db.AuditAppend(s.db(), actor, action, subject, detail); err != nil {
 		s.cfg.Logger.Printf("audit %s: %v", action, err)
 	}
+}
+
+// clientNameForAudit — имя клиента для записи в журнал, или пусто, если его
+// уже не прочитать. Номер в журнале бесполезен: по нему потом некого искать,
+// особенно после удаления.
+func (s *Server) clientNameForAudit(id int64) string {
+	if c, err := db.ClientByID(s.db(), id); err == nil {
+		return c.Name
+	}
+	return ""
 }

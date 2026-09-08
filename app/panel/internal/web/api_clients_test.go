@@ -214,3 +214,51 @@ func TestAPICreateDoesNotWriteDescriptionToConf(t *testing.T) {
 		t.Fatalf("awg0.conf must not contain description: %s", raw)
 	}
 }
+
+// Предел скорости на клиента (amnezia-vpn-server-jzzu).
+func TestPatchClientRateLimit(t *testing.T) {
+	f := newFixture(t)
+	rec := f.postBody("/api/clients", `{"name":"router"}`)
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("создание: код %d: %s", rec.Code, rec.Body.String())
+	}
+	id := decodeAPI(t, rec)["id"]
+
+	path := fmt.Sprintf("/api/clients/%v", id)
+	if rec := f.patchBody(path, `{"rate_limit":50}`); rec.Code != http.StatusOK {
+		t.Fatalf("установка предела: код %d: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeAPI(t, f.get(path))
+	if got["rate_limit"] != float64(50) {
+		t.Fatalf("rate_limit = %v, ожидалось 50", got["rate_limit"])
+	}
+
+	// Ноль снимает предел и это обычное состояние.
+	if rec := f.patchBody(path, `{"rate_limit":0}`); rec.Code != http.StatusOK {
+		t.Fatalf("снятие предела: код %d", rec.Code)
+	}
+	if got := decodeAPI(t, f.get(path)); got["rate_limit"] != float64(0) {
+		t.Fatalf("rate_limit = %v, ожидалось 0", got["rate_limit"])
+	}
+
+	// Вне границ — отказ с внятным сообщением, а не молчаливый зажим.
+	rec = f.patchBody(path, `{"rate_limit":5000}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("код %d, ожидался 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Предел должен быть") {
+		t.Fatalf("отказ не объясняет границы: %s", rec.Body.String())
+	}
+
+	// И записано в журнал: по нему разбирают, кто что менял.
+	entries, _ := decodeAPI(t, f.get("/api/audit"))["entries"].([]any)
+	found := false
+	for _, e := range entries {
+		if m, _ := e.(map[string]any); m != nil && m["action"] == "client.rate" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("смена предела не попала в журнал")
+	}
+}

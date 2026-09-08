@@ -286,6 +286,15 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 	if err := s.restoreHostSettings(restoreEndpoint, liveMTU); err != nil {
 		s.cfg.Logger.Printf("restore host settings: %v", err)
 	}
+	// Запись делается ПОСЛЕ подмены базы и потому попадает в новую, а не в
+	// ту, которой больше нет. Восстановление заменяет и сам журнал — он
+	// лежит в той же базе, — так что запись, сделанная раньше, исчезла бы
+	// вместе со старой базой: восстановление стёрло бы след самого себя.
+	//
+	// Это самое разрушительное действие панели, и до сих пор оно было
+	// единственным незаписанным (amnezia-vpn-server-y5y2).
+	s.auditAs(sess.Username, auditRestore, "",
+		fmt.Sprintf("клиентов применено: %d", appliedN))
 	if _, err := db.AuthUserByUsername(s.db(), sess.Username); err != nil {
 		auth.ClearSessionCookie(w)
 	}

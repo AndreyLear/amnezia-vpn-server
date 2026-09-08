@@ -47,6 +47,7 @@ commands:
   client disable <id>
   client rename <id> <name>
   client set-mtu <id> <bytes|default>
+  client set-rate <id> <mbit|default>
     (this client's own tunnel MTU; "default" returns it to the server's.
      It sizes what the client sends — the other direction is bounded by
      the server interface, which is one value for everyone)

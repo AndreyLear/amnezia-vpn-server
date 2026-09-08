@@ -48,7 +48,7 @@ func mapNameConstraint(err error) error {
 // which cannot be derived (amnezia-vpn-server-xy6j). Archives written
 // by older releases are still accepted by restore and migrated here at
 // apply time (T-110 backward compatibility).
-const SchemaVersion = "9"
+const SchemaVersion = "10"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS server (
@@ -74,7 +74,8 @@ var schemaStatements = []string{
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		expires_at TEXT,
-		mtu INTEGER NOT NULL DEFAULT 0
+		mtu INTEGER NOT NULL DEFAULT 0,
+		rate_limit INTEGER NOT NULL DEFAULT 0
 	);`,
 	`CREATE TABLE IF NOT EXISTS settings (
 		key TEXT PRIMARY KEY,
@@ -177,6 +178,9 @@ func Migrate(handle *sql.DB) error {
 		return err
 	}
 	if err := migrateAuditLog(handle); err != nil {
+		return err
+	}
+	if err := migrateClientRateLimit(handle); err != nil {
 		return err
 	}
 	if _, err := handle.Exec(
@@ -440,6 +444,9 @@ type ClientRow struct {
 	// генератору, чтобы выписать маршрут этому клиенту
 	// (amnezia-vpn-server-wc2l).
 	MTU int64
+	// RateLimit — предел скорости к этому клиенту в мегабитах, 0 означает
+	// «без предела» (amnezia-vpn-server-jzzu).
+	RateLimit int64
 }
 
 // ClientsForConfig returns the clients active for the server AWG config,
@@ -449,7 +456,7 @@ type ClientRow struct {
 // (fail-closed).
 func ClientsForConfig(handle *sql.DB) ([]ClientRow, error) {
 	rows, err := handle.Query(
-		`SELECT id, public_key, preshared_key, address, expires_at, mtu
+		`SELECT id, public_key, preshared_key, address, expires_at, mtu, rate_limit
 		   FROM clients WHERE enabled = 1 ORDER BY id`,
 	)
 	if err != nil {
@@ -465,7 +472,7 @@ func ClientsForConfig(handle *sql.DB) ([]ClientRow, error) {
 			psk sql.NullString
 			exp sql.NullString
 		)
-		if err := rows.Scan(&c.ID, &c.PublicKey, &psk, &c.Address, &exp, &c.MTU); err != nil {
+		if err := rows.Scan(&c.ID, &c.PublicKey, &psk, &c.Address, &exp, &c.MTU, &c.RateLimit); err != nil {
 			return nil, fmt.Errorf("db: scan client: %w", err)
 		}
 		c.PresharedKey = psk.String
@@ -744,6 +751,10 @@ type ClientRecord struct {
 	// MTU is this client's own tunnel MTU; 0 means "whatever the server
 	// says" and is the normal state (amnezia-vpn-server-h2pg).
 	MTU int64
+	// RateLimit — предел скорости к этому клиенту в мегабитах; 0 означает
+	// «без предела» и является обычным состоянием
+	// (amnezia-vpn-server-jzzu).
+	RateLimit int64
 }
 
 // Expired reports whether the record is past expires_at (see ClientRow.
@@ -984,7 +995,7 @@ func ClientAddress6(serverAddress, serverAddress6, clientAddress string) (string
 // ErrClientNotFound.
 func ClientByID(handle *sql.DB, id int64) (*ClientRecord, error) {
 	row := handle.QueryRow(
-		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu, rate_limit
 		   FROM clients WHERE id = ?`, id,
 	)
 	c, err := scanClient(row)
@@ -1000,7 +1011,7 @@ func ClientByID(handle *sql.DB, id int64) (*ClientRecord, error) {
 // ClientsAll loads all client records, ordered by id.
 func ClientsAll(handle *sql.DB) ([]ClientRecord, error) {
 	rows, err := handle.Query(
-		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu, rate_limit
 		   FROM clients ORDER BY id`,
 	)
 	if err != nil {
@@ -1034,7 +1045,8 @@ func scanClient(row rowScanner) (*ClientRecord, error) {
 		expiresAt sql.NullString
 	)
 	if err := row.Scan(&c.ID, &c.Name, &c.PrivateKey, &c.PublicKey, &psk,
-		&c.Address, &enabled, &c.CreatedAt, &c.UpdatedAt, &expiresAt, &c.Description, &c.MTU); err != nil {
+		&c.Address, &enabled, &c.CreatedAt, &c.UpdatedAt, &expiresAt, &c.Description,
+		&c.MTU, &c.RateLimit); err != nil {
 		return nil, err
 	}
 	c.PresharedKey = psk.String
@@ -1072,6 +1084,39 @@ func UpdateClientMTU(handle *sql.DB, id int64, mtu int64) error {
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("db: update client mtu: %w", err)
+	}
+	if n == 0 {
+		return ErrClientNotFound
+	}
+	return nil
+}
+
+// Границы предела скорости. Ниже мегабита ограничение перестаёт быть
+// ограничением и становится обрывом связи; выше гигабита его не выдержит ни
+// одно плечо, ради которого оно заводилось (amnezia-vpn-server-jzzu).
+const (
+	ClientRateFloor   = 1
+	ClientRateCeiling = 1000
+)
+
+// UpdateClientRateLimit задаёт предел скорости к этому клиенту в мегабитах;
+// 0 снимает предел.
+//
+// Значение вне границ отвергается, а не зажимается, — как у MTU: человек
+// вводил его руками, и молча заменить его значило бы спрятать ошибку там,
+// куда больше никто не заглянет.
+func UpdateClientRateLimit(handle *sql.DB, id int64, mbit int64) error {
+	if mbit != 0 && (mbit < ClientRateFloor || mbit > ClientRateCeiling) {
+		return fmt.Errorf("db: client rate %d is outside [%d, %d]", mbit, ClientRateFloor, ClientRateCeiling)
+	}
+	res, err := handle.Exec(`UPDATE clients SET rate_limit = ?, updated_at = ? WHERE id = ?`,
+		mbit, stamp(), id)
+	if err != nil {
+		return fmt.Errorf("db: update client rate: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("db: update client rate: %w", err)
 	}
 	if n == 0 {
 		return ErrClientNotFound
@@ -1253,4 +1298,40 @@ func AuditTail(handle *sql.DB, limit int) ([]AuditRecord, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// migrateClientRateLimit (schema v10) adds clients.rate_limit.
+//
+// Additive, like every migration here (docs/adr/0001): the column appears
+// where it was missing and nothing existing is touched, so a database can
+// still be opened by the previous release — it simply ignores the column
+// (amnezia-vpn-server-jzzu).
+func migrateClientRateLimit(handle *sql.DB) error {
+	rows, err := handle.Query(`PRAGMA table_info(clients)`)
+	if err != nil {
+		return fmt.Errorf("db: inspect clients: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid, notnull, pk int
+			name, ctype      string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("db: inspect clients: %w", err)
+		}
+		if name == "rate_limit" {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("db: inspect clients: %w", err)
+	}
+	if _, err := handle.Exec(
+		`ALTER TABLE clients ADD COLUMN rate_limit INTEGER NOT NULL DEFAULT 0`,
+	); err != nil {
+		return fmt.Errorf("db: add clients.rate_limit: %w", err)
+	}
+	return nil
 }

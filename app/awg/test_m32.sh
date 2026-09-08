@@ -129,6 +129,25 @@ case "${1:-}" in
 esac
 exit 0
 SH
+    # tc записывает вызовы и держит игрушечное состояние: «дисциплина стоит
+    # или нет». Проверка «очередь не заведена, когда никому не задан предел»
+    # иначе проверяла бы заглушку, а не entrypoint (amnezia-vpn-server-jzzu).
+    cat > "${TMP}/bin/tc" <<'SH'
+#!/bin/bash
+echo "tc $*" >> "${AWG_STUB_LOG}"
+STATE="${AWG_STUB_QDISC:-/dev/null}"
+case "$1:$2" in
+    qdisc:add)
+        [ -f "${AWG_STUB_FLAG_TC_FAIL:-}" ] && exit 2
+        echo root > "$STATE"
+        ;;
+    qdisc:del) : > "$STATE" ;;
+    class:add|filter:add)
+        [ -f "${AWG_STUB_FLAG_TC_FAIL:-}" ] && exit 2
+        ;;
+esac
+exit 0
+SH
     cat > "${TMP}/bin/stat" <<'SH'
 #!/bin/bash
 cat "${AWG_STUB_MTIME_FILE}"
@@ -159,6 +178,9 @@ export AWG_STUB_FLAG_IP_GONE="${STUB_FLAG_DIR}/ip-gone"
 export AWG_STUB_FLAG_UAPI_GONE="${STUB_FLAG_DIR}/uapi-gone"
 export AWG_STUB_FLAG_SYNCONF_FAIL="${STUB_FLAG_DIR}/syncconf-fail"
 export AWG_STUB_FLAG_ROUTE_FAIL="${STUB_FLAG_DIR}/route-fail"
+export AWG_STUB_FLAG_TC_FAIL="${STUB_FLAG_DIR}/tc-fail"
+export AWG_STUB_QDISC="${dir}/qdisc.state"
+export AWG_RATE_STATE="${dir}/rates.state"
 export AWG_STUB_ROUTES="${dir}/routes.table"
 export AWG_ROUTE_STATE="${dir}/routes.state"
 export CONFIG_SRC="${dir}/config/awg0.conf"
@@ -654,6 +676,114 @@ check "flow-i: свой размер доехал до маршрута" \
 check "flow-i: остальным маршрут не выписан" \
     not grep -q "^10.8.0.2/32 " "${DIR_I}/routes.table"
 stop_pid "${PID_I}"
+
+# --- 3.10 предел скорости на клиента (amnezia-vpn-server-jzzu) ---------
+#
+# Плечо до клиента может терять пакеты под нагрузкой; предел вдвое сокращает
+# потери при той же полезной скорости. Проверяем, что он ставится тому, кому
+# задан, снимается вместе с ним и НЕ заводит очередь там, где никому ничего не
+# задано: awg0 живёт с noqueue, и менять это ради никого нельзя.
+DIR_J="${TMP}/flow-j"
+mkdir -p "${DIR_J}/config" "${DIR_J}/etc"
+printf '100\n' > "${STUB_MTIME}"
+cat > "${DIR_J}/config/awg0.conf" <<'CONF'
+[Interface]
+PrivateKey = kEY
+Address = 10.8.0.1/24
+ListenPort = 51820
+MTU = 1340
+
+[Peer]
+PublicKey = aaa
+AllowedIPs = 10.8.0.2/32
+
+[Peer]
+PublicKey = bbb
+AllowedIPs = 10.8.0.3/32
+# amnezia-rate = 50
+CONF
+: > "${STUB_LOG}"; : > "${STUB_STATE}"
+rm -f "${STUB_FLAG_DIR}"/*
+run_entrypoint "${DIR_J}" "flow-j"
+PID_J=$!
+check "flow-j: awg-quick up invoked" wait_for_line "${STUB_STATE}" "^up$"
+sleep 0.6
+check "flow-j: очередь заведена" grep -q "tc qdisc add dev awg0 root handle 1: htb" "${STUB_LOG}"
+check "flow-j: предел ограниченному клиенту" \
+    grep -q "tc class add dev awg0 parent 1: classid 1:101 htb rate 50mbit" "${STUB_LOG}"
+check "flow-j: правило на его адрес" \
+    grep -q "match ip dst 10.8.0.3/32" "${STUB_LOG}"
+# Тому, кому ничего не задано, отдельный класс не нужен: он идёт в класс по
+# умолчанию, который без предела.
+check "flow-j: обычному клиенту предел не выписан" \
+    not grep -q "match ip dst 10.8.0.2/32" "${STUB_LOG}"
+check "flow-j: короткая очередь под классом" grep -q "fq_codel" "${STUB_LOG}"
+
+# Предел снят на горячую — очередь должна уйти целиком.
+cat > "${DIR_J}/config/awg0.conf" <<'CONF'
+[Interface]
+PrivateKey = kEY
+Address = 10.8.0.1/24
+ListenPort = 51820
+MTU = 1340
+
+[Peer]
+PublicKey = aaa
+AllowedIPs = 10.8.0.2/32
+
+[Peer]
+PublicKey = bbb
+AllowedIPs = 10.8.0.3/32
+CONF
+printf '200\n' > "${STUB_MTIME}"
+check "flow-j: перезагрузка прошла" wait_for_line "${STUB_STATE}" "^syncconf-ok$"
+check "flow-j: снятый предел убирает очередь" \
+    wait_for_line "${TMP}/flow-j.out" "пределы скорости сняты"
+stop_pid "${PID_J}"
+
+# --- 3.11 никому не задано — очередь не заводится вовсе ----------------
+DIR_K="${TMP}/flow-k"
+mkdir -p "${DIR_K}/config" "${DIR_K}/etc"
+printf '100\n' > "${STUB_MTIME}"
+cat > "${DIR_K}/config/awg0.conf" <<'CONF'
+[Interface]
+PrivateKey = kEY
+Address = 10.8.0.1/24
+ListenPort = 51820
+MTU = 1340
+
+[Peer]
+PublicKey = aaa
+AllowedIPs = 10.8.0.2/32
+CONF
+: > "${STUB_LOG}"; : > "${STUB_STATE}"
+rm -f "${STUB_FLAG_DIR}"/*
+run_entrypoint "${DIR_K}" "flow-k"
+PID_K=$!
+check "flow-k: awg-quick up invoked" wait_for_line "${STUB_STATE}" "^up$"
+sleep 0.6
+check "flow-k: очередь не заведена" not grep -q "tc qdisc add" "${STUB_LOG}"
+check "flow-k: и не снималась зря" not grep -q "tc qdisc del" "${STUB_LOG}"
+stop_pid "${PID_K}"
+
+# --- 3.12 пределы разошлись не полностью — снимаем целиком -------------
+# Полумера хуже отсутствия: часть клиентов ограничена, часть нет, и объяснить
+# разницу потом нечем.
+DIR_L="${TMP}/flow-l"
+mkdir -p "${DIR_L}/config" "${DIR_L}/etc"
+printf '100\n' > "${STUB_MTIME}"
+cp "${DIR_J}/config/awg0.conf" "${DIR_L}/config/awg0.conf"
+printf '# amnezia-rate = 50\n' >> "${DIR_L}/config/awg0.conf"
+: > "${STUB_LOG}"; : > "${STUB_STATE}"
+rm -f "${STUB_FLAG_DIR}"/*
+touch "${STUB_FLAG_DIR}/tc-fail"
+run_entrypoint "${DIR_L}" "flow-l"
+PID_L=$!
+check "flow-l: awg-quick up invoked" wait_for_line "${STUB_STATE}" "^up$"
+check "flow-l: неудача замечена" \
+    wait_for_line "${TMP}/flow-l.out" "пределы скорости не применены"
+check "flow-l: туннель при этом жив" not grep -q "^down$" "${STUB_STATE}"
+stop_pid "${PID_L}"
 
 # =====================================================================
 echo

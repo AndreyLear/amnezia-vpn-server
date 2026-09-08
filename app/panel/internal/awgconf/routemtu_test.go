@@ -137,3 +137,29 @@ func TestPeerLineWithoutAMeasuredCeiling(t *testing.T) {
 		t.Errorf("свой размер не доехал: %d", got)
 	}
 }
+
+// Предел скорости уезжает комментарием и только тому, кому задан
+// (amnezia-vpn-server-jzzu).
+func TestRenderPutsRateInComments(t *testing.T) {
+	server := ServerConfig{
+		PrivateKey: "k", Address: "10.8.0.1/24", ListenPort: 51820, MTU: 1340,
+	}
+	peers := []PeerConfig{
+		{PublicKey: "a", AllowedIPs: "10.8.0.2/32"},
+		{PublicKey: "b", AllowedIPs: "10.8.0.3/32", RateLimit: 50},
+	}
+	out := Render(server, peers)
+
+	if !strings.Contains(out, "# amnezia-rate = 50\n") {
+		t.Fatalf("предел не выписан:\n%s", out)
+	}
+	if strings.Count(out, "amnezia-rate") != 1 {
+		t.Fatalf("предел выписан тому, кому не задан:\n%s", out)
+	}
+	// Комментарий, иначе awg setconf отвергнет конфигурацию целиком.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "amnezia-rate") && !strings.HasPrefix(line, "#") {
+			t.Fatalf("строка предела не комментарий: %q", line)
+		}
+	}
+}

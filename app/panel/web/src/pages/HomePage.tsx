@@ -152,6 +152,7 @@ export default function HomePage() {
     name: string;
     description: string;
     mtu?: number;
+    rate_limit?: number;
   }) {
     if (!infoClient) return false;
     setPendingId(infoClient.id);

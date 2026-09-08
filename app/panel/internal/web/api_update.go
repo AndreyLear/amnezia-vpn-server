@@ -9,7 +9,6 @@ package web
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
@@ -119,14 +118,14 @@ func (s *Server) apiUpdateCheck(w http.ResponseWriter, r *http.Request) {
 
 // writeRequest drops a request file atomically. Atomically because the host
 // watches the path: a half-written request would be read as a whole one.
+//
+// Тем же способом, что и остальные производные файлы: tmp -> fsync ->
+// close -> rename -> fsync каталога, 0600. Прежде здесь стояли WriteFile и
+// Rename без fsync — то есть комментарий обещал больше, чем делал код, и
+// следующий читатель на это обещание оперся бы (amnezia-vpn-server-i4m6).
 func writeRequest(path, body string) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
-		return fmt.Errorf("web: write %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("web: rename %s: %w", tmp, err)
+	if err := status.WriteAtomic(path, []byte(body)); err != nil {
+		return fmt.Errorf("web: write request %s: %w", path, err)
 	}
 	return nil
 }

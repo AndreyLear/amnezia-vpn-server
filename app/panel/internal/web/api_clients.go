@@ -45,6 +45,9 @@ type clientJSON struct {
 	// because nobody chose" and "1340 because somebody did" are different
 	// answers to the same question.
 	MTU int64 `json:"mtu"`
+	// RateLimit — предел скорости к этому клиенту в мегабитах; 0 означает
+	// «без предела» (amnezia-vpn-server-jzzu).
+	RateLimit int64 `json:"rate_limit"`
 }
 
 type clientCreateReq struct {
@@ -59,6 +62,8 @@ type clientPatchReq struct {
 	// MTU: 0 returns the client to the server value; out of range is
 	// refused rather than clamped.
 	MTU *int64 `json:"mtu"`
+	// RateLimit: 0 снимает предел; вне границ — отказ, а не зажим.
+	RateLimit *int64 `json:"rate_limit"`
 }
 
 // dnsBypassMinRx: сколько клиент должен был прислать, прежде чем молчание
@@ -78,6 +83,7 @@ func clientToJSON(c db.ClientRecord, st *status.Status, dns *status.DNSSeen, add
 		Address6:    addr6,
 		Enabled:     c.Enabled,
 		MTU:         c.MTU,
+		RateLimit:   c.RateLimit,
 	}
 	if st == nil {
 		return out
@@ -310,6 +316,21 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.RateLimit != nil {
+		if err := db.UpdateClientRateLimit(s.db(), id, *req.RateLimit); err != nil {
+			if errors.Is(err, db.ErrClientNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": flashNotFound})
+				return
+			}
+			// Как и с MTU: значение вне границ — ошибка человека, а не сбой,
+			// и ему надо сказать, в каких пределах можно.
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"ok":      false,
+				"message": fmt.Sprintf("Предел должен быть от %d до %d Мбит", db.ClientRateFloor, db.ClientRateCeiling),
+			})
+			return
+		}
+	}
 	if req.Enabled != nil {
 		if err := db.SetClientEnabled(s.db(), id, *req.Enabled); err != nil {
 			if msg, ok := classifyExpected(err); ok {
@@ -338,6 +359,13 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 			detail = strconv.FormatInt(*req.MTU, 10)
 		}
 		s.audit(r, auditClientMTU, c.Name, detail)
+	}
+	if req.RateLimit != nil {
+		detail := "без предела"
+		if *req.RateLimit != 0 {
+			detail = strconv.FormatInt(*req.RateLimit, 10) + " Мбит"
+		}
+		s.audit(r, auditClientRate, c.Name, detail)
 	}
 	if req.Enabled != nil {
 		detail := "отключён"

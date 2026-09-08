@@ -21,6 +21,7 @@ const (
 	opClientRename    = "client rename"
 	opClientSetExpiry = "client set-expiry"
 	opClientSetMTU    = "client set-mtu"
+	opClientSetRate   = "client set-rate"
 	opClientDelete    = "client delete"
 	opClientConfig    = "client config"
 )
@@ -49,6 +50,8 @@ func (a *app) cmdClient(args []string) int {
 		return a.cmdClientRename(args[1:])
 	case "set-mtu":
 		return a.cmdClientSetMTU(args[1:])
+	case "set-rate":
+		return a.cmdClientSetRate(args[1:])
 	case "set-expiry":
 		return a.cmdClientSetExpiry(args[1:])
 	case "delete":
@@ -359,6 +362,52 @@ func (a *app) cmdClientSetMTU(args []string) int {
 		return a.ok(opClientSetMTU, "client "+strconv.FormatInt(id, 10)+" follows the server MTU again")
 	}
 	return a.ok(opClientSetMTU, fmt.Sprintf("client %d MTU %d (applies to the config issued from now on)", id, mtu))
+}
+
+// cmdClientSetRate ограничивает скорость к этому клиенту или снимает предел
+// ("default"). Предел сокращает потери на плече до клиента примерно вдвое при
+// той же полезной скорости — он НЕ ускоряет, и текст об этом молчать не должен
+// (amnezia-vpn-server-jzzu).
+func (a *app) cmdClientSetRate(args []string) int {
+	parsed, err := parseArgs(args, nil)
+	if err != nil {
+		return a.usageError(opClientSetRate, err.Error())
+	}
+	if len(parsed.positional) != 2 {
+		return a.usageError(opClientSetRate, "want <id> <mbit|default>")
+	}
+	id, err := parseClientID(parsed.positional[0])
+	if err != nil {
+		return a.usageError(opClientSetRate, err.Error())
+	}
+	var rate int64
+	if parsed.positional[1] != "default" {
+		rate, err = strconv.ParseInt(parsed.positional[1], 10, 64)
+		if err != nil {
+			return a.usageError(opClientSetRate, "rate must be a number of megabits or \"default\"")
+		}
+		if rate < db.ClientRateFloor || rate > db.ClientRateCeiling {
+			return a.usageError(opClientSetRate, fmt.Sprintf(
+				"rate %d is outside [%d, %d]: below the floor a limit stops being a limit and becomes a broken connection, above the ceiling no link this exists for could carry it",
+				rate, db.ClientRateFloor, db.ClientRateCeiling))
+		}
+	}
+	handle, err := a.openDB()
+	if err != nil {
+		return a.fatal(opClientSetRate, err)
+	}
+	defer handle.Close()
+	if err := db.UpdateClientRateLimit(handle, id, rate); err != nil {
+		return a.fatal(opClientSetRate, err)
+	}
+	if err := a.regenerate(handle); err != nil {
+		return a.fatal(opClientSetRate, fmt.Errorf("generate config: %w", err))
+	}
+	if rate == 0 {
+		return a.ok(opClientSetRate, "client "+strconv.FormatInt(id, 10)+" has no rate limit again")
+	}
+	return a.ok(opClientSetRate, fmt.Sprintf(
+		"client %d limited to %d Mbit (fewer retransmissions, not more speed)", id, rate))
 }
 
 // cmdClientSetExpiry sets (RFC3339, canonicalized) or clears ("none")
