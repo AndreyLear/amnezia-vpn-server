@@ -28,7 +28,7 @@ function series(over: Partial<SpeedSeries> = {}): SpeedSeries {
  * Заливки: у приёма до максимума («поднималось») и до минимума
  * («держалось»), у отдачи — до максимума.
  */
-function areas(series: "down-max" | "down-min" | "up-max"): SVGPathElement[] {
+function areas(series: "down-max" | "up-max"): SVGPathElement[] {
   const svg = document.querySelector("svg");
   if (!svg) return [];
   return Array.from(svg.querySelectorAll(`path[data-series="${series}"]`));
@@ -66,7 +66,10 @@ afterEach(() => {
 describe("график скорости", () => {
   // Самое важное: столбец рисуется от минимума до максимума. Среднее
   // спрятало бы секундный провал, ради которого график и заводится.
-  it("рисует столбец от минимума до максимума, а не одну точку", async () => {
+  // Заливка одна, до максимума. Их было две — плотная до минимума и
+  // светлая до максимума; светлая читалась как посторонняя тень и путала
+  // (amnezia-vpn-server-lzqx). Минимум не потерян: он в подсказке.
+  it("рисует одну заливку до максимума, а не две", async () => {
     fetchSpeed.mockResolvedValue(
       series({
         down_min_bps: [1_000_000],
@@ -77,15 +80,14 @@ describe("график скорости", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    await waitFor(() => expect(bands()).toHaveLength(1));
-    // Две заливки, и верх у них разный: максимум выше минимума. Одна
-    // заливка означала бы среднее, а среднее прячет провал.
-    const topOfMax = Math.min(...ys(areas("down-max")[0]));
-    const topOfMin = Math.min(...ys(areas("down-min")[0]));
-    expect(topOfMax).toBeLessThan(topOfMin);
-    // И обе доходят до основания: снизу сплошь, а не дырки
-    // (amnezia-vpn-server-b8kv).
-    expect(Math.max(...ys(areas("down-min")[0]))).toBe(120);
+    await waitFor(() => expect(areas("down-max")).toHaveLength(1));
+    expect(document.querySelectorAll('path[data-series="down-min"]')).toHaveLength(0);
+    // Верх заливки — максимум столбца, а не среднее и не минимум.
+    const top = Math.min(...ys(areas("down-max")[0]));
+    const y = (bps: number) => 120 - Math.min(bps / 100_000_000, 1) * 120;
+    expect(top).toBeCloseTo(y(100_000_000), 0);
+    // И доходит до основания: снизу сплошь, а не дырки.
+    expect(Math.max(...ys(areas("down-max")[0]))).toBe(120);
   });
 
   // Разрыв — это отсутствие столбика, а не столбик нулевой высоты. Ноль
@@ -103,7 +105,6 @@ describe("график скорости", () => {
 
     // Разрыв рвёт заливку надвое, а не рисуется полосой нулевой высоты.
     await waitFor(() => expect(areas("down-max")).toHaveLength(2));
-    expect(areas("down-min")).toHaveLength(2);
   });
 
   it("говорит, когда замеров нет вовсе", async () => {
@@ -388,7 +389,7 @@ describe("отдача", () => {
 
     await waitFor(() => expect(areas("up-max")).toHaveLength(1));
     const up_ = areas("up-max")[0];
-    const downDense = areas("down-min")[0];
+    const downDense = areas("down-max")[0];
     // Поверх — значит позже в порядке отрисовки.
     expect(
       downDense.compareDocumentPosition(up_) & Node.DOCUMENT_POSITION_FOLLOWING,
