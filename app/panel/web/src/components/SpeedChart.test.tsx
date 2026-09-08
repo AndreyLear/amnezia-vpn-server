@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SpeedChart, formatBits } from "@/components/SpeedChart";
+import { SpeedChart, formatBits, speedScale } from "@/components/SpeedChart";
 import type { SpeedSeries } from "@/lib/api";
 
 const fetchSpeed = vi.hoisted(() => vi.fn());
@@ -24,13 +24,17 @@ function series(over: Partial<SpeedSeries> = {}): SpeedSeries {
   };
 }
 
-/** Столбики графика в порядке отрисовки. */
-function bars(prefix: "d" | "u"): SVGLineElement[] {
+/** Куски заливки приёма: по одному на каждый непрерывный отрезок. */
+function bands(): SVGPathElement[] {
   const svg = document.querySelector("svg");
   if (!svg) return [];
-  return Array.from(svg.querySelectorAll("line")).filter((el) =>
-    (el.getAttribute("class") ?? "").includes(prefix === "d" ? "text-primary" : "text-muted"),
-  );
+  return Array.from(svg.querySelectorAll("path"));
+}
+
+/** Все координаты y из фигуры — чтобы проверять высоту полосы. */
+function ys(el: Element): number[] {
+  const d = el.getAttribute("d") ?? "";
+  return [...d.matchAll(/[\s,ML]([\d.]+)(?=[\sZ]|$)/g)].map((m) => Number(m[1]));
 }
 
 beforeEach(() => {
@@ -55,13 +59,11 @@ describe("график скорости", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    await waitFor(() => expect(bars("d")).toHaveLength(1));
-    const bar = bars("d")[0];
-    const y1 = Number(bar.getAttribute("y1"));
-    const y2 = Number(bar.getAttribute("y2"));
-    expect(y1).not.toBe(y2);
-    // Пик наверху, провал внизу: чем меньше скорость, тем больше y.
-    expect(y1).toBeGreaterThan(y2);
+    await waitFor(() => expect(bands()).toHaveLength(1));
+    const heights = ys(bands()[0]);
+    // Полоса имеет высоту: верх — максимум, низ — минимум. Одна координата
+    // означала бы среднее, а среднее прячет провал.
+    expect(Math.max(...heights)).toBeGreaterThan(Math.min(...heights));
   });
 
   // Разрыв — это отсутствие столбика, а не столбик нулевой высоты. Ноль
@@ -77,7 +79,8 @@ describe("график скорости", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    await waitFor(() => expect(bars("d")).toHaveLength(2));
+    // Разрыв рвёт заливку надвое, а не рисуется полосой нулевой высоты.
+    await waitFor(() => expect(bands()).toHaveLength(2));
   });
 
   it("говорит, когда замеров нет вовсе", async () => {
@@ -141,6 +144,118 @@ describe("обновление по таймеру", () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchSpeed).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("шкала", () => {
+  // Отзыв владельца: один всплеск прижимал весь час к полу, и провалы
+  // пропадали — то самое, от чего мы отказались, отвергнув усреднение
+  // (amnezia-vpn-server-0ypv).
+  it("одиночный всплеск её не задирает", () => {
+    const quiet = Array.from({ length: 100 }, () => 10_000_000);
+    const withSpike = [...quiet.slice(1), 200_000_000];
+    const base = speedScale(
+      series({ down_max_bps: quiet, down_min_bps: quiet, up_max_bps: [], up_min_bps: [] }),
+    );
+    const spiked = speedScale(
+      series({ down_max_bps: withSpike, down_min_bps: withSpike, up_max_bps: [], up_min_bps: [] }),
+    );
+    expect(spiked).toBeLessThan(base * 1.25);
+  });
+
+  // А устойчивая высокая нагрузка — задирает: она и есть 95-й процентиль.
+  it("устойчивая нагрузка её поднимает", () => {
+    const busy = Array.from({ length: 100 }, () => 200_000_000);
+    expect(
+      speedScale(series({ down_max_bps: busy, down_min_bps: busy, up_max_bps: [], up_min_bps: [] })),
+    ).toBeGreaterThan(100_000_000);
+  });
+
+  it("говорит, что пик выше шкалы, когда его обрезало", async () => {
+    const quiet = Array.from({ length: 100 }, () => 10_000_000);
+    const withSpike = [...quiet.slice(1), 200_000_000];
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: withSpike, down_min_bps: withSpike, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    expect(await screen.findByText(/выше шкалы/)).toBeInTheDocument();
+  });
+
+  it("не поминает шкалу, когда обрезать нечего", async () => {
+    const quiet = Array.from({ length: 100 }, () => 10_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: quiet, down_min_bps: quiet, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await screen.findByText(/Пик/);
+    expect(screen.queryByText(/выше шкалы/)).toBeNull();
+  });
+});
+
+describe("оси", () => {
+  // В сутках время без даты обманывает: начало и конец окна показывают один
+  // и тот же час, и подписи выглядят одинаковыми.
+  it("в сутках подписывают дату, а не только час", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({
+        window: "day",
+        down_max_bps: v,
+        down_min_bps: v,
+        up_max_bps: [],
+        up_min_bps: [],
+        from_utc: "2026-09-07T13:00:00Z",
+        to_utc: "2026-09-08T13:00:00Z",
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    expect(await screen.findByText(/07\.09/)).toBeInTheDocument();
+    expect(screen.getByText(/08\.09/)).toBeInTheDocument();
+  });
+
+  // Отзыв владельца: «нет мин макс значений». Числа обязаны быть на самом
+  // графике, а не только в подписи под ним.
+  it("подписывают шкалу и время", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_max_bps: v,
+        down_min_bps: v,
+        up_max_bps: [],
+        up_min_bps: [],
+        from_utc: "2026-09-08T12:00:00Z",
+        to_utc: "2026-09-08T13:00:00Z",
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    // Единицы стоят в заголовке, а на оси только числа: полная подпись в
+    // колонке не помещается и ломается на две строки посреди слова.
+    expect(await screen.findByText("Скорость, Мбит/с")).toBeInTheDocument();
+    expect(screen.getByText("20.0")).toBeInTheDocument();
+    expect(screen.getByText("10.0")).toBeInTheDocument();
+    expect(screen.getByText("0")).toBeInTheDocument();
+    // Начало и конец окна.
+    const start = new Date("2026-09-08T12:00:00Z").toLocaleTimeString("ru-RU", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    expect(screen.getByText(start)).toBeInTheDocument();
+  });
+
+  it("рисует линии сетки", async () => {
+    const v = Array.from({ length: 10 }, () => 20_000_000);
+    fetchSpeed.mockResolvedValue(
+      series({ down_max_bps: v, down_min_bps: v, up_max_bps: [], up_min_bps: [] }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() =>
+      expect(document.querySelectorAll("svg line.text-border")).toHaveLength(3),
+    );
   });
 });
 
