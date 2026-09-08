@@ -9,12 +9,11 @@ import { fetchSpeed, type SpeedSeries } from "@/lib/api";
  * Своим svg, без библиотеки: одна область без легенды и зума — библиотека
  * весила бы больше, чем весь график, а прореживание делает сервер.
  *
- * Приём рисуется ПОЛОСОЙ между минимумом и максимумом столбца, а не
- * средним и не отдельными штрихами. Среднее спрятало бы секундный провал —
- * ровно то, ради чего график заводился; отдельные штрихи при трёхстах
- * столбцах превращались в щетину, по которой не видно ни формы, ни
- * значений. Тонкая полоса читается как «скорость держалась», широкая — как
- * «прыгала».
+ * Приём рисуется ДВУМЯ ЗАЛИВКАМИ от нуля: плотная доходит до минимума
+ * столбца — «столько было всё время», светлая до максимума — «до столько
+ * поднималось». Ни среднего, ни отдельных штрихов: среднее спрятало бы
+ * секундный провал, ради которого график заводился, а штрихи при трёхстах
+ * столбцах превращались в щетину без формы и значений.
  */
 
 type Range = "hour" | "day";
@@ -150,15 +149,6 @@ function SpeedPlot({
   return (
     <div className="grid gap-1">
       <div className="flex gap-1">
-        {/* Ось слева, а не внутри svg: там preserveAspectRatio растянул бы
-            текст вместе с картинкой. */}
-        {/* Только числа: единицы названы в заголовке, потому что полная
-            подпись в колонке оси не помещается и ломается на две строки. */}
-        <div className="flex h-[120px] w-9 shrink-0 flex-col justify-between text-right text-[10px] leading-none text-muted-foreground tabular-nums">
-          <span>{formatBitsBare(scale, scale)}</span>
-          <span>{formatBitsBare(scale / 2, scale)}</span>
-          <span>0</span>
-        </div>
         <div ref={plot} className="relative min-w-0 flex-1">
         {at !== null && series !== null ? (
           <Readout series={series} at={at} n={series.down_max_bps.length} scale={scale} />
@@ -168,7 +158,7 @@ function SpeedPlot({
           aria-label={`Скорость: шкала до ${formatBits(scale)}, пик ${formatBits(peak)}`}
           viewBox={`0 0 ${n} ${HEIGHT}`}
           preserveAspectRatio="none"
-          className="h-[120px] w-full touch-none overflow-hidden rounded-md bg-muted/40"
+          className="h-[120px] w-full touch-none overflow-hidden rounded-md bg-black/10"
           onPointerMove={(e) => {
             const box = plot.current?.getBoundingClientRect();
             if (!box || box.width === 0) return;
@@ -197,14 +187,30 @@ function SpeedPlot({
               vectorEffect="non-scaling-stroke"
             />
           ))}
-          {/* Приём — заливка. Разрывы рвут заливку, а не рисуются нулём:
-              ноль означал бы «клиент ничего не получал», а это диагноз. */}
+          {/* Приём — две заливки от нуля, одна поверх другой. Раньше это
+              была полоса от минимума до максимума, и там, где максимум
+              скакал, между всплесками зияло поле: читалось как дырки в
+              данных, хотя данные были сплошные. Теперь плотная заливка
+              доходит до минимума — «столько было всё время», а светлая до
+              максимума — «до столько поднималось». Разрывы рвут обе, а не
+              рисуются нулём: ноль означал бы «клиент ничего не получал», а
+              это диагноз. */}
           {bandRuns(series.down_min_bps, series.down_max_bps).map((run, i) => (
             <path
-              key={`d${i}`}
-              d={bandPath(run, series.down_min_bps, series.down_max_bps, y)}
+              key={`dmax${i}`}
+              data-series="down-max"
+              d={areaPath(run, series.down_max_bps, y)}
               clipPath={`url(#${clipId})`}
-              className="fill-sky-500/70"
+              className="fill-sky-500/35"
+            />
+          ))}
+          {bandRuns(series.down_min_bps, series.down_max_bps).map((run, i) => (
+            <path
+              key={`dmin${i}`}
+              data-series="down-min"
+              d={areaPath(run, series.down_min_bps, y)}
+              clipPath={`url(#${clipId})`}
+              className="fill-sky-500/80"
             />
           ))}
           {/* Черта под указателем: без неё непонятно, к какому месту
@@ -238,8 +244,18 @@ function SpeedPlot({
           ))}
         </svg>
         </div>
+        {/* Ось справа: слева она отодвигала само поле, а поле важнее чисел.
+            Числа без единиц — единицы названы в заголовке, полная подпись в
+            колонке не помещается и ломается на две строки. Ось живёт в
+            HTML, а не в svg: там preserveAspectRatio растянул бы текст
+            вместе с картинкой. */}
+        <div className="flex h-[120px] w-9 shrink-0 flex-col justify-between text-left text-[10px] leading-none text-muted-foreground tabular-nums">
+          <span>{formatBitsBare(scale, scale)}</span>
+          <span>{formatBitsBare(scale / 2, scale)}</span>
+          <span>0</span>
+        </div>
       </div>
-      <div className="flex justify-between pl-10 text-[10px] leading-none text-muted-foreground tabular-nums">
+      <div className="flex justify-between py-1 pr-10 text-[10px] leading-none text-muted-foreground tabular-nums">
         <span>{formatClock(series.from_utc, series)}</span>
         <span>{formatClock(series.to_utc, series)}</span>
       </div>
@@ -248,22 +264,29 @@ function SpeedPlot({
           обведено, и только потом — что это значит. И слова называют
           действие, а не направление: «к клиенту» тоже требовало
           додумывания (amnezia-vpn-server-udas). */}
-      <div className="flex justify-center gap-4 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          <span className="size-2 rounded-full bg-sky-500" aria-hidden />
-          скачивание
+      <div
+        data-slot="speed-legend"
+        className="flex items-center justify-between gap-4 text-xs text-muted-foreground"
+      >
+        <span className="flex items-center gap-4">
+          <span className="flex items-center gap-1.5">
+            <span className="size-2 rounded-full bg-sky-500" aria-hidden />
+            скачивание
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="size-2 rounded-full bg-orange-500" aria-hidden />
+            отдача
+          </span>
         </span>
-        <span className="flex items-center gap-1.5">
-          <span className="size-2 rounded-full bg-orange-500" aria-hidden />
-          отдача
-        </span>
+        <span className="tabular-nums">пик {formatBits(peak)}</span>
       </div>
-      <p className="text-center text-xs text-muted-foreground">
-        пик {formatBits(peak)}
-        {/* Про разрывы — только когда они есть: иначе читатель ищет в
-            графике то, чего в нём не было. */}
-        {hasGaps ? " · разрывы — время, за которое замеров нет" : ""}
-      </p>
+      {/* Про разрывы — только когда они есть: иначе читатель ищет в графике
+          то, чего в нём не было. */}
+      {hasGaps ? (
+        <p data-slot="speed-gaps" className="text-xs text-muted-foreground">
+          разрывы — время, за которое замеров нет
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -316,16 +339,24 @@ function bandRuns(mins: (number | null)[], maxs: (number | null)[]): number[][] 
   return runs;
 }
 
-/** Полоса: по верхам вперёд, по низам назад. */
-function bandPath(
+/**
+ * Заливка от основания до значения: вверх, по верхам вперёд, вниз к
+ * основанию и назад по нему.
+ *
+ * Раньше рисовалась полоса от минимума до максимума. Там, где максимум
+ * скакал, между всплесками зияло поле, и это читалось как дырки в данных,
+ * хотя данные были сплошные.
+ */
+function areaPath(
   run: number[],
-  mins: (number | null)[],
-  maxs: (number | null)[],
+  values: (number | null)[],
   y: (bps: number) => number,
 ): string {
-  const top = run.map((c) => `${c + 0.5},${y(maxs[c] ?? 0)}`);
-  const bottom = [...run].reverse().map((c) => `${c + 0.5},${y(mins[c] ?? 0)}`);
-  return `M${top.join(" L")} L${bottom.join(" L")} Z`;
+  if (run.length === 0) return "";
+  const first = run[0] + 0.5;
+  const last = run[run.length - 1] + 0.5;
+  const top = run.map((c) => `${c + 0.5},${y(values[c] ?? 0)}`);
+  return `M${first},${HEIGHT} L${top.join(" L")} L${last},${HEIGHT} Z`;
 }
 
 /**
@@ -395,7 +426,7 @@ function formatRange(lo: number | null, hi: number | null): string {
 
 function Empty({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-[120px] items-center justify-center rounded-md bg-muted/40 text-xs text-muted-foreground">
+    <div className="flex h-[120px] items-center justify-center rounded-md bg-black/10 text-xs text-muted-foreground">
       {children}
     </div>
   );
