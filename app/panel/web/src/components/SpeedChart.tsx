@@ -232,7 +232,7 @@ function SpeedPlot({
               stroke="currentColor"
               strokeWidth={1.5}
               clipPath={`url(#${clipId})`}
-              className="text-amber-400"
+              className="text-orange-500"
               vectorEffect="non-scaling-stroke"
             />
           ))}
@@ -243,11 +243,24 @@ function SpeedPlot({
         <span>{formatClock(series.from_utc, series)}</span>
         <span>{formatClock(series.to_utc, series)}</span>
       </div>
-      <p className="text-xs text-muted-foreground">
-        <span className="text-sky-500">заливка</span> — к клиенту,{" "}
-        <span className="text-amber-500">линия</span> — от него
-        {` · пик ${formatBits(peak)}`}
-        {/* Про пропуски — только когда они есть: иначе читатель ищет в
+      {/* Кружок вместо слов «заливка» и «линия»: те объясняли приём
+          отрисовки, и читателю приходилось сперва понять, что залито, а что
+          обведено, и только потом — что это значит. И слова называют
+          действие, а не направление: «к клиенту» тоже требовало
+          додумывания (amnezia-vpn-server-udas). */}
+      <div className="flex justify-center gap-4 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <span className="size-2 rounded-full bg-sky-500" aria-hidden />
+          скачивание
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="size-2 rounded-full bg-orange-500" aria-hidden />
+          отдача
+        </span>
+      </div>
+      <p className="text-center text-xs text-muted-foreground">
+        пик {formatBits(peak)}
+        {/* Про разрывы — только когда они есть: иначе читатель ищет в
             графике то, чего в нём не было. */}
         {hasGaps ? " · разрывы — время, за которое замеров нет" : ""}
       </p>
@@ -364,7 +377,7 @@ function Readout({
           <div className="text-sky-500 tabular-nums">
             ↓ {formatRange(series.down_min_bps[at], series.down_max_bps[at])}
           </div>
-          <div className="text-amber-500 tabular-nums">
+          <div className="text-orange-500 tabular-nums">
             ↑ {formatRange(series.up_min_bps[at], series.up_max_bps[at])}
           </div>
         </>
