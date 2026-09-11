@@ -216,7 +216,10 @@ export function UpdateDialog({
     onOpenChange(false);
   }
 
-  const title = running ? "Обновление идёт" : showOutcome ? outcome!.title : `Версия ${info?.latest ?? ""}`;
+  // «Обновление идёт» — отчёт о системе; «Обновляем…» — то, что человек и
+  // сам бы сказал про происходящее. Формулировку выбрал владелец
+  // (amnezia-vpn-server-7edq).
+  const title = running ? "Обновляем…" : showOutcome ? outcome!.title : `Версия ${info?.latest ?? ""}`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -261,7 +264,17 @@ export function UpdateDialog({
                     // тут ожидаемо и не значит, что обновление сорвалось
                     // (amnezia-vpn-server-mrjh).
                     "Панель перезапускается — это ожидаемая часть обновления"
-                  : (info?.state_step ? `Шаг: ${info.state_step}` : "Идёт обновление")}
+                  : // Хост пишет и машинное имя шага (state_step), и
+                    // человеческое пояснение (state_message) — но показывалось
+                    // только первое, и выходило «Шаг: запрос», что не значит
+                    // ничего. Теперь видно пояснение: «проверяю выпуск»,
+                    // «снимаю копию перед обновлением» (amnezia-vpn-server-7edq).
+                    //
+                    // Без пояснения показывается общее «Идёт обновление», а не
+                    // машинное слово: «запрос» в одиночку человеку не помогает,
+                    // а в update-state.json имя шага остаётся и для разбора
+                    // никуда не девается.
+                    (info?.state_message || "Идёт обновление")}
               </p>
               <p className="text-sm text-muted-foreground">
                 Окно можно закрыть — обновление от этого не остановится, а итог дождётся
