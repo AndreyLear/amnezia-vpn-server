@@ -278,6 +278,31 @@ describe("ход обновления", () => {
     );
   }
 
+  // Заголовок — то, что человек сказал бы сам, а не отчёт о системе
+  // (amnezia-vpn-server-7edq).
+  it("говорит «Обновляем…», а не «Обновление идёт»", () => {
+    openDialog({ state: "running", state_step: "установка", state_message: "ставлю выпуск 2.11.0" });
+    expect(screen.getByRole("heading", { name: "Обновляем…" })).toBeInTheDocument();
+  });
+
+  // Хост пишет и машинное имя шага, и человеческое пояснение; показывалось
+  // только первое, и выходило «Шаг: запрос» — не значащее ничего
+  // (amnezia-vpn-server-7edq).
+  it("под полосой стоит пояснение, а не машинное слово", () => {
+    openDialog({ state: "running", state_step: "запрос", state_message: "проверяю выпуск" });
+    expect(screen.getByText("проверяю выпуск")).toBeInTheDocument();
+    expect(screen.queryByText(/Шаг:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("запрос")).not.toBeInTheDocument();
+  });
+
+  // Без пояснения машинное слово не всплывает обратно: «запрос» в одиночку
+  // человеку не помогает (amnezia-vpn-server-7edq).
+  it("без пояснения говорит общее, а не машинное слово", () => {
+    openDialog({ state: "running", state_step: "запрос", state_message: "" });
+    expect(screen.getByText("Идёт обновление")).toBeInTheDocument();
+    expect(screen.queryByText(/запрос/)).not.toBeInTheDocument();
+  });
+
   // Полоса прогресса не привязана ко времени: панель в середине
   // перезапускается, и живой ход отдавать некому. Дойти до ста она может
   // ровно в тот момент, когда обновление затянулось, — а это единственный
