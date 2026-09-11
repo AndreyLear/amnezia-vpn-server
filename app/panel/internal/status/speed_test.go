@@ -52,11 +52,11 @@ func TestAppendSampleWritesCumulativeCounters(t *testing.T) {
 	if lines[0] != SpeedSchema {
 		t.Errorf("first line = %q, want the schema marker %q", lines[0], SpeedSchema)
 	}
-	want := fmt.Sprintf("%d AAAAAAAAAAAA:100:200", at.Unix())
+	want := fmt.Sprintf("%d AAAAAAAAAAAA:100:200:-", at.Unix())
 	if lines[1] != want {
 		t.Errorf("first tick = %q, want %q", lines[1], want)
 	}
-	if got, want := lines[2], fmt.Sprintf("%d AAAAAAAAAAAA:700:260", at.Add(5*time.Second).Unix()); got != want {
+	if got, want := lines[2], fmt.Sprintf("%d AAAAAAAAAAAA:700:260:-", at.Add(5*time.Second).Unix()); got != want {
 		t.Errorf("second tick = %q, want %q; counters must stay cumulative, not become deltas", got, want)
 	}
 }
@@ -121,11 +121,11 @@ func TestAppendSampleRotatesOnUTCDay(t *testing.T) {
 	}
 
 	current := readLines(t, path)
-	if len(current) != 2 || !strings.HasSuffix(current[1], ":30:40") {
+	if len(current) != 2 || !strings.HasSuffix(current[1], ":30:40:-") {
 		t.Fatalf("current file = %q, want the schema and only the new day", current)
 	}
 	rotated := readLines(t, speedDatedPath(path, time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)))
-	if len(rotated) != 2 || !strings.HasSuffix(rotated[1], ":10:20") {
+	if len(rotated) != 2 || !strings.HasSuffix(rotated[1], ":10:20:-") {
 		t.Fatalf("rotated file = %q, want the whole day that ended", rotated)
 	}
 }
@@ -180,7 +180,7 @@ func TestAppendSampleSurvivesUnreadableLines(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 	lines := readLines(t, path)
-	if got := lines[len(lines)-1]; !strings.HasSuffix(got, ":5:6") {
+	if got := lines[len(lines)-1]; !strings.HasSuffix(got, ":5:6:-") {
 		t.Errorf("last line = %q, want the new tick", got)
 	}
 }
@@ -240,7 +240,7 @@ func TestRotationSeesTheLastLineOfALongFile(t *testing.T) {
 	if _, err := os.Stat(speedDatedPath(path, day)); err != nil {
 		t.Fatalf("did not rotate on the next day: %v", err)
 	}
-	if lines := readLines(t, path); len(lines) != 2 || !strings.HasSuffix(lines[1], ":2:2") {
+	if lines := readLines(t, path); len(lines) != 2 || !strings.HasSuffix(lines[1], ":2:2:-") {
 		t.Fatalf("new file = %q, want the schema and only the new day", lines)
 	}
 }
@@ -416,5 +416,44 @@ func TestPruneLegacySpeedPrevLeavesUnreadableFileAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(SpeedPrevPath(path)); err != nil {
 		t.Errorf("unreadable legacy file was deleted: %v", err)
+	}
+}
+
+// The handshake age is what tells a buffering pause from a broken tunnel,
+// so it has to reach the file — traffic counters alone cannot
+// (amnezia-vpn-server-3wbe).
+func TestSpeedLineCarriesHandshakeAge(t *testing.T) {
+	at := time.Date(2026, 9, 11, 8, 9, 0, 0, time.UTC)
+	shook := at.Add(-42 * time.Second)
+	ahead := at.Add(4 * time.Second)
+
+	for _, tc := range []struct {
+		name      string
+		handshake *time.Time
+		want      string
+	}{
+		{"возраст в секундах", &shook, "42"},
+		{"рукопожатия не было", nil, SpeedNoHandshake},
+		{"замер в тот же миг", &at, "0"},
+		{"часы ушли вперёд — не отрицательное", &ahead, "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := peer("AAAAAAAAAAAAxxxx", 100, 200)
+			p.LastHandshakeUTC = tc.handshake
+			line := speedLine(sampleStatus(at, p))
+
+			want := fmt.Sprintf("%d AAAAAAAAAAAA:100:200:%s\n", at.Unix(), tc.want)
+			if line != want {
+				t.Errorf("line = %q, want %q", line, want)
+			}
+		})
+	}
+}
+
+// «Рукопожатия никогда не было» и «рукопожатие сию секунду» — разные
+// вещи, и ноль не может означать оба (amnezia-vpn-server-3wbe).
+func TestSpeedNoHandshakeIsNotZero(t *testing.T) {
+	if SpeedNoHandshake == "0" {
+		t.Fatal("признак «рукопожатия не было» совпал с нулевым возрастом")
 	}
 }

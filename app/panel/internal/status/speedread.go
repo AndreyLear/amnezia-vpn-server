@@ -30,6 +30,22 @@ import (
 // ordinary scheduling, half a minute is an outage.
 const SpeedMaxGap = 30 * time.Second
 
+// SpeedAliveMaxAge is how old the last handshake may be before a sample
+// counts as "the client was not reachable" (amnezia-vpn-server-3wbe).
+//
+// AmneziaWG renews a handshake about every two minutes while a peer has
+// traffic to send. Three minutes is that interval plus room for a renewal
+// that runs late, so a peer still talking is never called offline.
+//
+// The limit of what this can prove, stated plainly: it separates a
+// SUSTAINED silence from a player refilling its buffer, not a twenty-second
+// one. Over twenty seconds the handshake ages by twenty seconds either way,
+// and nothing here can tell the two apart. Over minutes it can — a working
+// tunnel keeps renewing, a broken one does not, and the age climbs sample
+// after sample. That is the case worth catching: the complaints are about
+// "YouTube said there is no internet", not about a pause nobody noticed.
+const SpeedAliveMaxAge = 3 * time.Minute
+
 // SpeedColumn is one column of the chart: the extremes of what happened
 // inside it. Extremes, not an average, because averaging is what hides
 // the dips this whole history exists to show — a one-second collapse
@@ -46,6 +62,19 @@ type SpeedColumn struct {
 	DownMax uint64
 	UpMin   uint64
 	UpMax   uint64
+	// HasLiveness and Online answer a different question from HasData, and
+	// confusing the two would be the whole bug back again
+	// (amnezia-vpn-server-3wbe). HasData means "we looked"; Online means
+	// "the client was actually reachable while we looked". A video player
+	// refilling its buffer produces zero bytes for twenty seconds and is
+	// perfectly online; a broken tunnel produces the same zero bytes and is
+	// not. Traffic alone cannot tell them apart — see SpeedAliveMaxAge.
+	//
+	// HasLiveness is false for a column built only from v1 lines, which
+	// carried no handshake. Such a column must be drawn as neither online
+	// nor offline: nothing is known about it either way.
+	HasLiveness bool
+	Online      bool
 }
 
 // SpeedSeries is a client's history folded to a fixed number of columns.
@@ -60,6 +89,12 @@ type speedSample struct {
 	at time.Time
 	rx uint64
 	tx uint64
+	// handshakeAge is how old the peer's handshake was at that moment, and
+	// hasHandshake says whether the line carried the field at all — a v1
+	// line does not, and that absence must not read as "age zero"
+	// (amnezia-vpn-server-3wbe).
+	handshakeAge time.Duration
+	hasHandshake bool
 }
 
 // ReadSpeedSeries folds the history of one peer between from and to into
@@ -259,19 +294,32 @@ func parseSpeedLine(line, key string) (speedSample, bool) {
 		if !ok || id != key {
 			continue
 		}
-		rxs, txs, ok := strings.Cut(counters, ":")
-		if !ok {
+		// Two parts is a v1 line, three a v2 one. Both are expected side by
+		// side — rotation happens on the UTC day, an update whenever the
+		// operator presses the button, so one file routinely holds a v1
+		// morning and a v2 afternoon (amnezia-vpn-server-3wbe).
+		parts := strings.Split(counters, ":")
+		if len(parts) < 2 || len(parts) > 3 {
 			return speedSample{}, false
 		}
-		rx, err := strconv.ParseUint(rxs, 10, 64)
+		rx, err := strconv.ParseUint(parts[0], 10, 64)
 		if err != nil {
 			return speedSample{}, false
 		}
-		tx, err := strconv.ParseUint(txs, 10, 64)
+		tx, err := strconv.ParseUint(parts[1], 10, 64)
 		if err != nil {
 			return speedSample{}, false
 		}
-		return speedSample{at: time.Unix(unix, 0).UTC(), rx: rx, tx: tx}, true
+		s := speedSample{at: time.Unix(unix, 0).UTC(), rx: rx, tx: tx}
+		if len(parts) == 3 && parts[2] != SpeedNoHandshake {
+			age, err := strconv.ParseInt(parts[2], 10, 64)
+			if err != nil {
+				return speedSample{}, false
+			}
+			s.handshakeAge = time.Duration(age) * time.Second
+			s.hasHandshake = true
+		}
+		return s, true
 	}
 	return speedSample{}, false
 }
@@ -315,10 +363,27 @@ func foldSpeed(samples []speedSample, from, to time.Time, columns int) *SpeedSer
 		//
 		// Настоящие разрывы это не трогает: отрезок длиннее SpeedMaxGap сюда
 		// не доходит вовсе, он отсеян выше.
+		// Liveness is taken from the interval's END: the handshake age on b
+		// is what was true once this interval had happened
+		// (amnezia-vpn-server-3wbe).
+		alive := b.handshakeAge <= SpeedAliveMaxAge
 		first := columnAt(a.at, from, width, columns)
 		last := columnAt(b.at, from, width, columns)
 		for idx := first; idx <= last; idx++ {
 			col := &out.Columns[idx]
+			if b.hasHandshake {
+				if !col.HasLiveness {
+					col.HasLiveness = true
+					col.Online = alive
+				} else {
+					// A column is called online only if EVERY sample in it
+					// was. In the day window a column spans minutes, and an
+					// outage inside it is exactly what the operator opened
+					// the chart to find — letting one healthy sample paint
+					// over it would hide the answer.
+					col.Online = col.Online && alive
+				}
+			}
 			if !col.HasData {
 				col.HasData = true
 				col.DownMin, col.DownMax = down, down

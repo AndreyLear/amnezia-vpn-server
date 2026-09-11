@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -251,5 +252,81 @@ func TestSpeedLogFileName(t *testing.T) {
 	want := filepath.Join(filepath.Dir(f.statusPath), "speed.log")
 	if got := filepath.Join(f.server.statusDir(), "speed.log"); got != want {
 		t.Fatalf("путь = %q, ожидался %q", got, want)
+	}
+}
+
+// speedLogLineV2 — строка истории с возрастом рукопожатия
+// (amnezia-vpn-server-3wbe).
+func speedLogLineV2(at time.Time, key string, rx, tx uint64, handshake string) string {
+	return fmt.Sprintf("%d %s:%d:%d:%s", at.UTC().Unix(), status.SpeedKey(key), rx, tx, handshake)
+}
+
+// График должен уметь показать обрыв, а не только нули в трафике, — значит
+// признак связи обязан дойти до SPA (amnezia-vpn-server-3wbe).
+func TestAPIClientSpeedSendsOnline(t *testing.T) {
+	f := newFixture(t)
+	c, _, _ := f.addClient("router")
+	now := time.Now().UTC()
+	writeSpeedLog(t, f,
+		speedLogLineV2(now.Add(-20*time.Second), c.PublicKey, 0, 0, "600"),
+		speedLogLineV2(now.Add(-15*time.Second), c.PublicKey, 0, 0, "605"),
+		speedLogLineV2(now.Add(-10*time.Second), c.PublicKey, 0, 0, "8"),
+		speedLogLineV2(now.Add(-5*time.Second), c.PublicKey, 0, 0, "13"),
+	)
+
+	rec := f.get(fmt.Sprintf("/api/clients/%d/speed?columns=120", c.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код = %d", rec.Code)
+	}
+	var got struct {
+		Online []*bool `json:"online"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("разбор ответа: %v", err)
+	}
+	if len(got.Online) != 120 {
+		t.Fatalf("длина online = %d, ждали 120", len(got.Online))
+	}
+	var offline, online int
+	for _, v := range got.Online {
+		if v == nil {
+			continue
+		}
+		if *v {
+			online++
+		} else {
+			offline++
+		}
+	}
+	if offline == 0 {
+		t.Errorf("состарившееся рукопожатие не пришло как «не на связи»: %s", rec.Body.String())
+	}
+	if online == 0 {
+		t.Errorf("свежее рукопожатие не пришло как «на связи»: %s", rec.Body.String())
+	}
+}
+
+// Записи прежнего формата признака не несут, и выдавать «неизвестно» за
+// «был на связи» нельзя (amnezia-vpn-server-3wbe).
+func TestAPIClientSpeedOnlineUnknownForOldRecords(t *testing.T) {
+	f := newFixture(t)
+	c, _, _ := f.addClient("router")
+	now := time.Now().UTC()
+	writeSpeedLog(t, f,
+		speedLogLine(now.Add(-10*time.Second), c.PublicKey, 0, 0),
+		speedLogLine(now.Add(-5*time.Second), c.PublicKey, 100, 100),
+	)
+
+	rec := f.get(fmt.Sprintf("/api/clients/%d/speed?columns=120", c.ID))
+	var got struct {
+		Online []*bool `json:"online"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("разбор ответа: %v", err)
+	}
+	for i, v := range got.Online {
+		if v != nil {
+			t.Fatalf("столбец %d получил признак связи там, где его неоткуда взять: %v", i, *v)
+		}
 	}
 }
