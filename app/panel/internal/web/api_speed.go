@@ -57,6 +57,15 @@ type speedJSON struct {
 	DownMax []*uint64 `json:"down_max_bps"`
 	UpMin   []*uint64 `json:"up_min_bps"`
 	UpMax   []*uint64 `json:"up_max_bps"`
+	// Online — был ли клиент на связи в этом столбце
+	// (amnezia-vpn-server-3wbe). Это НЕ то же самое, что нули в скорости:
+	// плеер, добирающий буфер, двадцать секунд не получает ничего и при
+	// этом прекрасно на связи. Отличить одно от другого по объёму трафика
+	// нельзя вовсе — здесь это видно по возрасту рукопожатия.
+	//
+	// null значит «неизвестно», а не «был на связи»: столбцы, собранные из
+	// записей прежнего формата, признака не несут.
+	Online []*bool `json:"online"`
 }
 
 func (s *Server) apiClientSpeed(w http.ResponseWriter, r *http.Request) {
@@ -110,8 +119,14 @@ func speedSeriesJSON(window string, series *status.SpeedSeries) speedJSON {
 		DownMax: make([]*uint64, len(series.Columns)),
 		UpMin:   make([]*uint64, len(series.Columns)),
 		UpMax:   make([]*uint64, len(series.Columns)),
+		Online:  make([]*bool, len(series.Columns)),
 	}
 	for i, col := range series.Columns {
+		if col.HasLiveness {
+			// Отдельно от HasData: про связь бывает известно и там, где
+			// скорости нет, — именно этот случай и интересен.
+			out.Online[i] = &series.Columns[i].Online
+		}
 		if !col.HasData {
 			continue
 		}

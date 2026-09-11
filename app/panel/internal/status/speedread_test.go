@@ -391,3 +391,124 @@ func TestReadSpeedSeriesReadsBeyondOneChunk(t *testing.T) {
 		t.Errorf("down = %d, want 10 000 000", got)
 	}
 }
+
+// sampleLineV2 renders a line in the format that carries the handshake age
+// (amnezia-vpn-server-3wbe). sampleLine above stays on the old format on
+// purpose: the reader must keep understanding it, and the tests that use
+// it are what prove it.
+func sampleLineV2(at time.Time, rx, tx uint64, handshake string) string {
+	return fmt.Sprintf("%d %s:%d:%d:%s", at.UTC().Unix(), testKey, rx, tx, handshake)
+}
+
+// Обновление приходит посреди суток, а ротация — по суткам, поэтому один
+// файл штатно держит записи обоих форматов. Потерять из-за этого утро —
+// значит потерять ровно ту историю, ради которой всё и заведено
+// (amnezia-vpn-server-3wbe).
+func TestReadSpeedSeriesReadsBothFormatsInOneFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "speed.log")
+	from := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	to := from.Add(20 * time.Second)
+	writeLog(t, path,
+		sampleLine(from, 0, 0),
+		sampleLine(from.Add(5*time.Second), 1_250_000, 1_250_000),
+		sampleLineV2(from.Add(10*time.Second), 2_500_000, 2_500_000, "7"),
+		sampleLineV2(from.Add(15*time.Second), 3_750_000, 3_750_000, "12"),
+	)
+
+	series, err := ReadSpeedSeries(path, testKey, from, to, 4)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for i, col := range series.Columns {
+		if !col.HasData {
+			t.Fatalf("столбец %d без данных — строка одного из форматов потеряна: %+v", i, series.Columns)
+		}
+	}
+	// Первый столбец красит только пара из строк старого формата, и признака
+	// живости он не несёт — это не «был на связи», а «неизвестно».
+	if series.Columns[0].HasLiveness {
+		t.Errorf("столбец из записей старого формата заявил, что знает про связь")
+	}
+	if !series.Columns[3].HasLiveness || !series.Columns[3].Online {
+		t.Errorf("столбец из записей нового формата: HasLiveness=%v Online=%v, ждали true/true",
+			series.Columns[3].HasLiveness, series.Columns[3].Online)
+	}
+}
+
+// Главное различение: одинаковые нули в трафике — у плеера, добирающего
+// буфер, и у оборвавшегося туннеля. Отличает их только возраст
+// рукопожатия (amnezia-vpn-server-3wbe).
+func TestReadSpeedSeriesTellsBufferingFromOutage(t *testing.T) {
+	from := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name       string
+		handshake  string
+		wantOnline bool
+	}{
+		{"плеер добирает буфер — рукопожатие свежее", "40", true},
+		{"на границе срока — ещё на связи", "180", true},
+		{"рукопожатие состарилось — связи не было", "600", false},
+		{"рукопожатия не было вовсе", SpeedNoHandshake, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "speed.log")
+			// Трафика в обоих случаях нет: счётчики не двигаются.
+			writeLog(t, path,
+				sampleLineV2(from, 1000, 2000, tc.handshake),
+				sampleLineV2(from.Add(5*time.Second), 1000, 2000, tc.handshake),
+			)
+
+			series, err := ReadSpeedSeries(path, testKey, from, from.Add(10*time.Second), 2)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			col := series.Columns[1]
+			if !col.HasData {
+				t.Fatalf("столбец без данных: %+v", col)
+			}
+			if col.DownMax != 0 || col.UpMax != 0 {
+				t.Fatalf("трафик не нулевой, случай не тот: %+v", col)
+			}
+			if tc.handshake == SpeedNoHandshake {
+				if col.HasLiveness {
+					t.Errorf("без рукопожатия признак живости не может быть известен")
+				}
+				return
+			}
+			if !col.HasLiveness {
+				t.Fatalf("признак живости потерян: %+v", col)
+			}
+			if col.Online != tc.wantOnline {
+				t.Errorf("Online = %v, ждали %v при возрасте рукопожатия %s", col.Online, tc.wantOnline, tc.handshake)
+			}
+		})
+	}
+}
+
+// В суточном окне столбец — это минуты, и обрыв внутри него ровно то, что
+// ищут. Один здоровый замер не должен закрашивать его «всё хорошо»
+// (amnezia-vpn-server-3wbe).
+func TestReadSpeedSeriesColumnIsOnlineOnlyIfEverySampleWas(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "speed.log")
+	from := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	writeLog(t, path,
+		sampleLineV2(from, 0, 0, "5"),
+		sampleLineV2(from.Add(5*time.Second), 100, 100, "10"),
+		sampleLineV2(from.Add(10*time.Second), 200, 200, "900"),
+		sampleLineV2(from.Add(15*time.Second), 300, 300, "15"),
+	)
+
+	// Одно окно — один столбец: все замеры попадают в него.
+	series, err := ReadSpeedSeries(path, testKey, from, from.Add(20*time.Second), 1)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	col := series.Columns[0]
+	if !col.HasLiveness {
+		t.Fatalf("признак живости потерян: %+v", col)
+	}
+	if col.Online {
+		t.Error("столбец назван «на связи», хотя внутри него связь пропадала")
+	}
+}

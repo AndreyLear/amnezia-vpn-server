@@ -28,13 +28,16 @@ if [ "${AMNEZIA_E2E_NO_CLIENTS:-0}" != "1" ]; then
     keys="$(awk '/^PublicKey/ {printf "%s ", substr($3, 1, 12)}' "$AMNEZIA_CONFIG_PATH")"
     awk -v now="$(date -u +%s)" -v keys="$keys" 'BEGIN {
         n = split(keys, k, " ")
-        print "#speed v1"
+        print "#speed v2"
         rx = 0; tx = 0
         for (i = 0; i < 120; i++) {
             step = (i >= 60 && i < 66) ? 1250000 : 62500000
             tx += step; rx += step / 10
             line = sprintf("%d", now - (120 - i) * 5)
-            for (j = 1; j <= n; j++) line = line sprintf(" %s:%d:%d", k[j], rx, tx)
+            # Четвёртым полем — возраст рукопожатия: клиент всё время на
+            # связи, провал посередине сделан трафиком, а не обрывом
+            # (amnezia-vpn-server-3wbe).
+            for (j = 1; j <= n; j++) line = line sprintf(" %s:%d:%d:5", k[j], rx, tx)
             print line
         }
     }' > "$DIR/speed.log"

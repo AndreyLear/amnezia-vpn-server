@@ -44,7 +44,19 @@ import (
 // SpeedSchema is the first line of every history file. A reader must
 // skip lines it does not understand: after an update the previous
 // version's file still lies next to the new one.
-const SpeedSchema = "#speed v1"
+//
+// v2 added a fourth field per peer, the handshake age
+// (amnezia-vpn-server-3wbe). v1 lines stay readable — see parseSpeedLine —
+// because rotation happens on the UTC day while an update happens whenever
+// the operator presses the button, so one file routinely holds both.
+const SpeedSchema = "#speed v2"
+
+// SpeedNoHandshake is what the handshake field holds for a peer that has
+// never completed one. It is deliberately not "0": zero is a perfectly
+// good age meaning "a handshake just now", and a peer that has never been
+// seen is not the same thing as one seen this second
+// (amnezia-vpn-server-3wbe).
+const SpeedNoHandshake = "-"
 
 // SpeedKeyLen is how much of a peer's public key identifies it in the
 // log. The full 44-character key repeated on every line would be most of
@@ -323,12 +335,13 @@ func AppendSample(path string, st *Status) error {
 	return nil
 }
 
-// speedLine renders "<unix> <key>:<rx>:<tx> …". Peers keep the order
-// Parse gave them (sorted by public key), so a line is deterministic for
-// a given dump.
+// speedLine renders "<unix> <key>:<rx>:<tx>:<handshake age> …". Peers keep
+// the order Parse gave them (sorted by public key), so a line is
+// deterministic for a given dump.
 func speedLine(st *Status) string {
+	at := st.GeneratedAt.UTC()
 	var b strings.Builder
-	b.WriteString(strconv.FormatInt(st.GeneratedAt.UTC().Unix(), 10))
+	b.WriteString(strconv.FormatInt(at.Unix(), 10))
 	for _, p := range st.Peers {
 		b.WriteByte(' ')
 		b.WriteString(SpeedKey(p.PublicKey))
@@ -336,9 +349,36 @@ func speedLine(st *Status) string {
 		b.WriteString(strconv.FormatUint(p.RxBytes, 10))
 		b.WriteByte(':')
 		b.WriteString(strconv.FormatUint(p.TxBytes, 10))
+		b.WriteByte(':')
+		b.WriteString(speedHandshakeField(p.LastHandshakeUTC, at))
 	}
 	b.WriteByte('\n')
 	return b.String()
+}
+
+// speedHandshakeField renders how old the peer's last handshake was at the
+// moment of this sample (amnezia-vpn-server-3wbe).
+//
+// An age relative to the line's own timestamp, not the absolute handshake
+// time, for two reasons. It is what a reader actually wants, so nobody has
+// to subtract anything later; and it is three or four characters instead of
+// ten, which matters when the field repeats for every peer of every
+// five-second tick — the absolute form would have added most of a megabyte
+// a day to a file that is currently 1.3 MB.
+//
+// A negative age means the clock moved backwards between the handshake and
+// the sample. There is no honest reading of "the handshake happens in four
+// seconds", so it is clamped to zero rather than written out and left for
+// the reader to puzzle over.
+func speedHandshakeField(handshake *time.Time, at time.Time) string {
+	if handshake == nil {
+		return SpeedNoHandshake
+	}
+	age := int64(at.Sub(handshake.UTC()) / time.Second)
+	if age < 0 {
+		age = 0
+	}
+	return strconv.FormatInt(age, 10)
 }
 
 // rotateSpeed moves the current file aside when the sample belongs to a
