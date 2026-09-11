@@ -8,15 +8,31 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { outcomes } from "@/components/UpdateOutcomeDialog";
 import { api, mutationOk, type MutationResponse, type UpdateInfo } from "@/lib/api";
 
 /**
- * Окно изменений и ход обновления (amnezia-vpn-server-tjoq).
+ * Окно изменений, ход обновления и — если это самое окно оставалось
+ * открытым, когда обновление кончилось, — сам итог (amnezia-vpn-server-tjoq,
+ * -mrjh).
  *
- * Чем обновление кончилось, рассказывает не это окно, а UpdateOutcomeDialog:
- * итог должен найти человека сам, в том числе после перезапуска панели,
- * который делает само обновление. Здесь же — то, что человек пришёл прочитать
- * ПЕРЕД тем, как нажать (amnezia-vpn-server-tjoq).
+ * ПЕРЕЖИВАЕТ ПЕРЕЗАПУСК ПАНЕЛИ. Шаг установки перезапускает саму панель:
+ * открытая вкладка на секунды-минуты теряет с ней связь, и опрос состояния
+ * падает — по сети или потому что прокси перед ещё не поднявшейся панелью
+ * ответил вместо неё error-страницей. Упавший запрос сам по себе — НЕ
+ * признак неудачи обновления, это ожидаемая часть перезапуска; признак
+ * неудачи только один — состояние из update-state.json, когда панель снова
+ * ответила. Поэтому пока идёт "running", окно не закрывается и не сбрасывает
+ * то, что знает, — оно говорит, что панель перезапускается, и продолжает
+ * стучаться (см. useUpdateInfo в lib/update.ts). Если панель не поднимается
+ * дольше PANEL_RESTART_TIMEOUT_MS, окно честно говорит, что связь не
+ * вернулась, и предлагает обновить страницу — вместо вечно бегущей полосы.
+ *
+ * Когда панель отвечает снова и итог готов, это же окно показывает его сразу,
+ * без перезагрузки страницы. UpdateOutcomeDialog в этот момент молчит (см.
+ * UpdateBanner) — показывать один итог в двух окнах разом незачем.
+ * UpdateOutcomeDialog остаётся отдельным окном для холодного случая: браузер
+ * был закрыт весь ход обновления и это окно никто не открывал.
  *
  * ПОЛОСА ПРОГРЕССА НЕ ПРИВЯЗАНА КО ВРЕМЕНИ. Панель в середине обновления
  * перезапускается, и живой ход отдавать некому. Полоса идёт к 99% и там
@@ -157,15 +173,35 @@ export function UpdateDialog({
   open,
   onOpenChange,
   onStarted,
+  restarting = false,
+  timedOut = false,
+  onAcknowledge = () => {},
 }: {
   info: UpdateInfo | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onStarted: () => void;
+  /** Панель не ответила на последний опрос — см. useUpdateInfo (amnezia-vpn-server-mrjh). */
+  restarting?: boolean;
+  /** Не отвечает дольше PANEL_RESTART_TIMEOUT_MS — ждать молча больше нечего. */
+  timedOut?: boolean;
+  /** Итог показан этим окном — отметить увиденным на сервере. */
+  onAcknowledge?: () => void;
 }) {
   const [starting, setStarting] = useState(false);
   const running = info?.state === "running";
   const percent = useCreepingProgress(running, open);
+
+  // Итог показывается прямо здесь, если это самое окно и наблюдало за
+  // обновлением: state — один из finishedStates и его ещё не видели
+  // (state_at_utc отличается от outcome_seen — тот же признак, что и у
+  // UpdateOutcomeDialog). Пустой state_at_utc — это НЕ «итог только что», а
+  // «итога никогда не было»: свежая установка выглядит так же, и превращать
+  // её в «итог» значило бы путать «когда-то кончилось» с «моё кончилось»
+  // (amnezia-vpn-server-tjoq, -mrjh).
+  const outcome = info ? outcomes[info.state] : undefined;
+  const showOutcome = Boolean(outcome && info?.state_at_utc && info.state_at_utc !== info.outcome_seen);
+  const outcomeFailed = info?.state !== "ok";
 
   async function start() {
     if (starting || running) return;
@@ -174,6 +210,13 @@ export function UpdateDialog({
     if (mutationOk(data)) onStarted();
     setStarting(false);
   }
+
+  function acknowledgeAndClose() {
+    onAcknowledge();
+    onOpenChange(false);
+  }
+
+  const title = running ? "Обновление идёт" : showOutcome ? outcome!.title : `Версия ${info?.latest ?? ""}`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -185,30 +228,50 @@ export function UpdateDialog({
       */}
       <DialogContent className="gap-6 sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{running ? "Обновление идёт" : `Версия ${info?.latest ?? ""}`}</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
 
         {running ? (
-          <div className="flex flex-col gap-2">
-            <div
-              role="progressbar"
-              aria-valuenow={percent}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              className="h-2 w-full overflow-hidden rounded-full bg-muted"
-            >
+          timedOut ? (
+            // Потолок ожидания исчерпан: полоса, которая якобы всё ещё идёт
+            // к цели, здесь соврала бы. Честнее сказать, что связи нет, и
+            // отдать решение человеку, а не крутиться вечно
+            // (amnezia-vpn-server-mrjh).
+            <p className="text-sm text-destructive">
+              Панель долго не отвечает. Обновление может всё ещё идти на сервере — обновите
+              страницу, чтобы проверить
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2">
               <div
-                className="h-full rounded-full bg-primary transition-[width] duration-1000 ease-linear"
-                style={{ width: `${percent}%` }}
-              />
+                role="progressbar"
+                aria-valuenow={percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                className="h-2 w-full overflow-hidden rounded-full bg-muted"
+              >
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-1000 ease-linear"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {restarting
+                  ? // Панель на этом шаге перезапускает саму себя — молчание
+                    // тут ожидаемо и не значит, что обновление сорвалось
+                    // (amnezia-vpn-server-mrjh).
+                    "Панель перезапускается — это ожидаемая часть обновления"
+                  : (info?.state_step ? `Шаг: ${info.state_step}` : "Идёт обновление")}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Окно можно закрыть — обновление от этого не остановится, а итог дождётся
+              </p>
             </div>
-            <p className="text-sm text-muted-foreground">
-              {info?.state_step ? `Шаг: ${info.state_step}` : "Идёт обновление"}
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Окно можно закрыть — обновление от этого не остановится, а итог дождётся
-            </p>
-          </div>
+          )
+        ) : showOutcome ? (
+          <p className={outcomeFailed ? "text-destructive" : undefined}>
+            {info?.state_message || outcome!.fallback}
+          </p>
         ) : (
           <>
             <Notes notes={info?.notes ?? ""} />
@@ -219,7 +282,21 @@ export function UpdateDialog({
           </>
         )}
 
-        {running ? null : (
+        {running ? (
+          timedOut ? (
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => window.location.reload()}>
+                Обновить страницу
+              </Button>
+            </DialogFooter>
+          ) : null
+        ) : showOutcome ? (
+          <DialogFooter>
+            <Button type="button" onClick={acknowledgeAndClose}>
+              Понятно
+            </Button>
+          </DialogFooter>
+        ) : (
           <DialogFooter>
             <Button type="button" disabled={starting} onClick={() => void start()}>
               Обновить

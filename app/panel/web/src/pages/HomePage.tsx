@@ -35,7 +35,12 @@ export default function HomePage() {
   const [host, setHost] = useState<HostSnapshot | null>(null);
   // Всё про обновление приходит одним ответом и обновляется само, пока агент
   // работает (amnezia-vpn-server-tjoq).
-  const { info: updateInfo, reload: reloadUpdate } = useUpdateInfo();
+  const {
+    info: updateInfo,
+    reload: reloadUpdate,
+    restarting: updateRestarting,
+    timedOut: updateTimedOut,
+  } = useUpdateInfo();
 
   const load = useCallback(async () => {
     const list = await api<unknown>("/api/clients");
@@ -179,7 +184,12 @@ export default function HomePage() {
       pendingUpdate={updateInfo?.available ?? false}
       onUpdateChecked={reloadUpdate}
     >
-      <UpdateBanner info={updateInfo} onChanged={reloadUpdate} />
+      <UpdateBanner
+        info={updateInfo}
+        restarting={updateRestarting}
+        timedOut={updateTimedOut}
+        onChanged={reloadUpdate}
+      />
       {clients === null ? null : clients.length === 0 ? (
         <EmptyClients onAdd={() => setAddOpen(true)} restorePending={restorePending} />
       ) : (
