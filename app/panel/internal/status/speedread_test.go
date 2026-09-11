@@ -189,7 +189,10 @@ func TestReadSpeedSeriesSurvivesLateSample(t *testing.T) {
 }
 
 // A day-long window has to reach into the file that rotated out, or
-// "yesterday evening" would always be empty.
+// "yesterday evening" would always be empty. This exercises the legacy
+// "speed.prev.log" tier directly: a build from before dated rotation
+// (amnezia-vpn-server-b0fl) wrote only that file, and an update must not
+// erase whatever it had already collected.
 func TestReadSpeedSeriesReachesIntoThePreviousFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "speed.log")
@@ -209,6 +212,116 @@ func TestReadSpeedSeriesReachesIntoThePreviousFile(t *testing.T) {
 	}
 	if got := series.Columns[0].DownMax; got != 10_000_000 {
 		t.Errorf("down = %d, want 10 000 000 from the previous file", got)
+	}
+}
+
+// A window several days wide must stitch samples back together across
+// every dated file it touches, not just the newest one
+// (amnezia-vpn-server-b0fl): otherwise a report spanning "since last
+// Tuesday" would silently start on the wrong day.
+func TestReadSpeedSamplesSpansMultipleDatedDays(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "speed.log")
+	day0 := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	day1 := day0.AddDate(0, 0, 1)
+	day2 := day0.AddDate(0, 0, 2)
+
+	writeLog(t, speedDatedPath(path, day0), sampleLine(day0.Add(12*time.Hour), 0, 1))
+	writeLog(t, speedDatedPath(path, day1), sampleLine(day1.Add(12*time.Hour), 0, 2))
+	writeLog(t, path, sampleLine(day2.Add(12*time.Hour), 0, 3))
+
+	samples, err := readSpeedSamples(path, testKey, day0, day2.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(samples) != 3 {
+		t.Fatalf("samples = %d, want 3 (one per day): %+v", len(samples), samples)
+	}
+	for i, want := range []uint64{1, 2, 3} {
+		if samples[i].tx != want {
+			t.Errorf("sample %d tx = %d, want %d (days out of order)", i, samples[i].tx, want)
+		}
+	}
+}
+
+// forbidFile writes one sample line to path and then strips every
+// permission from it, so opening it turns into a hard error instead of a
+// silent, wasteful read. A test that reads successfully around such a file
+// is proof the file was never opened - the only way an unreadable file
+// causes no error.
+func forbidFile(t *testing.T, path string, at time.Time) {
+	t.Helper()
+	writeLog(t, path, sampleLine(at, 0, 0))
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatalf("chmod %s: %v", path, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+}
+
+// A dated file whose name already places it outside [from-gap, to] must
+// never be opened (amnezia-vpn-server-b0fl): with speedRetentionDays of
+// files potentially on disk, a short query has to skip almost all of them
+// by name alone. Both directions matter - a day older than the window and
+// a day newer than it - because readSpeedDatedFiles walks newest first and
+// the two bounds need different loop actions (continue past a too-new day,
+// since an in-window day can still follow it; break on a too-old one).
+func TestReadSpeedSeriesNeverOpensFilesOutsideTheWindow(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+
+	tests := []struct {
+		name string
+		// build lays down fixtures under path (a fresh temp dir's
+		// "speed.log") and returns the query window.
+		build func(t *testing.T, path string) (from, to time.Time)
+	}{
+		{
+			// The window reaches back from the live file; only an older
+			// day sits outside it.
+			name: "window reaches back from the live file",
+			build: func(t *testing.T, path string) (time.Time, time.Time) {
+				base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+				writeLog(t, path, sampleLine(base, 0, 0), sampleLine(base.Add(5*time.Second), 0, 6_250_000))
+				forbidFile(t, speedDatedPath(path, base.AddDate(0, 0, -20)), base.AddDate(0, 0, -20))
+				return base, base.Add(10 * time.Second)
+			},
+		},
+		{
+			// The window lies entirely in the past: no live-file data is
+			// in range, the wanted day is a dated file, and both older
+			// and newer dated days sit outside the window.
+			name: "window lies entirely in the past",
+			build: func(t *testing.T, path string) (time.Time, time.Time) {
+				base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+				writeLog(t, speedDatedPath(path, base),
+					sampleLine(base, 0, 0), sampleLine(base.Add(5*time.Second), 0, 6_250_000))
+				forbidFile(t, speedDatedPath(path, base.AddDate(0, 0, -10)), base.AddDate(0, 0, -10))
+				for i := 1; i <= 3; i++ {
+					forbidFile(t, speedDatedPath(path, base.AddDate(0, 0, i)), base.AddDate(0, 0, i))
+				}
+				return base, base.Add(10 * time.Second)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "speed.log")
+			from, to := tt.build(t, path)
+
+			series, err := ReadSpeedSeries(path, testKey, from, to, 1)
+			if err != nil {
+				t.Fatalf("read: %v, want out-of-window files never to be opened", err)
+			}
+			if !series.Columns[0].HasData {
+				t.Fatalf("column has no data; the in-window day was not read")
+			}
+			if got := series.Columns[0].DownMax; got != 10_000_000 {
+				t.Errorf("down = %d, want 10 000 000 from the in-window day", got)
+			}
+		})
 	}
 }
 
