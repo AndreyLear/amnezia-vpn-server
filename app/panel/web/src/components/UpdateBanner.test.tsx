@@ -99,6 +99,34 @@ describe("полоса о новом выпуске", () => {
     await user.click(await screen.findByRole("button", { name: "Обновить" }));
     await waitFor(() => expect(posted).toContain("/api/update/start"));
   });
+
+  // Регрессия на сам гейт, который раньше решал, рендерить ли UpdateDialog
+  // вообще: `if (!offer) return outcome;` возвращался из UpdateBanner ДО
+  // <UpdateDialog>, поэтому как только available становился false — а
+  // именно это происходит ровно в момент успешного обновления, когда
+  // installed становится равен latest, — открытое окно хода обновления
+  // пропадало из документа целиком, а не просто теряло предложение
+  // обновиться. Владелец видел это как «модалка закрывается посреди
+  // обновления» (amnezia-vpn-server-mrjh).
+  it("окно хода обновления остаётся в документе, когда available гаснет во время показа", async () => {
+    const user = userEvent.setup();
+    const base = { installed: "2.9.0", latest: "2.10.0", available: true, state: "running" };
+    const { rerender } = render(<UpdateBanner info={info(base)} onChanged={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: "Показать подробности" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // Обновление только что удалось: installed сравнялся с latest, брать
+    // больше нечего — available стал false. Это НЕ команда закрыть окно.
+    rerender(
+      <UpdateBanner
+        info={info({ ...base, available: false, installed: "2.10.0" })}
+        onChanged={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
 });
 
 // Критерий 5 задачи: «Итог виден, даже если браузер был закрыт всё
@@ -183,19 +211,69 @@ describe("итог обновления", () => {
     );
     expect(await screen.findByText(/не новее установленной/)).toBeInTheDocument();
   });
+
+  // Окно хода обновления, пока открыто, само доводит наблюдаемое им
+  // обновление до итога; отдельный попап с тем же итогом в этот момент
+  // молчит — иначе один и тот же итог показался бы дважды в двух окнах
+  // разом (amnezia-vpn-server-mrjh).
+  it("пока окно хода обновления открыто, отдельный попап с итогом не дублируется", async () => {
+    const user = userEvent.setup();
+    const base = {
+      installed: "2.9.0",
+      latest: "2.10.0",
+      available: true,
+      state: "running",
+    };
+    const { rerender } = render(<UpdateBanner info={info(base)} onChanged={() => {}} />);
+
+    // Открыли окно, пока обновление ещё идёт — итога ещё нет, попапу
+    // конфликтовать не с чем.
+    await user.click(screen.getByRole("button", { name: "Показать подробности" }));
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+
+    // Опрос принёс итог тем же info — так это выглядит в реальном приложении:
+    // useUpdateInfo меняет один и тот же проп, а не подменяет компонент.
+    rerender(
+      <UpdateBanner
+        info={info({
+          ...base,
+          state: "ok",
+          state_message: "обновление до 2.10.0 завершено",
+          state_at_utc: "2026-09-08T10:00:00Z",
+        })}
+        onChanged={() => {}}
+      />,
+    );
+
+    // Окно хода обновления само показывает итог, кнопка «Понятно» —
+    // ровно одна, а не две (отдельный попап промолчал).
+    expect(screen.getAllByRole("button", { name: "Понятно" })).toHaveLength(1);
+    expect(screen.getAllByText("обновление до 2.10.0 завершено")).toHaveLength(1);
+  });
 });
 
 describe("ход обновления", () => {
   // Окно проверяется напрямую: щёлкать по полосе, чтобы добраться до
   // прогресса, значило бы проверять заодно и открытие окна, которое проверено
   // выше, и мешать поддельным часам работать.
-  function openDialog(overrides: Partial<UpdateInfo>) {
+  function openDialog(
+    overrides: Partial<UpdateInfo>,
+    extra: {
+      restarting?: boolean;
+      timedOut?: boolean;
+      onOpenChange?: (open: boolean) => void;
+      onAcknowledge?: () => void;
+    } = {},
+  ) {
     render(
       <UpdateDialog
         info={info(overrides)}
         open
-        onOpenChange={() => {}}
+        onOpenChange={extra.onOpenChange ?? (() => {})}
         onStarted={() => {}}
+        restarting={extra.restarting}
+        timedOut={extra.timedOut}
+        onAcknowledge={extra.onAcknowledge}
       />,
     );
   }
@@ -231,14 +309,66 @@ describe("ход обновления", () => {
     expect(screen.getByText(/Окно можно закрыть/)).toBeInTheDocument();
   });
 
-  // Итог рассказывает не это окно, а попап: он должен найти человека сам,
-  // в том числе после перезапуска панели. Здесь остаётся то, что читают
-  // ПЕРЕД нажатием, — иначе окно путало бы «обновление когда-то кончилось»
-  // с «моё обновление кончилось».
-  it("после обновления снова показывает изменения, а не итог", () => {
+  // state_at_utc пустой — это "итога никогда не было" (свежая установка), а
+  // не "мой итог только что пришёл". Спутать их значило бы показать
+  // случайный чужой итог тому, кто просто открыл окно посмотреть изменения
+  // (amnezia-vpn-server-tjoq, -mrjh).
+  it("без state_at_utc снова показывает изменения, а не итог", () => {
     openDialog({ state: "ok", state_message: "обновление до 2.9.0 завершено" });
     expect(screen.queryByText("обновление до 2.9.0 завершено")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Обновить" })).toBeInTheDocument();
+  });
+
+  // Критерий задачи amnezia-vpn-server-mrjh: упавший по сети запрос во
+  // время перезапуска панели — не признак неудачи. Окно остаётся открытым
+  // и говорящим, а не гаснет.
+  it("запрос упал по сети — окно не закрывается и говорит, что панель перезапускается", () => {
+    const onOpenChange = vi.fn();
+    openDialog({ state: "running" }, { restarting: true, onOpenChange });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText(/панель перезапускается/i)).toBeInTheDocument();
+    // Полоса прогресса остаётся на месте — это не отдельный отказ, а тот же ход.
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  // Панель снова ответила успешным итогом — то же самое окно показывает
+  // его сразу, без перезагрузки страницы (amnezia-vpn-server-mrjh).
+  it("сервер вернулся с успешным итогом — тот же диалог показывает итог", () => {
+    const onAcknowledge = vi.fn();
+    openDialog(
+      {
+        state: "ok",
+        state_message: "обновление до 2.10.0 завершено",
+        state_at_utc: "2026-09-11T10:00:00Z",
+      },
+      { onAcknowledge },
+    );
+    expect(screen.getByText("Обновление завершено")).toBeInTheDocument();
+    expect(screen.getByText("обновление до 2.10.0 завершено")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  // Сервер вернулся с неудачей — показана неудача, а не тишина
+  // (amnezia-vpn-server-mrjh).
+  it("сервер вернулся с неудачей — показана неудача", () => {
+    openDialog({
+      state: "rolled-back",
+      state_message: "не удалось; сервер работает на 2.9.0",
+      state_at_utc: "2026-09-11T10:00:00Z",
+    });
+    expect(screen.getByText("Обновиться не удалось")).toBeInTheDocument();
+    expect(screen.getByText("не удалось; сервер работает на 2.9.0")).toBeInTheDocument();
+  });
+
+  // Потолок ожидания исчерпан — честное признание вместо вечной полосы, и
+  // предложение обновить страницу вместо того, чтобы ждать молча
+  // (amnezia-vpn-server-mrjh).
+  it("потолок ожидания исчерпан — сказано, что связь не вернулась, предложено обновить страницу", () => {
+    openDialog({ state: "running" }, { restarting: true, timedOut: true });
+    expect(screen.getByText(/не отвечает/i)).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Обновить страницу" })).toBeInTheDocument();
   });
 });
 

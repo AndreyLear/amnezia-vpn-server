@@ -19,9 +19,15 @@ import { api, mutationOk, type MutationResponse, type UpdateInfo } from "@/lib/a
  */
 export function UpdateBanner({
   info,
+  restarting = false,
+  timedOut = false,
   onChanged,
 }: {
   info: UpdateInfo | null;
+  /** Панель не ответила на последний опрос — прокинуто в UpdateDialog. */
+  restarting?: boolean;
+  /** Не отвечает дольше потолка ожидания — прокинуто в UpdateDialog. */
+  timedOut?: boolean;
   onChanged: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -47,38 +53,53 @@ export function UpdateBanner({
     if (mutationOk(data)) onChanged();
   }
 
-  // Итог показывается всегда, а полоса — только когда есть что взять. Раньше
-  // здесь стоял общий ранний выход, и после удачного обновления полоса
-  // исчезала вместе с окном: available становилось false, и человек не
-  // узнавал, чем всё кончилось (amnezia-vpn-server-tjoq).
-  const outcome = <UpdateOutcomeDialog info={info} onAcknowledge={() => void acknowledge()} />;
+  // Итог показывается всегда, а полоса о выпуске — только когда есть что
+  // взять. Раньше здесь стоял общий ранний выход, и после удачного
+  // обновления полоса исчезала вместе с окном ХОДА обновления: available
+  // становилось false ровно в момент успеха, и то же самое условие гасило
+  // UpdateDialog посреди работы — человек не узнавал, чем всё кончилось
+  // (amnezia-vpn-server-tjoq, -mrjh). UpdateDialog теперь рендерится
+  // отдельно от предложения обновиться, пока он открыт (detailsOpen) — так
+  // available может стать false в любой момент, не закрывая окно, которое
+  // всё ещё показывает пользователю ход или итог его собственного клика.
+  //
+  // Пока UpdateDialog открыт, он сам доведёт наблюдаемое обновление до
+  // итога и закроется по «Понятно» — отдельный попап в этот момент молчит,
+  // чтобы не показать тот же итог дважды в двух окнах (amnezia-vpn-server-mrjh).
+  const outcome = detailsOpen ? null : (
+    <UpdateOutcomeDialog info={info} onAcknowledge={() => void acknowledge()} />
+  );
   const offer = info?.available && info.dismissed !== info.latest;
-  if (!offer) return outcome;
 
   return (
     <>
       {outcome}
-      <div className="mt-4 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-        <p className="min-w-0 flex-1">Вышла версия {info.latest}</p>
-        <Button type="button" variant="outline" size="sm" onClick={() => setDetailsOpen(true)}>
-          Показать подробности
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Скрыть до следующего выпуска"
-          disabled={hiding}
-          onClick={() => void dismiss()}
-        >
-          <XIcon />
-        </Button>
-      </div>
+      {offer ? (
+        <div className="mt-4 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
+          <p className="min-w-0 flex-1">Вышла версия {info.latest}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => setDetailsOpen(true)}>
+            Показать подробности
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Скрыть до следующего выпуска"
+            disabled={hiding}
+            onClick={() => void dismiss()}
+          >
+            <XIcon />
+          </Button>
+        </div>
+      ) : null}
       <UpdateDialog
         info={info}
         open={detailsOpen}
         onOpenChange={setDetailsOpen}
         onStarted={onChanged}
+        restarting={restarting}
+        timedOut={timedOut}
+        onAcknowledge={() => void acknowledge()}
       />
     </>
   );
