@@ -20,6 +20,7 @@ function series(over: Partial<SpeedSeries> = {}): SpeedSeries {
     down_max_bps: [],
     up_min_bps: [],
     up_max_bps: [],
+    online: [],
     ...over,
   };
 }
@@ -28,6 +29,13 @@ function series(over: Partial<SpeedSeries> = {}): SpeedSeries {
  * Заливки: у приёма до максимума («поднималось») и до минимума
  * («держалось»), у отдачи — до максимума.
  */
+/** Подложки «связи не было» (amnezia-vpn-server-tyic). */
+function offline(): SVGRectElement[] {
+  const svg = document.querySelector("svg");
+  if (!svg) return [];
+  return Array.from(svg.querySelectorAll('rect[data-series="offline"]'));
+}
+
 function areas(series: "down-max" | "up-max"): SVGPathElement[] {
   const svg = document.querySelector("svg");
   if (!svg) return [];
@@ -440,6 +448,33 @@ describe("чтение значения в точке", () => {
     fireEvent.pointerMove(svg, { clientX: x, clientY: 60 });
   }
 
+  // Подложка помечает отрезок, но какой именно столбец под указателем —
+  // говорит подсказка. Нули там же, где «связи не было», без слов
+  // неразличимы (amnezia-vpn-server-tyic).
+  it("говорит про обрыв словами, а «неизвестно» не выдаёт за обрыв", async () => {
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_min_bps: [0, 0],
+        down_max_bps: [0, 0],
+        up_min_bps: [0, 0],
+        up_max_bps: [0, 0],
+        online: [false, null],
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(bands().length).toBeGreaterThan(0));
+
+    hover(25);
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("связи не было"),
+    );
+
+    hover(75);
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).not.toContain("связи не было"),
+    );
+  });
+
   it("показывает время и оба ряда", async () => {
     fetchSpeed.mockResolvedValue(
       series({
@@ -667,5 +702,90 @@ describe("подпись скорости", () => {
     expect(formatBits(10_000_000)).toBe("10.0 Мбит/с");
     expect(formatBits(250_000)).toBe("250 Кбит/с");
     expect(formatBits(300)).toBe("300 бит/с");
+  });
+});
+
+// Нули в трафике и «сервер не слышал клиента» — разные вещи, и без
+// подложки человек видел одни и те же нули и читал их как обрыв
+// (amnezia-vpn-server-tyic).
+describe("промежутки без связи", () => {
+  it("закрашивает подряд идущие столбцы одной подложкой", async () => {
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_min_bps: [1_000_000, 0, 0, 0, 1_000_000],
+        down_max_bps: [1_000_000, 0, 0, 0, 1_000_000],
+        up_min_bps: [0, 0, 0, 0, 0],
+        up_max_bps: [0, 0, 0, 0, 0],
+        online: [true, false, false, false, true],
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(offline()).toHaveLength(1));
+    const rect = offline()[0];
+    expect(rect.getAttribute("x")).toBe("1");
+    expect(rect.getAttribute("width")).toBe("3");
+    // Во всю высоту: помечается отрезок времени, а не значение.
+    expect(rect.getAttribute("height")).toBe("120");
+  });
+
+  it("не закрашивает «неизвестно»", async () => {
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_min_bps: [1_000_000, 0, 1_000_000],
+        down_max_bps: [1_000_000, 0, 1_000_000],
+        up_min_bps: [0, 0, 0],
+        up_max_bps: [0, 0, 0],
+        online: [true, null, true],
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(areas("down-max").length).toBeGreaterThan(0));
+    expect(offline()).toHaveLength(0);
+  });
+
+  it("объясняет подложку в легенде, и только когда она есть", async () => {
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_min_bps: [1_000_000, 0],
+        down_max_bps: [1_000_000, 0],
+        up_min_bps: [0, 0],
+        up_max_bps: [0, 0],
+        online: [true, false],
+      }),
+    );
+    const { unmount } = render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(screen.getByText("связи не было")).toBeInTheDocument());
+    unmount();
+
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_min_bps: [1_000_000, 1_000_000],
+        down_max_bps: [1_000_000, 1_000_000],
+        up_min_bps: [0, 0],
+        up_max_bps: [0, 0],
+        online: [true, true],
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(areas("down-max").length).toBeGreaterThan(0));
+    expect(screen.queryByText("связи не было")).not.toBeInTheDocument();
+  });
+
+  // Сервер прежней версии поля не присылает: страница не должна падать.
+  it("переживает ответ без поля", async () => {
+    const s = series({
+      down_min_bps: [1_000_000],
+      down_max_bps: [1_000_000],
+      up_min_bps: [0],
+      up_max_bps: [0],
+    });
+    delete (s as { online?: unknown }).online;
+    fetchSpeed.mockResolvedValue(s);
+    render(<SpeedChart clientId={1} />);
+
+    await waitFor(() => expect(areas("down-max")).toHaveLength(1));
+    expect(offline()).toHaveLength(0);
   });
 });

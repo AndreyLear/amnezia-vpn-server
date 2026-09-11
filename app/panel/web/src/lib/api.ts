@@ -142,6 +142,15 @@ export type SpeedSeries = {
   down_max_bps: (number | null)[];
   up_min_bps: (number | null)[];
   up_max_bps: (number | null)[];
+  /**
+   * Был ли клиент на связи в этом столбце (amnezia-vpn-server-tyic).
+   *
+   * null — неизвестно, и это НЕ «был на связи»: в записях прежнего формата
+   * признака может не быть вовсе. false значит, что сервер не слышал
+   * клиента: даже keepalive не приходил. Нулевая скорость сама по себе об
+   * этом не говорит — плеер, добирающий буфер, тоже ничего не качает.
+   */
+  online: (boolean | null)[];
 };
 
 export function fetchSpeed(

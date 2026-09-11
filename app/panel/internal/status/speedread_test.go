@@ -424,10 +424,12 @@ func TestReadSpeedSeriesReadsBothFormatsInOneFile(t *testing.T) {
 			t.Fatalf("столбец %d без данных — строка одного из форматов потеряна: %+v", i, series.Columns)
 		}
 	}
-	// Первый столбец красит только пара из строк старого формата, и признака
-	// живости он не несёт — это не «был на связи», а «неизвестно».
-	if series.Columns[0].HasLiveness {
-		t.Errorf("столбец из записей старого формата заявил, что знает про связь")
+	// Записи старого формата не несут возраста рукопожатия, но признак связи
+	// у них всё равно есть: счётчик rx двигался, значит клиент говорил
+	// (amnezia-vpn-server-tyic).
+	if !series.Columns[0].HasLiveness || !series.Columns[0].Online {
+		t.Errorf("столбец из записей старого формата: HasLiveness=%v Online=%v, ждали true/true",
+			series.Columns[0].HasLiveness, series.Columns[0].Online)
 	}
 	if !series.Columns[3].HasLiveness || !series.Columns[3].Online {
 		t.Errorf("столбец из записей нового формата: HasLiveness=%v Online=%v, ждали true/true",
@@ -492,15 +494,24 @@ func TestReadSpeedSeriesTellsBufferingFromOutage(t *testing.T) {
 func TestReadSpeedSeriesColumnIsOnlineOnlyIfEverySampleWas(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "speed.log")
 	from := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
-	writeLog(t, path,
-		sampleLineV2(from, 0, 0, "5"),
-		sampleLineV2(from.Add(5*time.Second), 100, 100, "10"),
-		sampleLineV2(from.Add(10*time.Second), 200, 200, "900"),
-		sampleLineV2(from.Add(15*time.Second), 300, 300, "15"),
-	)
+	// Так выглядит настоящий обрыв: продюсер живёт на сервере и продолжает
+	// писать замер каждые пять секунд, а счётчик rx стоит на месте — клиент
+	// не присылает даже keepalive. Через 65 секунд тишины он считается
+	// оборвавшимся, потом снова заговаривает. В одном столбце оказываются и
+	// обрыв, и здоровые замеры (amnezia-vpn-server-tyic).
+	var lines []string
+	rx := uint64(0)
+	for i := 0; i <= 20; i++ {
+		at := from.Add(time.Duration(i) * 5 * time.Second)
+		if i <= 1 || i >= 15 {
+			rx += 100 // клиент говорит
+		}
+		lines = append(lines, sampleLineV2(at, rx, rx, "5"))
+	}
+	writeLog(t, path, lines...)
 
 	// Одно окно — один столбец: все замеры попадают в него.
-	series, err := ReadSpeedSeries(path, testKey, from, from.Add(20*time.Second), 1)
+	series, err := ReadSpeedSeries(path, testKey, from, from.Add(105*time.Second), 1)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -510,5 +521,58 @@ func TestReadSpeedSeriesColumnIsOnlineOnlyIfEverySampleWas(t *testing.T) {
 	}
 	if col.Online {
 		t.Error("столбец назван «на связи», хотя внутри него связь пропадала")
+	}
+}
+
+// Сердце различения: клиент, который ничего не качает, всё равно слышен —
+// наш конфиг несёт PersistentKeepalive = 25, и раз в 25 секунд приходит 32
+// байта. Оборвавшийся не присылает даже их. Скорость в обоих случаях
+// нулевая, так что отличает их только это (amnezia-vpn-server-tyic).
+func TestReadSpeedSeriesHearsKeepaliveThroughIdleTime(t *testing.T) {
+	from := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	const ticks = 30 // 150 секунд, с запасом больше порога тишины
+
+	for _, tc := range []struct {
+		name       string
+		keepalive  bool
+		wantOnline bool
+	}{
+		{"простой с keepalive — на связи", true, true},
+		{"полная тишина — обрыв", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "speed.log")
+			var lines []string
+			rx := uint64(1000)
+			for i := 0; i <= ticks; i++ {
+				// Каждый пятый такт — это 25 секунд, период keepalive.
+				if tc.keepalive && i%5 == 0 {
+					rx += 32
+				}
+				// Рукопожатие намеренно состарено в обоих случаях: грубый
+				// признак тут бессилен, и проверяем мы именно точный.
+				lines = append(lines, sampleLineV2(from.Add(time.Duration(i)*5*time.Second), rx, 500, "900"))
+			}
+			writeLog(t, path, lines...)
+
+			to := from.Add(time.Duration(ticks) * 5 * time.Second)
+			series, err := ReadSpeedSeries(path, testKey, from, to, 1)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			col := series.Columns[0]
+			if !col.HasData {
+				t.Fatalf("столбец без данных: %+v", col)
+			}
+			if col.DownMax != 0 {
+				t.Fatalf("скачивание не нулевое, случай не тот: %+v", col)
+			}
+			if !col.HasLiveness {
+				t.Fatalf("признак связи потерян: %+v", col)
+			}
+			if col.Online != tc.wantOnline {
+				t.Errorf("Online = %v, ждали %v", col.Online, tc.wantOnline)
+			}
+		})
 	}
 }
