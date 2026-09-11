@@ -83,26 +83,83 @@ func ReadSpeedSeries(path, key string, from, to time.Time, columns int) (*SpeedS
 }
 
 // readSpeedSamples gathers this peer's samples from the current file and,
-// when the window reaches further back than it goes, from the rotated-out
-// one as well.
+// when the window reaches further back than that file goes, walks the
+// rotated-out days (newest first, readSpeedDatedFiles) and finally, as a
+// last resort, the legacy single "speed.prev.log" a pre-b0fl build may
+// have left behind (amnezia-vpn-server-b0fl). Each tier is skipped once
+// the one before it already reaches back to the window: a query for the
+// last ten minutes must not walk fourteen days of files to answer it.
 func readSpeedSamples(path, key string, from, to time.Time) ([]speedSample, error) {
 	// One sample before the window is deliberately kept: the first rate
 	// inside the window is the difference against it, and without it the
 	// chart would begin with an unexplained gap.
 	reach := from.Add(-SpeedMaxGap)
-	current, err := readSpeedFile(path, key, reach, to)
+	all, err := readSpeedFile(path, key, reach, to)
 	if err != nil {
 		return nil, err
 	}
-	if len(current) == 0 || current[0].at.After(reach) {
-		prev, err := readSpeedFile(SpeedPrevPath(path), key, reach, to)
+	if !speedReaches(all, reach) {
+		dated, err := readSpeedDatedFiles(path, key, reach, to)
 		if err != nil {
 			return nil, err
 		}
-		current = append(prev, current...)
+		all = append(dated, all...)
 	}
-	sort.Slice(current, func(i, j int) bool { return current[i].at.Before(current[j].at) })
-	return current, nil
+	if !speedReaches(all, reach) {
+		legacy, err := readSpeedFile(SpeedPrevPath(path), key, reach, to)
+		if err != nil {
+			return nil, err
+		}
+		all = append(legacy, all...)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].at.Before(all[j].at) })
+	return all, nil
+}
+
+// speedReaches reports whether samples already cover back to reach, so a
+// caller knows whether an older, more expensive tier is worth opening at
+// all.
+func speedReaches(samples []speedSample, reach time.Time) bool {
+	return len(samples) > 0 && !samples[0].at.After(reach)
+}
+
+// readSpeedDatedFiles walks the rotated-out days newest first, stopping as
+// soon as the window is covered or the days run out. A day whose name
+// already places it outside [reach, to] is never opened
+// (amnezia-vpn-server-b0fl): with speedRetentionDays of files on disk, a
+// short window - including one that lies entirely in the past, e.g. "what
+// happened the day before yesterday" - has to be able to ignore almost all
+// of them by name alone. The two bounds need different loop actions: a day
+// newer than the window is skipped with continue (older days further down
+// the newest-first order can still be inside it), while a day older than
+// the window ends the search outright.
+func readSpeedDatedFiles(path, key string, reach, to time.Time) ([]speedSample, error) {
+	files, err := listSpeedDatedFiles(path)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].day.After(files[j].day) })
+	reachDay := reach.UTC().Truncate(24 * time.Hour)
+	toDay := to.UTC().Truncate(24 * time.Hour)
+
+	var out []speedSample
+	for _, f := range files {
+		if f.day.After(toDay) {
+			continue
+		}
+		if f.day.Before(reachDay) {
+			break
+		}
+		samples, err := readSpeedFile(f.path, key, reach, to)
+		if err != nil {
+			return nil, err
+		}
+		out = append(samples, out...)
+		if speedReaches(out, reach) {
+			break
+		}
+	}
+	return out, nil
 }
 
 // readSpeedFile parses one file. Only its tail is read: this endpoint is

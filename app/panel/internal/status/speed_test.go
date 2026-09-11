@@ -124,9 +124,9 @@ func TestAppendSampleRotatesOnUTCDay(t *testing.T) {
 	if len(current) != 2 || !strings.HasSuffix(current[1], ":30:40") {
 		t.Fatalf("current file = %q, want the schema and only the new day", current)
 	}
-	prev := readLines(t, SpeedPrevPath(path))
-	if len(prev) != 2 || !strings.HasSuffix(prev[1], ":10:20") {
-		t.Fatalf("previous file = %q, want the whole day that ended", prev)
+	rotated := readLines(t, speedDatedPath(path, time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)))
+	if len(rotated) != 2 || !strings.HasSuffix(rotated[1], ":10:20") {
+		t.Fatalf("rotated file = %q, want the whole day that ended", rotated)
 	}
 }
 
@@ -237,10 +237,184 @@ func TestRotationSeesTheLastLineOfALongFile(t *testing.T) {
 	if err := AppendSample(path, sampleStatus(day.Add(30*time.Hour), peer("k", 2, 2))); err != nil {
 		t.Fatalf("next day: %v", err)
 	}
-	if _, err := os.Stat(SpeedPrevPath(path)); err != nil {
+	if _, err := os.Stat(speedDatedPath(path, day)); err != nil {
 		t.Fatalf("did not rotate on the next day: %v", err)
 	}
 	if lines := readLines(t, path); len(lines) != 2 || !strings.HasSuffix(lines[1], ":2:2") {
 		t.Fatalf("new file = %q, want the schema and only the new day", lines)
+	}
+}
+
+// A file is named for the day its own content covers, taken apart from
+// the path it rotates out of.
+func TestSpeedDatedPath(t *testing.T) {
+	day := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	if got, want := speedDatedPath("/status/speed.log", day), "/status/speed-2026-09-10.log"; got != want {
+		t.Errorf("speedDatedPath = %q, want %q", got, want)
+	}
+}
+
+// Rotating aside when the size backstop fires twice on the same
+// frozen-clock day must not silently discard whatever the day already
+// collected.
+func TestRotateFileToAppendsOnCollision(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "speed.log")
+	dest := filepath.Join(dir, "speed-2026-09-10.log")
+	if err := os.WriteFile(dest, []byte("first\n"), 0o600); err != nil {
+		t.Fatalf("seed dest: %v", err)
+	}
+	if err := os.WriteFile(src, []byte("second\n"), 0o600); err != nil {
+		t.Fatalf("seed src: %v", err)
+	}
+
+	if err := rotateFileTo(src, dest); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("source file still exists after rotation")
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if want := "first\nsecond\n"; string(got) != want {
+		t.Errorf("dest = %q, want %q (append, not overwrite)", got, want)
+	}
+}
+
+// speedPruneDecision is the pure budget arithmetic behind pruneSpeedHistory
+// (amnezia-vpn-server-b0fl); testing it directly avoids writing hundreds of
+// megabytes of fixture files to cross speedMaxTotalBytes.
+func TestSpeedPruneDecisionByAge(t *testing.T) {
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		daysAgo     int
+		wantRemoved bool
+	}{
+		{"well inside retention", 1, false},
+		{"just inside retention", speedRetentionDays - 1, false},
+		{"exactly at the boundary is kept", speedRetentionDays, false},
+		{"one day past the boundary", speedRetentionDays + 1, true},
+		{"long expired", speedRetentionDays + 30, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			day := now.AddDate(0, 0, -tt.daysAgo)
+			f := speedDatedFile{path: "f.log", day: day, size: 1024}
+			keep, remove := speedPruneDecision([]speedDatedFile{f}, now)
+			removed := len(remove) == 1
+			if removed != tt.wantRemoved {
+				t.Errorf("removed = %v, want %v (keep=%v remove=%v)", removed, tt.wantRemoved, keep, remove)
+			}
+			if removed && len(keep) != 0 {
+				t.Errorf("keep = %v, want empty", keep)
+			}
+			if !removed && len(keep) != 1 {
+				t.Errorf("keep = %v, want the one file", keep)
+			}
+		})
+	}
+}
+
+// When the total exceeds speedMaxTotalBytes, the oldest surviving days go
+// first - the same "protect the newest history" choice speedMaxBytes makes
+// for one file, applied across the whole directory.
+func TestSpeedPruneDecisionByTotalSize(t *testing.T) {
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	// All three are comfortably inside the age window; only the combined
+	// size should drive removal.
+	half := int64(speedMaxTotalBytes / 2)
+	files := []speedDatedFile{
+		{path: "day1.log", day: now.AddDate(0, 0, -3), size: half},
+		{path: "day2.log", day: now.AddDate(0, 0, -2), size: half},
+		{path: "day3.log", day: now.AddDate(0, 0, -1), size: half},
+	}
+
+	keep, remove := speedPruneDecision(files, now)
+	if len(remove) != 1 || remove[0].path != "day1.log" {
+		t.Fatalf("remove = %v, want only the oldest day (day1.log)", remove)
+	}
+	if len(keep) != 2 || keep[0].path != "day2.log" || keep[1].path != "day3.log" {
+		t.Fatalf("keep = %v, want the two newest days", keep)
+	}
+	var total int64
+	for _, f := range keep {
+		total += f.size
+	}
+	if total > speedMaxTotalBytes {
+		t.Errorf("kept total = %d, still over the budget %d", total, speedMaxTotalBytes)
+	}
+}
+
+// pruneSpeedHistory is speedPruneDecision wired to real files: this pins
+// that the files it decides to remove actually disappear from disk, and
+// the ones it keeps do not.
+func TestPruneSpeedHistoryRemovesDecidedFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "speed.log")
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+
+	expired := speedDatedPath(path, now.AddDate(0, 0, -(speedRetentionDays+1)))
+	recent := speedDatedPath(path, now.AddDate(0, 0, -1))
+	writeLog(t, expired, sampleLine(now.AddDate(0, 0, -(speedRetentionDays+1)), 1, 1))
+	writeLog(t, recent, sampleLine(now.AddDate(0, 0, -1), 1, 1))
+
+	if err := pruneSpeedHistory(path, now); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if _, err := os.Stat(expired); !os.IsNotExist(err) {
+		t.Errorf("expired file survived pruning")
+	}
+	if _, err := os.Stat(recent); err != nil {
+		t.Errorf("recent file was removed: %v", err)
+	}
+}
+
+// A "speed.prev.log" a pre-b0fl build left behind is retired once its own
+// last line ages out of the retention window - the same rule a dated file
+// this old would be held to.
+func TestPruneLegacySpeedPrevAgesOut(t *testing.T) {
+	tests := []struct {
+		name        string
+		lastSample  time.Time
+		wantDeleted bool
+	}{
+		{"recent", time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), false},
+		{"expired", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), true},
+	}
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "speed.log")
+			writeLog(t, SpeedPrevPath(path), speedLine(sampleStatus(tt.lastSample, peer("k", 1, 1))))
+
+			if err := pruneLegacySpeedPrev(path, now); err != nil {
+				t.Fatalf("prune: %v", err)
+			}
+			_, err := os.Stat(SpeedPrevPath(path))
+			deleted := os.IsNotExist(err)
+			if deleted != tt.wantDeleted {
+				t.Errorf("deleted = %v, want %v", deleted, tt.wantDeleted)
+			}
+		})
+	}
+}
+
+// Content that cannot be dated must not be deleted on a guess - the same
+// caution rotation takes about mtime.
+func TestPruneLegacySpeedPrevLeavesUnreadableFileAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "speed.log")
+	if err := os.WriteFile(SpeedPrevPath(path), []byte(SpeedSchema+"\nrubbish\n"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := pruneLegacySpeedPrev(path, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if _, err := os.Stat(SpeedPrevPath(path)); err != nil {
+		t.Errorf("unreadable legacy file was deleted: %v", err)
 	}
 }
