@@ -37,14 +37,36 @@ const SpeedMaxGap = 30 * time.Second
 // traffic to send. Three minutes is that interval plus room for a renewal
 // that runs late, so a peer still talking is never called offline.
 //
-// The limit of what this can prove, stated plainly: it separates a
-// SUSTAINED silence from a player refilling its buffer, not a twenty-second
-// one. Over twenty seconds the handshake ages by twenty seconds either way,
-// and nothing here can tell the two apart. Over minutes it can — a working
-// tunnel keeps renewing, a broken one does not, and the age climbs sample
-// after sample. That is the case worth catching: the complaints are about
-// "YouTube said there is no internet", not about a pause nobody noticed.
+// This is the COARSE signal, and only the fallback: three minutes is the
+// best it can do, because over twenty seconds a handshake ages by twenty
+// seconds whether the tunnel works or not. SpeedOfflineSilence below is
+// the sharper one and is preferred wherever it can be measured
+// (amnezia-vpn-server-tyic).
 const SpeedAliveMaxAge = 3 * time.Minute
+
+// SpeedOfflineSilence is how long the server may hear NOTHING from a peer
+// before the peer counts as unreachable (amnezia-vpn-server-tyic).
+//
+// A client that is connected but idle is not silent: the config this panel
+// generates carries PersistentKeepalive = 25 (internal/awgconf/clientconf.go),
+// so an idle client sends a 32-byte keepalive every twenty-five seconds and
+// the server's rx counter keeps ticking. A broken tunnel delivers nothing at
+// all. So "the rx counter has not moved" separates the two where traffic
+// volume cannot: a player refilling its buffer downloads nothing but keeps
+// answering, and a dead tunnel does neither.
+//
+// Sixty seconds is measured, not guessed. Over two days of one real client —
+// 26 908 intervals between successive arrivals of bytes from it — the
+// longest silence was 46 seconds (distribution: 5 s ×22113, 6 s ×1413,
+// 10 s ×1150, 15 s ×1313, 20 s ×253, 25 s ×76, then a thin tail to 46 s).
+// Sixty leaves room above that worst case without waiting out the three
+// minutes the handshake would need.
+//
+// The assumption it rests on: keepalive is in the client's config. This
+// panel writes it, but a hand-edited config without it would make an idle
+// client look unreachable. That is why the handshake age stays as a second
+// opinion rather than being deleted.
+const SpeedOfflineSilence = 60 * time.Second
 
 // SpeedColumn is one column of the chart: the extremes of what happened
 // inside it. Extremes, not an average, because averaging is what hides
@@ -70,9 +92,10 @@ type SpeedColumn struct {
 	// perfectly online; a broken tunnel produces the same zero bytes and is
 	// not. Traffic alone cannot tell them apart — see SpeedAliveMaxAge.
 	//
-	// HasLiveness is false for a column built only from v1 lines, which
-	// carried no handshake. Such a column must be drawn as neither online
-	// nor offline: nothing is known about it either way.
+	// HasLiveness is false only where neither signal is available: no rx
+	// movement seen yet (the very start of a window) and no handshake age
+	// on the record. Such a column must be drawn as neither online nor
+	// offline — nothing is known about it either way.
 	HasLiveness bool
 	Online      bool
 }
@@ -333,8 +356,35 @@ func foldSpeed(samples []speedSample, from, to time.Time, columns int) *SpeedSer
 	for i := range out.Columns {
 		out.Columns[i].AtUTC = from.Add(time.Duration(i) * width)
 	}
+	// lastRxMove is when the client was last heard from. Updated before the
+	// skips below, because a sample being unusable as a RATE (too far apart,
+	// counters reset) does not make it unusable as proof the client spoke
+	// (amnezia-vpn-server-tyic).
+	var lastRxMove time.Time
+	// Whether the rx signal is usable at all in this window decides which
+	// signal is in charge, and it has to be known BEFORE the first interval
+	// is judged — hence a separate scan.
+	//
+	// The two signals must not be mixed per-interval. The handshake ages
+	// even on a perfectly healthy idle client, because AmneziaWG renews a
+	// handshake only when there is data to send and a keepalive is not data:
+	// fifteen idle minutes leave a 900-second-old handshake with keepalives
+	// arriving the whole time. Letting the handshake veto that would call
+	// the commonest state — connected, idle — an outage.
+	anyRxMove := false
+	for i := 1; i < len(samples); i++ {
+		if samples[i].rx > samples[i-1].rx {
+			anyRxMove = true
+			break
+		}
+	}
 	for i := 1; i < len(samples); i++ {
 		a, b := samples[i-1], samples[i]
+		if b.rx > a.rx {
+			// The bytes arrived somewhere in (a, b]; b is the conservative
+			// reading — it never claims the client spoke earlier than it did.
+			lastRxMove = b.at
+		}
 		dt := b.at.Sub(a.at)
 		if dt <= 0 || dt > SpeedMaxGap {
 			continue
@@ -363,15 +413,38 @@ func foldSpeed(samples []speedSample, from, to time.Time, columns int) *SpeedSer
 		//
 		// Настоящие разрывы это не трогает: отрезок длиннее SpeedMaxGap сюда
 		// не доходит вовсе, он отсеян выше.
-		// Liveness is taken from the interval's END: the handshake age on b
-		// is what was true once this interval had happened
-		// (amnezia-vpn-server-3wbe).
-		alive := b.handshakeAge <= SpeedAliveMaxAge
+		// Liveness is taken from the interval's END: what was true once this
+		// interval had happened (amnezia-vpn-server-3wbe).
+		//
+		// Silence in the rx counter is the sharper signal and wins whenever
+		// it can be measured; the handshake age is the fallback for the very
+		// start of a window, where no rx movement has been seen yet, and for
+		// records from before the age was written at all
+		// (amnezia-vpn-server-tyic).
+		// known says whether this interval has any opinion to offer at all.
+		// Before the first rx movement of a window there is none: the client
+		// may have been quiet for one second or one hour, and the handshake
+		// cannot break the tie (see anyRxMove above).
+		var alive, known bool
+		switch {
+		case anyRxMove && !lastRxMove.IsZero():
+			alive, known = b.at.Sub(lastRxMove) <= SpeedOfflineSilence, true
+		case !anyRxMove && b.hasHandshake:
+			// Nothing was ever heard in this window, so the handshake is all
+			// there is — and here it can only accuse, never acquit wrongly:
+			// a client silent for the whole window really is unreachable if
+			// its handshake is stale too.
+			alive, known = b.handshakeAge <= SpeedAliveMaxAge, true
+		}
 		first := columnAt(a.at, from, width, columns)
 		last := columnAt(b.at, from, width, columns)
 		for idx := first; idx <= last; idx++ {
 			col := &out.Columns[idx]
-			if b.hasHandshake {
+			// Either signal is enough to have an opinion. Notably the rx
+			// one works on v1 records too, which carry no handshake — so
+			// history written before the age existed is not blind after all
+			// (amnezia-vpn-server-tyic).
+			if known {
 				if !col.HasLiveness {
 					col.HasLiveness = true
 					col.Online = alive

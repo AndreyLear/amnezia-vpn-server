@@ -183,6 +183,26 @@ function SpeedPlot({
           <clipPath id={clipId}>
             <rect x={0} y={0} width={n} height={HEIGHT} />
           </clipPath>
+          {/* Промежутки без связи — подложка во всю высоту, под всем
+              остальным (amnezia-vpn-server-tyic). Помечается отрезок
+              ВРЕМЕНИ, а не второй ряд данных: именно поэтому это фон, а не
+              полоса под осью — тень под графиком владелец уже читал как
+              постороннюю и путающую (amnezia-vpn-server-6kj9).
+              Смысл подложки: нули внутри неё — обрыв, нули вне неё — клиент
+              на связи и просто ничего не качал. Различить их по трафику
+              нельзя вовсе, а без подложки человек видел одни и те же нули и
+              читал их как обрыв. */}
+          {offlineRuns(series.online).map((run, i) => (
+            <rect
+              key={`off${i}`}
+              data-series="offline"
+              x={run[0]}
+              width={run.length}
+              y={0}
+              height={HEIGHT}
+              className="fill-rose-500/20"
+            />
+          ))}
           {[0, 0.5, 1].map((f) => (
             <line
               key={f}
@@ -296,6 +316,19 @@ function SpeedPlot({
             </span>
             отдал
           </span>
+          {/* Объяснение подложки показывается только когда подложка есть:
+              строка про обрыв над графиком без обрывов заставляла бы искать
+              то, чего нет (amnezia-vpn-server-tyic). */}
+          {series.online?.some((v) => v === false) ? (
+            <span className="flex items-center gap-1.5">
+              <span
+                data-slot="legend-offline"
+                className="inline-block size-2.5 rounded-sm bg-rose-500/20"
+                aria-hidden
+              />
+              связи не было
+            </span>
+          ) : null}
         </span>
         <span className="tabular-nums">{formatClock(series.to_utc, series)}</span>
       </div>
@@ -352,6 +385,34 @@ function bandRuns(mins: (number | null)[], maxs: (number | null)[]): number[][] 
 }
 
 /**
+ * Подряд идущие столбцы, в которых сервер не слышал клиента
+ * (amnezia-vpn-server-tyic).
+ *
+ * Отбирается ровно false. null пропускается наравне с true, потому что
+ * «неизвестно» нельзя закрашивать: заливка утверждает, что связи не было,
+ * а про эти столбцы нам сказать нечего.
+ */
+function offlineRuns(online: (boolean | null)[] | undefined): number[][] {
+  // Поля может не быть вовсе: во время обновления страница, загруженная из
+  // прежней сборки, разговаривает с новым сервером и наоборот. Пустой ответ
+  // означает «нечего закрашивать», а не поломку графика
+  // (amnezia-vpn-server-tyic).
+  if (!online) return [];
+  const runs: number[][] = [];
+  let run: number[] = [];
+  for (let i = 0; i < online.length; i++) {
+    if (online[i] === false) {
+      run.push(i);
+      continue;
+    }
+    if (run.length) runs.push(run);
+    run = [];
+  }
+  if (run.length) runs.push(run);
+  return runs;
+}
+
+/**
  * Заливка от основания до значения: вверх, по верхам вперёд, вниз к
  * основанию и назад по нему.
  *
@@ -400,6 +461,9 @@ function Readout({
         second: "2-digit",
       });
   const gap = series.down_max_bps[at] === null;
+  // Ровно false: null — «неизвестно», и выдавать его за обрыв нельзя
+  // (amnezia-vpn-server-tyic).
+  const offline = series.online?.[at] === false;
   // Подсказка держится у своего края: у правого края поля она иначе
   // вылезала бы за карточку.
   const right = at > n / 2;
@@ -429,6 +493,10 @@ function Readout({
           <div className="text-orange-500 tabular-nums">
             ↑ {formatRange(series.up_min_bps[at], series.up_max_bps[at])}
           </div>
+          {/* Словами, а не только подложкой: нулевая скорость и «сервер не
+              слышал клиента» — разные вещи, и человек, наведя на нули,
+              должен прочитать, какая из них (amnezia-vpn-server-tyic). */}
+          {offline ? <div className="text-rose-500">связи не было</div> : null}
         </>
       )}
     </div>

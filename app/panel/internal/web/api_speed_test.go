@@ -306,15 +306,53 @@ func TestAPIClientSpeedSendsOnline(t *testing.T) {
 	}
 }
 
-// Записи прежнего формата признака не несут, и выдавать «неизвестно» за
-// «был на связи» нельзя (amnezia-vpn-server-3wbe).
-func TestAPIClientSpeedOnlineUnknownForOldRecords(t *testing.T) {
+// Записи прежнего формата не несут возраста рукопожатия, но признак связи
+// у них есть: движение счётчика rx значит, что клиент говорил
+// (amnezia-vpn-server-tyic).
+func TestAPIClientSpeedOnlineFromOldRecords(t *testing.T) {
 	f := newFixture(t)
 	c, _, _ := f.addClient("router")
 	now := time.Now().UTC()
 	writeSpeedLog(t, f,
-		speedLogLine(now.Add(-10*time.Second), c.PublicKey, 0, 0),
-		speedLogLine(now.Add(-5*time.Second), c.PublicKey, 100, 100),
+		speedLogLine(now.Add(-15*time.Second), c.PublicKey, 0, 0),
+		speedLogLine(now.Add(-10*time.Second), c.PublicKey, 100, 100),
+		speedLogLine(now.Add(-5*time.Second), c.PublicKey, 200, 200),
+	)
+
+	rec := f.get(fmt.Sprintf("/api/clients/%d/speed?columns=120", c.ID))
+	var got struct {
+		Online []*bool `json:"online"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("разбор ответа: %v", err)
+	}
+	var online int
+	for i, v := range got.Online {
+		if v == nil {
+			continue
+		}
+		if !*v {
+			t.Errorf("столбец %d назван «не на связи», хотя клиент говорил", i)
+		}
+		online++
+	}
+	if online == 0 {
+		t.Error("ни один столбец не получил признака связи, хотя счётчик rx двигался")
+	}
+}
+
+// «Неизвестно» остаётся там, где ни одного признака нет: счётчик rx не
+// двигался и возраста рукопожатия в записях тоже нет. Выдавать такое за
+// «был на связи» нельзя (amnezia-vpn-server-3wbe, -tyic).
+func TestAPIClientSpeedOnlineUnknownWithoutAnySignal(t *testing.T) {
+	f := newFixture(t)
+	c, _, _ := f.addClient("router")
+	now := time.Now().UTC()
+	// Старый формат и неподвижный rx: сказать нечего.
+	writeSpeedLog(t, f,
+		speedLogLine(now.Add(-15*time.Second), c.PublicKey, 500, 0),
+		speedLogLine(now.Add(-10*time.Second), c.PublicKey, 500, 100),
+		speedLogLine(now.Add(-5*time.Second), c.PublicKey, 500, 200),
 	)
 
 	rec := f.get(fmt.Sprintf("/api/clients/%d/speed?columns=120", c.ID))
