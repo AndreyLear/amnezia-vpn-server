@@ -57,7 +57,9 @@ describe("BackupUploadDialog", () => {
     const content = document.querySelector("[data-slot=dialog-content]");
     expect(content?.className).toContain("sm:max-w-md");
     expect(content?.className).toContain("overflow-hidden");
-    expect(content).toHaveClass("gap-6");
+    // Отступы живут на теле окна, ширина — на внешнем элементе
+    // (amnezia-vpn-server-kq1m).
+    expect(document.querySelector("[data-slot=dialog-body]")).toHaveClass("gap-6");
     const form = content?.querySelector("form");
     expect(form).toHaveClass("grid", "gap-6");
     expect(form).not.toHaveClass("gap-3");

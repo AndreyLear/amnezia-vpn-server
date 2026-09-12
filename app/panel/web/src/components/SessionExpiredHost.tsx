@@ -112,7 +112,7 @@ export function SessionExpiredHost() {
   return (
     <Dialog open={open} onOpenChange={() => {}}>
       <DialogContent
-        className="gap-6"
+        bodyClassName="gap-6"
         showCloseButton={false}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}

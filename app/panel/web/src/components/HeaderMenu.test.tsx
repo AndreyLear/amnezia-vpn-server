@@ -63,7 +63,10 @@ describe("меню в шапке", () => {
 
     await user.click(screen.getByRole("button", { name: "Ещё" }));
     const items = await screen.findAllByRole("menuitem");
-    expect(items.map((item) => item.textContent)).toEqual([
+    // Доступное имя, а не textContent: варианты подписи пункта проверки
+    // лежат друг поверх друга ради неизменной ширины, и скрытые попадают в
+    // textContent, но не в имя (amnezia-vpn-server-x65u).
+    expect(items.map((item) => item.getAttribute("aria-label") ?? item.textContent)).toEqual([
       "О версиях",
       "Состояние служб",
       "Журнал",

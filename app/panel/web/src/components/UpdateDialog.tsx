@@ -301,7 +301,7 @@ export function UpdateDialog({
           dismissed without that happening. While the update is still
           running or the changelog is being reviewed, the panel is usable
           in the background and the X stays (amnezia-vpn-server-d27j). */}
-      <DialogContent className="gap-6 sm:max-w-lg" showCloseButton={!showOutcome}>
+      <DialogContent className="sm:max-w-lg" bodyClassName="gap-6" showCloseButton={!showOutcome}>
         <DialogHeader>
           <DialogTitle aria-label={running ? "Обновляем…" : undefined}>{title}</DialogTitle>
         </DialogHeader>

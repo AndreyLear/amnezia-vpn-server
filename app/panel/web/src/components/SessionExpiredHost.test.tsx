@@ -42,8 +42,9 @@ describe("session expired re-login", () => {
     expect(await screen.findByText("Сессия истекла")).toBeInTheDocument();
     expect(screen.getByText("Введите пароль, чтобы продолжить")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Повторить вход" })).toHaveClass("max-sm:h-12", "max-sm:w-full");
+    // Отступы живут на теле окна (amnezia-vpn-server-kq1m).
+    expect(document.querySelector("[data-slot=dialog-body]")).toHaveClass("gap-6");
     const content = document.querySelector("[data-slot=dialog-content]");
-    expect(content).toHaveClass("gap-6");
     const form = content?.querySelector("form");
     expect(form).toHaveClass("grid", "gap-6");
     expect(form).not.toHaveClass("gap-3");

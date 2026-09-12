@@ -41,22 +41,6 @@ describe("index.css client-card-sweep", () => {
   });
 });
 
-// Подпись пункта проверки обновлений меняется на ходу, и меню не должно
-// дёргаться под курсором (amnezia-vpn-server-3tm4).
-describe("подпись пункта проверки обновлений", () => {
-  it("резервирует ширину псевдоэлементом, а не копией текста в DOM", () => {
-    expect(css).toMatch(
-      /\.header-menu-check::before\s*\{[\s\S]*?content:\s*var\(--header-menu-check-reserve[\s\S]*?\}/,
-    );
-  });
-
-  it("прячет резерв от глаза и от указателя", () => {
-    const rule = css.match(/\.header-menu-check::before\s*\{([\s\S]*?)\}/)?.[1] ?? "";
-    expect(rule).toContain("visibility: hidden");
-    expect(rule).toContain("pointer-events: none");
-  });
-});
-
 // Одна анимация многоточия на всю панель: и «Проверяю…» в меню, и
 // «Обновляем…» в окне обновления просят одного и того же
 // (amnezia-vpn-server-3tm4, -d27j).

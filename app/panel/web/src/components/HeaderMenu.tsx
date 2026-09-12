@@ -1,10 +1,11 @@
-import { useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Loader2Icon, MoreHorizontalIcon } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
+import { MoreHorizontalIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { AboutDialog } from "@/components/AboutDialog";
 import { AuditDialog } from "@/components/AuditDialog";
 import { ServicesDialog } from "@/components/ServicesDialog";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -26,6 +27,7 @@ type MenuItem = {
   id: string;
   label: ReactNode;
   onSelect: (event: Event) => void;
+  ariaLabel?: string;
   disabled?: boolean;
   /** Пункт занят: вместо ожидания вслепую — вертушка на месте пункта. */
   busy?: boolean;
@@ -73,18 +75,11 @@ const CHECK_LABEL_IDLE = "Проверить обновления";
 const CHECK_LABEL_CHECKING = "Проверяю";
 const CHECK_LABEL_AVAILABLE = "Доступна новая версия";
 
-/**
- * Самый широкий из трёх вариантов подписи пункта (amnezia-vpn-server-3tm4).
- *
- * Меню не должно дёргаться под курсором, пока «Проверить обновления»
- * сменяется на «Проверяю…», а потом, возможно, на «Доступна новая версия»
- * (amnezia-vpn-server-nzb3). Ширина посчитана от самих подписей, а не
- * захардкожена в пикселях, — если текст любой из них изменится, резерв
- * пересчитается сам.
- */
-const WIDEST_CHECK_LABEL = [CHECK_LABEL_IDLE, CHECK_LABEL_CHECKING, CHECK_LABEL_AVAILABLE].reduce(
-  (widest, candidate) => (candidate.length > widest.length ? candidate : widest),
-);
+const CHECK_LABELS: Record<CheckState, string> = {
+  idle: CHECK_LABEL_IDLE,
+  checking: CHECK_LABEL_CHECKING,
+  available: CHECK_LABEL_AVAILABLE,
+};
 
 /**
  * Подпись пункта «Проверить обновления».
@@ -97,40 +92,69 @@ const WIDEST_CHECK_LABEL = [CHECK_LABEL_IDLE, CHECK_LABEL_CHECKING, CHECK_LABEL_
  * псевдоэлемента нет текстового узла в DOM, поэтому в `textContent` он не
  * попадает (amnezia-vpn-server-3tm4).
  */
+function CheckVariant({ state }: { state: CheckState }) {
+  if (state === "checking") {
+    return (
+      <>
+        {CHECK_LABEL_CHECKING}
+        {/* Точки набегают по очереди (index.css, .animated-ellipsis): текст
+            без движения читается как зависший, а не как идущая работа. */}
+        <span className="animated-ellipsis" aria-hidden>
+          <span>.</span>
+          <span>.</span>
+          <span>.</span>
+        </span>
+      </>
+    );
+  }
+  if (state === "available") {
+    return (
+      <>
+        {/* Переливание — то же, что у имени интерфейса в шапке
+            (amnezia-vpn-server-nzb3): один приём — один сигнал. */}
+        <span className="header-iface-shimmer">{CHECK_LABEL_AVAILABLE}</span>
+        <span
+          data-testid="update-item-badge"
+          aria-hidden
+          className="size-2 shrink-0 rounded-full bg-destructive"
+        />
+      </>
+    );
+  }
+  return <>{CHECK_LABEL_IDLE}</>;
+}
+
+/**
+ * Подпись пункта проверки обновлений (amnezia-vpn-server-3tm4, -nzb3).
+ *
+ * Ширину держат сами варианты, отрисованные друг поверх друга в одной
+ * ячейке сетки: видно только текущий, остальные лежат под ним невидимыми.
+ *
+ * Первый заход резервировал место псевдоэлементом с самой длинной СТРОКОЙ
+ * подписи — и ширину всё равно уводило, потому что в пункт входит не только
+ * текст: у «Доступна новая версия» рядом бадж, у «Проверяю» — три точки.
+ * Строка о них не знала (amnezia-vpn-server-x65u). Отрисованные варианты
+ * знают: ширина ячейки равна самому широкому из них, чем бы он ни был набран.
+ *
+ * Скрытые варианты помечены aria-hidden, поэтому в доступное имя пункта
+ * попадает только текущий. В textContent они попадают — это цена приёма, и
+ * тесты поэтому спрашивают доступное имя, а не текст узла.
+ */
 function CheckMenuLabel({ state }: { state: CheckState }) {
   return (
-    <span
-      className="header-menu-check relative inline-grid"
-      style={{ "--header-menu-check-reserve": JSON.stringify(WIDEST_CHECK_LABEL) } as CSSProperties}
-    >
-      <span className="inline-flex items-center gap-1.5">
-        {state === "checking" ? (
-          <>
-            {CHECK_LABEL_CHECKING}
-            {/* Точки анимированы по очереди в index.css; текст без них не
-                читался бы как «идёт проверка», а не «зависло». */}
-            <span className="animated-ellipsis" aria-hidden>
-              <span>.</span>
-              <span>.</span>
-              <span>.</span>
-            </span>
-          </>
-        ) : state === "available" ? (
-          <>
-            {/* Переливание — то же, что у имени интерфейса в шапке
-                (amnezia-vpn-server-nzb3): один и тот же приём читается как
-                один и тот же сигнал «пока не разобрались до конца». */}
-            <span className="header-iface-shimmer">{CHECK_LABEL_AVAILABLE}</span>
-            <span
-              data-testid="update-item-badge"
-              aria-hidden
-              className="size-2 shrink-0 rounded-full bg-destructive"
-            />
-          </>
-        ) : (
-          CHECK_LABEL_IDLE
-        )}
-      </span>
+    <span className="header-menu-check inline-grid">
+      {(["idle", "checking", "available"] as const).map((variant) => (
+        <span
+          key={variant}
+          aria-hidden={variant !== state}
+          className={cn(
+            "inline-flex items-center gap-1.5 whitespace-nowrap",
+            variant !== state && "invisible",
+          )}
+        >
+          <CheckVariant state={variant} />
+        </span>
+      ))}
     </span>
   );
 }
@@ -240,11 +264,16 @@ export function HeaderMenu({
     {
       id: "check-updates",
       label: <CheckMenuLabel state={checkState} />,
+      // Имя задаётся явно: варианты подписи лежат друг поверх друга ради
+      // неизменной ширины, и хотя скрытые помечены aria-hidden, собирать имя
+      // пункта из обрывков — лишний риск. Здесь оно всегда одно и то же
+      // слово, что и на экране (amnezia-vpn-server-x65u).
+      ariaLabel: CHECK_LABELS[checkState],
       busy: checking,
       disabled: checking,
       onSelect: (event) => {
-        // Меню не закрываем: вертушка живёт в пункте, и закрыться в тот же
-        // миг значило бы снова оставить нажавшего ни с чем.
+        // Меню не закрываем: пункт сам говорит «Проверяю…», и закрыться в
+        // тот же миг значило бы снова оставить нажавшего ни с чем.
         event.preventDefault();
         void checkForUpdates();
       },
@@ -300,11 +329,16 @@ export function HeaderMenu({
               className="whitespace-nowrap"
               disabled={item.disabled}
               aria-busy={item.busy}
+              aria-label={item.ariaLabel}
               onSelect={item.onSelect}
             >
-              {item.busy ? (
-                <Loader2Icon data-testid="check-spinner" aria-hidden className="animate-spin" />
-              ) : null}
+              {/* Вертушки рядом с подписью нет намеренно: она появлялась
+                  только во время проверки и раздвигала меню на два десятка
+                  пикселей — меню дёргалось под курсором ровно в тот момент,
+                  когда по нему целятся. Что работа идёт, говорит сама
+                  подпись «Проверяю…» с набегающим многоточием, а для тех,
+                  кто не видит анимацию, остаётся aria-busy
+                  (amnezia-vpn-server-x65u). */}
               {item.label}
             </DropdownMenuItem>
           ))}

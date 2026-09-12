@@ -192,7 +192,10 @@ describe("проверка обновлений из меню", () => {
 
     await waitMs(POLL_MS * 3);
     expect(item).toHaveAttribute("aria-busy", "true");
-    expect(screen.getByTestId("check-spinner")).toBeInTheDocument();
+    // Вертушки рядом с подписью нет намеренно: она раздвигала меню на два
+    // десятка пикселей ровно в тот момент, когда по нему целятся. Что работа
+    // идёт, говорит сама подпись (amnezia-vpn-server-x65u).
+    expect(screen.queryByTestId("check-spinner")).toBeNull();
     // И второе нажатие занятого пункта не просит проверку заново.
     fireEvent.click(item);
     await waitMs(0);
@@ -245,23 +248,40 @@ describe("пункт проверки называет своё состояни
     pressCheck();
     await waitMs(POLL_MS);
 
-    // Резерв держит псевдоэлемент, а не спрятанная копия текста: иначе
-    // лишний вариант протёк бы в доступное имя пункта и в textContent.
-    const reserving = document.querySelector(".header-menu-check");
-    expect(reserving).not.toBeNull();
-    expect(reserving?.getAttribute("style")).toContain("--header-menu-check-reserve");
-    expect(reserving?.getAttribute("style")).toContain("Доступна новая версия");
-    expect(reserving?.textContent).not.toContain("Проверить обновления");
-    expect(reserving?.textContent).not.toContain("Доступна новая версия");
+    // Ширину держат сами варианты, отрисованные друг поверх друга: ячейка
+    // всегда шириной с самый широкий из них. Здесь проверяется только
+    // устройство — настоящую ширину в jsdom не измерить, вёрстки нет вовсе,
+    // и первый заход именно на этом и обжёгся: тест был зелёный, а меню у
+    // владельца прыгало. Измерение живьём — в e2e (amnezia-vpn-server-x65u).
+    const cell = document.querySelector(".header-menu-check");
+    expect(cell).not.toBeNull();
+    const variants = [...cell!.children];
+    expect(variants).toHaveLength(3);
+
+    // Виден ровно один, остальные лежат под ним и скрыты от чтения с экрана.
+    const shown = variants.filter((v) => !v.className.includes("invisible"));
+    expect(shown).toHaveLength(1);
+    expect(shown[0].textContent).toContain("Проверяю");
+    for (const v of variants) {
+      if (v === shown[0]) continue;
+      expect(v).toHaveAttribute("aria-hidden", "true");
+    }
+
+    // В доступное имя пункта попадает только текущая подпись.
+    expect(screen.getByRole("menuitem", { name: "Проверяю" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Проверить обновления" })).toBeNull();
 
     await waitMs(POLL_MS * 4);
   });
 
-  it("когда версия вышла, пункт так и называется и несёт бадж рядом", () => {
+  it("без доступного обновления пункт зовёт проверить, и бадж не виден", () => {
     render(<HeaderMenu />);
     openMenu();
-    // Без доступного обновления пункт зовёт проверить.
-    expect(screen.getByRole("menuitem", { name: /Проверить обновления/ })).toBeInTheDocument();
-    expect(screen.queryByTestId("update-item-badge")).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Проверить обновления" })).toBeInTheDocument();
+    // Бадж есть в разметке — он лежит в скрытом варианте подписи, который
+    // держит ширину, — но помечен скрытым и не читается.
+    const badge = screen.getByTestId("update-item-badge");
+    expect(badge.closest("[aria-hidden=true]")).not.toBeNull();
+    expect(badge.closest(".invisible")).not.toBeNull();
   });
 });

@@ -105,7 +105,7 @@ export function AuditDialog({
           метка времени — переносились посреди фразы. sm:max-w-md — та же
           ширина, что у ClientInfoDialog и BackupUploadDialog, и её хватает
           с запасом (amnezia-vpn-server-4yo4). */}
-      <DialogContent className="gap-6 sm:max-w-md">
+      <DialogContent className="sm:max-w-md" bodyClassName="gap-6">
         <DialogHeader>
           <DialogTitle>Журнал</DialogTitle>
         </DialogHeader>
