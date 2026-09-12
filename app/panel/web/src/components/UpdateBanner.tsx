@@ -28,7 +28,11 @@ export function UpdateBanner({
   restarting?: boolean;
   /** Не отвечает дольше потолка ожидания — прокинуто в UpdateDialog. */
   timedOut?: boolean;
-  onChanged: () => void;
+  // acknowledge() below awaits this, so the real reloadUpdate passed in from
+  // HomePage (an async function) must be allowed to return its promise —
+  // typing it as plain () => void would silently let a caller assume
+  // "fire and forget" is fine (amnezia-vpn-server-jdkq).
+  onChanged: () => void | Promise<void>;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [hiding, setHiding] = useState(false);
@@ -44,13 +48,24 @@ export function UpdateBanner({
     setHiding(false);
   }
 
-  async function acknowledge() {
-    if (!info) return;
+  // Returns whether the outcome is actually recorded as seen — both the
+  // dismiss request AND the info reload after it must succeed. UpdateDialog
+  // awaits this before closing itself, specifically so that the moment it
+  // closes, info.outcome_seen already matches: closing on the dismiss
+  // response alone (without waiting for the reload) would still leave a gap
+  // where UpdateOutcomeDialog's own "already seen" check sees stale data
+  // and flashes open (amnezia-vpn-server-jdkq). UpdateOutcomeDialog's own
+  // "Понятно" doesn't need this care — it isn't racing a sibling popup — so
+  // it still calls this fire-and-forget below.
+  async function acknowledge(): Promise<boolean> {
+    if (!info) return true;
     const data = await api<MutationResponse>("/api/update/dismiss", {
       method: "POST",
       body: JSON.stringify({ outcome: info.state_at_utc }),
     });
-    if (mutationOk(data)) onChanged();
+    if (!mutationOk(data)) return false;
+    await onChanged();
+    return true;
   }
 
   // Итог показывается всегда, а полоса о выпуске — только когда есть что
@@ -99,7 +114,7 @@ export function UpdateBanner({
         onStarted={onChanged}
         restarting={restarting}
         timedOut={timedOut}
-        onAcknowledge={() => void acknowledge()}
+        onAcknowledge={acknowledge}
       />
     </>
   );

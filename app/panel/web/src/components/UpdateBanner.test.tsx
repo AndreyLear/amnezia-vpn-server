@@ -152,8 +152,11 @@ describe("итог обновления", () => {
         onChanged={() => {}}
       />,
     );
-    expect(await screen.findByText("Обновление завершено")).toBeInTheDocument();
-    expect(screen.getByText("обновление до 2.9.0 завершено")).toBeInTheDocument();
+    // Заголовок называет, что произошло с панелью, а не докладывает статус;
+    // текст собирается панелью из версии, а не пересказывает строку хоста
+    // (amnezia-vpn-server-jdkq).
+    expect(await screen.findByText("Обновление установлено")).toBeInTheDocument();
+    expect(screen.getByText("Панель обновлена до версии 2.9.0")).toBeInTheDocument();
   });
 
   it("показывается сам и когда обновление не удалось", async () => {
@@ -252,7 +255,7 @@ describe("итог обновления", () => {
     // Окно хода обновления само показывает итог, кнопка «Понятно» —
     // ровно одна, а не две (отдельный попап промолчал).
     expect(screen.getAllByRole("button", { name: "Понятно" })).toHaveLength(1);
-    expect(screen.getAllByText("обновление до 2.10.0 завершено")).toHaveLength(1);
+    expect(screen.getAllByText("Панель обновлена до версии 2.10.0")).toHaveLength(1);
   });
 });
 
@@ -292,18 +295,26 @@ describe("ход обновления", () => {
   // Хост пишет и машинное имя шага, и человеческое пояснение; показывалось
   // только первое, и выходило «Шаг: запрос» — не значащее ничего
   // (amnezia-vpn-server-7edq).
-  it("под полосой стоит пояснение, а не машинное слово", () => {
+  // Строка шага убрана совсем (amnezia-vpn-server-d27j). Сначала она
+  // показывала машинное слово («Шаг: запрос»), потом человеческое пояснение
+  // хоста, и оба раза читалась как строка журнала агента, а не как что-то
+  // написанное для владельца. Полоса выше и так говорит, что работа идёт.
+  it("не показывает под полосой ни машинный шаг, ни пояснение хоста", () => {
     openDialog({ state: "running", state_step: "запрос", state_message: "проверяю выпуск" });
-    expect(screen.getByText("проверяю выпуск")).toBeInTheDocument();
     expect(screen.queryByText(/Шаг:/)).not.toBeInTheDocument();
     expect(screen.queryByText("запрос")).not.toBeInTheDocument();
+    expect(screen.queryByText("проверяю выпуск")).not.toBeInTheDocument();
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
   });
 
   // Без пояснения машинное слово не всплывает обратно: «запрос» в одиночку
   // человеку не помогает (amnezia-vpn-server-7edq).
-  it("без пояснения говорит общее, а не машинное слово", () => {
+  // Вместо строки шага под полосой стоит то, что человеку и нужно знать:
+  // закрытие окна ничего не ломает (amnezia-vpn-server-d27j).
+  it("объясняет, что закрытие окна не остановит обновление", () => {
     openDialog({ state: "running", state_step: "запрос", state_message: "" });
-    expect(screen.getByText("Идёт обновление")).toBeInTheDocument();
+    expect(screen.getByText(/Обновление идёт на сервере/)).toBeInTheDocument();
+    expect(screen.getByText(/результат покажется, когда вы вернётесь/)).toBeInTheDocument();
     expect(screen.queryByText(/запрос/)).not.toBeInTheDocument();
   });
 
@@ -335,7 +346,7 @@ describe("ход обновления", () => {
 
   it("говорит, что окно можно закрыть", () => {
     openDialog({ state: "running" });
-    expect(screen.getByText(/Окно можно закрыть/)).toBeInTheDocument();
+    expect(screen.getByText(/Окно и вкладку можно закрыть/)).toBeInTheDocument();
   });
 
   // state_at_utc пустой — это "итога никогда не было" (свежая установка), а
@@ -344,7 +355,7 @@ describe("ход обновления", () => {
   // (amnezia-vpn-server-tjoq, -mrjh).
   it("без state_at_utc снова показывает изменения, а не итог", () => {
     openDialog({ state: "ok", state_message: "обновление до 2.9.0 завершено" });
-    expect(screen.queryByText("обновление до 2.9.0 завершено")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Панель обновлена до версии/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Обновить" })).toBeInTheDocument();
   });
 
@@ -368,13 +379,17 @@ describe("ход обновления", () => {
     openDialog(
       {
         state: "ok",
+        // Версию панель берёт из данных, а не из фразы хоста
+        // (amnezia-vpn-server-jdkq): state_message тут намеренно оставлен
+        // прежним, чтобы было видно, что его больше не пересказывают.
+        state_to: "2.10.0",
         state_message: "обновление до 2.10.0 завершено",
         state_at_utc: "2026-09-11T10:00:00Z",
       },
       { onAcknowledge },
     );
-    expect(screen.getByText("Обновление завершено")).toBeInTheDocument();
-    expect(screen.getByText("обновление до 2.10.0 завершено")).toBeInTheDocument();
+    expect(screen.getByText("Обновление установлено")).toBeInTheDocument();
+    expect(screen.getByText("Панель обновлена до версии 2.10.0")).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
@@ -473,5 +488,55 @@ describe("описание выпуска", () => {
   it("открывается шире стандартного диалога", () => {
     openDialog(release21013);
     expect(screen.getByRole("dialog").className).toContain("sm:max-w-lg");
+  });
+});
+
+// Владелец: нажал «Понятно» — мелькнуло второе окно. Так и было: окно
+// закрывалось сразу, не дожидаясь ответа сервера, и баннер тут же рисовал
+// отдельный попап с тем же итогом, потому что отметка «увидел» ещё не
+// доехала (amnezia-vpn-server-jdkq).
+describe("итог не показывается дважды", () => {
+  const finished: Partial<UpdateInfo> = {
+    state: "ok",
+    state_to: "2.10.0",
+    state_at_utc: "2026-09-11T10:00:00Z",
+    outcome_seen: "",
+    available: false,
+  };
+
+  it("после «Понятно» второе окно не появляется, пока сервер думает", async () => {
+    const user = userEvent.setup();
+    // Сервер отвечает не сразу: именно в этот промежуток и мелькало окно.
+    let release!: (v: unknown) => void;
+    const slow = new Promise((r) => (release = r));
+    const fetchMock = vi.fn(async () => {
+      await slow;
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Настоящий сценарий: человек открыл окно хода обновления и дождался в
+    // нём итога. Именно это окно и закрывалось раньше слишком рано.
+    const { rerender } = render(
+      <UpdateBanner info={info({ available: true, latest: "2.10.0" })} onChanged={() => {}} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Показать подробности" }));
+    rerender(<UpdateBanner info={info(finished)} onChanged={() => {}} />);
+
+    const ok = await screen.findByRole("button", { name: "Понятно" });
+    // Считать окна бесполезно: и при ошибке их на экране по одному. Держим
+    // сам узел — при прежнем поведении это окно исчезало, а на его месте
+    // появлялось ДРУГОЕ, с тем же текстом.
+    const before = screen.getByRole("dialog");
+    await user.click(ok);
+
+    expect(screen.getByRole("dialog")).toBe(before);
+    expect(screen.getAllByText("Панель обновлена до версии 2.10.0")).toHaveLength(1);
+
+    release(null);
+    vi.unstubAllGlobals();
   });
 });

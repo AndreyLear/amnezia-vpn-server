@@ -55,15 +55,25 @@ describe("подпись пункта проверки обновлений", ()
     expect(rule).toContain("visibility: hidden");
     expect(rule).toContain("pointer-events: none");
   });
+});
 
-  it("набегает многоточием, а не стоит на месте", () => {
-    expect(css).toMatch(/\.checking-ellipsis > span\s*\{[\s\S]*?animation:\s*checking-ellipsis/);
-    expect(css).toMatch(/@keyframes checking-ellipsis\s*\{/);
+// Одна анимация многоточия на всю панель: и «Проверяю…» в меню, и
+// «Обновляем…» в окне обновления просят одного и того же
+// (amnezia-vpn-server-3tm4, -d27j).
+describe("набегающее многоточие", () => {
+  it("точки набегают по одной, а не стоят на месте", () => {
+    expect(css).toMatch(/\.animated-ellipsis > span\s*\{[\s\S]*?animation:\s*animated-ellipsis/);
+    expect(css).toMatch(/@keyframes animated-ellipsis\s*\{/);
   });
 
-  it("выключает многоточие, когда человек просил меньше движения", () => {
+  it("точки идут со сдвигом, иначе мигают все разом", () => {
+    expect(css).toMatch(/\.animated-ellipsis > span:nth-child\(2\)\s*\{[^}]*animation-delay/);
+    expect(css).toMatch(/\.animated-ellipsis > span:nth-child\(3\)\s*\{[^}]*animation-delay/);
+  });
+
+  it("выключается, когда человек просил меньше движения", () => {
     expect(css).toMatch(
-      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.checking-ellipsis > span\s*\{[^}]*animation:\s*none/,
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.animated-ellipsis > span\s*\{[^}]*animation:\s*none/,
     );
   });
 });

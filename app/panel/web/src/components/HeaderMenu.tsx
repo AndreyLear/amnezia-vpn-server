@@ -109,7 +109,7 @@ function CheckMenuLabel({ state }: { state: CheckState }) {
             {CHECK_LABEL_CHECKING}
             {/* Точки анимированы по очереди в index.css; текст без них не
                 читался бы как «идёт проверка», а не «зависло». */}
-            <span className="checking-ellipsis" aria-hidden>
+            <span className="animated-ellipsis" aria-hidden>
               <span>.</span>
               <span>.</span>
               <span>.</span>

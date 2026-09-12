@@ -280,33 +280,38 @@
   grid-area: 1 / 1;
 }
 
-/* Многоточие набегает по точке: подпись «Проверяю» без движения читается
-   как зависшая, а не как идущая работа (amnezia-vpn-server-3tm4). */
-.checking-ellipsis > span {
-  animation: checking-ellipsis 1.2s steps(1, end) infinite;
+/* Многоточие, в котором точки набегают по одной: подпись без движения
+   читается как зависшая, а не как идущая работа. Одна на всю панель — и
+   пункт «Проверяю…» в меню (amnezia-vpn-server-3tm4), и заголовок
+   «Обновляем…» в окне обновления (amnezia-vpn-server-d27j) просят одного
+   и того же, и две одинаковые анимации под разными именами разошлись бы
+   при первой же правке. */
+.animated-ellipsis > span {
   opacity: 0;
+  animation: animated-ellipsis 1.4s infinite;
 }
 
-.checking-ellipsis > span:nth-child(2) {
-  animation-delay: 0.3s;
+.animated-ellipsis > span:nth-child(2) {
+  animation-delay: 0.2s;
 }
 
-.checking-ellipsis > span:nth-child(3) {
-  animation-delay: 0.6s;
+.animated-ellipsis > span:nth-child(3) {
+  animation-delay: 0.4s;
 }
 
-@keyframes checking-ellipsis {
-  0% {
+@keyframes animated-ellipsis {
+  0%,
+  80%,
+  100% {
     opacity: 0;
   }
-  25%,
-  100% {
+  40% {
     opacity: 1;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .checking-ellipsis > span {
+  .animated-ellipsis > span {
     animation: none;
     opacity: 1;
   }
