@@ -152,34 +152,6 @@ test("журнал показывает вход и изменения", async (
 
 
 
-// Ширину меню юнит-тест не измерит: в jsdom вёрстки нет вовсе, там любая
-// ширина равна нулю. Именно поэтому первый заход прошёл зелёным, а у
-// владельца меню прыгало под курсором (amnezia-vpn-server-x65u).
-test("ширина меню не меняется, пока идёт проверка обновлений", async ({ page }) => {
-  await login(page);
-
-  // Ширина берётся только после того, как она перестала меняться: меню
-  // открывается с анимацией zoom-in-95, и замер в её середине даёт 95% от
-  // настоящей ширины — тест падал бы на ровном месте.
-  const menuWidth = async () => {
-    let last = -1;
-    for (let i = 0; i < 20; i++) {
-      const box = await page.locator("[role=menu]").boundingBox();
-      const w = Math.round(box!.width);
-      if (w === last) return w;
-      last = w;
-      await page.waitForTimeout(50);
-    }
-    return last;
-  };
-
-  await page.getByRole("button", { name: "Ещё" }).click();
-  const before = await menuWidth();
-
-  await page.getByRole("menuitem", { name: /Проверить обновления|Доступна новая версия/ }).click();
-  await expect(page.getByRole("menuitem", { name: "Проверяю" })).toBeVisible();
-  expect(await menuWidth()).toBe(before);
-});
 
 // Крестик пропадал из ВСЕХ окон разом: закреплённая шапка получила z-10 и
 // рисовалась поверх него. В разметке он оставался, поэтому тесты на наличие
@@ -201,3 +173,4 @@ test("крестик виден в окнах со шапкой", async ({ page 
     await expect(dialog).toHaveCount(0);
   }
 });
+

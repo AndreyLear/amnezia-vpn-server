@@ -32,6 +32,9 @@ export default function HomePage() {
   const [infoId, setInfoId] = useState<number | null>(null);
   const [qrId, setQrId] = useState<number | null>(null);
   const [pendingId, setPendingId] = useState<number | "new" | null>(null);
+  // Окно с описанием выпуска открывают двое: плашка и пункт меню, поэтому
+  // его состояние живёт здесь (amnezia-vpn-server-919e).
+  const [updateDetailsOpen, setUpdateDetailsOpen] = useState(false);
   const [host, setHost] = useState<HostSnapshot | null>(null);
   // Всё про обновление приходит одним ответом и обновляется само, пока агент
   // работает (amnezia-vpn-server-tjoq).
@@ -183,8 +186,11 @@ export default function HomePage() {
       host={host}
       pendingUpdate={updateInfo?.available ?? false}
       onUpdateChecked={reloadUpdate}
+      onShowUpdate={() => setUpdateDetailsOpen(true)}
     >
       <UpdateBanner
+        detailsOpen={updateDetailsOpen}
+        onDetailsOpenChange={setUpdateDetailsOpen}
         info={updateInfo}
         restarting={updateRestarting}
         timedOut={updateTimedOut}
