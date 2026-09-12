@@ -40,3 +40,30 @@ describe("index.css client-card-sweep", () => {
     expect(reduced![0]).toMatch(/animation:\s*none/);
   });
 });
+
+// Подпись пункта проверки обновлений меняется на ходу, и меню не должно
+// дёргаться под курсором (amnezia-vpn-server-3tm4).
+describe("подпись пункта проверки обновлений", () => {
+  it("резервирует ширину псевдоэлементом, а не копией текста в DOM", () => {
+    expect(css).toMatch(
+      /\.header-menu-check::before\s*\{[\s\S]*?content:\s*var\(--header-menu-check-reserve[\s\S]*?\}/,
+    );
+  });
+
+  it("прячет резерв от глаза и от указателя", () => {
+    const rule = css.match(/\.header-menu-check::before\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+    expect(rule).toContain("visibility: hidden");
+    expect(rule).toContain("pointer-events: none");
+  });
+
+  it("набегает многоточием, а не стоит на месте", () => {
+    expect(css).toMatch(/\.checking-ellipsis > span\s*\{[\s\S]*?animation:\s*checking-ellipsis/);
+    expect(css).toMatch(/@keyframes checking-ellipsis\s*\{/);
+  });
+
+  it("выключает многоточие, когда человек просил меньше движения", () => {
+    expect(css).toMatch(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.checking-ellipsis > span\s*\{[^}]*animation:\s*none/,
+    );
+  });
+});

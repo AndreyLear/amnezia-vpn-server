@@ -162,7 +162,11 @@ describe("проверка обновлений из меню", () => {
     pressCheck();
 
     await waitMs(POLL_MS * 3);
-    expect(toast.success).toHaveBeenCalledWith("Обновлений нет: установлена последняя версия");
+    // Заголовок и текст раздельно: одна слипшаяся строка читалась хуже
+    // (amnezia-vpn-server-3tm4).
+    expect(toast.success).toHaveBeenCalledWith("Обновлений нет", {
+      description: "Установлена последняя версия",
+    });
     expect(toast.error).not.toHaveBeenCalled();
   });
 
@@ -207,5 +211,57 @@ describe("проверка обновлений из меню", () => {
     // И вертушка гаснет: молчание — это конец ожидания, а не его продолжение.
     expect(item).not.toHaveAttribute("aria-busy", "true");
     expect(screen.queryByTestId("check-spinner")).not.toBeInTheDocument();
+  });
+});
+
+// Пункт меню говорит, что делает и что нашёл (amnezia-vpn-server-3tm4,
+// -nzb3). Раньше он молчал в обоих случаях: во время проверки выглядел
+// нажатым, а бадж висел на кнопке меню и ни к чему не относился.
+describe("пункт проверки называет своё состояние", () => {
+  function openMenu() {
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Ещё" }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+  }
+
+  it("во время проверки называется «Проверяю», а не «Проверить обновления»", async () => {
+    answer = { after: 3, info: { checked_at_utc: FRESH_CHECK, check_result: "ok", latest: "" } };
+    render(<HeaderMenu />);
+    pressCheck();
+
+    // Один опрос: проверка ещё идёт.
+    await waitMs(POLL_MS);
+    expect(screen.getByRole("menuitem", { name: /Проверяю/ })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Проверить обновления/ })).toBeNull();
+
+    await waitMs(POLL_MS * 4);
+  });
+
+  it("ширина пункта не гуляет между состояниями", async () => {
+    answer = { after: 3, info: { checked_at_utc: FRESH_CHECK, check_result: "ok", latest: "" } };
+    render(<HeaderMenu />);
+    pressCheck();
+    await waitMs(POLL_MS);
+
+    // Резерв держит псевдоэлемент, а не спрятанная копия текста: иначе
+    // лишний вариант протёк бы в доступное имя пункта и в textContent.
+    const reserving = document.querySelector(".header-menu-check");
+    expect(reserving).not.toBeNull();
+    expect(reserving?.getAttribute("style")).toContain("--header-menu-check-reserve");
+    expect(reserving?.getAttribute("style")).toContain("Доступна новая версия");
+    expect(reserving?.textContent).not.toContain("Проверить обновления");
+    expect(reserving?.textContent).not.toContain("Доступна новая версия");
+
+    await waitMs(POLL_MS * 4);
+  });
+
+  it("когда версия вышла, пункт так и называется и несёт бадж рядом", () => {
+    render(<HeaderMenu />);
+    openMenu();
+    // Без доступного обновления пункт зовёт проверить.
+    expect(screen.getByRole("menuitem", { name: /Проверить обновления/ })).toBeInTheDocument();
+    expect(screen.queryByTestId("update-item-badge")).toBeNull();
   });
 });
