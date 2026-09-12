@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -41,42 +41,14 @@ import { api, mutationOk, type MutationResponse, type UpdateInfo } from "@/lib/a
  * момент, когда на неё смотрят.
  *
  * Закрытый браузер ничего не ломает: итог лежит на сервере и дождётся.
+ *
+ * ПРОЦЕНТ ПРИХОДИТ СНАРУЖИ. Тот же ход теперь показывает и тост, живущий,
+ * пока это окно закрыто (amnezia-vpn-server-ekvi) — если бы каждый из двух
+ * держал свой собственный отсчёт, они разошлись бы в показаниях в одну и ту
+ * же секунду. Поэтому единственный счётчик (useCreepingProgress,
+ * src/lib/updateProgress.ts) поднят в общего родителя, UpdateBanner, а сюда
+ * приходит уже готовым пропом.
  */
-
-// Девяносто девять процентов за пять минут — не обещание, а темп, при котором
-// полоса не упирается в потолок раньше обычного обновления (около минуты) и
-// не выглядит застывшей, если выпуск собирается на месте.
-const creepToPercent = 99;
-const creepOverMs = 5 * 60 * 1000;
-const creepTickMs = 1000;
-
-// Отсчёт идёт, только пока на него смотрят: окно закрыто — таймер не нужен,
-// а обновление от этого не останавливается. Настоящий итог всё равно придёт
-// из файла состояния, а не отсюда.
-function useCreepingProgress(running: boolean, visible: boolean) {
-  const [percent, setPercent] = useState(0);
-  const startedAt = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!running) {
-      startedAt.current = null;
-      return;
-    }
-    if (!visible) return;
-    startedAt.current ??= Date.now();
-    const tick = () => {
-      const started = startedAt.current;
-      if (started === null) return;
-      const share = Math.min(1, (Date.now() - started) / creepOverMs);
-      setPercent(Math.round(share * creepToPercent));
-    };
-    tick();
-    const timer = window.setInterval(tick, creepTickMs);
-    return () => window.clearInterval(timer);
-  }, [running, visible]);
-
-  return percent;
-}
 
 /**
  * Описание выпуска приходит текстом тела релиза с GitHub — тем же, что лежит
@@ -179,13 +151,38 @@ function Notes({ notes }: { notes: string }) {
  * are in index.css (animated-ellipsis-dot), disabled under
  * prefers-reduced-motion.
  */
-function RunningEllipsis() {
+// Exported: reused verbatim by the update-progress toast so the two never
+// show a different word for the same thing while an update is running
+// (amnezia-vpn-server-ekvi).
+export function RunningEllipsis() {
   return (
     <span className="animated-ellipsis" aria-hidden="true">
       <span>.</span>
       <span>.</span>
       <span>.</span>
     </span>
+  );
+}
+
+/**
+ * The progress bar itself, exported so the update-progress toast renders the
+ * exact same markup instead of a second hand-copied version that could drift
+ * from this one (amnezia-vpn-server-ekvi).
+ */
+export function UpdateProgressBar({ percent }: { percent: number }) {
+  return (
+    <div
+      role="progressbar"
+      aria-valuenow={percent}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      className="h-2 w-full overflow-hidden rounded-full bg-muted"
+    >
+      <div
+        className="h-full rounded-full bg-primary transition-[width] duration-1000 ease-linear"
+        style={{ width: `${percent}%` }}
+      />
+    </div>
   );
 }
 
@@ -199,6 +196,10 @@ export function UpdateDialog({
   // Default resolves true so a caller that never wired onAcknowledge (e.g. a
   // test rendering this dialog on its own) still lets "Понятно" close it.
   onAcknowledge = async () => true,
+  // Default matches "nobody is watching yet" — every real caller (UpdateBanner)
+  // always passes the live value from the shared useCreepingProgress instance
+  // (amnezia-vpn-server-ekvi); tests that don't care about the number can omit it.
+  percent = 0,
 }: {
   info: UpdateInfo | null;
   open: boolean;
@@ -214,6 +215,8 @@ export function UpdateDialog({
    * below waits for this before closing (amnezia-vpn-server-jdkq).
    */
   onAcknowledge?: () => Promise<boolean>;
+  /** Ход обновления — общий с тостом счётчик, см. комментарий выше (amnezia-vpn-server-ekvi). */
+  percent?: number;
 }) {
   const [starting, setStarting] = useState(false);
   // Busy state for "Понятно": the button stays enabled-looking but inert
@@ -221,7 +224,6 @@ export function UpdateDialog({
   // (amnezia-vpn-server-jdkq).
   const [acknowledging, setAcknowledging] = useState(false);
   const running = info?.state === "running";
-  const percent = useCreepingProgress(running, open);
 
   // Итог показывается прямо здесь, если это самое окно и наблюдало за
   // обновлением: state — один из finishedStates и его ещё не видели
@@ -316,18 +318,7 @@ export function UpdateDialog({
             </p>
           ) : (
             <div className="flex flex-col gap-2">
-              <div
-                role="progressbar"
-                aria-valuenow={percent}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                className="h-2 w-full overflow-hidden rounded-full bg-muted"
-              >
-                <div
-                  className="h-full rounded-full bg-primary transition-[width] duration-1000 ease-linear"
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
+              <UpdateProgressBar percent={percent} />
               {restarting && (
                 // Панель на этом шаге перезапускает саму себя — молчание
                 // тут ожидаемо и не значит, что обновление сорвалось
