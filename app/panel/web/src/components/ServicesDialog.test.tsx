@@ -116,4 +116,24 @@ describe("состояние служб", () => {
       checked.compareDocumentPosition(lastService) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
+
+  // Раньше «Проверено …» стояло отдельной строкой снаружи DialogHeader и
+  // получало общий отступ контента (gap-6, 24px) с обеих сторон — заголовок
+  // и время проверки должны отстоять друг от друга как подпись и уточнение
+  // (gap-2 хедера), а не как два независимых блока формы
+  // (amnezia-vpn-server-suni).
+  it("держит время проверки внутри заголовка окна, рядом с названием", async () => {
+    reply({
+      checked_at_utc: new Date().toISOString(),
+      services: [],
+    });
+    render(<ServicesDialog open onOpenChange={() => {}} />);
+
+    const checked = await screen.findByText(/Проверено/);
+    const header = checked.closest('[data-slot="dialog-header"]');
+    expect(header).not.toBeNull();
+    expect(
+      screen.getByText("Состояние служб").closest('[data-slot="dialog-header"]'),
+    ).toBe(header);
+  });
 });
