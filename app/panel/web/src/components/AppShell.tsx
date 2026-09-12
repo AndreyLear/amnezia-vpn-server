@@ -19,6 +19,7 @@ export function AppShell({
   empty = false,
   pendingUpdate = false,
   onUpdateChecked,
+  onShowUpdate,
 }: {
   children: ReactNode;
   restorePending?: boolean;
@@ -29,6 +30,7 @@ export function AppShell({
   pendingUpdate?: boolean;
   /** Проверка обновлений принесла новый ответ: полосе пора перечитать своё. */
   onUpdateChecked?: () => void;
+  onShowUpdate?: () => void;
 }) {
   const [theme, setThemeState] = useState<Theme>(() =>
     typeof window === "undefined" ? "dark" : getTheme(),
@@ -82,7 +84,11 @@ export function AppShell({
                   >
                     {theme === "dark" ? <Moon /> : <Sun />}
                   </Button>
-                  <HeaderMenu pendingUpdate={pendingUpdate} onChecked={onUpdateChecked} />
+                  <HeaderMenu
+                    pendingUpdate={pendingUpdate}
+                    onChecked={onUpdateChecked}
+                    onShowUpdate={onShowUpdate}
+                  />
                 </div>
               </>
             )}

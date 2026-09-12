@@ -30,6 +30,8 @@ export function UpdateBanner({
   restarting = false,
   timedOut = false,
   onChanged,
+  detailsOpen: controlledDetailsOpen,
+  onDetailsOpenChange,
 }: {
   info: UpdateInfo | null;
   /** Панель не ответила на последний опрос — прокинуто в UpdateDialog. */
@@ -41,8 +43,20 @@ export function UpdateBanner({
   // typing it as plain () => void would silently let a caller assume
   // "fire and forget" is fine (amnezia-vpn-server-jdkq).
   onChanged: () => void | Promise<void>;
+  /**
+   * Окно с описанием выпуска открывает не только плашка, но и пункт меню
+   * «Доступна новая версия» (amnezia-vpn-server-919e). Поэтому состояние
+   * можно поднять наверх; без этих пропов оно остаётся своим.
+   */
+  detailsOpen?: boolean;
+  onDetailsOpenChange?: (open: boolean) => void;
 }) {
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [ownDetailsOpen, setOwnDetailsOpen] = useState(false);
+  const detailsOpen = controlledDetailsOpen ?? ownDetailsOpen;
+  const setDetailsOpen = (open: boolean) => {
+    setOwnDetailsOpen(open);
+    onDetailsOpenChange?.(open);
+  };
   const [hiding, setHiding] = useState(false);
   // Какой итог человек уже закрыл в этом сеансе, отмеченный временем его
   // появления (amnezia-vpn-server-wbz0).

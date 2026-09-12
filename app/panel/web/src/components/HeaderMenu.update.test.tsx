@@ -285,3 +285,34 @@ describe("пункт проверки называет своё состояни
     expect(badge.closest(".invisible")).not.toBeNull();
   });
 });
+
+// Пункт, который называется «Доступна новая версия», обязан её показать, а
+// не идти спрашивать GitHub заново про то, что уже известно
+// (amnezia-vpn-server-919e).
+describe("пункт с доступной версией показывает её, а не проверяет", () => {
+  it("зовёт показать обновление и не шлёт запрос на проверку", async () => {
+    const onShowUpdate = vi.fn();
+    render(<HeaderMenu pendingUpdate onShowUpdate={onShowUpdate} />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Ещё" }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Доступна новая версия" }));
+    await waitMs(0);
+
+    expect(onShowUpdate).toHaveBeenCalledTimes(1);
+    expect(posts).toBe(0);
+  });
+
+  it("без доступного обновления по-прежнему просит проверить", async () => {
+    const onShowUpdate = vi.fn();
+    render(<HeaderMenu onShowUpdate={onShowUpdate} />);
+    pressCheck();
+    await waitMs(0);
+
+    expect(onShowUpdate).not.toHaveBeenCalled();
+    expect(posts).toBe(1);
+  });
+});

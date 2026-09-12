@@ -717,3 +717,51 @@ describe("закрытый итог не возвращается", () => {
     vi.unstubAllGlobals();
   });
 });
+
+// Окно не должно на прощание превращаться в чужое (amnezia-vpn-server-tiov).
+describe("окно не мигает чужим содержимым на закрытии", () => {
+  it("после «Понятно» показывает итог до самого закрытия, а не предложение обновиться", async () => {
+    const user = userEvent.setup();
+    // Сервер отвечает не сразу — в эту щель вспышка и пролезала.
+    let release!: (v: unknown) => void;
+    const slow = new Promise((r) => (release = r));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await slow;
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    const finished = info({
+      state: "ok",
+      state_to: "2.10.18",
+      state_at_utc: "2026-09-11T10:00:00Z",
+      outcome_seen: "",
+      available: true,
+      latest: "2.10.18",
+      notes: "",
+    });
+    const { rerender } = render(
+      <UpdateBanner info={info({ available: true, latest: "2.10.18" })} onChanged={() => {}} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Показать подробности" }));
+    rerender(<UpdateBanner info={finished} onChanged={() => {}} />);
+    await user.click(await screen.findByRole("button", { name: "Понятно" }));
+
+    // Сервер отметил итог увиденным — но окно ещё открыто и обязано
+    // показывать то же, что человек видел, когда нажимал.
+    rerender(
+      <UpdateBanner info={info({ ...finished, outcome_seen: finished.state_at_utc })} onChanged={() => {}} />,
+    );
+    expect(screen.queryByRole("button", { name: "Обновить" })).toBeNull();
+    expect(screen.queryByText(/Описание выпуска не пришло/)).toBeNull();
+    expect(screen.getByText("Панель обновлена до версии 2.10.18")).toBeInTheDocument();
+
+    release(null);
+    vi.unstubAllGlobals();
+  });
+});

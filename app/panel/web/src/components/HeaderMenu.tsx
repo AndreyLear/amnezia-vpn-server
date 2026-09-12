@@ -162,10 +162,13 @@ function CheckMenuLabel({ state }: { state: CheckState }) {
 export function HeaderMenu({
   pendingUpdate = false,
   onChecked,
+  onShowUpdate,
 }: {
   pendingUpdate?: boolean;
   /** Проверка принесла новый ответ: полосе о выпуске пора перечитать своё. */
   onChecked?: () => void;
+  /** Показать окно с описанием выпуска (amnezia-vpn-server-919e). */
+  onShowUpdate?: () => void;
 }) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [servicesOpen, setServicesOpen] = useState(false);
@@ -272,6 +275,14 @@ export function HeaderMenu({
       busy: checking,
       disabled: checking,
       onSelect: (event) => {
+        // Когда версия уже вышла, пункт так и называется — и должен её
+        // показать, а не идти спрашивать GitHub заново про то, что и так
+        // известно. Человек читает «Доступна новая версия» и ждёт, что ему
+        // её покажут (amnezia-vpn-server-919e).
+        if (pendingUpdate && onShowUpdate) {
+          onShowUpdate();
+          return;
+        }
         // Меню не закрываем: пункт сам говорит «Проверяю…», и закрыться в
         // тот же миг значило бы снова оставить нажавшего ни с чем.
         event.preventDefault();

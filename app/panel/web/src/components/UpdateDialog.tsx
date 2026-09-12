@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -233,7 +233,24 @@ export function UpdateDialog({
   // её в «итог» значило бы путать «когда-то кончилось» с «моё кончилось»
   // (amnezia-vpn-server-tjoq, -mrjh).
   const outcome = info ? outcomes[info.state] : undefined;
-  const showOutcome = Boolean(outcome && info?.state_at_utc && info.state_at_utc !== info.outcome_seen);
+  const outcomeReady = Boolean(outcome && info?.state_at_utc && info.state_at_utc !== info.outcome_seen);
+
+  // Показанный итог держится до самого закрытия окна (amnezia-vpn-server-tiov).
+  //
+  // Без этого нажатие «Понятно» давало вспышку: отметка «итог увиден»
+  // записывалась, outcomeReady гас, а окно ещё кадр оставалось открытым — и
+  // рисовало себя предложением обновиться на версию, которая только что
+  // установилась: «Версия», «Обновить». Человек видел чужое окно, мигнувшее
+  // на прощание.
+  const [latchedOutcome, setLatchedOutcome] = useState(false);
+  useEffect(() => {
+    if (!open) {
+      setLatchedOutcome(false);
+      return;
+    }
+    if (outcomeReady) setLatchedOutcome(true);
+  }, [open, outcomeReady]);
+  const showOutcome = outcomeReady || latchedOutcome;
   const outcomeFailed = info?.state !== "ok";
 
   async function start() {
