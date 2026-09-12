@@ -114,7 +114,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch {
       // keep going so the original JSON body can still be parsed
     }
-    toast.error("сессия устарела");
+    // Standalone toast sentence, capitalized (amnezia-vpn-server-4cnf).
+    toast.error("Сессия устарела");
   }
   let data: T | undefined;
   try {

@@ -106,7 +106,7 @@ test("окно «О версиях» не оставляет пустых мес
   await expect(page.getByText("Схема базы")).toHaveCount(0);
   // Панель, запущенная без развёртывания, про хост не знает — и обязана
   // сказать именно это, а не оставить пустоту.
-  await expect(page.getByText("неизвестно").first()).toBeVisible();
+  await expect(page.getByText("Неизвестно").first()).toBeVisible();
 });
 
 // Состояние служб (amnezia-vpn-server-eq82): отказ, который чинится сам,

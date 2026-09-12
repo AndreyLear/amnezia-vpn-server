@@ -21,7 +21,9 @@ import { api, type Versions } from "@/lib/api";
  * читается как «ничего нет», и это разные вещи: панель на развёртывании
  * старше этой возможности честно не знает, а не знает, что там ноль.
  */
-const unknown = "неизвестно";
+// Standalone row values (dt/dd pair), so they get a capital letter like any
+// other caption of this shape (amnezia-vpn-server-4cnf).
+const unknown = "Неизвестно";
 
 function text(value: string | undefined): string {
   const trimmed = value?.trim();
@@ -29,8 +31,8 @@ function text(value: string | undefined): string {
 }
 
 function flag(value: boolean | null | undefined): string {
-  if (value === true) return "включён";
-  if (value === false) return "выключен";
+  if (value === true) return "Включён";
+  if (value === false) return "Выключен";
   return unknown;
 }
 
@@ -63,15 +65,15 @@ export function AboutDialog({
     };
   }, [open]);
 
-  // «Свежая» и «вышла новее» — про один и тот же номер, поэтому строка одна:
-  // две отдельные заставляли бы читать обе, чтобы понять одну.
+  // Приписка нужна только когда есть что сказать: «вышла новее» — новость,
+  // а «— последняя» повторяло то, что и так видно по отсутствию новости, и
+  // читалось как вторая, незнакомая версия (amnezia-vpn-server-cavu).
   const product = (() => {
     const installed = text(versions?.product);
     if (installed === unknown) return unknown;
     if (versions?.latest && versions.latest !== versions.product) {
       return `${installed} — вышла ${versions.latest}`;
     }
-    if (versions?.latest) return `${installed} — последняя`;
     return installed;
   })();
 

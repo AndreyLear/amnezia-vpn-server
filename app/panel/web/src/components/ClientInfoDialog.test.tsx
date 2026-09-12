@@ -37,11 +37,22 @@ describe("ClientInfoDialog", () => {
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 
     expect(screen.getByText("Статус")).toBeInTheDocument();
-    expect(screen.getByText("офлайн")).toBeInTheDocument();
+    expect(screen.getByText("Офлайн")).toBeInTheDocument();
     expect(screen.getByText("IP")).toBeInTheDocument();
     expect(screen.getByText("Handshake")).toBeInTheDocument();
     expect(screen.getByText("Трафик")).toBeInTheDocument();
     expect(document.querySelector('[data-slot="badge"]')).toBeNull();
+  });
+
+  // amnezia-vpn-server-4cnf: the owner's screenshots showed the status
+  // value starting with a lowercase letter ("офлайн"). It is a standalone
+  // caption next to the "Статус" label, not mid-sentence text, so it must
+  // start with a capital letter like every other value in this card.
+  it("capitalizes the client status value", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    expect(screen.getByText("Офлайн")).toBeInTheDocument();
+    expect(screen.queryByText("офлайн")).toBeNull();
   });
 
   // The counters arrive from the server's point of view: rx is what it
@@ -80,9 +91,9 @@ describe("ClientInfoDialog", () => {
     );
 
     const status = screen.getByText("Статус").closest("div");
-    expect(status).toHaveTextContent("пауза");
-    expect(status).not.toHaveTextContent("онлайн");
-    expect(status).not.toHaveTextContent("офлайн");
+    expect(status).toHaveTextContent("Пауза");
+    expect(status).not.toHaveTextContent("Онлайн");
+    expect(status).not.toHaveTextContent("Офлайн");
     const enable = screen.getByRole("button", { name: "Включить" });
     expect(enable).toHaveTextContent("Включить");
     const icon = enable.querySelector("svg");
@@ -100,7 +111,7 @@ describe("ClientInfoDialog", () => {
       />,
     );
 
-    expect(screen.getByText("онлайн")).toBeInTheDocument();
+    expect(screen.getByText("Онлайн")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Отключить" })).toBeInTheDocument();
     expect(document.querySelector('[data-slot="badge"]')).toBeNull();
   });
@@ -240,7 +251,7 @@ describe("ClientInfoDialog", () => {
     const row = toggle.parentElement;
     expect(row).toHaveClass("flex", "items-center");
     expect(row).toContainElement(screen.getByText("Статус"));
-    expect(row).toContainElement(screen.getByText("офлайн"));
+    expect(row).toContainElement(screen.getByText("Офлайн"));
     expect(toggle).toHaveTextContent("Отключить");
     const icon = toggle.querySelector("svg");
     expect(icon).not.toBeNull();

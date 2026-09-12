@@ -42,7 +42,7 @@ describe("состояние служб", () => {
 
     expect(await screen.findByText("Резолвер в туннеле")).toBeInTheDocument();
     expect(screen.getByText("Туннель")).toBeInTheDocument();
-    expect(screen.getAllByText("работает")).toHaveLength(2);
+    expect(screen.getAllByText("Работает")).toHaveLength(2);
   });
 
   it("называет причину, когда служба не отвечает", async () => {

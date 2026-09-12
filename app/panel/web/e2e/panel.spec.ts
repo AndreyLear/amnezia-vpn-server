@@ -69,9 +69,9 @@ test("752px and 375px keep the client list in one column", async ({ page }) => {
   expect(narrow.every((x) => x === narrow[0])).toBe(true);
 });
 
-test("unknown route shows не найдено", async ({ page }) => {
+test("unknown route shows Не найдено", async ({ page }) => {
   await page.goto("/does-not-exist");
-  await expect(page.getByText("не найдено")).toBeVisible();
+  await expect(page.getByText("Не найдено")).toBeVisible();
 });
 
 test("overflow menu has no account item at 375px", async ({ page }) => {
@@ -102,15 +102,15 @@ test("карточка клиента показывает график скор
   // Пика под графиком больше нет: шкала следует за данными, и верх оси
   // называет почти то же число (amnezia-vpn-server-jyhb). Вместо него —
   // легенда, стоящая в одной строке с метками времени.
-  await expect(page.getByText("скачал")).toBeVisible();
-  await expect(page.getByText("отдал")).toBeVisible();
+  await expect(page.getByText("Скачал")).toBeVisible();
+  await expect(page.getByText("Отдал")).toBeVisible();
   // Ось: верх шкалы, середина, ноль.
   await expect(page.getByText("0", { exact: true })).toBeVisible();
 
   // Сутки — то же окно, другой охват; данные фикстуры лежат в последних
   // минутах, поэтому график остаётся непустым.
-  await page.getByRole("button", { name: "сутки" }).click();
-  await expect(page.getByRole("button", { name: "сутки" })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Сутки" }).click();
+  await expect(page.getByRole("button", { name: "Сутки" })).toHaveAttribute("aria-pressed", "true");
   await expect(chart).toBeVisible();
 
   // И обратно в короткое окно: час заменён десятью минутами

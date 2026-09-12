@@ -20,17 +20,22 @@ import { formatHandshake } from "@/lib/format";
  *
  * Секретов здесь нет и не будет: ни ключей, ни введённых паролей.
  */
+// Capitalized at render time, not in storage: these are the SPA's own
+// display strings for the action codes stored in the audit log, never the
+// stored rows themselves, so recasing them here does not rewrite history
+// (amnezia-vpn-server-4cnf: the owner's screenshots showed lowercase entry
+// titles like "вход" and "клиент изменён").
 const actions: Record<string, string> = {
-  login: "вход",
-  "login.failed": "неудачный вход",
-  logout: "выход",
-  "client.add": "клиент добавлен",
-  "client.edit": "клиент изменён",
+  login: "Вход",
+  "login.failed": "Неудачный вход",
+  logout: "Выход",
+  "client.add": "Клиент добавлен",
+  "client.edit": "Клиент изменён",
   "client.mtu": "MTU клиента",
-  "client.rate": "ограничение скорости",
-  "client.toggle": "клиент",
-  "client.delete": "клиент удалён",
-  "backup.restore": "восстановление из копии",
+  "client.rate": "Ограничение скорости",
+  "client.toggle": "Клиент",
+  "client.delete": "Клиент удалён",
+  "backup.restore": "Восстановление из копии",
 };
 
 function actionTitle(action: string): string {

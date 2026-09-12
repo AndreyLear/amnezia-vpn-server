@@ -74,7 +74,7 @@ describe("api CSRF", () => {
     });
     expect(Date.now() - started).toBeLessThan(1000);
     expect(data.message).toBe("Forbidden.");
-    expect(toast.error).toHaveBeenCalledWith("сессия устарела");
+    expect(toast.error).toHaveBeenCalledWith("Сессия устарела");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/me",
       expect.objectContaining({ credentials: "same-origin" }),

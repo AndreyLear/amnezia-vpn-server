@@ -26,7 +26,18 @@ describe("MTU клиента", () => {
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 
     expect(screen.getByText("MTU")).toBeInTheDocument();
-    expect(screen.getByText("как у сервера")).toBeInTheDocument();
+    expect(screen.getByText("Как у сервера")).toBeInTheDocument();
+  });
+
+  // amnezia-vpn-server-4cnf: the owner's screenshots showed this fallback
+  // value starting with a lowercase letter ("как у сервера"). It stands on
+  // its own in the read-only property row (not mid-sentence text like the
+  // hint below the input), so it must start with a capital letter.
+  it("capitalizes the MTU fallback value", () => {
+    render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
+
+    expect(screen.getByText("Как у сервера")).toBeInTheDocument();
+    expect(screen.queryByText("как у сервера")).toBeNull();
   });
 
   it("со своим значением показывает его", () => {
@@ -35,7 +46,7 @@ describe("MTU клиента", () => {
     );
 
     expect(screen.getByText("1420")).toBeInTheDocument();
-    expect(screen.queryByText("как у сервера")).toBeNull();
+    expect(screen.queryByText("Как у сервера")).toBeNull();
   });
 
   // Владелец прочитал первую версию подсказки и спросил ровно то, чего в ней
@@ -47,8 +58,8 @@ describe("MTU клиента", () => {
 
     await user.click(screen.getByRole("button", { name: "Изменить MTU" }));
 
-    // Подсказка живёт в диалоге правки; «как у сервера» встречается и в
-    // строке свойства, поэтому ищем внутри самого диалога.
+    // Подсказка живёт в диалоге правки; тот же текст (в другом регистре)
+    // встречается и в строке свойства, поэтому ищем внутри самого диалога.
     const dialog = await screen.findByRole("dialog", { name: "MTU" });
     expect(within(dialog).getByText(/от 1280 до 1440/)).toBeInTheDocument();
     expect(

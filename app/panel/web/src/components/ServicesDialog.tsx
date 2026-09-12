@@ -28,10 +28,14 @@ function serviceTitle(name: string): string {
   return titles[name] ?? name;
 }
 
+// Standalone status values (own line, right-aligned next to the service
+// title), so they get a capital letter like any other caption of this shape
+// (amnezia-vpn-server-4cnf). service.reason itself, when present, is
+// server-supplied free text and is shown verbatim, untouched here.
 function verdict(service: ServiceState): string {
-  if (service.state === "ok") return "работает";
-  if (service.state === "fail") return service.reason || "не отвечает";
-  return "неизвестно";
+  if (service.state === "ok") return "Работает";
+  if (service.state === "fail") return service.reason || "Не отвечает";
+  return "Неизвестно";
 }
 
 function Row({ service }: { service: ServiceState }) {

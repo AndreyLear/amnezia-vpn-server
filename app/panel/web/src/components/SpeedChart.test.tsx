@@ -153,7 +153,7 @@ describe("график скорости", () => {
     render(<SpeedChart clientId={7} />);
 
     await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "10min", expect.any(Number)));
-    await user.click(screen.getByRole("button", { name: "сутки" }));
+    await user.click(screen.getByRole("button", { name: "Сутки" }));
     await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "day", expect.any(Number)));
     await user.click(screen.getByRole("button", { name: "10 минут" }));
     await waitFor(() =>
@@ -187,7 +187,7 @@ describe("обновление по таймеру", () => {
     render(<SpeedChart clientId={1} />);
     await vi.waitFor(() => expect(fetchSpeed).toHaveBeenCalledTimes(1));
 
-    await user.click(screen.getByRole("button", { name: "сутки" }));
+    await user.click(screen.getByRole("button", { name: "Сутки" }));
     await vi.waitFor(() => expect(fetchSpeed).toHaveBeenCalledTimes(2));
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -280,8 +280,8 @@ describe("легенда", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    expect(await screen.findByText("скачал")).toBeInTheDocument();
-    expect(screen.getByText("отдал")).toBeInTheDocument();
+    expect(await screen.findByText("Скачал")).toBeInTheDocument();
+    expect(screen.getByText("Отдал")).toBeInTheDocument();
     expect(screen.queryByText(/заливка|линия — от/)).toBeNull();
   });
 
@@ -307,13 +307,13 @@ describe("легенда", () => {
     // Обе метки времени лежат в той же строке, что и легенда, а не своей.
     expect(screen.getByText(clock("2026-09-08T12:00:00Z")).parentElement).toBe(row);
     expect(screen.getByText(clock("2026-09-08T13:00:00Z")).parentElement).toBe(row);
-    expect(screen.getByText("скачал").closest("[data-slot='speed-legend']")).toBe(row);
+    expect(screen.getByText("Скачал").closest("[data-slot='speed-legend']")).toBe(row);
     // Время по краям, легенда между ними.
     const parts = Array.from(row!.children).map((el) => el.textContent ?? "");
     expect(parts).toHaveLength(3);
     expect(parts[0]).toBe(clock("2026-09-08T12:00:00Z"));
     expect(parts[2]).toBe(clock("2026-09-08T13:00:00Z"));
-    expect(parts[1]).toMatch(/скачал.*отдал/);
+    expect(parts[1]).toMatch(/Скачал.*Отдал/);
   });
 
   // Шкала следует за данными, и верх оси называет почти то же число, что и
@@ -466,12 +466,12 @@ describe("чтение значения в точке", () => {
 
     hover(25);
     await waitFor(() =>
-      expect(screen.getByRole("status").textContent).toContain("связи не было"),
+      expect(screen.getByRole("status").textContent).toContain("Связи не было"),
     );
 
     hover(75);
     await waitFor(() =>
-      expect(screen.getByRole("status").textContent).not.toContain("связи не было"),
+      expect(screen.getByRole("status").textContent).not.toContain("Связи не было"),
     );
   });
 
@@ -533,7 +533,7 @@ describe("чтение значения в точке", () => {
 
     hover(10);
     const box = await screen.findByRole("status");
-    expect(box.textContent).toMatch(/замеров нет/);
+    expect(box.textContent).toMatch(/Замеров нет/);
     expect(box.textContent).not.toMatch(/0 бит/);
   });
 
@@ -756,7 +756,7 @@ describe("промежутки без связи", () => {
       }),
     );
     const { unmount } = render(<SpeedChart clientId={1} />);
-    await waitFor(() => expect(screen.getByText("связи не было")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Связи не было")).toBeInTheDocument());
     unmount();
 
     fetchSpeed.mockResolvedValue(
@@ -770,7 +770,7 @@ describe("промежутки без связи", () => {
     );
     render(<SpeedChart clientId={1} />);
     await waitFor(() => expect(areas("down-max").length).toBeGreaterThan(0));
-    expect(screen.queryByText("связи не было")).not.toBeInTheDocument();
+    expect(screen.queryByText("Связи не было")).not.toBeInTheDocument();
   });
 
   // Сервер прежней версии поля не присылает: страница не должна падать.
