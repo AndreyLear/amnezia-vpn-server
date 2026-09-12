@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { UserText } from "@/components/UserText";
 import type { Client } from "@/lib/api";
@@ -579,10 +580,20 @@ export function ClientInfoDialog({
       <Dialog
         open={editingRate}
         onOpenChange={(open) => {
-          if (!open) cancelRateEdit();
+          // amnezia-vpn-server-yjh2: the PATCH is already in flight once
+          // `pending` is true — the server received it and will apply the
+          // limit regardless of what happens to this window. Closing it
+          // wouldn't cancel anything, only hide the fact that it's still
+          // running, so any close attempt (Escape, overlay click; the X
+          // itself is a disabled native button below and never reaches
+          // here) is ignored until the save settles.
+          if (!open && !pending) cancelRateEdit();
         }}
       >
-        <DialogContent className="gap-6 sm:max-w-md">
+        <DialogContent
+          className="gap-6 sm:max-w-md"
+          closeButtonDisabled={pending}
+        >
           <DialogHeader>
             <DialogTitle>Ограничение скорости</DialogTitle>
           </DialogHeader>
@@ -606,12 +617,16 @@ export function ClientInfoDialog({
                 onChange={(e) => setRateDraft(e.target.value)}
                 disabled={pending}
               />
-              {/* Подпись говорит, для чего это и что даёт. Прежняя обещала
-                  прежнюю скорость, которой на замере нет
-                  (amnezia-vpn-server-ouhb). */}
+              {/* Owner's wording, verbatim: measurements back "evens out the
+                  load curve", not the earlier "keeps speed flat" claim the
+                  measurement didn't support (amnezia-vpn-server-ouhb,
+                  amnezia-vpn-server-yjh2). */}
               <p className="text-sm text-muted-foreground">
-                Держит скорость ровной: пропадают рывки и повторные передачи.
-                Видео не встаёт, звонки не рассыпаются
+                Тесты показали, что ограничение скорости может помочь
+                выровнять кривую загрузки и сделать потребление трафика более
+                равномерным. Кроме того, такой подход потенциально может
+                улучшить стабильность работы при загрузке видео и аудио, а
+                также при использовании видеозвонков.
               </p>
               <p className="text-sm text-muted-foreground">
                 Оставьте поле пустым, чтобы убрать ограничение
@@ -624,6 +639,11 @@ export function ClientInfoDialog({
                 aria-label="Сохранить ограничение скорости"
                 disabled={pending || rateOutOfRange}
               >
+                {/* Applying a rate limit can take a while server-side; a
+                    merely-disabled button looks identical to a stuck one.
+                    The spinner is the same affordance BackupUploadDialog
+                    uses for its own slow submit (amnezia-vpn-server-yjh2). */}
+                {pending ? <Spinner data-icon="inline-start" /> : null}
                 Сохранить
               </Button>
             </DialogFooter>
