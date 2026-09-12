@@ -5,14 +5,33 @@ import { formatHandshake, formatHandshakeAge } from "@/lib/format";
 const now = Date.parse("2026-08-16T12:00:00Z");
 
 describe("formatHandshake", () => {
-  it("writes the same UTC instant as Russian date and 24-hour time", () => {
-    expect(formatHandshake("2026-08-16T08:17:23Z")).toBe("16.08.2026, 08:17:23");
-    expect(formatHandshake("2026-08-16T00:00:00Z")).toBe("16.08.2026, 00:00:00");
+  // Table-driven cases for the amnezia-vpn-server-kfmf date format: day and
+  // a three-letter, dot-free Russian month abbreviation, with the year
+  // shown only when the entry is not from `now`'s (UTC) year.
+  it.each([
+    ["current year, mid-month", "2026-08-16T08:17:23Z", now, "16 авг, 08:17:23"],
+    ["current year, single-digit day stays unpadded", "2026-01-05T08:17:23Z", now, "5 янв, 08:17:23"],
+    ["previous year gets the year suffix", "2025-08-16T08:17:23Z", now, "16 авг 2025, 08:17:23"],
+    [
+      "year boundary: an event a second before New Year, relative to `now` right at New Year, still needs the year",
+      "2025-12-31T23:59:59Z",
+      Date.parse("2026-01-01T00:00:00Z"),
+      "31 дек 2025, 23:59:59",
+    ],
+    [
+      "year boundary: an event right at New Year, relative to the same `now`, does not",
+      "2026-01-01T00:00:00Z",
+      Date.parse("2026-01-01T00:00:00Z"),
+      "1 янв, 00:00:00",
+    ],
+    ["midnight keeps two-digit zero time, not omitted", "2026-08-16T00:00:00Z", now, "16 авг, 00:00:00"],
+  ] as const)("%s", (_label, iso, at, expected) => {
+    expect(formatHandshake(iso, at)).toBe(expected);
   });
 
   it("returns an em dash for null or invalid timestamps", () => {
-    expect(formatHandshake(null)).toBe("—");
-    expect(formatHandshake("not-a-date")).toBe("—");
+    expect(formatHandshake(null, now)).toBe("—");
+    expect(formatHandshake("not-a-date", now)).toBe("—");
   });
 });
 

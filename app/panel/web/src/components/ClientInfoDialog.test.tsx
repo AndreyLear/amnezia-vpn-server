@@ -71,6 +71,11 @@ describe("ClientInfoDialog", () => {
   });
 
   it("keeps handshake as a timestamp in Russian writing", () => {
+    // Fixed to the fixture's own year (amnezia-vpn-server-kfmf: the year is
+    // dropped only for the current year), so this does not start failing
+    // once the real calendar moves past 2026.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-12T00:00:00Z"));
     render(
       <ClientInfoDialog
         client={{ ...client, last_handshake_utc: "2026-08-16T00:00:00Z" }}
@@ -78,7 +83,8 @@ describe("ClientInfoDialog", () => {
       />,
     );
 
-    expect(screen.getByText("16.08.2026, 00:00:00")).toBeInTheDocument();
+    expect(screen.getByText("16 авг, 00:00:00")).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it("shows paused status and enable button when the client is disabled", () => {

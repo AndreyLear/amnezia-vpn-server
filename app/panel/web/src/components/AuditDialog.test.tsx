@@ -27,6 +27,13 @@ afterEach(() => {
 
 describe("журнал", () => {
   it("показывает, что было сделано, кем и когда", async () => {
+    // Fixed to the same year as the fixture below (amnezia-vpn-server-kfmf:
+    // the year is now dropped for the current year), so this assertion
+    // does not start failing once the real calendar moves past 2026.
+    // Only `Date` is faked (not timers): `findByText` below polls via
+    // `waitFor`, which needs real `setTimeout` to ever resolve.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-12T00:00:00Z"));
     entries = [
       {
         at_utc: "2026-09-07T12:00:00Z",
@@ -41,7 +48,8 @@ describe("журнал", () => {
     expect(await screen.findByText(/Клиент добавлен/)).toBeInTheDocument();
     expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.getByText("admin")).toBeInTheDocument();
-    expect(screen.getByText("07.09.2026, 12:00:00")).toBeInTheDocument();
+    expect(screen.getByText("7 сен, 12:00:00")).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   // Неудачный вход — то, ради чего в журнал заглядывают в первую очередь.
