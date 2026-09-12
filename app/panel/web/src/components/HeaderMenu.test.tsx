@@ -134,20 +134,22 @@ describe("окно «О версиях»", () => {
     await user.click(await screen.findByText("О версиях"));
 
     // update_check пришёл null — это «неизвестно», а не «выключено».
-    await waitFor(() => expect(screen.getByText("неизвестно")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Неизвестно")).toBeInTheDocument());
     // А выключенное показывается выключенным: fail2ban пришёл false.
-    expect(screen.getByText("выключен")).toBeInTheDocument();
+    expect(screen.getByText("Выключен")).toBeInTheDocument();
   });
 
-  it("говорит, последняя ли версия", async () => {
+  it("показывает установленную версию без приписок, когда новее ничего нет", async () => {
     const user = userEvent.setup();
     render(<HeaderMenu />);
 
     await user.click(screen.getByRole("button", { name: "Ещё" }));
     await user.click(await screen.findByText("О версиях"));
 
-    // amnezia-vpn-server-4yo4: «свежая» переименовано в «последняя» —
-    // владелец принимал первое за отдельную, незнакомую версию.
-    expect(await screen.findByText("2.9.0 — последняя")).toBeInTheDocument();
+    // Приписка была сначала «свежая», потом «последняя», и оба раза владелец
+    // читал её как вторую, незнакомую версию. Когда сказать нечего — номер
+    // стоит один (amnezia-vpn-server-4yo4, -cavu).
+    expect(await screen.findByText("2.9.0")).toBeInTheDocument();
+    expect(screen.queryByText(/последняя|свежая/)).not.toBeInTheDocument();
   });
 });

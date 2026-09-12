@@ -32,14 +32,15 @@ afterEach(() => {
 });
 
 describe("о версиях", () => {
-  // Владелец принял «2.10.12 — свежая» за отдельную, незнакомую версию.
-  // «Последняя» говорит то же самое про тот же номер, но однозначно.
-  it("называет установленную версию последней, а не свежей", async () => {
+  // Приписка сначала была «свежая», потом «последняя», и оба раза владелец
+  // читал её как вторую, незнакомую версию. Когда новой версии нет, сказать
+  // нечего — номер стоит один (amnezia-vpn-server-cavu).
+  it("показывает установленную версию без приписок, когда новее ничего нет", async () => {
     reply({ product: "2.10.12", latest: "2.10.12" });
     render(<AboutDialog open onOpenChange={() => {}} />);
 
-    expect(await screen.findByText("2.10.12 — последняя")).toBeInTheDocument();
-    expect(screen.queryByText(/свежая/)).not.toBeInTheDocument();
+    expect(await screen.findByText("2.10.12")).toBeInTheDocument();
+    expect(screen.queryByText(/последняя|свежая/)).not.toBeInTheDocument();
   });
 
   it("показывает вышедшую версию отдельно от установленной", async () => {

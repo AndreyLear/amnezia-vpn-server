@@ -63,15 +63,15 @@ export function AboutDialog({
     };
   }, [open]);
 
-  // «Свежая» и «вышла новее» — про один и тот же номер, поэтому строка одна:
-  // две отдельные заставляли бы читать обе, чтобы понять одну.
+  // Приписка нужна только когда есть что сказать: «вышла новее» — новость,
+  // а «— последняя» повторяло то, что и так видно по отсутствию новости, и
+  // читалось как вторая, незнакомая версия (amnezia-vpn-server-cavu).
   const product = (() => {
     const installed = text(versions?.product);
     if (installed === unknown) return unknown;
     if (versions?.latest && versions.latest !== versions.product) {
       return `${installed} — вышла ${versions.latest}`;
     }
-    if (versions?.latest) return `${installed} — последняя`;
     return installed;
   })();
 
