@@ -258,3 +258,56 @@
     background-image: none;
   }
 }
+/* Резерв ширины под самый длинный вариант подписи пункта проверки
+   обновлений (amnezia-vpn-server-3tm4). Меню не должно дёргаться под
+   курсором, пока «Проверить обновления» сменяется на «Проверяю…», а потом
+   на «Доступна новая версия».
+
+   Резервирует псевдоэлемент, а не спрятанная копия текста: у генерируемого
+   содержимого нет текстового узла в DOM, поэтому оно не попадает ни в
+   textContent, ни в доступное имя пункта. Сам текст задаётся из компонента
+   через переменную, так что при смене подписи резерв пересчитается сам. */
+.header-menu-check::before {
+  content: var(--header-menu-check-reserve, "");
+  grid-area: 1 / 1;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.header-menu-check > * {
+  grid-area: 1 / 1;
+}
+
+/* Многоточие набегает по точке: подпись «Проверяю» без движения читается
+   как зависшая, а не как идущая работа (amnezia-vpn-server-3tm4). */
+.checking-ellipsis > span {
+  animation: checking-ellipsis 1.2s steps(1, end) infinite;
+  opacity: 0;
+}
+
+.checking-ellipsis > span:nth-child(2) {
+  animation-delay: 0.3s;
+}
+
+.checking-ellipsis > span:nth-child(3) {
+  animation-delay: 0.6s;
+}
+
+@keyframes checking-ellipsis {
+  0% {
+    opacity: 0;
+  }
+  25%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .checking-ellipsis > span {
+    animation: none;
+    opacity: 1;
+  }
+}
