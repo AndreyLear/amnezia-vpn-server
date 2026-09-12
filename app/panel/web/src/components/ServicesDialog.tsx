@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -90,17 +91,23 @@ export function ServicesDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-6">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Состояние служб</DialogTitle>
+          {/* Относится ко всему снимку, а не к последней службе в списке —
+              поэтому стоит сразу под заголовком, а не последней строкой.
+              Внутри DialogHeader, не отдельной строкой контента: заголовок
+              и время проверки — пара «подпись и уточнение», которой
+              подходит gap-2 хедера, а не общий gap контента — раньше
+              подпись стояла снаружи и получала по gap-6 (24px) с обеих
+              сторон, отчего вокруг неё было два больших пустых пояса
+              (amnezia-vpn-server-suni). */}
+          {info?.checked_at_utc ? (
+            <DialogDescription>
+              Проверено {formatHandshakeAge(info.checked_at_utc)} назад
+            </DialogDescription>
+          ) : null}
         </DialogHeader>
-        {/* Относится ко всему снимку, а не к последней службе в списке —
-            поэтому стоит сразу под заголовком, а не последней строкой. */}
-        {info?.checked_at_utc ? (
-          <p className="text-sm text-muted-foreground">
-            Проверено {formatHandshakeAge(info.checked_at_utc)} назад
-          </p>
-        ) : null}
         {off ? (
           // Сервер без сторожа не сломан — за ним просто никто не следит.
           <p className="text-muted-foreground">

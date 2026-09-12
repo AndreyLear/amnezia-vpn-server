@@ -222,12 +222,16 @@ describe("ClientInfoDialog", () => {
       "max-sm:translate-y-0",
       "max-sm:rounded-b-none",
       "h-auto",
-      "overflow-y-auto",
       "max-h-[calc(100dvh-2rem)]",
       "sm:max-w-md",
-      "p-4",
       "pb-6",
     );
+    // Overflow and padding now live on the scrolling body wrapper, not the
+    // outer content box — that box no longer scrolls itself, so the header
+    // and close button can stay put while only this wrapper moves
+    // (amnezia-vpn-server-5oj5).
+    const body = document.querySelector('[data-slot="dialog-body"]');
+    expect(body).toHaveClass("overflow-y-auto", "p-4");
 
     const dl = document.querySelector("dl");
     expect(dl).toHaveClass("divide-y", "divide-border", "gap-0");
