@@ -3,8 +3,10 @@ import { XIcon } from "lucide-react";
 
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { UpdateOutcomeDialog } from "@/components/UpdateOutcomeDialog";
+import { UpdateProgressToast } from "@/components/UpdateProgressToast";
 import { Button } from "@/components/ui/button";
 import { api, mutationOk, type MutationResponse, type UpdateInfo } from "@/lib/api";
+import { useCreepingProgress } from "@/lib/updateProgress";
 
 /**
  * Полоса о новом выпуске (amnezia-vpn-server-tjoq).
@@ -16,6 +18,12 @@ import { api, mutationOk, type MutationResponse, type UpdateInfo } from "@/lib/a
  *
  * Значок-напоминание на кнопке меню при этом остаётся: он гаснет, когда
  * версия обновлена, а не когда полосу убрали с глаз.
+ *
+ * Пока обновление в состоянии "running" и окно его хода (UpdateDialog)
+ * закрыто, здесь же рендерится UpdateProgressToast — иначе закрытое окно
+ * оставляло бы экран без единого признака того, что что-то происходит
+ * (amnezia-vpn-server-ekvi). Тост и окно делят один и тот же счётчик хода
+ * (useCreepingProgress), поднятый сюда, чтобы не разойтись в показаниях.
  */
 export function UpdateBanner({
   info,
@@ -36,6 +44,11 @@ export function UpdateBanner({
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [hiding, setHiding] = useState(false);
+  const running = info?.state === "running";
+  // Один счётчик хода на окно и на тост (amnezia-vpn-server-ekvi): см.
+  // комментарий в src/lib/updateProgress.ts про то, почему у него не может
+  // быть двух независимых экземпляров.
+  const percent = useCreepingProgress(running);
 
   async function dismiss() {
     if (!info || hiding) return;
@@ -89,6 +102,14 @@ export function UpdateBanner({
   return (
     <>
       {outcome}
+      {/* Виден, только пока окно хода обновления закрыто — иначе один и тот
+          же ход показался бы дважды на экране разом (amnezia-vpn-server-ekvi). */}
+      <UpdateProgressToast
+        visible={running && !detailsOpen}
+        percent={percent}
+        restarting={restarting}
+        onOpen={() => setDetailsOpen(true)}
+      />
       {offer ? (
         <div className="mt-4 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
           <p className="min-w-0 flex-1">Вышла версия {info.latest}</p>
@@ -115,6 +136,7 @@ export function UpdateBanner({
         restarting={restarting}
         timedOut={timedOut}
         onAcknowledge={acknowledge}
+        percent={percent}
       />
     </>
   );

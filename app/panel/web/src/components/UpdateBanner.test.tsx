@@ -1,9 +1,11 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { UpdateDialog } from "@/components/UpdateDialog";
+import { Toaster } from "@/components/ui/sonner";
 import type { UpdateInfo } from "@/lib/api";
 
 // Полоса о новом выпуске (amnezia-vpn-server-tjoq).
@@ -268,6 +270,7 @@ describe("ход обновления", () => {
     extra: {
       restarting?: boolean;
       timedOut?: boolean;
+      percent?: number;
       onOpenChange?: (open: boolean) => void;
       onAcknowledge?: () => void;
     } = {},
@@ -281,6 +284,7 @@ describe("ход обновления", () => {
         restarting={extra.restarting}
         timedOut={extra.timedOut}
         onAcknowledge={extra.onAcknowledge}
+        percent={extra.percent}
       />,
     );
   }
@@ -318,24 +322,14 @@ describe("ход обновления", () => {
     expect(screen.queryByText(/запрос/)).not.toBeInTheDocument();
   });
 
-  // Полоса прогресса не привязана ко времени: панель в середине
-  // перезапускается, и живой ход отдавать некому. Дойти до ста она может
-  // ровно в тот момент, когда обновление затянулось, — а это единственный
-  // момент, когда на неё смотрят.
-  it("никогда не доходит до ста, пока итога нет", async () => {
-    vi.useFakeTimers();
-    try {
-      openDialog({ state: "running", state_step: "установка" });
-      const bar = screen.getByRole("progressbar");
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-      });
-      expect(Number(bar.getAttribute("aria-valuenow"))).toBeLessThan(100);
-      // И не стоит на месте: за час она обязана уйти далеко от нуля.
-      expect(Number(bar.getAttribute("aria-valuenow"))).toBeGreaterThan(50);
-    } finally {
-      vi.useRealTimers();
-    }
+  // Сам ход (что полоса не привязана ко времени и никогда не доходит до
+  // ста, пока итога нет) теперь проверяется на уровне общего хука —
+  // src/lib/updateProgress.test.ts — потому что хук общий для окна и для
+  // тоста (amnezia-vpn-server-ekvi), а не приватный внутри UpdateDialog.
+  // Здесь достаточно знать, что переданный процент действительно рисуется.
+  it("рисует переданный процент, а не считает его сам", () => {
+    openDialog({ state: "running" }, { percent: 42 });
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42");
   });
 
   it("во время обновления кнопки «Обновить» нет", () => {
@@ -538,5 +532,155 @@ describe("итог не показывается дважды", () => {
 
     release(null);
     vi.unstubAllGlobals();
+  });
+});
+
+// Владелец: панель говорит человеку, что окно обновления можно закрыть —
+// обновление всё равно идёт на сервере, — но с закрытым окном на экране не
+// остаётся ничего, будто ничего не происходит. Тост держит признак работы
+// на экране, пока окно закрыто (amnezia-vpn-server-ekvi).
+//
+// Тесты рендерят настоящий <Toaster/>, а не подменяют sonner: иначе легко
+// проверить не то, что на самом деле видит человек.
+describe("тост о ходе обновления", () => {
+  const running = { installed: "2.9.0", latest: "2.10.0", available: true, state: "running" };
+
+  afterEach(() => {
+    // Тосты sonner живут в модульном хранилище, не в дереве React — без
+    // этого тост из одного теста мог бы попасться следующему.
+    toast.dismiss();
+  });
+
+  it("появляется, когда обновление идёт, а окно хода закрыто", async () => {
+    render(
+      <>
+        <Toaster />
+        <UpdateBanner info={info(running)} onChanged={() => {}} />
+      </>,
+    );
+    expect(await screen.findByRole("button", { name: /Обновляем/ })).toBeInTheDocument();
+  });
+
+  it("не появляется, пока открыто окно хода обновления — человек и так всё видит", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <Toaster />
+        <UpdateBanner info={info(running)} onChanged={() => {}} />
+      </>,
+    );
+    await screen.findByRole("button", { name: /Обновляем/ });
+
+    await user.click(screen.getByRole("button", { name: "Показать подробности" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Обновляем/ })).not.toBeInTheDocument(),
+    );
+    // Окно само показывает ход — тост не дублирует его.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("уходит, когда обновление кончилось", async () => {
+    const { rerender } = render(
+      <>
+        <Toaster />
+        <UpdateBanner info={info(running)} onChanged={() => {}} />
+      </>,
+    );
+    await screen.findByRole("button", { name: /Обновляем/ });
+
+    rerender(
+      <>
+        <Toaster />
+        <UpdateBanner
+          info={info({ ...running, state: "ok", state_at_utc: "2026-09-12T10:00:00Z" })}
+          onChanged={() => {}}
+        />
+      </>,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Обновляем/ })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("нажатие на тост открывает окно хода обновления", async () => {
+    render(
+      <>
+        <Toaster />
+        <UpdateBanner info={info(running)} onChanged={() => {}} />
+      </>,
+    );
+    const toastButton = await screen.findByRole("button", { name: /Обновляем/ });
+
+    fireEvent.click(toastButton);
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  // Критерий amnezia-vpn-server-mrjh, теперь и для тоста: панель на шаге
+  // установки перезапускает саму себя, опрос падает по сети, и это не
+  // признак неудачи — тост не должен погаснуть из-за этого.
+  it("перезапуск панели (упавший опрос) тост не убивает", async () => {
+    const { rerender } = render(
+      <>
+        <Toaster />
+        <UpdateBanner info={info(running)} restarting={false} onChanged={() => {}} />
+      </>,
+    );
+    await screen.findByRole("button", { name: /Обновляем/ });
+
+    rerender(
+      <>
+        <Toaster />
+        <UpdateBanner info={info(running)} restarting onChanged={() => {}} />
+      </>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Обновляем/ })).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Панель перезапускается")).toBeInTheDocument();
+  });
+
+  // Требование задачи: окно и тост обязаны показывать один и тот же ход, а
+  // не два независимых отсчёта (amnezia-vpn-server-ekvi) — иначе открытое
+  // из тоста окно начало бы с нуля, пока тост уже показывал существенный
+  // процент.
+  it("окно, открытое из тоста, продолжает тот же ход, а не начинает с нуля", async () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <>
+          <Toaster />
+          <UpdateBanner info={info(running)} onChanged={() => {}} />
+        </>,
+      );
+
+      // Шагами по секунде, а не одним прыжком на 30с: тост sonner обновляет
+      // своё внутреннее состояние через подписку, а не синхронно с рендером
+      // React, и один большой скачок фальшивых часов сминает промежуточные
+      // тики интервала в один — тик за тиком каждый успевает долететь.
+      for (let tick = 0; tick < 30; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+      }
+
+      const toastButton = screen.getByRole("button", { name: /Обновляем/ });
+      const toastBar = toastButton.querySelector('[role="progressbar"]');
+      const percentBefore = toastBar?.getAttribute("aria-valuenow");
+      expect(Number(percentBefore)).toBeGreaterThan(0);
+
+      fireEvent.click(toastButton);
+
+      // Тост под фальшивыми часами не успевает физически уйти из DOM (его
+      // уборка идёт через requestAnimationFrame) — окно ищем в его
+      // собственном диалоге, а не первым попавшимся progressbar на странице.
+      const dialogBar = within(screen.getByRole("dialog")).getByRole("progressbar");
+      expect(dialogBar.getAttribute("aria-valuenow")).toBe(percentBefore);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
