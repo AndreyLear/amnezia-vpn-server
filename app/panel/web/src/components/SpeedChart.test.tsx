@@ -606,8 +606,10 @@ describe("оси", () => {
     );
     render(<SpeedChart clientId={1} />);
 
-    expect(await screen.findByText(/07\.09/)).toBeInTheDocument();
-    expect(screen.getByText(/08\.09/)).toBeInTheDocument();
+    // Дата подписывается так же, как везде в панели: «7 сен», а не «07.09»
+    // (amnezia-vpn-server-kfmf).
+    expect(await screen.findByText(/7 сен/)).toBeInTheDocument();
+    expect(screen.getByText(/8 сен/)).toBeInTheDocument();
   });
 
   // Отзыв владельца: «нет мин макс значений». Числа обязаны быть на самом
@@ -690,10 +692,16 @@ describe("оси", () => {
     await waitFor(() => expect(bands()).toHaveLength(1));
     const row = document.querySelector("[data-slot='speed-legend']");
     const parts = Array.from(row!.children).map((el) => el.textContent ?? "");
-    expect(parts[0]).toMatch(/^\d{2}\.\d{2} \d{2}:\d{2}:\d{2}$/);
-    expect(parts[2]).toMatch(/^\d{2}\.\d{2} \d{2}:\d{2}:\d{2}$/);
-    // Одинаковая длина — ширина подписи не гуляет между краями графика.
-    expect(parts[0].length).toBe(parts[2].length);
+    expect(parts[0]).toMatch(/^\d{1,2} [а-я]{3} \d{2}:\d{2}:\d{2}$/);
+    expect(parts[2]).toMatch(/^\d{1,2} [а-я]{3} \d{2}:\d{2}:\d{2}$/);
+    // Раньше здесь стояло равенство длин: обе метки были «07.09 13:00:07», и
+    // ширина не гуляла. С «7 сен» день не дополняется нулём, поэтому окно с 9
+    // на 10 число даёт метки разной длины на один знак. Это принято: метки
+    // прижаты к противоположным краям (justify-between), так что двигается
+    // только середина легенды, и то на символ — а второй формат даты ради
+    // этого заводить нельзя (amnezia-vpn-server-kfmf).
+    expect(parts[0].endsWith(":07")).toBe(true);
+    expect(parts[2].endsWith(":00")).toBe(true);
   });
 });
 

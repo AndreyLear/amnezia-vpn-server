@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { fetchSpeed, type SpeedSeries } from "@/lib/api";
+import { formatDateShort } from "@/lib/format";
 
 /**
  * График скорости клиента (amnezia-vpn-server-tmjw, -0ypv).
@@ -546,6 +547,12 @@ export function formatBits(bps: number): string {
  * следующего показывали бы одну и ту же минуту. Формат один на оба края
  * графика, поэтому ширина не гуляет — `tabular-nums` держит цифры
  * моноширинными, а секунды добавляют ровно два знака к обеим меткам сразу.
+ *
+ * The date half comes from lib/format.ts, the same place journal and dialog
+ * dates come from (amnezia-vpn-server-kfmf). The owner asked for "11 сен"
+ * wherever a date is shown, with no exception for axis ticks, and the cost
+ * is one character against the numeric form it replaces — not enough to
+ * justify a second date format living in this file.
  */
 function formatClock(utc: string, series: SpeedSeries): string {
   const d = new Date(utc);
@@ -556,7 +563,7 @@ function formatClock(utc: string, series: SpeedSeries): string {
     second: "2-digit",
   });
   if (series.window !== "day") return clock;
-  const date = d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+  const date = formatDateShort(d);
   return `${date} ${clock}`;
 }
 
