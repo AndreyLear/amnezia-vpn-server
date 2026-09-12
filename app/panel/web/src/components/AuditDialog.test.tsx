@@ -38,7 +38,7 @@ describe("журнал", () => {
     ];
     render(<AuditDialog open onOpenChange={() => {}} />);
 
-    expect(await screen.findByText(/клиент добавлен/)).toBeInTheDocument();
+    expect(await screen.findByText(/Клиент добавлен/)).toBeInTheDocument();
     expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.getByText("admin")).toBeInTheDocument();
     expect(screen.getByText("07.09.2026, 12:00:00")).toBeInTheDocument();
@@ -50,7 +50,7 @@ describe("журнал", () => {
       { at_utc: "2026-09-07T12:00:00Z", actor: "admin", action: "login.failed", subject: "", detail: "" },
     ];
     render(<AuditDialog open onOpenChange={() => {}} />);
-    expect(await screen.findByText(/неудачный вход/)).toBeInTheDocument();
+    expect(await screen.findByText(/Неудачный вход/)).toBeInTheDocument();
   });
 
   // «Изменён» без указания чего отвечает на вопрос наполовину.
@@ -84,7 +84,7 @@ describe("журнал", () => {
     ];
     render(<AuditDialog open onOpenChange={() => {}} />);
 
-    const title = await screen.findByText(/ограничение скорости/);
+    const title = await screen.findByText(/Ограничение скорости/);
     // Заголовок больше не содержит подробность в одной фразе с собой.
     expect(title.textContent).not.toContain("60 Мбит");
     const detail = screen.getByText("60 Мбит");

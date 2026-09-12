@@ -91,8 +91,11 @@ export function SpeedChart({ clientId }: { clientId: number }) {
           <RangeButton current={range} value="10min" onSelect={setRange}>
             10 минут
           </RangeButton>
+          {/* "10 минут" starts with a digit on purpose and is left alone;
+              "сутки" is a plain word caption, so it gets a capital letter
+              like any other standalone label (amnezia-vpn-server-4cnf). */}
           <RangeButton current={range} value="day" onSelect={setRange}>
-            сутки
+            Сутки
           </RangeButton>
         </div>
       </div>
@@ -139,8 +142,11 @@ function SpeedPlot({
   // (amnezia-vpn-server-cor5).
   const [at, setAt] = useState<number | null>(null);
   const plot = useRef<HTMLDivElement>(null);
-  if (failed) return <Empty>историю прочитать не удалось</Empty>;
-  if (loading || !series) return <Empty>загружаю</Empty>;
+  // These placeholder captions stand alone in place of the whole chart, so
+  // each one is capitalized like any other standalone label
+  // (amnezia-vpn-server-4cnf).
+  if (failed) return <Empty>Историю прочитать не удалось</Empty>;
+  if (loading || !series) return <Empty>Загружаю</Empty>;
 
   const peak = Math.max(
     0,
@@ -148,7 +154,7 @@ function SpeedPlot({
     ...series.up_max_bps.map((v) => v ?? 0),
   );
   if (peak === 0 && series.down_max_bps.every((v) => v === null)) {
-    return <Empty>за это время замеров нет</Empty>;
+    return <Empty>За это время замеров нет</Empty>;
   }
   const scale = speedScale(series);
   const n = series.down_max_bps.length;
@@ -308,13 +314,16 @@ function SpeedPlot({
             <span data-slot="legend-down" className="text-sky-500" aria-hidden>
               ↓
             </span>
-            скачал
+            {/* Caption for the arrow glyph, not a sentence continuation —
+                capitalized like the offline caption below
+                (amnezia-vpn-server-4cnf). */}
+            Скачал
           </span>
           <span className="flex items-center gap-1.5">
             <span data-slot="legend-up" className="text-orange-500" aria-hidden>
               ↑
             </span>
-            отдал
+            Отдал
           </span>
           {/* Объяснение подложки показывается только когда подложка есть:
               строка про обрыв над графиком без обрывов заставляла бы искать
@@ -326,7 +335,8 @@ function SpeedPlot({
                 className="inline-block size-2.5 rounded-sm bg-rose-500/20"
                 aria-hidden
               />
-              связи не было
+              {/* Standalone caption, capitalized (amnezia-vpn-server-4cnf). */}
+              Связи не было
             </span>
           ) : null}
         </span>
@@ -484,7 +494,8 @@ function Readout({
       {gap ? (
         // Разрыв обязан читаться и здесь: ноль означал бы «клиент ничего не
         // получал», а это диагноз.
-        <div>замеров нет</div>
+        // Standalone tooltip line, capitalized (amnezia-vpn-server-4cnf).
+        <div>Замеров нет</div>
       ) : (
         <>
           <div className="text-sky-500 tabular-nums">
@@ -496,7 +507,9 @@ function Readout({
           {/* Словами, а не только подложкой: нулевая скорость и «сервер не
               слышал клиента» — разные вещи, и человек, наведя на нули,
               должен прочитать, какая из них (amnezia-vpn-server-tyic). */}
-          {offline ? <div className="text-rose-500">связи не было</div> : null}
+          {/* Same standalone caption as the legend, capitalized
+              (amnezia-vpn-server-4cnf). */}
+          {offline ? <div className="text-rose-500">Связи не было</div> : null}
         </>
       )}
     </div>

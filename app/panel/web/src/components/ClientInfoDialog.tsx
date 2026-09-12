@@ -350,7 +350,11 @@ export function ClientInfoDialog({
                     }
                   >
                     <dd>
-                      {viewMTU === 0 ? "как у сервера" : viewMTU}
+                      {/* Displayed value, capitalized like any other status
+                          value in this card (amnezia-vpn-server-4cnf). The
+                          input placeholder below stays lowercase — it reads
+                          as an inline hint, not a standalone value. */}
+                      {viewMTU === 0 ? "Как у сервера" : viewMTU}
                     </dd>
                   </ReadOnlyProperty>
                   <ReadOnlyProperty
@@ -395,11 +399,15 @@ export function ClientInfoDialog({
                     <div className="grid gap-0.5">
                       <dt className="text-muted-foreground">Статус</dt>
                       <dd>
+                        {/* Status values are standalone captions, not mid-
+                            sentence text, so they start with a capital
+                            letter — matches the "Пауза" badge on the client
+                            card (amnezia-vpn-server-4cnf). */}
                         {!client.enabled
-                          ? "пауза"
+                          ? "Пауза"
                           : client.online
-                            ? "онлайн"
-                            : "офлайн"}
+                            ? "Онлайн"
+                            : "Офлайн"}
                       </dd>
                     </div>
                   </PropertyRow>
