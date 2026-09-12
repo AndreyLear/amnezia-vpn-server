@@ -258,3 +258,43 @@
     background-image: none;
   }
 }
+
+/* Dots in the "Обновляем…" title light up one after another instead of
+   sitting there as a static ellipsis (amnezia-vpn-server-d27j). Each span
+   is its own dot; the shared keyframe just fades one in and out, and a
+   per-dot animation-delay staggers the three so the lit one visibly moves
+   left to right. */
+.update-running-ellipsis span {
+  opacity: 0;
+  animation: update-running-ellipsis-dot 1.4s infinite;
+}
+
+.update-running-ellipsis span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.update-running-ellipsis span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.update-running-ellipsis span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes update-running-ellipsis-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-running-ellipsis span {
+    animation: none;
+    opacity: 1;
+  }
+}

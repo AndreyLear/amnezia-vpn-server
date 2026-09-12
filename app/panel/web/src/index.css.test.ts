@@ -40,3 +40,41 @@ describe("index.css client-card-sweep", () => {
     expect(reduced![0]).toMatch(/animation:\s*none/);
   });
 });
+
+// The "Обновляем…" title's dots light up one after another
+// (amnezia-vpn-server-d27j) — pinned the same way as the other decorative
+// animations above: an infinite keyframe, per-dot stagger, and a
+// reduced-motion override that turns the animation off and leaves the dots
+// visible rather than stuck at opacity 0.
+describe("index.css update-running-ellipsis", () => {
+  it("fades each dot in and out on an infinite loop", () => {
+    expect(css).toContain("@keyframes update-running-ellipsis-dot");
+
+    const dot = rule(".update-running-ellipsis span");
+    expect(dot).toMatch(/animation:/);
+    expect(dot).toContain("infinite");
+  });
+
+  it("staggers the three dots so they light up in turn, not together", () => {
+    const first = rule(".update-running-ellipsis span:nth-child(1)");
+    const second = rule(".update-running-ellipsis span:nth-child(2)");
+    const third = rule(".update-running-ellipsis span:nth-child(3)");
+    expect(first).toMatch(/animation-delay:\s*0s/);
+    expect(second).toMatch(/animation-delay:\s*0\.2s/);
+    expect(third).toMatch(/animation-delay:\s*0\.4s/);
+    // Three distinct delays, not the same value copy-pasted three times.
+    const delays = new Set(
+      [first, second, third].map((r) => /animation-delay:\s*([\d.]+s)/.exec(r)?.[1]),
+    );
+    expect(delays.size).toBe(3);
+  });
+
+  it("disables the animation and keeps the dots visible under reduced motion", () => {
+    const reduced = css.match(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.update-running-ellipsis span\s*\{[^}]*\}/,
+    );
+    expect(reduced, "missing reduced-motion rule for .update-running-ellipsis span").toBeTruthy();
+    expect(reduced![0]).toMatch(/animation:\s*none/);
+    expect(reduced![0]).toMatch(/opacity:\s*1/);
+  });
+});
