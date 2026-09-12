@@ -88,7 +88,11 @@ describe("полоса о новом выпуске", () => {
 
     await user.click(screen.getByRole("button", { name: "Показать подробности" }));
     expect(await screen.findByText("первое")).toBeInTheDocument();
-    expect(screen.getByText(/клиенты остаются без связи/)).toBeInTheDocument();
+    // Владелец: «сейчас много воды» — текст сокращён до двух коротких фраз
+    // (amnezia-vpn-server-r5qo).
+    expect(
+      screen.getByText("Клиенты будут без связи, пока идёт обновление. Обычно около минуты"),
+    ).toBeInTheDocument();
   });
 
   it("кнопка «Обновить» просит сервер обновиться", async () => {
