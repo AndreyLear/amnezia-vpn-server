@@ -57,9 +57,16 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  closeButtonDisabled = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  // amnezia-vpn-server-yjh2: a caller whose mutation is already in flight
+  // (request sent, cannot be cancelled) passes this so the X visibly can't
+  // be clicked instead of silently doing nothing — a disabled native button
+  // never fires the click Radix's Close listens for, so this also blocks
+  // the close itself, not just its look.
+  closeButtonDisabled?: boolean
 }) {
   return (
     <DialogPortal>
@@ -131,6 +138,7 @@ function DialogContent({
               variant="ghost"
               className="absolute top-2 right-2"
               size="icon-sm"
+              disabled={closeButtonDisabled}
             >
               <XIcon
               />
