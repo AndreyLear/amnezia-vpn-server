@@ -51,7 +51,7 @@ export function AddClientDialog({
       }}
     >
       <DialogContent
-        className="gap-6"
+        bodyClassName="gap-6"
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           nameInputRef.current?.focus();

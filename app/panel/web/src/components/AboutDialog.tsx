@@ -79,7 +79,7 @@ export function AboutDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-6">
+      <DialogContent bodyClassName="gap-6">
         <DialogHeader>
           <DialogTitle>О версиях</DialogTitle>
         </DialogHeader>

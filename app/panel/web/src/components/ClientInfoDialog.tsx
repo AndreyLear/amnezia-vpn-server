@@ -279,7 +279,7 @@ export function ClientInfoDialog({
     <>
       <Dialog open={client !== null} onOpenChange={onOpenChange}>
         <DialogContent
-          className="sm:max-w-md pb-6"
+          className="sm:max-w-md" bodyClassName="pb-6"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           {client ? (
@@ -485,7 +485,7 @@ export function ClientInfoDialog({
           if (!open) cancelNameEdit();
         }}
       >
-        <DialogContent className="gap-6 sm:max-w-md">
+        <DialogContent className="sm:max-w-md" bodyClassName="gap-6">
           <DialogHeader>
             <DialogTitle>Имя</DialogTitle>
           </DialogHeader>
@@ -526,7 +526,7 @@ export function ClientInfoDialog({
           if (!open) cancelMTUEdit();
         }}
       >
-        <DialogContent className="gap-6 sm:max-w-md">
+        <DialogContent className="sm:max-w-md" bodyClassName="gap-6">
           <DialogHeader>
             <DialogTitle>MTU</DialogTitle>
           </DialogHeader>
@@ -591,7 +591,7 @@ export function ClientInfoDialog({
         }}
       >
         <DialogContent
-          className="gap-6 sm:max-w-md"
+          className="sm:max-w-md" bodyClassName="gap-6"
           closeButtonDisabled={pending}
         >
           <DialogHeader>
@@ -656,7 +656,7 @@ export function ClientInfoDialog({
           if (!open) cancelDescriptionEdit();
         }}
       >
-        <DialogContent className="gap-6 sm:max-w-md">
+        <DialogContent className="sm:max-w-md" bodyClassName="gap-6">
           <DialogHeader>
             <DialogTitle>Описание</DialogTitle>
           </DialogHeader>

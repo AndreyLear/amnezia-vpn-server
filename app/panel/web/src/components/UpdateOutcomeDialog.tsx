@@ -88,7 +88,7 @@ export function UpdateOutcomeDialog({
           also tells the server the outcome was seen — a close button would
           let someone dismiss the dialog without that happening
           (amnezia-vpn-server-jdkq). */}
-      <DialogContent className="gap-6" showCloseButton={false}>
+      <DialogContent bodyClassName="gap-6" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>{outcome.title}</DialogTitle>
         </DialogHeader>

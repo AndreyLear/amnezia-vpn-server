@@ -171,7 +171,7 @@ function BackupHeaderTrigger() {
         Бэкап
       </Button>
       <Dialog open={sheetOpen} onOpenChange={setSheetOpen}>
-        <DialogContent className="gap-6">
+        <DialogContent bodyClassName="gap-6">
           <DialogHeader>
             <DialogTitle>Бэкап</DialogTitle>
           </DialogHeader>

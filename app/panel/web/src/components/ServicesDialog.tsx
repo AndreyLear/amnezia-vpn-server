@@ -42,7 +42,10 @@ function verdict(service: ServiceState): string {
 function Row({ service }: { service: ServiceState }) {
   const broken = service.state === "fail";
   return (
-    <div className="flex flex-col gap-1 py-3">
+    // first:pt-0 — у первой строки свой верхний отступ складывался с
+    // отступом сетки окна, и между подзаголовком и списком выходило под
+    // тридцать пикселей (amnezia-vpn-server-kq1m).
+    <div className="flex flex-col gap-1 py-3 first:pt-0">
       <div className="flex items-baseline justify-between gap-4">
         <span className="shrink-0 text-muted-foreground">{serviceTitle(service.name)}</span>
         <span className={broken ? "text-end text-destructive" : "text-end"}>

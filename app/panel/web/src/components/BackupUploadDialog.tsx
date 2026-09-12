@@ -232,7 +232,7 @@ export function BackupUploadDialog({
           </div>
         </div>
       ) : null}
-      <DialogContent className="gap-6 overflow-hidden sm:max-w-md">
+      <DialogContent className="overflow-hidden sm:max-w-md" bodyClassName="gap-6">
         <DialogHeader>
           <DialogTitle>Загрузить бэкап</DialogTitle>
         </DialogHeader>

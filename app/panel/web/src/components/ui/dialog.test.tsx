@@ -84,7 +84,7 @@ describe("шапка не прокручивается вместе с соде�
 // вида <DialogContent className="gap-4"> молча переставал на что-либо
 // влиять, а QrDialog и карточка клиента (у них className вовсе без gap-*)
 // без спроса получили чужой отступ по умолчанию (amnezia-vpn-server-5oj5).
-describe("className по-прежнему задаёт отступ тела, а не только примитив", () => {
+describe("отступы задаются телу, а ширина — внешнему элементу", () => {
   it("без className в теле остаётся отступ по умолчанию 16px (gap-4), как до правки шапки", () => {
     render(
       <Dialog open onOpenChange={() => {}}>
@@ -104,10 +104,10 @@ describe("className по-прежнему задаёт отступ тела, а
     expect(body).not.toHaveClass("gap-6");
   });
 
-  it("className из вызова всё ещё меняет отступ тела, а не только внешнего элемента", () => {
+  it("bodyClassName меняет отступ тела, а className на него не влияет", () => {
     render(
       <Dialog open onOpenChange={() => {}}>
-        <DialogContent className="gap-6">
+        <DialogContent className="pb-6 sm:max-w-lg" bodyClassName="gap-6">
           <DialogHeader>
             <DialogTitle>Заголовок</DialogTitle>
           </DialogHeader>
@@ -124,5 +124,12 @@ describe("className по-прежнему задаёт отступ тела, а
       .closest('[data-slot="dialog-body"]');
     expect(body).toHaveClass("gap-6");
     expect(body).not.toHaveClass("gap-4");
+
+    // И обратное: отступ, заданный в className, на тело НЕ уходит. Пока он
+    // уходил в оба места, pb-6 карточки клиента давал 24px на внешнем
+    // элементе плюс 24px на теле, и под последней кнопкой зияла пустая
+    // полоса (amnezia-vpn-server-kq1m).
+    expect(body).not.toHaveClass("pb-6");
+    expect(document.querySelector("[data-slot=dialog-content]")).toHaveClass("pb-6");
   });
 });

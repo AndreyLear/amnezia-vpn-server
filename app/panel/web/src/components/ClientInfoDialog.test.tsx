@@ -230,7 +230,6 @@ describe("ClientInfoDialog", () => {
       "h-auto",
       "max-h-[calc(100dvh-2rem)]",
       "sm:max-w-md",
-      "pb-6",
     );
     // Overflow and padding now live on the scrolling body wrapper, not the
     // outer content box — that box no longer scrolls itself, so the header
@@ -238,6 +237,11 @@ describe("ClientInfoDialog", () => {
     // (amnezia-vpn-server-5oj5).
     const body = document.querySelector('[data-slot="dialog-body"]');
     expect(body).toHaveClass("overflow-y-auto", "p-4");
+    // Нижний отступ карточки задаётся телу, а не внешнему элементу: пока он
+    // уходил в оба места, под последней кнопкой копилось 48px вместо 24
+    // (amnezia-vpn-server-kq1m).
+    expect(body).toHaveClass("pb-6");
+    expect(content).not.toHaveClass("pb-6");
 
     const dl = document.querySelector("dl");
     expect(dl).toHaveClass("divide-y", "divide-border", "gap-0");

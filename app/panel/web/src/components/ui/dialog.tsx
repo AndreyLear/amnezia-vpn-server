@@ -57,10 +57,22 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  bodyClassName,
   closeButtonDisabled = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  /**
+   * Классы для прокручиваемого тела окна: отступы и сетка живут ЗДЕСЬ, а
+   * className — на внешнем элементе, где живут ширина и положение
+   * (amnezia-vpn-server-kq1m).
+   *
+   * Разделено, потому что короткое время className уходил в оба места
+   * разом, и любая утилита отступа применялась дважды: pb-6 карточки
+   * клиента давал 24px на внешнем элементе плюс 24px на теле, и под
+   * последней кнопкой зияла пустая полоса.
+   */
+  bodyClassName?: string
   // amnezia-vpn-server-yjh2: a caller whose mutation is already in flight
   // (request sent, cannot be cancelled) passes this so the X visibly can't
   // be clicked instead of silently doing nothing — a disabled native button
@@ -128,7 +140,7 @@ function DialogContent({
             this wrapper already stretches to the outer element's width. */}
         <div
           data-slot="dialog-body"
-          className={cn("grid gap-4 overflow-y-auto p-4", className)}
+          className={cn("grid gap-4 overflow-y-auto p-4", bodyClassName)}
         >
           {children}
         </div>
@@ -136,7 +148,11 @@ function DialogContent({
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
             <Button
               variant="ghost"
-              className="absolute top-2 right-2"
+              // z-20, а не просто absolute: закреплённая шапка несёт z-10
+              // и без этого рисуется ПОВЕРХ крестика — он оставался в
+              // разметке, но исчезал с экрана во всех окнах сразу
+              // (amnezia-vpn-server-jy87).
+              className="absolute top-2 right-2 z-20"
               size="icon-sm"
               disabled={closeButtonDisabled}
             >
