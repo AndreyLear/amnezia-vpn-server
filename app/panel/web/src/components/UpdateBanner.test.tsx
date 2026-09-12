@@ -684,3 +684,36 @@ describe("тост о ходе обновления", () => {
     }
   });
 });
+
+// Итог, который человек уже закрыл, не всплывает снова — даже если сервер
+// не ответил вовсе. До этого всё держалось на том, успеет ли доехать
+// отметка «увидел»: медленный ответ или обрыв сети открывали щель, в
+// которую пролезало второе окно с тем же текстом (amnezia-vpn-server-wbz0).
+describe("закрытый итог не возвращается", () => {
+  it("не показывает окно снова, даже когда запрос об отметке провалился", async () => {
+    const user = userEvent.setup();
+    // Сервер отвечает отказом: отметка «увидел» не сохранится.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 500 })),
+    );
+
+    const finished = info({
+      state: "ok",
+      state_to: "2.10.0",
+      state_at_utc: "2026-09-11T10:00:00Z",
+      outcome_seen: "",
+      available: false,
+    });
+    const { rerender } = render(<UpdateBanner info={finished} onChanged={() => {}} />);
+
+    await user.click(await screen.findByRole("button", { name: "Понятно" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // Сервер по-прежнему говорит, что итог не отмечен, — и всё равно тихо.
+    rerender(<UpdateBanner info={finished} onChanged={() => {}} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
+});

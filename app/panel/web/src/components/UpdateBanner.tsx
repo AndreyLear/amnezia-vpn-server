@@ -44,6 +44,17 @@ export function UpdateBanner({
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [hiding, setHiding] = useState(false);
+  // Какой итог человек уже закрыл в этом сеансе, отмеченный временем его
+  // появления (amnezia-vpn-server-wbz0).
+  //
+  // Признак «увиден» живёт на сервере, и до правки jdkq окно закрывалось
+  // раньше, чем отметка туда доезжала, — тогда второе окно с тем же итогом
+  // успевало мелькнуть. Ожидание ответа это закрыло, но оставило условие на
+  // времени: медленный ответ, обрыв сети, перезапуск панели посреди запроса
+  // — и щель открывается снова. Здесь она закрыта по построению: закрытый
+  // итог не показывается повторно, что бы ни ответил сервер и когда бы ни
+  // обновился его ответ.
+  const [seenOutcome, setSeenOutcome] = useState<string | null>(null);
   const running = info?.state === "running";
   // Один счётчик хода на окно и на тост (amnezia-vpn-server-ekvi): см.
   // комментарий в src/lib/updateProgress.ts про то, почему у него не может
@@ -72,6 +83,9 @@ export function UpdateBanner({
   // it still calls this fire-and-forget below.
   async function acknowledge(): Promise<boolean> {
     if (!info) return true;
+    // Запоминается ДО запроса: смысл в том, чтобы итог не всплыл снова,
+    // даже если запрос не дойдёт вовсе.
+    if (info.state_at_utc) setSeenOutcome(info.state_at_utc);
     const data = await api<MutationResponse>("/api/update/dismiss", {
       method: "POST",
       body: JSON.stringify({ outcome: info.state_at_utc }),
@@ -94,9 +108,11 @@ export function UpdateBanner({
   // Пока UpdateDialog открыт, он сам доведёт наблюдаемое обновление до
   // итога и закроется по «Понятно» — отдельный попап в этот момент молчит,
   // чтобы не показать тот же итог дважды в двух окнах (amnezia-vpn-server-mrjh).
-  const outcome = detailsOpen ? null : (
-    <UpdateOutcomeDialog info={info} onAcknowledge={() => void acknowledge()} />
-  );
+  const outcomeHandled = Boolean(info?.state_at_utc) && info?.state_at_utc === seenOutcome;
+  const outcome =
+    detailsOpen || outcomeHandled ? null : (
+      <UpdateOutcomeDialog info={info} onAcknowledge={() => void acknowledge()} />
+    );
   const offer = info?.available && info.dismissed !== info.latest;
 
   return (
