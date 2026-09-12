@@ -37,13 +37,15 @@ async function login(page: Page) {
 test("итог прошлого обновления показывается сам", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await signIn(page);
-  await expect(page.getByRole("heading", { name: "Обновление завершено" })).toBeVisible();
-  await expect(page.getByText("обновление до 99.9.9 завершено")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Обновление установлено" })).toBeVisible();
+  // Версию панель называет сама, а не пересказывает строку хоста
+  // (amnezia-vpn-server-jdkq).
+  await expect(page.getByText("Панель обновлена до версии 99.9.9")).toBeVisible();
   // Закрыли — и он не возвращается: сервер помнит, какой итог показали.
   await page.getByRole("button", { name: "Понятно" }).click();
   await page.reload();
   await expect(page.getByRole("button", { name: "Добавить клиента" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Обновление завершено" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Обновление установлено" })).toHaveCount(0);
   // И полоса под ним никуда не делась: итог её перекрывал, а не отменял.
   await expect(page.getByText("Вышла версия 99.9.9")).toBeVisible();
 });
@@ -69,7 +71,7 @@ test("подробности показывают изменения и пред
   // И то, что вышло между установленной версией и свежей, тоже: человек
   // решает по тому, что изменится у него, а не по последней записи.
   await expect(items.nth(1)).toHaveText("Второе изменение");
-  await expect(page.getByText(/клиенты остаются без связи/)).toBeVisible();
+  await expect(page.getByText(/Клиенты будут без связи/)).toBeVisible();
   // Контрольная сумма предназначена агенту обновления, а не человеку.
   await expect(page.getByText(/amnezia-sha256/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Обновить" })).toBeVisible();
@@ -143,6 +145,7 @@ test("журнал показывает вход и изменения", async (
   await page.getByRole("menuitem", { name: "Журнал" }).click();
 
   await expect(page.getByRole("heading", { name: "Журнал" })).toBeVisible();
-  await expect(page.getByText(/^клиент/).first()).toBeVisible();
-  await expect(page.getByText("вход").first()).toBeVisible();
+  // Подписи журнала пишутся с большой буквы (amnezia-vpn-server-4cnf).
+  await expect(page.getByText(/^Клиент/).first()).toBeVisible();
+  await expect(page.getByText("Вход").first()).toBeVisible();
 });
