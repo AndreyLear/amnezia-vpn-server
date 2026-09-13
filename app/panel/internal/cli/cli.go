@@ -422,9 +422,12 @@ func (a *app) serveHTTP(ctx context.Context, cfg web.Config) int {
 	cfg.Logger = log.New(a.stderr, "panel serve: ", log.LstdFlags)
 	cfg.DB = handle
 	cfg.DBPath = db.DefaultPath()
-	// M7.4: one in-memory session store per serve process; restarting
-	// the panel discards every session (M7.3 contract).
+	// M7.4: one session store per serve process. Sessions are mirrored to
+	// the database so a restart — every update is one — does not log
+	// everybody out and stack «Сессия сброшена» on top of the update
+	// progress window (amnezia-vpn-server-4aab).
 	cfg.Sessions = auth.NewSessionStore(auth.SessionTTL)
+	cfg.PersistSessions = true
 	server, err := web.New(cfg)
 	if err != nil {
 		return a.fatal(opServe, err)

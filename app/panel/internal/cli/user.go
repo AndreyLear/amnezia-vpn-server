@@ -98,10 +98,16 @@ func (a *app) cmdAuthChangePassword(args []string) int {
 	if err := db.UpdateAuthPassword(u, username, row.PasswordHash, hash); err != nil {
 		return a.fatal("auth change-password", err)
 	}
+	// Stored sessions go first, straight from the database: a password
+	// changed while the panel is stopped must not leave a session alive
+	// for the next start to restore (amnezia-vpn-server-4aab).
+	if err := db.DeleteSessionsByUsername(u, username); err != nil {
+		return a.fatal("auth change-password", err)
+	}
 	// The CLI and `panel serve` are separate processes and do not
 	// share the in-memory SessionStore. A sidecar next to the DB
-	// tells serve to drop this user's live sessions on the next
-	// authenticated request.
+	// tells a RUNNING serve to drop this user's live sessions on the
+	// next authenticated request.
 	if err := auth.RequestInvalidateSessions(db.DefaultPath(), username); err != nil {
 		return a.fatal("auth change-password", err)
 	}
@@ -145,6 +151,11 @@ func (a *app) cmdAuthSetPassword(args []string) int {
 		return a.fatal("auth set-password", err)
 	}
 	if err := db.UpdateAuthPassword(handle, username, row.PasswordHash, hash); err != nil {
+		return a.fatal("auth set-password", err)
+	}
+	// See auth change-password: stored sessions are removed directly so a
+	// stopped panel cannot restore them (amnezia-vpn-server-4aab).
+	if err := db.DeleteSessionsByUsername(handle, username); err != nil {
 		return a.fatal("auth set-password", err)
 	}
 	if err := auth.RequestInvalidateSessions(db.DefaultPath(), username); err != nil {

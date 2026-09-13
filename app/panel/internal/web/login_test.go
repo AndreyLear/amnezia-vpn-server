@@ -100,14 +100,10 @@ func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 }
 
 // activeSessionCount counts live sessions for a username in the store.
+// ByUsername already returns only live ones: the store keeps no session
+// ids to re-check with Get (amnezia-vpn-server-4aab).
 func activeSessionCount(f *fixture, username string) int {
-	n := 0
-	for _, sess := range f.sessions.ByUsername(username) {
-		if _, ok := f.sessions.Get(sess.ID); ok {
-			n++
-		}
-	}
-	return n
+	return len(f.sessions.ByUsername(username))
 }
 
 func TestLoginPageRendersForm(t *testing.T) {
