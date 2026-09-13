@@ -530,8 +530,13 @@ describe("итог не показывается дважды", () => {
     expect(screen.getByRole("dialog")).toBe(before);
     expect(screen.getAllByText("Панель обновлена до версии 2.10.0")).toHaveLength(1);
 
+    // Дать цепочке «Понятно → отметка → обновить данные» дойти до конца,
+    // пока подделка fetch ещё на месте. Снятая посреди цепочки, она
+    // пропускала следующий запрос в настоящий fetch, и на медленной машине
+    // CI тест падал: «Failed to parse URL from /api/update/dismiss».
+    // Снимает подделку общий afterEach — после того как всё улеглось.
     release(null);
-    vi.unstubAllGlobals();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 });
 
@@ -713,8 +718,8 @@ describe("закрытый итог не возвращается", () => {
     // Сервер по-прежнему говорит, что итог не отмечен, — и всё равно тихо.
     rerender(<UpdateBanner info={finished} onChanged={() => {}} />);
     expect(screen.queryByRole("dialog")).toBeNull();
-
-    vi.unstubAllGlobals();
+    // Подделку fetch снимает общий afterEach, а не тест посреди работы: снятая
+    // здесь, она пропускала отложенные запросы в настоящий fetch.
   });
 });
 
@@ -761,8 +766,13 @@ describe("окно не мигает чужим содержимым на зак
     expect(screen.queryByText(/Описание выпуска не пришло/)).toBeNull();
     expect(screen.getByText("Панель обновлена до версии 2.10.18")).toBeInTheDocument();
 
+    // Дать цепочке «Понятно → отметка → обновить данные» дойти до конца,
+    // пока подделка fetch ещё на месте. Снятая посреди цепочки, она
+    // пропускала следующий запрос в настоящий fetch, и на медленной машине
+    // CI тест падал: «Failed to parse URL from /api/update/dismiss».
+    // Снимает подделку общий afterEach — после того как всё улеглось.
     release(null);
-    vi.unstubAllGlobals();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 });
 
