@@ -157,12 +157,20 @@ test("ширина меню не меняется, пока идёт прове�
 // уезжали под нижний край экрана. Проверки при этом зелёные: toBeVisible
 // считает видимым и элемент за краем окна. Поэтому здесь меряется, что
 // уведомление целиком внутри окна (amnezia-vpn-server-omsa).
-test("уведомление видно на экране, а не уезжает под край", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
+for (const width of [1280, 375]) test(`уведомление видно сверху справа, а не уезжает под край (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
   await login(page);
 
-  await page.getByRole("button", { name: /Действия для/ }).first().click();
-  await page.getByRole("menuitem", { name: /Отключить|Включить/ }).click();
+  // Тост вызывается сохранением настроек почты: это действие есть на любой
+  // ширине, а меню карточки клиента на телефоне устроено иначе.
+  await page.getByRole("button", { name: "Ещё" }).click();
+  await page.getByRole("menuitem", { name: "Уведомления" }).click();
+  const dialog = page.getByRole("dialog", { name: "Уведомления" });
+  await dialog.getByLabel("Сервер SMTP").fill("smtp.example.org");
+  await dialog.getByLabel("Логин").fill("vpn@example.org");
+  await dialog.getByLabel("Пароль").fill("toast-check-password");
+  await dialog.getByLabel("Куда присылать").fill("owner@example.org");
+  await dialog.getByRole("button", { name: "Сохранить" }).click();
 
   const toast = page.locator("[data-sonner-toast]").first();
   await expect(toast).toBeAttached();
@@ -173,6 +181,13 @@ test("уведомление видно на экране, а не уезжае�
       return Boolean(box && box.y >= 0 && box.y + box.height <= vp.height && box.x >= 0 && box.x + box.width <= vp.width);
     })
     .toBe(true);
+  // Сверху справа (amnezia-vpn-server-1f31): верх тоста в верхней трети
+  // экрана, правый край у правого края.
+  const box = (await toast.boundingBox())!;
+  const vp = page.viewportSize()!;
+  expect(box.y).toBeLessThan(vp.height / 3);
+  expect(vp.width - (box.x + box.width)).toBeLessThan(40);
+  await page.screenshot({ path: `test-results/toast-${width}.png` });
 });
 
 // Окно «Уведомления» (amnezia-vpn-server-8fg2) в настоящей панели: пункт в
