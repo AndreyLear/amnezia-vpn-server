@@ -63,6 +63,11 @@ type Config struct {
 	// reads/writes the database (docs/TECHNICAL_SPEC_v2.0.md §2). The
 	// caller (cli serve) owns closing it. Required.
 	DB *sql.DB
+	// PersistSessions keeps login sessions in the database so they survive
+	// a panel restart — above all the one every update does
+	// (amnezia-vpn-server-4aab). Off by default so tests and embedders keep
+	// the in-memory contract unless they ask; cli serve turns it on.
+	PersistSessions bool
 	// Sessions is the in-memory session store backing RequireAuth
 	// (M7.4). Required: without it the panel would have no way to
 	// authenticate any request.
@@ -203,6 +208,18 @@ func New(cfg Config) (*Server, error) {
 		cfg.HostDiskPath = "/data"
 	}
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, loginLimit: newLoginLimiter()}
+	if cfg.PersistSessions {
+		// A failure to read stored sessions is logged, not fatal: the panel
+		// must still start, and the worst outcome is the old behavior —
+		// everybody logs in again (amnezia-vpn-server-4aab). Errors carry
+		// database messages only, never a session id.
+		logger := cfg.Logger
+		if err := cfg.Sessions.SetPersister(dbSessionPersister{db: s.db}, func(err error) {
+			logger.Printf("sessions: %v", err)
+		}); err != nil {
+			logger.Printf("sessions: stored sessions not loaded, logins start fresh: %v", err)
+		}
+	}
 	// Document GETs serve the embedded SPA with no RequireAuth so React
 	// can boot and send the user to /login after GET /api/me 401.
 	// /api/* stays RequireAPI (401 JSON, never 303). HTML POSTs remain

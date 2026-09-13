@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/web"
 )
 
@@ -104,7 +105,30 @@ func startServe(t *testing.T, addr string, errb io.Writer) (stop func(), done ch
 	return cancel, done
 }
 
-func TestServeRestartInvalidatesSessions(t *testing.T) {
+// getMe asks /api/me with a given cookie and returns the status code.
+func getMe(t *testing.T, base *url.URL, sid string) int {
+	t.Helper()
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	req, err := http.NewRequest(http.MethodGet, base.String()+"/api/me", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: sid})
+	resp, err := noFollow.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/me: %v", err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// Вход переживает перезапуск панели. Раньше этот тест требовал обратного —
+// «после перезапуска старая кука не открывает ничего», — и каждое обновление
+// заканчивалось окном «Сессия сброшена» поверх хода обновления. Владелец
+// решил, что сессии должны переживать перезапуск (amnezia-vpn-server-4aab).
+func TestServeRestartKeepsSessions(t *testing.T) {
 	newCtx(t)
 	if code, _, errb := runInput(strings.NewReader(lifePassword+"\n"),
 		"auth", "add-user", lifeAdmin, "--password-stdin"); code != 0 {
@@ -113,7 +137,6 @@ func TestServeRestartInvalidatesSessions(t *testing.T) {
 	addr := freePort(t)
 	base := &url.URL{Scheme: "http", Host: addr}
 
-	// First panel process: login works, the dashboard renders.
 	stop1, done1 := startServe(t, addr, io.Discard)
 	cl1 := jarClient(t)
 	_, sid1 := loginOverHTTP(t, cl1, base)
@@ -122,34 +145,55 @@ func TestServeRestartInvalidatesSessions(t *testing.T) {
 		t.Fatalf("first serve exited %d", rc)
 	}
 
-	// Restart: a new process, a new in-memory store. The old cookie
-	// must authenticate nothing anymore.
+	// Перезапуск: новый процесс, но сессия поднимается из базы.
 	stop2, done2 := startServe(t, addr, io.Discard)
 	defer func() {
 		stop2()
 		<-done2
 	}()
-	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}}
-	req, err := http.NewRequest(http.MethodGet, base.String()+"/api/me", nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
+	if code := getMe(t, base, sid1); code != http.StatusOK {
+		t.Fatalf("кука до перезапуска после перезапуска: %d; ждали 200", code)
 	}
-	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: sid1})
-	resp, err := noFollow.Do(req)
-	if err != nil {
-		t.Fatalf("GET /api/me with pre-restart cookie: %v", err)
+}
+
+// Пароль сменён из командной строки, пока панель остановлена. Раньше это
+// было безопасно само собой — запуск всё равно сбрасывал сессии. Теперь
+// сессии переживают запуск, и старая, возможно чужая, сессия не должна
+// ожить (amnezia-vpn-server-4aab).
+func TestPasswordChangedWhilePanelStoppedRevokesSessions(t *testing.T) {
+	newCtx(t)
+	if code, _, errb := runInput(strings.NewReader(lifePassword+"\n"),
+		"auth", "add-user", lifeAdmin, "--password-stdin"); code != 0 {
+		t.Fatalf("auth add-user: exit %d, stderr %q", code, errb)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("pre-restart cookie after restart: %d; want 401", resp.StatusCode)
+	addr := freePort(t)
+	base := &url.URL{Scheme: "http", Host: addr}
+
+	stop1, done1 := startServe(t, addr, io.Discard)
+	cl1 := jarClient(t)
+	_, sid1 := loginOverHTTP(t, cl1, base)
+	stop1()
+	if rc := <-done1; rc != 0 {
+		t.Fatalf("first serve exited %d", rc)
 	}
 
-	// A fresh login after the restart works again.
-	cl2 := jarClient(t)
-	if _, sid2 := loginOverHTTP(t, cl2, base); sid2 == sid1 {
-		t.Fatal("re-login must issue a fresh SID")
+	const newPassword = "life-password-changed-offline"
+	if code, _, errb := runInput(strings.NewReader(lifePassword+"\n"+newPassword+"\n"),
+		"auth", "change-password", lifeAdmin, "--old-password-stdin", "--new-password-stdin"); code != 0 {
+		t.Fatalf("auth change-password: exit %d, stderr %q", code, errb)
+	}
+	// Файл-указание для работающей панели убираем нарочно: проверяем, что
+	// сессию отзывает сама смена пароля, а не то, что панель после запуска
+	// успеет подобрать этот файл.
+	os.Remove(auth.InvalidateSessionsPath(db.DefaultPath()))
+
+	stop2, done2 := startServe(t, addr, io.Discard)
+	defer func() {
+		stop2()
+		<-done2
+	}()
+	if code := getMe(t, base, sid1); code != http.StatusUnauthorized {
+		t.Fatalf("кука до смены пароля после запуска: %d; ждали 401", code)
 	}
 }
 

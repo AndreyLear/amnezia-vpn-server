@@ -1,7 +1,13 @@
-// M7.3 in-memory server-side session store (TECHNICAL_SPEC_v2.0.md §6:
-// cookie sessions). Purely process-local: restarting the panel discards
-// every session, which is the expected behavior until a persistent
-// store is introduced.
+// M7.3 server-side session store (TECHNICAL_SPEC_v2.0.md §6: cookie
+// sessions). The store works in memory; an optional SessionPersister
+// mirrors every change to durable storage so sessions survive a panel
+// restart (amnezia-vpn-server-4aab). Without one — tests, and anything
+// that does not wire it — the store behaves exactly as before and a
+// restart discards every session.
+//
+// Keys are the SHA-256 of the session id, never the id itself, both in
+// memory and in what is persisted: the cookie value exists only in the
+// browser and in the Create/Rotate result that sets it.
 //
 // Scope discipline:
 //   - this package holds no HTTP/cookie logic (that is the web layer);
@@ -11,13 +17,16 @@
 //   - a session carries only identity (username, stamps) plus the
 //     per-session CSRF token — never passwords, hashes, private/
 //     Preshared keys;
-//   - SQLite is not touched (no sessions table, schema_version stays 3).
+//   - SQLite is not touched from here: persistence goes through the
+//     SessionPersister interface, implemented by the caller.
 package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -99,15 +108,51 @@ func newCSRFToken() (string, error) {
 	return t, nil
 }
 
+// PersistedSession is what a SessionPersister stores: the session with its
+// id replaced by the id's hash.
+type PersistedSession struct {
+	IDHash    string
+	Username  string
+	CSRFToken string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+// SessionPersister mirrors the store to durable storage
+// (amnezia-vpn-server-4aab). Every method receives id hashes only.
+//
+// Persistence is best effort by design: a failed write is reported through
+// the store's error hook and otherwise ignored. The in-memory store stays
+// the source of truth for the running process — losing a write costs at
+// most a re-login after the next restart, whereas failing the request
+// would log the person out right now.
+type SessionPersister interface {
+	Save(PersistedSession) error
+	Delete(idHash string) error
+	DeleteAll() error
+	LoadLive(now time.Time) ([]PersistedSession, error)
+}
+
+// hashID is the key a session id is stored and looked up under.
+func hashID(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
+}
+
 // SessionStore is a concurrency-safe in-memory map of live sessions.
 // Expired sessions are removed lazily: on Get they count as missing and
 // are deleted; Create also drops any expired entries it encounters, so
 // abandoned sessions cannot accumulate beyond the store's activity.
 type SessionStore struct {
-	mu         sync.RWMutex
+	mu sync.RWMutex
+	// byID and tombstones are keyed by hashID(id), not by the id. A session
+	// loaded from storage has no id to key it by — only the hash survived —
+	// and keying everything the same way keeps one lookup path.
 	byID       map[string]Session
 	tombstones map[string]sessionTombstone
 	ttl        time.Duration
+	persister  SessionPersister
+	onError    func(error)
 }
 
 // NewSessionStore returns an empty store. ttl is the idle session
@@ -121,6 +166,59 @@ func NewSessionStore(ttl time.Duration) *SessionStore {
 		byID:       make(map[string]Session),
 		tombstones: make(map[string]sessionTombstone),
 		ttl:        ttl,
+	}
+}
+
+// SetPersister attaches durable storage and loads the sessions still live
+// in it (amnezia-vpn-server-4aab). onError receives failed writes; nil
+// discards them. Loaded sessions have an empty ID until a request presents
+// their cookie: Lookup and Touch fill it in from the id they were given.
+func (s *SessionStore) SetPersister(p SessionPersister, onError func(error)) error {
+	now := time.Now().UTC()
+	recs, err := p.LoadLive(now)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persister = p
+	s.onError = onError
+	for _, rec := range recs {
+		s.byID[rec.IDHash] = Session{
+			Username:  rec.Username,
+			CSRFToken: rec.CSRFToken,
+			CreatedAt: rec.CreatedAt,
+			ExpiresAt: rec.ExpiresAt,
+		}
+	}
+	return nil
+}
+
+// persistSaveLocked mirrors one session. Callers hold mu.
+func (s *SessionStore) persistSaveLocked(key string, sess Session) {
+	if s.persister == nil {
+		return
+	}
+	s.report(s.persister.Save(PersistedSession{
+		IDHash:    key,
+		Username:  sess.Username,
+		CSRFToken: sess.CSRFToken,
+		CreatedAt: sess.CreatedAt,
+		ExpiresAt: sess.ExpiresAt,
+	}))
+}
+
+// persistDeleteLocked mirrors a removal. Callers hold mu.
+func (s *SessionStore) persistDeleteLocked(key string) {
+	if s.persister == nil {
+		return
+	}
+	s.report(s.persister.Delete(key))
+}
+
+func (s *SessionStore) report(err error) {
+	if err != nil && s.onError != nil {
+		s.onError(err)
 	}
 }
 
@@ -147,8 +245,16 @@ func (s *SessionStore) Create(username string) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(now)
-	s.byID[id] = sess
+	s.putLocked(hashID(id), sess)
 	return sess, nil
+}
+
+// putLocked stores sess under key without its id — only the browser and
+// the Create/Rotate result keep the id — and mirrors it. Callers hold mu.
+func (s *SessionStore) putLocked(key string, sess Session) {
+	sess.ID = ""
+	s.byID[key] = sess
+	s.persistSaveLocked(key, sess)
 }
 
 // Get returns the live session for id. An expired session counts as
@@ -164,22 +270,30 @@ func (s *SessionStore) Get(id string) (Session, bool) {
 // Lookup is Get plus the API 401 reason when the session is not live.
 // Expired SIDs that were in the store are idle (remembered as a
 // tombstone so a later lookup is not gone). SIDs dropped by a second
-// login are replaced. Unknown SIDs — restart, CLI invalidate, restore
-// DeleteAll, logout — are gone.
+// login are replaced. Unknown SIDs — CLI invalidate, restore DeleteAll,
+// logout, or a restart without a persister — are gone.
+//
+// The returned session always carries the id it was looked up with. A
+// session loaded from storage has none of its own, and the web layer
+// writes sess.ID straight back into the cookie when it slides the
+// session: an empty id there would log the person out on their first
+// save after a restart (amnezia-vpn-server-4aab).
 func (s *SessionStore) Lookup(id string) (Session, string, bool) {
 	now := time.Now().UTC()
+	key := hashID(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneTombstonesLocked(now)
-	sess, ok := s.byID[id]
+	sess, ok := s.byID[key]
 	if ok && sess.ExpiresAt.After(now) {
+		sess.ID = id
 		return sess, "", true
 	}
 	if ok {
-		s.tombstoneLocked(id, SessionReasonIdle, now)
+		s.tombstoneLocked(key, SessionReasonIdle, now)
 		return Session{}, SessionReasonIdle, false
 	}
-	if t, hit := s.tombstones[id]; hit {
+	if t, hit := s.tombstones[key]; hit {
 		return Session{}, t.reason, false
 	}
 	return Session{}, SessionReasonGone, false
@@ -187,30 +301,34 @@ func (s *SessionStore) Lookup(id string) (Session, string, bool) {
 
 // Touch returns the live session for id after sliding ExpiresAt to
 // now+ttl. Missing and expired ids report false, matching Get (expired
-// entries are deleted).
+// entries are deleted). Like Lookup, the result carries the given id.
 func (s *SessionStore) Touch(id string) (Session, bool) {
 	now := time.Now().UTC()
+	key := hashID(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sess, ok := s.byID[id]
+	sess, ok := s.byID[key]
 	if !ok {
 		return Session{}, false
 	}
 	if !sess.ExpiresAt.After(now) {
-		s.tombstoneLocked(id, SessionReasonIdle, now)
+		s.tombstoneLocked(key, SessionReasonIdle, now)
 		return Session{}, false
 	}
 	sess.ExpiresAt = now.Add(s.ttl)
-	s.byID[id] = sess
+	s.putLocked(key, sess)
+	sess.ID = id
 	return sess, true
 }
 
 // Delete removes a session. It is idempotent: deleting a missing or
 // already-expired id succeeds silently.
 func (s *SessionStore) Delete(id string) {
+	key := hashID(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.byID, id)
+	delete(s.byID, key)
+	s.persistDeleteLocked(key)
 }
 
 // DeleteAll drops every live session. Used after an in-process restore
@@ -220,6 +338,9 @@ func (s *SessionStore) DeleteAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.byID = make(map[string]Session)
+	if s.persister != nil {
+		s.report(s.persister.DeleteAll())
+	}
 }
 
 // DeleteByUsername removes every session of username except the one
@@ -229,14 +350,19 @@ func (s *SessionStore) DeleteAll() {
 // new login invalidates sessions from other browsers or devices.
 func (s *SessionStore) DeleteByUsername(username, keep string) {
 	now := time.Now().UTC()
+	keepKey := ""
+	if keep != "" {
+		keepKey = hashID(keep)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for id, sess := range s.byID {
-		if sess.Username == username && id != keep {
+	for key, sess := range s.byID {
+		if sess.Username == username && key != keepKey {
 			if keep != "" {
-				s.tombstoneLocked(id, SessionReasonReplaced, now)
+				s.tombstoneLocked(key, SessionReasonReplaced, now)
 			} else {
-				delete(s.byID, id)
+				delete(s.byID, key)
+				s.persistDeleteLocked(key)
 			}
 		}
 	}
@@ -247,22 +373,28 @@ func (s *SessionStore) DeleteByUsername(username, keep string) {
 func (s *SessionStore) ForgetByUsername(username string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for id, sess := range s.byID {
+	for key, sess := range s.byID {
 		if sess.Username == username {
-			delete(s.byID, id)
+			delete(s.byID, key)
+			s.persistDeleteLocked(key)
 		}
 	}
 }
 
-// ByUsername returns a snapshot of every session belonging to
-// username. Liveness is left to Get and callers: the login flow and
-// the web tests count "active sessions per user" through this view.
+// ByUsername returns a snapshot of the LIVE sessions belonging to
+// username; the web tests count "active sessions per user" through it.
+//
+// Liveness is decided here now. It used to be left to callers, who
+// re-checked each result with Get(sess.ID) — but the store no longer keeps
+// session ids, only their hashes, so a snapshot has no id to re-check with
+// (amnezia-vpn-server-4aab).
 func (s *SessionStore) ByUsername(username string) []Session {
+	now := time.Now().UTC()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []Session
 	for _, sess := range s.byID {
-		if sess.Username == username {
+		if sess.Username == username && sess.ExpiresAt.After(now) {
 			out = append(out, sess)
 		}
 	}
@@ -279,14 +411,15 @@ func (s *SessionStore) ByUsername(username string) []Session {
 // form token cannot survive a login rotation.
 func (s *SessionStore) Rotate(oldID, username string) (Session, error) {
 	now := time.Now().UTC()
+	oldKey := hashID(oldID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	old, ok := s.byID[oldID]
+	old, ok := s.byID[oldKey]
 	if !ok {
 		return Session{}, ErrSessionNotFound
 	}
 	if !old.ExpiresAt.After(now) {
-		s.tombstoneLocked(oldID, SessionReasonIdle, now)
+		s.tombstoneLocked(oldKey, SessionReasonIdle, now)
 		return Session{}, ErrSessionNotFound
 	}
 	id, err := newSessionID()
@@ -297,7 +430,8 @@ func (s *SessionStore) Rotate(oldID, username string) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	delete(s.byID, oldID)
+	delete(s.byID, oldKey)
+	s.persistDeleteLocked(oldKey)
 	sess := Session{
 		ID:        id,
 		Username:  username,
@@ -305,31 +439,36 @@ func (s *SessionStore) Rotate(oldID, username string) (Session, error) {
 		CreatedAt: now,
 		ExpiresAt: now.Add(s.ttl),
 	}
-	s.byID[id] = sess
+	s.putLocked(hashID(id), sess)
 	return sess, nil
 }
 
 // pruneLocked drops expired sessions. Callers hold mu.
 func (s *SessionStore) pruneLocked(now time.Time) {
 	s.pruneTombstonesLocked(now)
-	for id, sess := range s.byID {
+	for key, sess := range s.byID {
 		if !sess.ExpiresAt.After(now) {
-			s.tombstoneLocked(id, SessionReasonIdle, now)
+			s.tombstoneLocked(key, SessionReasonIdle, now)
 		}
 	}
 }
 
 func (s *SessionStore) pruneTombstonesLocked(now time.Time) {
-	for id, t := range s.tombstones {
+	for key, t := range s.tombstones {
 		if !t.until.After(now) {
-			delete(s.tombstones, id)
+			delete(s.tombstones, key)
 		}
 	}
 }
 
-func (s *SessionStore) tombstoneLocked(id, reason string, now time.Time) {
-	delete(s.byID, id)
-	s.tombstones[id] = sessionTombstone{reason: reason, until: now.Add(s.ttl)}
+// tombstoneLocked removes the live session under key, mirrors the removal
+// and remembers why it went away. Tombstones themselves stay in memory
+// only: after a restart a stale cookie reads as gone rather than idle or
+// replaced, which changes the wording of one message and nothing else.
+func (s *SessionStore) tombstoneLocked(key, reason string, now time.Time) {
+	delete(s.byID, key)
+	s.persistDeleteLocked(key)
+	s.tombstones[key] = sessionTombstone{reason: reason, until: now.Add(s.ttl)}
 }
 
 // String renders the session for logs. It deliberately omits the CSRF

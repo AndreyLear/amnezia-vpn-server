@@ -87,6 +87,44 @@ func snapshot(handle *sql.DB, dstPath string) error {
 	return nil
 }
 
+// stripSessions removes login sessions from the snapshot before it is
+// archived (amnezia-vpn-server-4aab).
+//
+// A backup leaves the server as a downloaded file — in a Downloads folder,
+// a cloud drive, a mail attachment. Sessions have no business travelling
+// with it, and a restore must start with none: cookies issued against the
+// previous database must not authorize the restored one. Clearing them
+// here makes that true for every restore path, the panel's and the command
+// line's alike.
+//
+// DELETE alone is not enough. SQLite only marks the freed pages; the bytes
+// of the deleted rows — session hashes, CSRF tokens — stay in the file until
+// it is rebuilt. VACUUM rewrites the snapshot without them, so they are
+// absent from the archive itself, not merely from the table.
+func stripSessions(snapPath string) error {
+	snap, err := sql.Open("sqlite", snapPath)
+	if err != nil {
+		return fmt.Errorf("backup: open snapshot: %w", err)
+	}
+	defer snap.Close()
+	var n int
+	if err := snap.QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`,
+	).Scan(&n); err != nil {
+		return fmt.Errorf("backup: inspect snapshot: %w", err)
+	}
+	if n == 0 {
+		return nil
+	}
+	if _, err := snap.Exec(`DELETE FROM sessions`); err != nil {
+		return fmt.Errorf("backup: clear sessions: %w", err)
+	}
+	if _, err := snap.Exec(`VACUUM`); err != nil {
+		return fmt.Errorf("backup: compact snapshot: %w", err)
+	}
+	return nil
+}
+
 // verifySnapshot runs PRAGMA integrity_check on the freshly created
 // snapshot so a bad image is rejected before it is packed.
 func verifySnapshot(snapPath string) error {
@@ -156,6 +194,9 @@ func create(handle *sql.DB, backupsDir string, now func() time.Time, nameOf func
 
 	snapPath := filepath.Join(staging, snapshotFilename)
 	if err := snapshot(handle, snapPath); err != nil {
+		return "", err
+	}
+	if err := stripSessions(snapPath); err != nil {
 		return "", err
 	}
 	if err := verifySnapshot(snapPath); err != nil {

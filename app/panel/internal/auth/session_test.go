@@ -235,9 +235,15 @@ func TestSessionByUsernameSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	// The store keeps no session ids — only their hashes — so a snapshot
+	// carries identity and stamps, never the cookie value
+	// (amnezia-vpn-server-4aab).
 	for _, got := range s.ByUsername("alice") {
-		if got.ID != sess.ID {
-			t.Errorf("snapshot session %q, want %q", got.ID, sess.ID)
+		if got.ID != "" {
+			t.Errorf("snapshot leaked a session id %q", got.ID)
+		}
+		if got.Username != "alice" || got.CSRFToken != sess.CSRFToken {
+			t.Errorf("snapshot = %+v, want alice's session", got)
 		}
 	}
 	// The snapshot must be independent of the store: mutating it is a

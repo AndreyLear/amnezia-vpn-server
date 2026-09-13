@@ -347,3 +347,39 @@ func keys(m map[string][]byte) []string {
 	}
 	return out
 }
+
+// Сессии входа не уезжают в резервную копию: архив скачивается и лежит где
+// угодно, а восстановление обязано начинаться без сессий
+// (amnezia-vpn-server-4aab). Проверяется по байтам архива, а не по счётчику
+// строк: удалённые в SQLite строки остаются в файле до VACUUM.
+func TestCreateStripsSessions(t *testing.T) {
+	handle, dir := newTestDB(t)
+	const idHash = "session-id-hash-that-must-not-travel-0000000000"
+	const csrf = "csrf-token-that-must-not-travel-000000000000000"
+	if _, err := handle.Exec(
+		`INSERT INTO sessions (id_hash, username, csrf_token, created_at_utc, expires_at_utc)
+		 VALUES (?, 'admin', ?, '2026-09-13T12:00:00.000000000Z', '2099-01-01T00:00:00.000000000Z')`,
+		idHash, csrf,
+	); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	path, err := Create(handle, filepath.Join(dir, "backups"), func() time.Time { return fakeNow })
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	entries := unpackTestArchive(t, path)
+	for name, data := range entries {
+		if bytes.Contains(data, []byte(idHash)) || bytes.Contains(data, []byte(csrf)) {
+			t.Fatalf("в архиве (%s) остались байты сессии", name)
+		}
+	}
+	// И сама живая база не тронута: чистится только снимок.
+	var live int
+	if err := handle.QueryRow(`SELECT count(*) FROM sessions`).Scan(&live); err != nil {
+		t.Fatalf("count live sessions: %v", err)
+	}
+	if live != 1 {
+		t.Errorf("в живой базе сессий %d, ждали 1 — резервная копия не должна разлогинивать", live)
+	}
+}

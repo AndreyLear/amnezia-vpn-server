@@ -107,6 +107,11 @@ var schemaStatements = []string{
 		detail TEXT NOT NULL DEFAULT ''
 	);`,
 	`CREATE INDEX IF NOT EXISTS audit_at_idx ON audit (at_utc DESC, id DESC);`,
+	// Сессии входа, переживающие перезапуск панели
+	// (amnezia-vpn-server-4aab, см. sessions.go). SchemaVersion не
+	// поднимается намеренно: в архив резервной копии таблица приходит
+	// пустой, так что содержимое архива для прежних версий не меняется.
+	sessionsTable,
 }
 
 // Open creates a new SQLite database file (including parent directories)
