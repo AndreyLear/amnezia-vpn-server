@@ -39,6 +39,11 @@ export function useCreepingProgress(running: boolean) {
   useEffect(() => {
     if (!running) {
       startedAt.current = null;
+      // Сбрасывается и сам процент, а не только момент старта: иначе он
+      // оставался от прошлого прогона, и следующий первым кадром рисовал
+      // его — полоса стартовала с трети и тут же падала в ноль
+      // (amnezia-vpn-server-evv3).
+      setPercent(0);
       return;
     }
     startedAt.current ??= Date.now();
@@ -53,5 +58,7 @@ export function useCreepingProgress(running: boolean) {
     return () => window.clearInterval(timer);
   }, [running]);
 
-  return percent;
+  // Пока обновление не идёт, полоса стоит на нуле независимо от того, успел
+  // ли эффект сбросить состояние (amnezia-vpn-server-evv3).
+  return running ? percent : 0;
 }

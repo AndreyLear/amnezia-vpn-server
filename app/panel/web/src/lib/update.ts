@@ -84,11 +84,18 @@ export function useUpdateInfo(reloadPage: () => void = () => window.location.rel
       if (data.installed) {
         if (bootInstalledRef.current === null) {
           bootInstalledRef.current = data.installed;
-        } else if (isStalePage(bootInstalledRef.current, data.installed)) {
+        } else if (isStalePage(bootInstalledRef.current, data.installed) && data.state !== "running") {
           // Перезагрузка, а не перерисовка: устарел сам код, и никакое новое
           // состояние старый код не научит вести себя по-новому. Итог
           // обновления не теряется — отметка «увиден» ещё не стоит, и свежая
           // страница покажет его сама.
+          //
+          // Но не посреди хода. Установщик поднимает новую панель РАНЬШЕ,
+          // чем агент записывает «готово», и несколько секунд новая версия
+          // уже отвечает, а обновление ещё идёт. Перезагрузка в этот момент
+          // начинала полосу хода заново — она падала в ноль на глазах
+          // (amnezia-vpn-server-evv3). Опрос во время хода не останавливается,
+          // так что перезагрузка случится на первом же ответе без «идёт».
           reloadPage();
           return;
         }

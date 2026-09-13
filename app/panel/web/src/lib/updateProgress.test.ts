@@ -36,3 +36,27 @@ describe("useCreepingProgress", () => {
     expect(result.current).toBe(0);
   });
 });
+
+// Владелец: «сперва прогресс начинается с трети, потом уходит в 0 и потом
+// снова работает нормально». Процент оставался от прошлого прогона, и новый
+// прогон первым кадром рисовал его (amnezia-vpn-server-evv3).
+describe("новый прогон начинается с нуля", () => {
+  it("после окончания обновления процент возвращается к нулю", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(({ running }) => useCreepingProgress(running), {
+      initialProps: { running: true },
+    });
+    // Около ста секунд — та самая «треть».
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100_000);
+    });
+    expect(result.current).toBeGreaterThan(25);
+
+    rerender({ running: false });
+    expect(result.current).toBe(0);
+
+    // И следующий прогон стартует с нуля с первого же кадра.
+    rerender({ running: true });
+    expect(result.current).toBe(0);
+  });
+});
