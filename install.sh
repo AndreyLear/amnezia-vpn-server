@@ -1180,6 +1180,25 @@ WantedBy=timers.target
 EOF
 chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-mail.timer"
 log "notification mail units written (ExecStart=$ROOT_DIR/bin/awgmail, every minute)"
+
+# Пробное письмо из панели (amnezia-vpn-server-8fg2): панель оставляет
+# просьбу рядом с mail.conf, дорожка будит ту же службу сразу, а не через
+# минуту — человек смотрит в окно и ждёт. PathChanged, а не PathExists:
+# awgmail просьбу не удаляет (писать ему можно только в status/), и дорожка
+# по существованию файла будила бы службу по кругу.
+cat > "$SYSTEMD_DIR/amnezia-vpn-mail-test.path" <<EOF
+# amnezia-vpn managed: send the test letter when the panel asks.
+[Unit]
+Description=Amnezia VPN test letter request
+
+[Path]
+PathChanged=${ROOT_DIR}/data/mail-test-request.json
+Unit=amnezia-vpn-mail.service
+
+[Install]
+WantedBy=paths.target
+EOF
+chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-mail-test.path"
 cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed (prune timer)"
 log "weekly docker-prune units written (enable --now after compose up; ExecStart=$ROOT_DIR/docker-prune.sh)"
 
@@ -2601,6 +2620,8 @@ fi
 cmd systemctl enable --now amnezia-vpn-mail.timer \
     || die_op "systemctl enable --now amnezia-vpn-mail.timer failed"
 log "notification mail timer enabled (silent until mail is set up in the panel)"
+cmd systemctl enable --now amnezia-vpn-mail-test.path \
+    || die_op "systemctl enable --now amnezia-vpn-mail-test.path failed"
 
 # Первая проверка — сразу, не через сутки: человек, который только что
 # поставил сервер, должен увидеть в панели ответ, а не пустое место. Отказ

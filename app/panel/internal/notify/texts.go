@@ -224,3 +224,16 @@ func (e *eval) flapping(group string, changes int) mailer.Message {
 		),
 	}
 }
+
+// TestLetter is the test letter sent from the panel's notification settings
+// (amnezia-vpn-server-8fg2). It confirms the channel works and says what
+// will arrive through it.
+func TestLetter(server string) mailer.Message {
+	e := &eval{in: Inputs{Server: server, Zone: time.UTC}}
+	return mailer.Message{
+		Subject: "Пробное письмо",
+		Body: e.body(
+			"Уведомления настроены. Сюда будут приходить письма о сбоях и об обновлениях.",
+		),
+	}
+}

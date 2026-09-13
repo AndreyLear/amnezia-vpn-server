@@ -2728,6 +2728,18 @@ test_mail_units_and_binary_installed() {
     else
         fail "mail timer enable must follow compose up (up=$up_n enable=$enable_n)"
     fi
+    # Пробное письмо из панели будит службу сразу (amnezia-vpn-server-8fg2).
+    local test_path="$SYSTEMD_DIR_TEST/amnezia-vpn-mail-test.path"
+    grep -Fq "PathChanged=${ROOT}/data/mail-test-request.json" "$test_path" \
+        && grep -q "^Unit=amnezia-vpn-mail.service" "$test_path" \
+        && pass "test letter request wakes the mail service" \
+        || fail "mail test path unit missing or wrong"
+    grep -q "PathExists=" "$test_path" \
+        && fail "mail test path must not use PathExists: awgmail never deletes the request" \
+        || pass "mail test path does not loop on an existing request"
+    grep -q "systemctl enable --now amnezia-vpn-mail-test.path" "$FAKE_CALLS" \
+        && pass "mail test path enabled" \
+        || fail "mail test path not enabled"
 }
 
 # Образ без awgmail или сбой копирования не срывают установку и не портят

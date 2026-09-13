@@ -70,8 +70,18 @@ describe("меню в шапке", () => {
       "О версиях",
       "Состояние служб",
       "Журнал",
+      "Уведомления",
       "Проверить обновления",
     ]);
+  });
+
+  // Пункт «Уведомления» открывает окно настроек почты (amnezia-vpn-server-8fg2).
+  it("открывает окно уведомлений", async () => {
+    const user = userEvent.setup();
+    render(<HeaderMenu />);
+    await user.click(screen.getByRole("button", { name: "Ещё" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Уведомления" }));
+    expect(await screen.findByRole("dialog", { name: "Уведомления" })).toBeInTheDocument();
   });
 
   // Названия пунктов ломались на две строки: меню наследовало ширину кнопки,

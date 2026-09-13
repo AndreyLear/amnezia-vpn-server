@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { AboutDialog } from "@/components/AboutDialog";
 import { AuditDialog } from "@/components/AuditDialog";
+import { NotificationsDialog } from "@/components/NotificationsDialog";
 import { ServicesDialog } from "@/components/ServicesDialog";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -173,6 +174,7 @@ export function HeaderMenu({
   const [aboutOpen, setAboutOpen] = useState(false);
   const [servicesOpen, setServicesOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   // Radix возвращает фокус на кнопку при закрытии меню. Для клавиатуры это
   // единственно верно; для мыши кольцо фокуса остаётся гореть, будто меню всё
@@ -264,6 +266,7 @@ export function HeaderMenu({
     { id: "about", label: "О версиях", onSelect: () => setAboutOpen(true) },
     { id: "services", label: "Состояние служб", onSelect: () => setServicesOpen(true) },
     { id: "audit", label: "Журнал", onSelect: () => setAuditOpen(true) },
+    { id: "notifications", label: "Уведомления", onSelect: () => setNotificationsOpen(true) },
     {
       id: "check-updates",
       label: <CheckMenuLabel state={checkState} />,
@@ -358,6 +361,7 @@ export function HeaderMenu({
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       <ServicesDialog open={servicesOpen} onOpenChange={setServicesOpen} />
       <AuditDialog open={auditOpen} onOpenChange={setAuditOpen} />
+      <NotificationsDialog open={notificationsOpen} onOpenChange={setNotificationsOpen} />
     </>
   );
 }
