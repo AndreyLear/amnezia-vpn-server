@@ -28,24 +28,29 @@ async function toasterRegion() {
   });
 }
 
+// Все тосты сверху справа на любой ширине (amnezia-vpn-server-1f31).
 describe("Toaster position", () => {
   afterEach(() => {
     toast.dismiss();
   });
 
-  it("places toasts at the top on max-sm viewports", async () => {
-    stubMatchMedia(true);
+  it.each([true, false])("places toasts top-right (narrow viewport: %s)", async (narrow) => {
+    stubMatchMedia(narrow);
     render(<Toaster />);
     toast("saved");
 
-    expect(await toasterRegion()).toHaveAttribute("data-y-position", "top");
+    const region = await toasterRegion();
+    expect(region).toHaveAttribute("data-y-position", "top");
+    expect(region).toHaveAttribute("data-x-position", "right");
   });
 
-  it("keeps the default Sonner y-position on sm+ viewports", async () => {
+  it("does not let a caller move toasts elsewhere", async () => {
     stubMatchMedia(false);
-    render(<Toaster />);
+    render(<Toaster position="bottom-left" />);
     toast("saved");
 
-    expect(await toasterRegion()).not.toHaveAttribute("data-y-position", "top");
+    const region = await toasterRegion();
+    expect(region).toHaveAttribute("data-y-position", "top");
+    expect(region).toHaveAttribute("data-x-position", "right");
   });
 });

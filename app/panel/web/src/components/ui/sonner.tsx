@@ -1,32 +1,14 @@
 "use client"
 
-import { useEffect, useState, type CSSProperties } from "react"
+import { type CSSProperties } from "react"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
 
-const MAX_SM_QUERY = "(max-width: 639px)"
-
-function useMaxSm() {
-  const [maxSm, setMaxSm] = useState(
-    () => typeof window !== "undefined" && window.matchMedia(MAX_SM_QUERY).matches,
-  )
-
-  useEffect(() => {
-    const media = window.matchMedia(MAX_SM_QUERY)
-    const sync = () => {
-      setMaxSm(media.matches)
-    }
-    sync()
-    media.addEventListener("change", sync)
-    return () => media.removeEventListener("change", sync)
-  }, [])
-
-  return maxSm
-}
-
+// Все тосты — сверху справа, на любой ширине (решение владельца,
+// amnezia-vpn-server-1f31). Раньше на телефоне они стояли сверху по центру,
+// а на компьютере — снизу справа, и одно и то же сообщение появлялось в
+// разных местах. На узком экране Sonner сам растягивает тост во всю ширину.
 function Toaster({ ...props }: ToasterProps) {
-  const maxSm = useMaxSm()
-
   return (
     <Sonner
       theme="system"
@@ -52,7 +34,7 @@ function Toaster({ ...props }: ToasterProps) {
         },
       }}
       {...props}
-      position={maxSm ? "top-center" : props.position}
+      position="top-right"
     />
   )
 }
