@@ -127,6 +127,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 	}
 
 	now := d.now()
+	// The test letter first: someone is looking at the panel and waiting.
+	sendTestLetter(ctx, stdout, stderr, d, cfg, mailconf.TestRequestPath(confPath),
+		filepath.Join(filepath.Dir(statePath), mailconf.TestResultName), now)
+
 	rules, err := notify.LoadState(notifyPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "awgmail: %v\n", err)
@@ -182,4 +186,36 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		return 1
 	}
 	return 0
+}
+
+// testRequestMaxAge: a request older than this is not answered. Nobody is
+// waiting for it any more, and a test letter arriving an hour after the
+// button was pressed would only confuse.
+const testRequestMaxAge = 15 * time.Minute
+
+// sendTestLetter answers the panel's request for a test letter
+// (amnezia-vpn-server-8fg2), once per request id.
+func sendTestLetter(ctx context.Context, stdout, stderr io.Writer, d deps, cfg *mailconf.File, requestPath, resultPath string, now time.Time) {
+	req, err := mailconf.ReadTestRequest(requestPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "awgmail: %v\n", err)
+		return
+	}
+	if req == nil || now.Sub(req.AtUTC) > testRequestMaxAge {
+		return
+	}
+	if res, err := mailconf.ReadTestResult(resultPath); err == nil && res != nil && res.ID == req.ID {
+		return
+	}
+	res := &mailconf.TestResult{ID: req.ID, OK: true, AtUTC: now.UTC()}
+	if err := d.send(ctx, cfg, notify.TestLetter(cfg.Server)); err != nil {
+		res.OK = false
+		res.Error = err.Error()
+		fmt.Fprintf(stderr, "awgmail: пробное письмо не отправлено: %v\n", err)
+	} else {
+		fmt.Fprintln(stdout, "awgmail: пробное письмо отправлено")
+	}
+	if err := mailconf.WriteTestResult(resultPath, res); err != nil {
+		fmt.Fprintf(stderr, "awgmail: итог пробного письма не записан: %v\n", err)
+	}
 }

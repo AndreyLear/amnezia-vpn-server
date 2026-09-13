@@ -1,0 +1,111 @@
+package mailconf
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
+)
+
+// The test letter (amnezia-vpn-server-8fg2).
+//
+// The panel does not reach the outside world, so it cannot send the test
+// letter itself. It leaves a request beside mail.conf; a systemd path unit
+// wakes awgmail on the host, which sends the letter and writes the outcome
+// into status/, where the panel reads it. The request carries an id, and
+// the outcome names the id it answers: «answered» is then a comparison, not
+// a guess about timing, and a request is never answered twice — awgmail does
+// not delete the request, because its sandbox may write only status/.
+
+// TestRequestPath is where the panel leaves the request: beside mail.conf,
+// in the directory the panel writes and the host reads.
+func TestRequestPath(confPath string) string {
+	return filepath.Join(filepath.Dir(confPath), "mail-test-request.json")
+}
+
+// TestResultName is the outcome's file name in the status directory.
+const TestResultName = "mail-test.json"
+
+// TestRequest asks for one test letter.
+type TestRequest struct {
+	ID    string    `json:"id"`
+	AtUTC time.Time `json:"at_utc"`
+}
+
+// TestResult is the outcome of the request with the same ID. Error is the
+// sender's error, already free of the password (internal/mailer redacts it).
+type TestResult struct {
+	ID    string    `json:"id"`
+	OK    bool      `json:"ok"`
+	Error string    `json:"error,omitempty"`
+	AtUTC time.Time `json:"at_utc"`
+}
+
+// WriteTestRequest leaves a new request with a fresh id.
+func WriteTestRequest(path string, now time.Time) (*TestRequest, error) {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return nil, fmt.Errorf("mailconf: request id: %w", err)
+	}
+	req := &TestRequest{ID: hex.EncodeToString(raw[:]), AtUTC: now.UTC()}
+	if err := writeJSON(path, req); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
+// ReadTestRequest returns nil, nil when there is no request.
+func ReadTestRequest(path string) (*TestRequest, error) {
+	var req TestRequest
+	found, err := readJSON(path, &req)
+	if err != nil || !found {
+		return nil, err
+	}
+	return &req, nil
+}
+
+// WriteTestResult records an outcome.
+func WriteTestResult(path string, res *TestResult) error {
+	return writeJSON(path, res)
+}
+
+// ReadTestResult returns nil, nil when there is no outcome yet.
+func ReadTestResult(path string) (*TestResult, error) {
+	var res TestResult
+	found, err := readJSON(path, &res)
+	if err != nil || !found {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func writeJSON(path string, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("mailconf: encode: %w", err)
+	}
+	if err := status.WriteAtomic(path, append(data, '\n')); err != nil {
+		return fmt.Errorf("mailconf: %w", err)
+	}
+	return nil
+}
+
+func readJSON(path string, v any) (bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("mailconf: read %s: %w", path, err)
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		return false, fmt.Errorf("mailconf: parse %s: %w", path, err)
+	}
+	return true, nil
+}

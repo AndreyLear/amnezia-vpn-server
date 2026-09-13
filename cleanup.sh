@@ -304,7 +304,7 @@ done
 # Письма оператору (amnezia-vpn-server-m3f1) — туда же: таймер звал бы
 # удалённый бинарник раз в минуту.
 for unit in amnezia-vpn-update-check.timer amnezia-vpn-update-check.service \
-            amnezia-vpn-mail.timer amnezia-vpn-mail.service; do
+            amnezia-vpn-mail.timer amnezia-vpn-mail.service amnezia-vpn-mail-test.path; do
     if [ -f "$SYSTEMD_DIR/$unit" ]; then
         if [ "$DO_IT" -eq 1 ]; then
             systemctl disable --now "$unit" >/dev/null 2>&1 || true

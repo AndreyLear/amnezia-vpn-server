@@ -174,3 +174,43 @@ test("уведомление видно на экране, а не уезжае�
     })
     .toBe(true);
 });
+
+// Окно «Уведомления» (amnezia-vpn-server-8fg2) в настоящей панели: пункт в
+// меню открывает окно, сохранение доходит до сервера, пароль после него не
+// виден, окно ждёт ответа службы писем. Службы в e2e нет, поэтому ответ не
+// приходит — и это как раз состояние «ждём». Лежит здесь, а не в своём
+// файле: файлы одного проекта идут параллельно, и вход тем же пользователем
+// из соседнего файла выбивал сессию.
+for (const width of [1280, 375]) {
+  test(`окно уведомлений сохраняет настройки (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await login(page);
+    await page.getByRole("button", { name: "Ещё" }).click();
+    await page.getByRole("menuitem", { name: "Уведомления" }).click();
+    const dialog = page.getByRole("dialog", { name: "Уведомления" });
+    await expect(dialog).toBeVisible();
+
+    await dialog.getByLabel("Сервер SMTP").fill("smtp.example.org");
+    await dialog.getByLabel("Логин").fill("vpn@example.org");
+    await dialog.getByLabel("Пароль").fill("mailbox-secret");
+    await dialog.getByLabel("Куда присылать").fill("owner@example.org");
+    await dialog.getByRole("button", { name: "Сохранить" }).click();
+
+    await expect(dialog.getByText(/Отправляем пробное письмо/)).toBeVisible();
+    await expect(dialog.getByLabel("Пароль")).toHaveValue("");
+    await page.screenshot({ path: `test-results/notifications-${width}.png` });
+
+    // Кнопки внутри экрана, а не под краем.
+    const save = await dialog.getByRole("button", { name: "Сохранить" }).boundingBox();
+    expect(save).not.toBeNull();
+    expect(save!.x + save!.width).toBeLessThanOrEqual(width);
+
+    // После перезагрузки настройки на месте, пароль по-прежнему не виден.
+    await page.reload();
+    await page.getByRole("button", { name: "Ещё" }).click();
+    await page.getByRole("menuitem", { name: "Уведомления" }).click();
+    await expect(dialog.getByLabel("Куда присылать")).toHaveValue("owner@example.org");
+    await expect(dialog.getByLabel("Пароль")).toHaveValue("");
+    expect(await page.content()).not.toContain("mailbox-secret");
+  });
+}

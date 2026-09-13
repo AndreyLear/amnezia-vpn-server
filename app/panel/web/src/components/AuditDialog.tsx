@@ -30,6 +30,8 @@ const actions: Record<string, string> = {
   "login.failed": "Неудачный вход",
   logout: "Выход",
   "client.add": "Клиент добавлен",
+  "mail.save": "Настройки почты сохранены",
+  "mail.test": "Пробное письмо запрошено",
   "client.edit": "Клиент изменён",
   "client.mtu": "MTU клиента",
   "client.rate": "Ограничение скорости",

@@ -269,6 +269,10 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("GET /api/services", s.auth.RequireAPI(http.HandlerFunc(s.apiServices)))
 	// Журнал панели: кто входил и что менял (amnezia-vpn-server-gqep).
 	s.mux.Handle("GET /api/audit", s.auth.RequireAPI(http.HandlerFunc(s.apiAudit)))
+	// Уведомления на почту (amnezia-vpn-server-8fg2).
+	s.mux.Handle("GET /api/mail", s.auth.RequireAPI(http.HandlerFunc(s.apiMail)))
+	s.mux.Handle("PUT /api/mail", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiMailSave))))
+	s.mux.Handle("POST /api/mail/test", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiMailTest))))
 	// RequireCSRF, как у любой мутации: RequireAPI проверяет сессию и
 	// только её. SameSite=Lax роняет чужие межсайтовые POST и потому
 	// прикрывает этот пропуск, но заведён он вторым слоем, а не

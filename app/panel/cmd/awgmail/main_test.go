@@ -297,3 +297,58 @@ func TestImageVersion(t *testing.T) {
 		t.Errorf("нет файла: %q", got)
 	}
 }
+
+// Пробное письмо из панели: уходит один раз на просьбу, итог с тем же id
+// ложится в status/, пароля в нём нет; старая просьба не исполняется
+// (amnezia-vpn-server-8fg2).
+func TestTestLetterAnsweredOnce(t *testing.T) {
+	e := newEnv(t)
+	e.writeConf(t)
+	reqPath := mailconf.TestRequestPath(filepath.Join(e.root, "data", "mail.conf"))
+	resPath := filepath.Join(e.root, "status", mailconf.TestResultName)
+	req, err := mailconf.WriteTestRequest(reqPath, e.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := e.run(); code != 0 {
+		t.Fatalf("exit %d: %s", code, e.stderr.String())
+	}
+	if len(e.sent) != 1 || e.sent[0].Subject != notify.TestLetter("").Subject {
+		t.Fatalf("отправлено %+v", e.sent)
+	}
+	res, err := mailconf.ReadTestResult(resPath)
+	if err != nil || res == nil || res.ID != req.ID || !res.OK {
+		t.Fatalf("итог %+v, %v", res, err)
+	}
+	e.now = e.now.Add(time.Minute)
+	e.run()
+	if len(e.sent) != 1 {
+		t.Fatalf("на одну просьбу ушло %d писем", len(e.sent))
+	}
+
+	// Неудача: итог с ошибкой, пароля нет ни в итоге, ни в журнале.
+	e.fail = errors.New("535 5.7.8 Authentication failed")
+	if _, err := mailconf.WriteTestRequest(reqPath, e.now); err != nil {
+		t.Fatal(err)
+	}
+	e.run()
+	res, _ = mailconf.ReadTestResult(resPath)
+	if res == nil || res.OK || !strings.Contains(res.Error, "535") {
+		t.Fatalf("итог неудачи %+v", res)
+	}
+	raw, _ := os.ReadFile(resPath)
+	if strings.Contains(string(raw)+e.stderr.String()+e.stdout.String(), password) {
+		t.Fatal("пароль в итоге или журнале")
+	}
+
+	// Просьба, которой больше пятнадцати минут, не исполняется.
+	e.fail = nil
+	sent := len(e.sent)
+	if _, err := mailconf.WriteTestRequest(reqPath, e.now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	e.run()
+	if len(e.sent) != sent {
+		t.Fatal("устаревшая просьба исполнена")
+	}
+}

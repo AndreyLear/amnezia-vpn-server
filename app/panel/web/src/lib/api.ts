@@ -270,6 +270,46 @@ export type ServicesInfo = {
   services: ServiceState[];
 };
 
+/**
+ * Настройки почты для уведомлений (amnezia-vpn-server-8fg2). Пароля здесь
+ * нет и не будет: сервер говорит только, сохранён ли он.
+ */
+export type MailTestState = "none" | "pending" | "ok" | "failed";
+
+export type MailInfo = {
+  ok: boolean;
+  configured: boolean;
+  host: string;
+  port: number;
+  username: string;
+  recipient: string;
+  password_set: boolean;
+  /** После последнего сохранения хотя бы одно письмо дошло до сервера. */
+  verified: boolean;
+  test: {
+    state: MailTestState;
+    error?: string;
+    requested_at_utc?: string;
+    at_utc?: string;
+  };
+};
+
+export type MailSavePayload = {
+  host: string;
+  port: number;
+  username: string;
+  /** Пустая строка — оставить сохранённый пароль. */
+  password: string;
+  recipient: string;
+};
+
+/** Отказ сохранения, привязанный к полю формы. */
+export type MailSaveError = {
+  ok: false;
+  field?: keyof MailSavePayload;
+  message?: string;
+};
+
 /** Строка журнала панели (amnezia-vpn-server-gqep). */
 export type AuditEntry = {
   at_utc: string;
