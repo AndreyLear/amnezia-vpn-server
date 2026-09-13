@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -159,11 +160,25 @@ func RenderMailConf(handle *sql.DB, path string) error {
 	if settings.PasswordMissing() {
 		return mailconf.Write(path, nil)
 	}
+	server := ""
+	if endpoint, ok, err := GetSetting(handle, "endpoint"); err == nil && ok {
+		server = endpointHost(endpoint)
+	}
 	return mailconf.Write(path, &mailconf.File{
 		Host:      settings.Host,
 		Port:      settings.Port,
 		Username:  settings.Username,
 		Password:  settings.Password,
 		Recipient: settings.Recipient,
+		Server:    server,
 	})
+}
+
+// endpointHost drops the port from a client endpoint: "vpn.example.org:51820"
+// gives "vpn.example.org", "[2001:db8::1]:51820" gives "2001:db8::1".
+func endpointHost(endpoint string) string {
+	if host, _, err := net.SplitHostPort(endpoint); err == nil {
+		return host
+	}
+	return endpoint
 }

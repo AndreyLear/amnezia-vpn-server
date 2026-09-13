@@ -9,14 +9,19 @@
 //     No file means mail is off: the run is silent and exits 0. The
 //     service must not fail every minute on a server that simply has no
 //     mail set up;
-//   - reads the outbox (status/mail-state.json, beside the watchdog's
-//     services.json, where the panel can read it);
+//   - observes the server through the files the watchdog, the update agent
+//     and awg already write, and lets the rules (internal/notify,
+//     amnezia-vpn-server-0d2n) decide what is news; their memory lives in
+//     status/notify-state.json;
+//   - puts the letters into the outbox (status/mail-state.json, beside the
+//     watchdog's services.json, where the panel can read it);
 //   - delivers what is due, retrying a failure after 1, 5 and 15 minutes
 //     (internal/mailer);
 //   - writes the outbox back.
 //
-// What to write about is decided by the event rules (amnezia-vpn-server-0d2n),
-// which put messages into the outbox before delivery.
+// With mail off the rules' memory is dropped, so that switching mail on
+// starts from a fresh baseline instead of reporting what happened while
+// nobody was listening.
 //
 // The password never reaches the command line — awgmail takes no
 // arguments besides --help, and paths come from the environment — nor
@@ -38,6 +43,7 @@ import (
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailer"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/notify"
 )
 
 const usageText = `awgmail — отправляет письма-уведомления оператору Amnezia VPN.
@@ -53,15 +59,17 @@ data/mail.conf, которые записывает панель; нет фай�
   AMNEZIA_MAIL_ROOT        каталог развёртывания (по умолчанию /opt/amnezia-vpn)
   AMNEZIA_MAIL_CONF_PATH   файл настроек (по умолчанию <root>/data/mail.conf)
   AMNEZIA_MAIL_STATE_PATH  очередь писем (по умолчанию <root>/status/mail-state.json)
+  AMNEZIA_NOTIFY_STATE_PATH память правил (по умолчанию <root>/status/notify-state.json)
 
 Ключи:
   --help    показать эту справку
 `
 
 type deps struct {
-	getenv func(string) string
-	now    func() time.Time
-	send   func(ctx context.Context, cfg *mailconf.File, msg mailer.Message) error
+	getenv  func(string) string
+	now     func() time.Time
+	send    func(ctx context.Context, cfg *mailconf.File, msg mailer.Message) error
+	observe func(root string, now time.Time, cfg *mailconf.File) notify.Inputs
 }
 
 func main() {
@@ -69,9 +77,10 @@ func main() {
 	defer stop()
 	sender := &mailer.Sender{}
 	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr, deps{
-		getenv: os.Getenv,
-		now:    time.Now,
-		send:   sender.Send,
+		getenv:  os.Getenv,
+		now:     time.Now,
+		send:    sender.Send,
+		observe: observe,
 	}))
 }
 
@@ -100,8 +109,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		statePath = filepath.Join(root, "status", "mail-state.json")
 	}
 
+	notifyPath := d.getenv("AMNEZIA_NOTIFY_STATE_PATH")
+	if notifyPath == "" {
+		notifyPath = filepath.Join(root, "status", "notify-state.json")
+	}
+
 	cfg, err := mailconf.Load(confPath)
 	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(notifyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(stderr, "awgmail: %v\n", err)
+		}
 		return 0
 	}
 	if err != nil {
@@ -109,15 +126,40 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		return 1
 	}
 
+	now := d.now()
+	rules, err := notify.LoadState(notifyPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "awgmail: %v\n", err)
+	}
+	before := rules.Marshal()
+	letters := notify.Evaluate(d.observe(root, now, cfg), rules)
+
 	st, err := mailer.LoadState(statePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "awgmail: %v\n", err)
+	}
+	for _, l := range letters {
+		st.Put(l.Key, l.Message, now)
+	}
+	// The new letters and the rules' memory are written before delivery: a
+	// letter is decided once, and a crash during a slow SMTP dialogue must
+	// neither lose it nor decide it a second time.
+	if len(letters) > 0 {
+		if err := st.Save(statePath); err != nil {
+			fmt.Fprintf(stderr, "awgmail: очередь писем не записана: %v\n", err)
+			return 1
+		}
+	}
+	if after := rules.Marshal(); string(after) != string(before) {
+		if err := rules.Save(notifyPath); err != nil {
+			fmt.Fprintf(stderr, "awgmail: память правил не записана: %v\n", err)
+			return 1
+		}
 	}
 	if len(st.Pending) == 0 {
 		return 0
 	}
 
-	now := d.now()
 	outcomes := st.Deliver(ctx, now, func(ctx context.Context, msg mailer.Message) error {
 		return d.send(ctx, cfg, msg)
 	})

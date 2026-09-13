@@ -256,7 +256,16 @@ func (a *app) openDB() (*sql.DB, error) {
 // derived state: a failure leaves the previous config intact (WriteAtomic)
 // and does not touch the database.
 func (a *app) regenerate(handle *sql.DB) error {
-	return awgconf.Generate(handle, configPath())
+	if err := awgconf.Generate(handle, configPath()); err != nil {
+		return err
+	}
+	// mail.conf names the server by its endpoint, which `server update` can
+	// change (amnezia-vpn-server-0d2n). Mail is not worth failing a command
+	// over: the tunnel config is already written.
+	if err := db.RenderMailConf(handle, mailconf.PathFor(db.DefaultPath())); err != nil {
+		fmt.Fprintf(a.stderr, "warning: mail settings: %v\n", err)
+	}
+	return nil
 }
 
 // testFault, when set by tests, injects the named failure into
