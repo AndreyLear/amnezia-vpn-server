@@ -143,6 +143,9 @@ func TestRenderMailConf(t *testing.T) {
 	if err := SaveMailSettings(d.h, sampleMail(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	if err := SetSetting(d.h, "endpoint", "vpn.example.org:51820"); err != nil {
+		t.Fatal(err)
+	}
 	if err := RenderMailConf(d.h, path); err != nil {
 		t.Fatalf("RenderMailConf: %v", err)
 	}
@@ -151,7 +154,7 @@ func TestRenderMailConf(t *testing.T) {
 		t.Fatalf("mailconf.Load: %v", err)
 	}
 	m := sampleMail()
-	want := mailconf.File{Host: m.Host, Port: m.Port, Username: m.Username, Password: m.Password, Recipient: m.Recipient}
+	want := mailconf.File{Host: m.Host, Port: m.Port, Username: m.Username, Password: m.Password, Recipient: m.Recipient, Server: "vpn.example.org"}
 	if *got != want {
 		t.Fatalf("в файле %+v, ждали %+v", got, want)
 	}
@@ -165,5 +168,18 @@ func TestRenderMailConf(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("пароля нет, а файл со старым паролем остался: %v", err)
+	}
+}
+
+func TestEndpointHost(t *testing.T) {
+	for in, want := range map[string]string{
+		"vpn.example.org:51820": "vpn.example.org",
+		"203.0.113.10:51820":    "203.0.113.10",
+		"[2001:db8::1]:51820":   "2001:db8::1",
+		"vpn.example.org":       "vpn.example.org",
+	} {
+		if got := endpointHost(in); got != want {
+			t.Errorf("endpointHost(%q) = %q, ждали %q", in, got, want)
+		}
 	}
 }

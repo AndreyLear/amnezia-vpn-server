@@ -54,6 +54,10 @@ type File struct {
 	Username  string `json:"username"`
 	Password  string `json:"password"`
 	Recipient string `json:"recipient"`
+	// Server is how letters name this server: the host of the client
+	// endpoint, which is the client domain when there is one and the IP
+	// otherwise. Letters put it in the body (amnezia-vpn-server-0d2n).
+	Server string `json:"server,omitempty"`
 }
 
 // Write replaces mail.conf with f, or removes it when f is nil. On a write
