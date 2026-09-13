@@ -214,3 +214,30 @@ for (const width of [1280, 375]) {
     expect(await page.content()).not.toContain("mailbox-secret");
   });
 }
+
+// Поймано на тестовом сервере (amnezia-vpn-server-2pdq): ответ с
+// настройками пришёл позже ввода и затёр его. Локально ответ мгновенный,
+// поэтому здесь он задерживается нарочно. Там же — поле порта съезжало вниз
+// за текстом ошибки под сервером.
+test("окно уведомлений не затирает ввод медленным ответом и держит строку ровной", async ({ page }) => {
+  await page.route("**/api/mail", async (route) => {
+    if (route.request().method() === "GET") await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await login(page);
+  await page.getByRole("button", { name: "Ещё" }).click();
+  await page.getByRole("menuitem", { name: "Уведомления" }).click();
+  const dialog = page.getByRole("dialog", { name: "Уведомления" });
+  // Ввод сразу после открытия, пока ответ ещё в пути.
+  await dialog.getByLabel("Сервер SMTP").fill("smtp.slow.example.org");
+  await page.waitForTimeout(2000);
+  await expect(dialog.getByLabel("Сервер SMTP")).toHaveValue("smtp.slow.example.org");
+
+  await dialog.getByLabel("Сервер SMTP").fill("");
+  await dialog.getByRole("button", { name: "Сохранить" }).click();
+  await expect(dialog.getByText("Укажите адрес почтового сервера")).toBeVisible();
+  const hostBox = await dialog.getByLabel("Сервер SMTP").boundingBox();
+  const portBox = await dialog.getByLabel("Порт").boundingBox();
+  expect(Math.abs(hostBox!.y - portBox!.y)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: "test-results/notifications-error-row.png" });
+});

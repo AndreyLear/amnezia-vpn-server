@@ -135,6 +135,10 @@ export function NotificationsDialog({
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  // Настройки приходят с сервера не мгновенно. Пока их нет, поля закрыты:
+  // иначе пришедший ответ затирал уже набранное, и сохранялась пустая форма
+  // (amnezia-vpn-server-2pdq, поймано на тестовом сервере).
+  const [loaded, setLoaded] = useState(false);
   const hostRef = useRef<HTMLInputElement>(null);
 
   function accept(next: MailInfo) {
@@ -148,13 +152,21 @@ export function NotificationsDialog({
     if (!open) return;
     let alive = true;
     setErrors({});
+    setLoaded(false);
     void api<MailInfo>("/api/mail").then((next) => {
-      if (alive && isMailInfo(next)) accept(next);
+      if (!alive) return;
+      if (isMailInfo(next)) accept(next);
+      setLoaded(true);
     });
     return () => {
       alive = false;
     };
   }, [open]);
+
+  // Фокус — в первое поле, когда оно открылось для ввода.
+  useEffect(() => {
+    if (open && loaded) hostRef.current?.focus();
+  }, [open, loaded]);
 
   // Пока пробное письмо в пути, спрашиваем об ответе. Форму при этом не
   // трогаем: человек мог начать править поле.
@@ -225,7 +237,7 @@ export function NotificationsDialog({
     }
   }
 
-  const busy = saving || testing;
+  const busy = saving || testing || !loaded;
   const canTest = Boolean(info?.configured && info.password_set) && !dirty && !pending && !busy;
 
   function fieldProps(key: Field) {
@@ -262,7 +274,9 @@ export function NotificationsDialog({
           }}
         >
           <div className="grid gap-4">
-            <div className="grid gap-4 sm:grid-cols-[1fr_6rem]">
+            {/* items-start: ошибка под сервером растягивала строку, и поле
+                порта съезжало вниз вслед за ней (amnezia-vpn-server-2pdq). */}
+            <div className="grid items-start gap-4 sm:grid-cols-[1fr_6rem]">
               <div className="grid gap-2">
                 <Label htmlFor="mail-host">Сервер SMTP</Label>
                 <Input
