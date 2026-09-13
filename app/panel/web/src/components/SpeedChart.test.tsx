@@ -737,6 +737,25 @@ describe("промежутки без связи", () => {
     expect(rect.getAttribute("height")).toBe("120");
   });
 
+  // Серый, а не красный: красный читается как авария, а уснувший телефон —
+  // обычное дело. Просьба владельца (amnezia-vpn-server-myuq).
+  it("закрашивает серым, а не красным", async () => {
+    fetchSpeed.mockResolvedValue(
+      series({
+        down_min_bps: [0, 0],
+        down_max_bps: [0, 0],
+        up_min_bps: [0, 0],
+        up_max_bps: [0, 0],
+        online: [false, false],
+      }),
+    );
+    render(<SpeedChart clientId={1} />);
+    await waitFor(() => expect(offline()).toHaveLength(1));
+    const cls = offline()[0].getAttribute("class") ?? "";
+    expect(cls).toContain("muted-foreground");
+    expect(cls).not.toMatch(/rose|red|destructive/);
+  });
+
   it("не закрашивает «неизвестно»", async () => {
     fetchSpeed.mockResolvedValue(
       series({

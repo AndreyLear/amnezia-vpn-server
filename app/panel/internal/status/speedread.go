@@ -449,12 +449,20 @@ func foldSpeed(samples []speedSample, from, to time.Time, columns int) *SpeedSer
 					col.HasLiveness = true
 					col.Online = alive
 				} else {
-					// A column is called online only if EVERY sample in it
-					// was. In the day window a column spans minutes, and an
-					// outage inside it is exactly what the operator opened
-					// the chart to find — letting one healthy sample paint
-					// over it would hide the answer.
-					col.Online = col.Online && alive
+					// A column is called offline only if the server heard
+					// nothing from the client for the WHOLE column; one live
+					// sample makes it online (amnezia-vpn-server-myuq).
+					//
+					// It used to be the other way round — offline if ANY
+					// sample was — and in the day window, where a column
+					// spans eight minutes, that painted "no connection" over
+					// real traffic: a phone streaming at 17 Mbit/s for two
+					// minutes and asleep for one got its whole column
+					// shaded. The shading exists to explain ZEROS — zeros
+					// inside it are an outage, zeros outside a pause — and
+					// shading over a column that carried traffic says the
+					// opposite of what the chart shows.
+					col.Online = col.Online || alive
 				}
 			}
 			if !col.HasData {
