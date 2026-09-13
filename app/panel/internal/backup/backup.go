@@ -87,37 +87,56 @@ func snapshot(handle *sql.DB, dstPath string) error {
 	return nil
 }
 
-// stripSessions removes login sessions from the snapshot before it is
-// archived (amnezia-vpn-server-4aab).
+// stripSecrets removes from the snapshot what must not leave the server
+// with a backup, before it is archived.
 //
 // A backup leaves the server as a downloaded file — in a Downloads folder,
-// a cloud drive, a mail attachment. Sessions have no business travelling
-// with it, and a restore must start with none: cookies issued against the
-// previous database must not authorize the restored one. Clearing them
-// here makes that true for every restore path, the panel's and the command
-// line's alike.
+// a cloud drive, a mail attachment. Two things have no business travelling
+// with it:
 //
-// DELETE alone is not enough. SQLite only marks the freed pages; the bytes
-// of the deleted rows — session hashes, CSRF tokens — stay in the file until
-// it is rebuilt. VACUUM rewrites the snapshot without them, so they are
-// absent from the archive itself, not merely from the table.
-func stripSessions(snapPath string) error {
+//   - login sessions (amnezia-vpn-server-4aab). A restore must start with
+//     none: cookies issued against the previous database must not
+//     authorize the restored one. Clearing them here makes that true for
+//     every restore path, the panel's and the command line's alike.
+//   - the mailbox password (amnezia-vpn-server-2kr4). It is somebody
+//     else's secret: it opens the operator's mailbox, not this server. The
+//     other mail settings stay, so after a restore only the password has
+//     to be entered again.
+//
+// DELETE and UPDATE alone are not enough. SQLite only marks the freed
+// pages; the old bytes — session hashes, CSRF tokens, the password — stay
+// in the file until it is rebuilt. VACUUM rewrites the snapshot without
+// them, so they are absent from the archive itself, not merely from the
+// tables.
+func stripSecrets(snapPath string) error {
 	snap, err := sql.Open("sqlite", snapPath)
 	if err != nil {
 		return fmt.Errorf("backup: open snapshot: %w", err)
 	}
 	defer snap.Close()
-	var n int
-	if err := snap.QueryRow(
-		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`,
-	).Scan(&n); err != nil {
-		return fmt.Errorf("backup: inspect snapshot: %w", err)
+	// A table may be absent in a database migrated by an older release.
+	steps := []struct{ table, stmt, what string }{
+		{"sessions", `DELETE FROM sessions`, "clear sessions"},
+		{"mail_settings", `UPDATE mail_settings SET password = ''`, "clear mail password"},
 	}
-	if n == 0 {
+	changed := false
+	for _, step := range steps {
+		var n int
+		if err := snap.QueryRow(
+			`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, step.table,
+		).Scan(&n); err != nil {
+			return fmt.Errorf("backup: inspect snapshot: %w", err)
+		}
+		if n == 0 {
+			continue
+		}
+		if _, err := snap.Exec(step.stmt); err != nil {
+			return fmt.Errorf("backup: %s: %w", step.what, err)
+		}
+		changed = true
+	}
+	if !changed {
 		return nil
-	}
-	if _, err := snap.Exec(`DELETE FROM sessions`); err != nil {
-		return fmt.Errorf("backup: clear sessions: %w", err)
 	}
 	if _, err := snap.Exec(`VACUUM`); err != nil {
 		return fmt.Errorf("backup: compact snapshot: %w", err)
@@ -196,7 +215,7 @@ func create(handle *sql.DB, backupsDir string, now func() time.Time, nameOf func
 	if err := snapshot(handle, snapPath); err != nil {
 		return "", err
 	}
-	if err := stripSessions(snapPath); err != nil {
+	if err := stripSecrets(snapPath); err != nil {
 		return "", err
 	}
 	if err := verifySnapshot(snapPath); err != nil {
