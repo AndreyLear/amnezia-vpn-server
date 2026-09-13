@@ -308,9 +308,12 @@ export function UpdateDialog({
   // «Обновление идёт» — отчёт о системе; «Обновляем…» — то, что человек и
   // сам бы сказал про происходящее. Формулировку выбрал владелец
   // (amnezia-vpn-server-7edq).
+  // Пока панель перезапускает саму себя, об этом говорит заголовок, а не
+  // отдельная строка под полосой (решение владельца, amnezia-vpn-server-dywt).
+  const runningWord = restarting ? "Перезапускаем панель" : "Обновляем";
   const title = running ? (
     <>
-      Обновляем
+      {runningWord}
       <RunningEllipsis />
     </>
   ) : showOutcome ? (
@@ -335,7 +338,7 @@ export function UpdateDialog({
           in the background and the X stays (amnezia-vpn-server-d27j). */}
       <DialogContent className="sm:max-w-lg" bodyClassName="gap-6" showCloseButton={!showOutcome}>
         <DialogHeader>
-          <DialogTitle aria-label={running ? "Обновляем…" : undefined}>{title}</DialogTitle>
+          <DialogTitle aria-label={running ? `${runningWord}…` : undefined}>{title}</DialogTitle>
         </DialogHeader>
 
         {running ? (
@@ -351,14 +354,6 @@ export function UpdateDialog({
           ) : (
             <div className="flex flex-col gap-2">
               <UpdateProgressBar percent={percent} />
-              {restarting && (
-                // Панель на этом шаге перезапускает саму себя — молчание
-                // тут ожидаемо и не значит, что обновление сорвалось
-                // (amnezia-vpn-server-mrjh).
-                <p className="text-sm text-muted-foreground">
-                  Панель перезапускается — это ожидаемая часть обновления
-                </p>
-              )}
               {/* The per-step line (state_step/state_message, e.g. "ставлю
                   выпуск 2.10.15") was removed here: it read like an agent
                   log line, not something written for the owner, and the
