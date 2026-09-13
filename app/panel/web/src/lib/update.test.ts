@@ -188,3 +188,79 @@ describe("useUpdateInfo", () => {
     expect(result.current.timedOut).toBe(true);
   });
 });
+
+// Открытая вкладка переживала обновление, но оставалась на старом коде:
+// номер версии приходил с сервера свежий, а поведение было прежним. Владелец
+// три выпуска подряд видел «правок нет» (amnezia-vpn-server-e2ww).
+describe("страница перезагружается, когда код на ней устарел", () => {
+  it("перезагружается, когда сервер сообщил новую установленную версию", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) return jsonResponse(updateInfo({ installed: "2.10.18", state: "running" }));
+        return jsonResponse(updateInfo({ installed: "2.10.19", state: "ok" }));
+      }),
+    );
+    vi.useFakeTimers();
+    const reloadPage = vi.fn();
+
+    renderHook(() => useUpdateInfo(reloadPage));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(reloadPage).not.toHaveBeenCalled();
+
+    // Опрос во время обновления приносит уже новую версию.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("не перезагружается, пока версия та же", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(updateInfo({ installed: "2.10.19", state: "running" })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers();
+    const reloadPage = vi.fn();
+
+    renderHook(() => useUpdateInfo(reloadPage));
+    // Шагами, а не одним скачком: опрос заводится эффектом ПОСЛЕ первого
+    // ответа, и один большой скачок часов проскакивал его целиком — тест
+    // выходил зелёным, так и не сравнив ни одной версии.
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+    }
+    // Без этого тест доказывал бы только то, что сравнивать было нечего.
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+    expect(reloadPage).not.toHaveBeenCalled();
+  });
+
+  it("спрашивает заново, когда вкладка снова стала видимой", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        // Сервер обновили из командной строки, пока вкладка лежала в фоне.
+        return jsonResponse(updateInfo({ installed: calls === 1 ? "2.10.18" : "2.10.19" }));
+      }),
+    );
+    const reloadPage = vi.fn();
+
+    renderHook(() => useUpdateInfo(reloadPage));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+  });
+});
