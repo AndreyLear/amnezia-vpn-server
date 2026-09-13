@@ -241,3 +241,43 @@ test("окно уведомлений не затирает ввод медле�
   expect(Math.abs(hostBox!.y - portBox!.y)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: "test-results/notifications-error-row.png" });
 });
+
+// Письма не уходят — панель говорит об этом над списком клиентов, а не
+// только в окне (amnezia-vpn-server-pz2r). Отказ службы писем в e2e не
+// устроить, поэтому ответ о состоянии подменяется.
+for (const width of [1280, 375]) {
+  test(`полоса «письма не уходят» видна и ведёт в настройки (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route("**/api/mail", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      await route.fulfill({
+        json: {
+          ok: true,
+          configured: true,
+          host: "smtp.example.org",
+          port: 587,
+          username: "vpn@example.org",
+          recipient: "owner@example.org",
+          password_set: true,
+          verified: true,
+          test: { state: "ok", at_utc: "2026-09-14T01:00:00Z" },
+          channel: "failing",
+          last_failure: {
+            subject: "Туннель не работает 5 минут",
+            error: "mailer: login as vpn@example.org: 535 5.7.8 Error: authentication failed",
+            at_utc: "2026-09-14T02:00:00Z",
+          },
+        },
+      });
+    });
+    await login(page);
+    const alert = page.getByRole("alert").filter({ hasText: "Письма о сбоях не уходят" });
+    await expect(alert).toBeVisible();
+    const box = await alert.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: `test-results/mail-banner-${width}.png` });
+    await alert.getByRole("button", { name: "Открыть настройки" }).click();
+    await expect(page.getByRole("dialog", { name: "Уведомления" })).toBeVisible();
+  });
+}

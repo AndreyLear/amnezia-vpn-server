@@ -254,3 +254,77 @@ func TestPlausibleAddress(t *testing.T) {
 		}
 	}
 }
+
+// Канал писем по последнему исходу (amnezia-vpn-server-pz2r): не
+// настроено — не ошибка; сломалось — видно; прежние отказы не говорят о
+// новых настройках.
+func TestAPIMailChannel(t *testing.T) {
+	statePath := func(f *fixture) string { return filepath.Join(f.server.statusDir(), "mail-state.json") }
+	writeState := func(t *testing.T, f *fixture, success, failure *time.Time) {
+		t.Helper()
+		st := &mailer.State{LastSuccessAt: success}
+		if failure != nil {
+			st.LastFailure = &mailer.Failure{Key: "tunnel", Subject: "Туннель не работает 5 минут", Error: "535 auth", At: *failure}
+		}
+		if err := st.Save(statePath(f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	later := func(d time.Duration) *time.Time { at := time.Now().Add(d).UTC(); return &at }
+
+	t.Run("не настроено", func(t *testing.T) {
+		f := newFixture(t)
+		if got := decodeMail(t, f.get("/api/mail")); got.Channel != mailChannelOff {
+			t.Fatalf("channel = %q", got.Channel)
+		}
+	})
+	t.Run("нет пароля после восстановления", func(t *testing.T) {
+		f := newFixture(t)
+		if err := db.SaveMailSettings(f.h, db.MailSettings{Host: "smtp.example.org", Port: 587, Username: "u@example.org", Recipient: "o@example.org"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if got := decodeMail(t, f.get("/api/mail")); got.Channel != mailChannelPasswordMissing {
+			t.Fatalf("channel = %q", got.Channel)
+		}
+	})
+	t.Run("сохранено, исходов нет", func(t *testing.T) {
+		f := newFixture(t)
+		if got := decodeMail(t, f.apiCSRF(http.MethodPut, "/api/mail", mailBody(mailSecret))); got.Channel != mailChannelUnverified {
+			t.Fatalf("channel = %q", got.Channel)
+		}
+	})
+	t.Run("пробное дошло, потом письмо правил не ушло", func(t *testing.T) {
+		f := newFixture(t)
+		decodeMail(t, f.apiCSRF(http.MethodPut, "/api/mail", mailBody(mailSecret)))
+		f.answerTest(true, "")
+		if got := decodeMail(t, f.get("/api/mail")); got.Channel != mailChannelOK {
+			t.Fatalf("после пробного channel = %q", got.Channel)
+		}
+		writeState(t, f, nil, later(time.Minute))
+		got := decodeMail(t, f.get("/api/mail"))
+		if got.Channel != mailChannelFailing || got.LastFailure == nil || got.LastFailure.Subject != "Туннель не работает 5 минут" || got.LastFailure.Error != "535 auth" {
+			t.Fatalf("после отказа %+v, %+v", got.Channel, got.LastFailure)
+		}
+	})
+	t.Run("пробное не ушло, потом письмо дошло", func(t *testing.T) {
+		f := newFixture(t)
+		decodeMail(t, f.apiCSRF(http.MethodPut, "/api/mail", mailBody(mailSecret)))
+		f.answerTest(false, "535 auth")
+		if got := decodeMail(t, f.get("/api/mail")); got.Channel != mailChannelFailing {
+			t.Fatalf("после отказа пробного channel = %q", got.Channel)
+		}
+		writeState(t, f, later(time.Minute), nil)
+		got := decodeMail(t, f.get("/api/mail"))
+		if got.Channel != mailChannelOK || got.LastSuccessAtUTC == "" {
+			t.Fatalf("после доставки %+v", got)
+		}
+	})
+	t.Run("отказ до пересохранения не считается", func(t *testing.T) {
+		f := newFixture(t)
+		writeState(t, f, nil, later(-time.Hour))
+		got := decodeMail(t, f.apiCSRF(http.MethodPut, "/api/mail", mailBody(mailSecret)))
+		if got.Channel != mailChannelUnverified {
+			t.Fatalf("channel = %q, отказ по прежним настройкам принят за нынешний", got.Channel)
+		}
+	})
+}

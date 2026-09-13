@@ -7,6 +7,7 @@ import { ClientCard } from "@/components/ClientCard";
 import { EmptyClients } from "@/components/EmptyClients";
 import { ClientInfoDialog } from "@/components/ClientInfoDialog";
 import { QrDialog } from "@/components/QrDialog";
+import { MailFailureBanner } from "@/components/MailFailureBanner";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import {
   api,
@@ -196,6 +197,7 @@ export default function HomePage() {
         timedOut={updateTimedOut}
         onChanged={reloadUpdate}
       />
+      {clients && clients.length > 0 ? <MailFailureBanner /> : null}
       {clients === null ? null : clients.length === 0 ? (
         <EmptyClients onAdd={() => setAddOpen(true)} restorePending={restorePending} />
       ) : (
