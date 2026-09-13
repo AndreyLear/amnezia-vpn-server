@@ -296,3 +296,25 @@ for (const width of [1280, 375]) {
     await expect(page.getByRole("dialog", { name: "Уведомления" })).toBeVisible();
   });
 }
+
+// Пока меню «Ещё» открыто, на кнопке крестик, и он же меню закрывает
+// (amnezia-vpn-server-3vec).
+test("кнопка меню показывает крестик, пока меню открыто", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login(page);
+  // По атрибуту, а не по роли: пока меню открыто, Radix прячет остальную
+  // страницу от дерева доступности, и кнопка по роли не находится.
+  const trigger = page.locator('button[aria-label="Ещё"]');
+  await expect(trigger.getByTestId("menu-more-icon")).toBeVisible();
+  await trigger.click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await expect(trigger.getByTestId("menu-close-icon")).toBeVisible();
+  await expect(trigger.getByTestId("menu-more-icon")).toHaveCount(0);
+  await page.screenshot({ path: "test-results/menu-open.png" });
+  // force: открытое меню Radix снимает pointer-events со страницы, и нажатие
+  // по крестику приходит как нажатие мимо меню — меню закрывается. Именно
+  // так это и происходит у человека; Playwright без force ждёт «кликабельности».
+  await trigger.click({ force: true });
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(trigger.getByTestId("menu-more-icon")).toBeVisible();
+});

@@ -75,6 +75,26 @@ describe("меню в шапке", () => {
     ]);
   });
 
+  // Пока меню открыто, на кнопке крестик, а не многоточие
+  // (amnezia-vpn-server-3vec). Имя кнопки прежнее.
+  it("меняет многоточие на крестик, пока меню открыто", async () => {
+    const user = userEvent.setup();
+    render(<HeaderMenu />);
+    const trigger = screen.getByRole("button", { name: "Ещё" });
+    expect(screen.getByTestId("menu-more-icon")).toBeInTheDocument();
+    expect(screen.queryByTestId("menu-close-icon")).toBeNull();
+
+    await user.click(trigger);
+    await screen.findAllByRole("menuitem");
+    expect(screen.getByTestId("menu-close-icon")).toBeInTheDocument();
+    expect(screen.queryByTestId("menu-more-icon")).toBeNull();
+    expect(screen.getByRole("button", { name: "Ещё", hidden: true })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.getByTestId("menu-more-icon")).toBeInTheDocument());
+    expect(screen.queryByTestId("menu-close-icon")).toBeNull();
+  });
+
   // Пункт «Уведомления» открывает окно настроек почты (amnezia-vpn-server-8fg2).
   it("открывает окно уведомлений", async () => {
     const user = userEvent.setup();
