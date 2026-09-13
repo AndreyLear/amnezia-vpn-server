@@ -199,6 +199,10 @@ function SpeedPlot({
               на связи и просто ничего не качал. Различить их по трафику
               нельзя вовсе, а без подложки человек видел одни и те же нули и
               читал их как обрыв. */}
+          {/* Серый, а не красный: красный читается как авария, а отсутствие
+              связи у телефона, который просто уснул, — обычное дело. Серый
+              говорит «здесь клиента не было слышно» и не пугает
+              (amnezia-vpn-server-myuq). */}
           {offlineRuns(series.online).map((run, i) => (
             <rect
               key={`off${i}`}
@@ -207,7 +211,7 @@ function SpeedPlot({
               width={run.length}
               y={0}
               height={HEIGHT}
-              className="fill-rose-500/20"
+              className="fill-muted-foreground/20"
             />
           ))}
           {[0, 0.5, 1].map((f) => (
@@ -333,7 +337,7 @@ function SpeedPlot({
             <span className="flex items-center gap-1.5">
               <span
                 data-slot="legend-offline"
-                className="inline-block size-2.5 rounded-sm bg-rose-500/20"
+                className="inline-block size-2.5 rounded-sm bg-muted-foreground/20"
                 aria-hidden
               />
               {/* Standalone caption, capitalized (amnezia-vpn-server-4cnf). */}
@@ -510,7 +514,7 @@ function Readout({
               должен прочитать, какая из них (amnezia-vpn-server-tyic). */}
           {/* Same standalone caption as the legend, capitalized
               (amnezia-vpn-server-4cnf). */}
-          {offline ? <div className="text-rose-500">Связи не было</div> : null}
+          {offline ? <div className="text-muted-foreground">Связи не было</div> : null}
         </>
       )}
     </div>

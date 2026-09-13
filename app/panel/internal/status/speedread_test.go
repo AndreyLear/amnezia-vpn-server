@@ -488,30 +488,63 @@ func TestReadSpeedSeriesTellsBufferingFromOutage(t *testing.T) {
 	}
 }
 
-// В суточном окне столбец — это минуты, и обрыв внутри него ровно то, что
-// ищут. Один здоровый замер не должен закрашивать его «всё хорошо»
-// (amnezia-vpn-server-3wbe).
-func TestReadSpeedSeriesColumnIsOnlineOnlyIfEverySampleWas(t *testing.T) {
+// Подложка «связи не было» объясняет нули, а не закрывает трафик. Столбец
+// суток — восемь минут, и в него попадают и работа, и простой: телефон качал
+// две минуты и минуту спал. Раньше хватало одного молчаливого замера, чтобы
+// закрасить весь столбец поверх загрузки в 17 Мбит/с — владелец прислал
+// снимок: «видно, что связь была, но показывает, что не было»
+// (amnezia-vpn-server-myuq).
+func TestReadSpeedSeriesColumnWithTrafficIsNotOffline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "speed.log")
 	from := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
-	// Так выглядит настоящий обрыв: продюсер живёт на сервере и продолжает
-	// писать замер каждые пять секунд, а счётчик rx стоит на месте — клиент
-	// не присылает даже keepalive. Через 65 секунд тишины он считается
-	// оборвавшимся, потом снова заговаривает. В одном столбце оказываются и
-	// обрыв, и здоровые замеры (amnezia-vpn-server-tyic).
+	// Клиент качает первые 10 секунд, затем молчит 90 секунд — дольше порога.
 	var lines []string
-	rx := uint64(0)
+	rx, tx := uint64(0), uint64(0)
 	for i := 0; i <= 20; i++ {
 		at := from.Add(time.Duration(i) * 5 * time.Second)
-		if i <= 1 || i >= 15 {
-			rx += 100 // клиент говорит
+		if i <= 2 {
+			rx += 5_000
+			tx += 10_000_000
 		}
-		lines = append(lines, sampleLineV2(at, rx, rx, "5"))
+		lines = append(lines, sampleLineV2(at, rx, tx, "5"))
 	}
 	writeLog(t, path, lines...)
 
-	// Одно окно — один столбец: все замеры попадают в него.
+	// Одно окно — один столбец: и всплеск, и простой попадают в него.
 	series, err := ReadSpeedSeries(path, testKey, from, from.Add(105*time.Second), 1)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	col := series.Columns[0]
+	if col.DownMax == 0 {
+		t.Fatalf("всплеска нет, случай не тот: %+v", col)
+	}
+	if !col.HasLiveness {
+		t.Fatalf("признак живости потерян: %+v", col)
+	}
+	if !col.Online {
+		t.Error("столбец с настоящей загрузкой назван «без связи»")
+	}
+}
+
+// Обратное тоже обязано работать: если сервер не слышал клиента ВЕСЬ
+// столбец, столбец так и помечается (amnezia-vpn-server-myuq).
+func TestReadSpeedSeriesColumnSilentThroughoutIsOffline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "speed.log")
+	from := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	// Клиент говорил до окна, а в самом окне — ни байта больше двух минут.
+	var lines []string
+	lines = append(lines, sampleLineV2(from.Add(-10*time.Second), 0, 0, "5"))
+	lines = append(lines, sampleLineV2(from.Add(-5*time.Second), 100, 100, "5"))
+	for i := 0; i <= 30; i++ {
+		lines = append(lines, sampleLineV2(from.Add(time.Duration(i)*5*time.Second), 100, 100, "200"))
+	}
+	writeLog(t, path, lines...)
+
+	// Окно начинается через 70 секунд тишины: к этому моменту клиент уже молчит
+	// дольше порога, и так до конца.
+	win := from.Add(70 * time.Second)
+	series, err := ReadSpeedSeries(path, testKey, win, from.Add(150*time.Second), 1)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -520,7 +553,7 @@ func TestReadSpeedSeriesColumnIsOnlineOnlyIfEverySampleWas(t *testing.T) {
 		t.Fatalf("признак живости потерян: %+v", col)
 	}
 	if col.Online {
-		t.Error("столбец назван «на связи», хотя внутри него связь пропадала")
+		t.Error("столбец, где клиента не было слышно весь, назван «на связи»")
 	}
 }
 
