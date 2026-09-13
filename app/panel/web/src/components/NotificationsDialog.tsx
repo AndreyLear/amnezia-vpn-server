@@ -280,8 +280,7 @@ export function NotificationsDialog({
         <DialogHeader>
           <DialogTitle>Уведомления</DialogTitle>
           <DialogDescription>
-            Письма о сбоях и обновлениях уходят через ваш почтовый ящик. Порт выбирает шифрование:
-            587 — STARTTLS, 465 — TLS.
+            Письма о сбоях и обновлениях уходят через ваш почтовый ящик
           </DialogDescription>
         </DialogHeader>
         <form
@@ -339,11 +338,6 @@ export function NotificationsDialog({
                 value={form.password}
                 onChange={(e) => set("password", e.target.value)}
               />
-              {/* Пояснение строкой, а не в плейсхолдере: на телефоне
-                  длинный плейсхолдер обрезался посреди слова. */}
-              {info?.password_set && !errors.password ? (
-                <p className="text-sm text-muted-foreground">Оставьте пустым, чтобы не менять</p>
-              ) : null}
               <FieldError name="password" message={errors.password} />
             </div>
             <div className="grid gap-2">

@@ -92,7 +92,10 @@ describe("уведомления", () => {
     const password = screen.getByLabelText("Пароль") as HTMLInputElement;
     await waitFor(() => expect(password.value).toBe(""));
     expect(password.placeholder).toBe("Сохранён");
-    expect(screen.getByText("Оставьте пустым, чтобы не менять")).toBeInTheDocument();
+    // Подписей про шифрование и про пустой пароль нет — решение владельца
+    // (amnezia-vpn-server-kiq4).
+    expect(screen.queryByText(/Оставьте пустым/)).toBeNull();
+    expect(screen.queryByText(/шифрование/)).toBeNull();
     expect(screen.getByText(/Отправляем пробное письмо/)).toBeInTheDocument();
   });
 
