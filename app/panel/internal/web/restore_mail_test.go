@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
-	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 )
 
 // Восстановление в самой панели убирает mail.conf, оставшийся с прежней
@@ -29,7 +28,7 @@ func TestRestoreUploadDropsMailConf(t *testing.T) {
 	if want := filepath.Join(filepath.Dir(f.dbPath), "mail.conf"); mailPath != want {
 		t.Fatalf("MailConfPath = %q, ждали %q рядом с базой", mailPath, want)
 	}
-	if err := mailconf.Render(f.h, mailPath); err != nil {
+	if err := db.RenderMailConf(f.h, mailPath); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 

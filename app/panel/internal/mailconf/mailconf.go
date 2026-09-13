@@ -1,9 +1,13 @@
-// Package mailconf renders data/mail.conf — the mail settings the host
-// notification service reads (amnezia-vpn-server-2kr4, dfs2).
+// Package mailconf is the contract of data/mail.conf — the mail settings
+// the host notification service reads (amnezia-vpn-server-2kr4, dfs2).
 //
 // The file is derived state, like awg0.conf: the truth is the
-// mail_settings row in SQLite (internal/db/mail.go), and Render reproduces
-// the file from it at any time. Deleting the file loses nothing.
+// mail_settings row in SQLite (internal/db/mail.go renders it through
+// Write), and the file is reproduced from it at any time. Deleting the file
+// loses nothing.
+//
+// The package imports nothing that touches SQLite on purpose: the sender
+// (cmd/awgmail) runs on the host and only needs to read this file.
 //
 // Where it lives, and why there: data/ is written by panel and panel-init
 // and is not mounted into the awg container at all. status/ is read-only
@@ -13,8 +17,8 @@
 //
 // Format is JSON: the password may contain any character, and JSON quotes
 // it unambiguously where a key=value file would need an escaping scheme
-// of its own. Mode is 0600 and the write is atomic (awgconf.WriteAtomic),
-// so the reader never sees half a file.
+// of its own. Mode is 0600 and the write is atomic, so the reader never
+// sees half a file.
 //
 // When there is nothing a sender could use — mail was never set up, or the
 // password is missing after a restore — the file is removed rather than
@@ -23,15 +27,13 @@
 package mailconf
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
-	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
 // PathFor returns the mail.conf location for the database at dbPath: next
@@ -54,39 +56,45 @@ type File struct {
 	Recipient string `json:"recipient"`
 }
 
-// Render writes mail.conf from the database, or removes it when there are
-// no usable settings. On a write failure the previous file stays intact.
-func Render(handle *sql.DB, path string) error {
-	settings, err := db.LoadMailSettings(handle)
-	if errors.Is(err, db.ErrMailNotConfigured) {
-		return remove(path)
+// Write replaces mail.conf with f, or removes it when f is nil. On a write
+// failure the previous file stays intact. Errors name only the path, never
+// the content.
+func Write(path string, f *File) error {
+	if f == nil {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("mailconf: remove %s: %w", path, err)
+		}
+		return nil
 	}
-	if err != nil {
-		return err
-	}
-	if settings.PasswordMissing() {
-		return remove(path)
-	}
-	data, err := json.Marshal(File{
-		Host:      settings.Host,
-		Port:      settings.Port,
-		Username:  settings.Username,
-		Password:  settings.Password,
-		Recipient: settings.Recipient,
-	})
+	data, err := json.Marshal(f)
 	if err != nil {
 		return fmt.Errorf("mailconf: encode: %w", err)
 	}
-	if err := awgconf.WriteAtomic(path, append(data, '\n')); err != nil {
-		// The wrapped error names only paths, never the content.
+	if err := status.WriteAtomic(path, append(data, '\n')); err != nil {
 		return fmt.Errorf("mailconf: %w", err)
 	}
 	return nil
 }
 
-func remove(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("mailconf: remove %s: %w", path, err)
+// ErrUnusable reports a mail.conf that exists but cannot be used to send.
+// The message never includes the file content.
+var ErrUnusable = errors.New("mailconf: file unusable")
+
+// Load reads mail.conf. A missing file is returned as an error wrapping
+// os.ErrNotExist, so the sender can tell «mail is off» from a broken file.
+func Load(path string) (*File, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	var f File
+	if err := json.Unmarshal(data, &f); err != nil {
+		// json errors may quote a fragment of the input; the input holds
+		// the password, so the cause is dropped.
+		return nil, fmt.Errorf("%w: not valid JSON", ErrUnusable)
+	}
+	if f.Host == "" || f.Username == "" || f.Password == "" || f.Recipient == "" || f.Port < 1 || f.Port > 65535 {
+		return nil, fmt.Errorf("%w: a field is missing", ErrUnusable)
+	}
+	return &f, nil
 }
