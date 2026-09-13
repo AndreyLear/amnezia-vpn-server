@@ -247,8 +247,9 @@ describe("страница перезагружается, когда код н�
       "fetch",
       vi.fn(async () => {
         calls += 1;
-        // Сервер обновили из командной строки, пока вкладка лежала в фоне.
-        return jsonResponse(updateInfo({ installed: calls === 1 ? "2.10.18" : "2.10.19" }));
+        // Сервер обновили из командной строки, пока вкладка лежала в фоне:
+        // хода обновления на странице нет, есть только новая версия.
+        return jsonResponse(updateInfo({ installed: calls === 1 ? "2.10.18" : "2.10.19", state: "ok" }));
       }),
     );
     const reloadPage = vi.fn();
@@ -260,6 +261,41 @@ describe("страница перезагружается, когда код н�
     await act(async () => {
       document.dispatchEvent(new Event("visibilitychange"));
       await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Новая панель отвечает новой версией раньше, чем агент пишет «готово».
+// Перезагрузка в этот момент начинала полосу хода заново
+// (amnezia-vpn-server-evv3).
+describe("перезагрузка ждёт конца хода", () => {
+  it("не перезагружается, пока обновление идёт, и перезагружается, когда кончилось", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) return jsonResponse(updateInfo({ installed: "2.10.20", state: "running" }));
+        // Новая панель уже поднята, а итог ещё не записан.
+        if (calls <= 3) return jsonResponse(updateInfo({ installed: "2.10.21", state: "running" }));
+        return jsonResponse(updateInfo({ installed: "2.10.21", state: "ok" }));
+      }),
+    );
+    vi.useFakeTimers();
+    const reloadPage = vi.fn();
+
+    renderHook(() => useUpdateInfo(reloadPage));
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+    }
+    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(reloadPage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
     });
     expect(reloadPage).toHaveBeenCalledTimes(1);
   });
