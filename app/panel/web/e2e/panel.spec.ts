@@ -151,3 +151,26 @@ test("ширина меню не меняется, пока идёт прове�
   await expect(page.getByRole("menuitem", { name: "Проверяю" })).toBeVisible();
   expect(await menuWidth()).toBe(before);
 });
+
+// Уведомления не были видны около четырёх недель: политика безопасности
+// отбрасывала стили, которые sonner вставляет в страницу сам, и уведомления
+// уезжали под нижний край экрана. Проверки при этом зелёные: toBeVisible
+// считает видимым и элемент за краем окна. Поэтому здесь меряется, что
+// уведомление целиком внутри окна (amnezia-vpn-server-omsa).
+test("уведомление видно на экране, а не уезжает под край", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login(page);
+
+  await page.getByRole("button", { name: /Действия для/ }).first().click();
+  await page.getByRole("menuitem", { name: /Отключить|Включить/ }).click();
+
+  const toast = page.locator("[data-sonner-toast]").first();
+  await expect(toast).toBeAttached();
+  await expect
+    .poll(async () => {
+      const box = await toast.boundingBox();
+      const vp = page.viewportSize()!;
+      return Boolean(box && box.y >= 0 && box.y + box.height <= vp.height && box.x >= 0 && box.x + box.width <= vp.width);
+    })
+    .toBe(true);
+});
