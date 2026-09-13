@@ -40,8 +40,30 @@ function isUpdateInfo(data: unknown): data is UpdateInfo {
  * экране нетронутым, а недоступность панели живёт отдельным состоянием
  * (amnezia-vpn-server-mrjh).
  */
-export function useUpdateInfo() {
+/**
+ * Код страницы устарел, если сервер сообщает не ту установленную версию,
+ * которую страница застала при загрузке (amnezia-vpn-server-e2ww).
+ *
+ * Панель обновляет сама себя, но открытая вкладка при этом не
+ * перезагружается: в её памяти остаётся JS, загруженный ДО обновления. Номер
+ * версии в «О версиях» при этом свежий — он приходит с сервера, — и этим
+ * вводит в заблуждение: версия новая, поведение старое. Владелец три выпуска
+ * подряд видел «правок нет», хотя они были в каждом.
+ *
+ * Сравнивается именно установленная версия, а не хеш бандла: она уже
+ * приходит в этом опросе, отдельный запрос и разбор HTML не нужны, и ловит
+ * любой путь обновления — из панели, из командной строки, из соседней
+ * вкладки.
+ */
+export function isStalePage(bootInstalled: string | null, installed: string | undefined): boolean {
+  return Boolean(bootInstalled && installed && installed !== bootInstalled);
+}
+
+export function useUpdateInfo(reloadPage: () => void = () => window.location.reload()) {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
+  // Версия сервера на момент загрузки этой страницы — то, с чем собран код,
+  // который сейчас исполняется (amnezia-vpn-server-e2ww).
+  const bootInstalledRef = useRef<string | null>(null);
   // null — панель недавно отвечала; время — с которого перестала. Отдельно
   // от info, чтобы неудачный опрос не стирал последнее известное состояние
   // обновления (amnezia-vpn-server-mrjh).
@@ -59,6 +81,18 @@ export function useUpdateInfo() {
       const data = await api<UpdateInfo>("/api/update");
       if (!isUpdateInfo(data)) throw new Error("panel did not answer with update info");
       unreachableSinceRef.current = null;
+      if (data.installed) {
+        if (bootInstalledRef.current === null) {
+          bootInstalledRef.current = data.installed;
+        } else if (isStalePage(bootInstalledRef.current, data.installed)) {
+          // Перезагрузка, а не перерисовка: устарел сам код, и никакое новое
+          // состояние старый код не научит вести себя по-новому. Итог
+          // обновления не теряется — отметка «увиден» ещё не стоит, и свежая
+          // страница покажет его сама.
+          reloadPage();
+          return;
+        }
+      }
       setInfo(data);
       setUnreachableSince(null);
       setTimedOut(false);
@@ -76,6 +110,14 @@ export function useUpdateInfo() {
 
   useEffect(() => {
     void reload();
+    // Вернулся на вкладку — спросить заново: сервер могли обновить из
+    // командной строки или из другой вкладки, пока эта лежала в фоне и
+    // ничего не опрашивала (amnezia-vpn-server-e2ww).
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void reload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
   useEffect(() => {
