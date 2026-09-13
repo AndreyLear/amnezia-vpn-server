@@ -112,6 +112,11 @@ var schemaStatements = []string{
 	// поднимается намеренно: в архив резервной копии таблица приходит
 	// пустой, так что содержимое архива для прежних версий не меняется.
 	sessionsTable,
+	// Настройки почты для уведомлений (amnezia-vpn-server-2kr4, см.
+	// mail.go). SchemaVersion не поднимается: архив прежней версии при
+	// восстановлении получит пустую таблицу через Migrate, а прежняя
+	// версия, восстановив новый архив, лишнюю таблицу просто не читает.
+	mailSettingsTable,
 }
 
 // Open creates a new SQLite database file (including parent directories)

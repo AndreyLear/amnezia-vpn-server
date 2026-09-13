@@ -383,3 +383,62 @@ func TestCreateStripsSessions(t *testing.T) {
 		t.Errorf("в живой базе сессий %d, ждали 1 — резервная копия не должна разлогинивать", live)
 	}
 }
+
+// Пароль от почтового ящика — чужой секрет, в архив он попадать не должен
+// ни строкой таблицы, ни байтами в освобождённых страницах снимка. Прочие
+// настройки почты в копии остаются (amnezia-vpn-server-2kr4).
+func TestCreateStripsMailPassword(t *testing.T) {
+	handle, dir := newTestDB(t)
+	const password = "mailbox-password-that-must-not-travel-000000"
+	// Прежний, позже заменённый пароль тоже не должен уехать в архив:
+	// снимок копирует страницы живой базы как есть.
+	const oldPassword = "previous-mailbox-password-must-not-travel-too"
+	if err := db.SaveMailSettings(handle, db.MailSettings{
+		Host: "smtp.example.org", Port: 587, Username: "vpn@example.org",
+		Password: oldPassword, Recipient: "o@example.org",
+	}, fakeNow); err != nil {
+		t.Fatalf("SaveMailSettings: %v", err)
+	}
+	if err := db.SaveMailSettings(handle, db.MailSettings{
+		Host: "smtp.example.org", Port: 587, Username: "vpn@example.org",
+		Password: password, Recipient: "owner@example.org",
+	}, fakeNow); err != nil {
+		t.Fatalf("SaveMailSettings: %v", err)
+	}
+
+	path, err := Create(handle, filepath.Join(dir, "backups"), func() time.Time { return fakeNow })
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	entries := unpackTestArchive(t, path)
+	for name, data := range entries {
+		if bytes.Contains(data, []byte(password)) || bytes.Contains(data, []byte(oldPassword)) {
+			t.Fatalf("в архиве (%s) остались байты пароля почты", name)
+		}
+	}
+
+	snap, ok := entries[snapshotFilename]
+	if !ok {
+		t.Fatalf("в архиве нет снимка %s", snapshotFilename)
+	}
+	snapPath := filepath.Join(t.TempDir(), "snap.sqlite")
+	if err := os.WriteFile(snapPath, snap, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := sql.Open("sqlite", snapPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	got, err := db.LoadMailSettings(restored)
+	if err != nil {
+		t.Fatalf("настройки почты не доехали в копии: %v", err)
+	}
+	if !got.PasswordMissing() || got.Host != "smtp.example.org" || got.Recipient != "owner@example.org" {
+		t.Fatalf("в снимке %+v: ждали всё, кроме пароля", got)
+	}
+
+	if live, err := db.LoadMailSettings(handle); err != nil || live.Password != password {
+		t.Errorf("живая база потеряла пароль: %v — чистится только снимок", err)
+	}
+}

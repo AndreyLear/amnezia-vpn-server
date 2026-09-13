@@ -23,6 +23,7 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/web"
 )
 
@@ -384,6 +385,12 @@ func (a *app) cmdInit(args []string) int {
 		return a.fatal("init", err)
 	}
 	fmt.Fprintln(a.stdout, "panel init: awg0.conf generated")
+	// mail.conf is derived from the database too (amnezia-vpn-server-2kr4).
+	// A failure here must not keep the tunnel from starting: the error is
+	// reported and init still succeeds.
+	if err := mailconf.Render(handle, mailconf.PathFor(dbPath)); err != nil {
+		fmt.Fprintf(a.stderr, "panel init: warning: mail settings: %v\n", err)
+	}
 	return 0
 }
 

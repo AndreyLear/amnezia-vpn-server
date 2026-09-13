@@ -31,6 +31,7 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/hostmetrics"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
@@ -79,6 +80,9 @@ type Config struct {
 	// every mutation; empty selects the AMNEZIA_CONFIG_PATH default
 	// (parity with the cli).
 	ConfPath string
+	// MailConfPath is the derived mail.conf the host notification service
+	// reads (amnezia-vpn-server-2kr4); empty selects mailconf.PathFor(DBPath).
+	MailConfPath string
 	// DBPath is the SQLite location the DB handle was opened from. The
 	// restore flow places its pending marker next to it and the page
 	// shows the restart-required state from it; empty selects
@@ -194,6 +198,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.DBPath == "" {
 		cfg.DBPath = db.DefaultPath()
+	}
+	if cfg.MailConfPath == "" {
+		cfg.MailConfPath = mailconf.PathFor(cfg.DBPath)
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(io.Discard, "", 0)
