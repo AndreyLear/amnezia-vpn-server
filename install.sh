@@ -79,6 +79,8 @@
 #                                      for awg0 to carry its addresses
 #   AMNEZIA_INSTALL_CAPABILITIES=LIST  answer the image capability probe with
 #                                      LIST instead of running a container
+#   AMNEZIA_INSTALL_AWGMAIL_FROM=FILE  take the notification mail binary
+#                                      from FILE instead of the panel image
 #   AMNEZIA_INSTALL_FAKE_DIR=DIR       prefix PATH with DIR so fakes can
 #                                      stand in for docker/apt-get/
 #                                      systemctl/sysctl/nft/curl: tests
@@ -1133,6 +1135,51 @@ WantedBy=paths.target
 EOF
 chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-update-check-request.path"
 log "on-demand update check armed (watching $ROOT_DIR/data/update-check-request)"
+
+# Письма оператору (amnezia-vpn-server-m3f1, dfs2). Ставится всегда, как и
+# агент обновления: без настроек почты awgmail молчит и выходит, а настроить
+# почту можно только в панели — выключателя в установщике нет.
+#
+# Раз в минуту, рядом со сторожем, и не из контейнера панели: служба должна
+# написать и тогда, когда сама панель лежит. Бинарник живёт на хосте, в
+# $ROOT_DIR/bin, куда его кладёт install_awgmail из образа панели. Пока его
+# там нет — образ старше этой возможности, — юнит просто не запускается.
+cat > "$SYSTEMD_DIR/amnezia-vpn-mail.service" <<EOF
+# amnezia-vpn managed: write to the operator about what the server did.
+[Unit]
+Description=Amnezia VPN notification mail
+ConditionPathExists=${ROOT_DIR}/bin/awgmail
+
+[Service]
+Type=oneshot
+Environment=AMNEZIA_MAIL_ROOT=${ROOT_DIR}
+ExecStart=${ROOT_DIR}/bin/awgmail
+# Службе нужно читать настройки и состояние и писать свою очередь в status/.
+# Больше ей писать некуда, а в её памяти пароль от почтового ящика.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=${ROOT_DIR}/status
+# Каждое письмо ограничено 45 секундами; несколько в очереди укладываются.
+TimeoutStartSec=5min
+EOF
+chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-mail.service"
+cat > "$SYSTEMD_DIR/amnezia-vpn-mail.timer" <<'EOF'
+# amnezia-vpn managed: notification mail, once a minute.
+[Unit]
+Description=Amnezia VPN notification mail every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+# Пропущенные минуты не догоняются: письмо пишется о том, что есть сейчас.
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+EOF
+chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-mail.timer"
+log "notification mail units written (ExecStart=$ROOT_DIR/bin/awgmail, every minute)"
 cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed (prune timer)"
 log "weekly docker-prune units written (enable --now after compose up; ExecStart=$ROOT_DIR/docker-prune.sh)"
 
@@ -2274,6 +2321,53 @@ capabilities_probe() {
 
 require_image_capabilities
 
+# awgmail едет в образе панели и копируется на хост при каждой установке, то
+# есть и при каждом обновлении: агент обновления запускает этот же скрипт
+# (amnezia-vpn-server-m3f1). Копируется из образа той версии, что указана в
+# versions.lock, поэтому письма пишет ровесник остального стека.
+#
+# Неудача не срывает установку: туннель важнее писем о нём. Прежний бинарник
+# в этом случае остаётся на месте.
+install_awgmail() {
+    local dir="$ROOT_DIR/bin" tmp
+    if ! mkdir -p "$dir"; then
+        log "WARNING: cannot create $dir; notification mail is not installed"
+        return 0
+    fi
+    tmp="$dir/awgmail.new"
+    rm -f "$tmp"
+    if ! awgmail_extract > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        log "WARNING: could not copy awgmail out of the panel image; notification mail keeps the previous binary, if any"
+        return 0
+    fi
+    # Не тот файл — тоже неудача: образ без awgmail может ответить чем угодно,
+    # а исполняемый файл под этим именем таймер будет запускать раз в минуту.
+    if [ "$(head -c 4 "$tmp" | od -An -c | tr -d ' ')" != '177ELF' ]; then
+        rm -f "$tmp"
+        log "WARNING: the panel image has no usable awgmail (older than these scripts?); notification mail is not updated"
+        return 0
+    fi
+    if ! { chmod 0755 "$tmp" && mv -f "$tmp" "$dir/awgmail"; }; then
+        rm -f "$tmp"
+        log "WARNING: could not install $dir/awgmail"
+        return 0
+    fi
+    log "notification mail binary installed ($dir/awgmail)"
+}
+
+# Hookable like capabilities_probe: the harness supplies the bytes.
+awgmail_extract() {
+    if [ -n "${AMNEZIA_INSTALL_AWGMAIL_FROM:-}" ]; then
+        cat "$AMNEZIA_INSTALL_AWGMAIL_FROM"
+        return
+    fi
+    docker_compose --env-file versions.lock run --rm --no-deps -T \
+        --entrypoint cat panel-init /app/awgmail
+}
+
+install_awgmail
+
 log "starting the stack"
 NO_SERVER_ROW=0
 if ! docker_compose --env-file versions.lock up -d; then
@@ -2501,6 +2595,12 @@ if [ "$WATCHDOG_ENABLED" = "1" ]; then
         || die_op "systemctl enable --now amnezia-vpn-watchdog.timer failed"
     log "watchdog timer enabled (ExecStart=$ROOT_DIR/watchdog.sh, every minute)"
 fi
+
+# Письма — после подъёма стека, по той же причине, что и сторож: минута
+# сборки выглядела бы как лежащий туннель.
+cmd systemctl enable --now amnezia-vpn-mail.timer \
+    || die_op "systemctl enable --now amnezia-vpn-mail.timer failed"
+log "notification mail timer enabled (silent until mail is set up in the panel)"
 
 # Первая проверка — сразу, не через сутки: человек, который только что
 # поставил сервер, должен увидеть в панели ответ, а не пустое место. Отказ

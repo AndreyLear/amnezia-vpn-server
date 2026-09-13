@@ -301,7 +301,10 @@ done
 
 # Проверка обновлений (amnezia-vpn-server-zklt): её таймер после удаления
 # развёртывания раз в сутки звал бы отсутствующий скрипт.
-for unit in amnezia-vpn-update-check.timer amnezia-vpn-update-check.service; do
+# Письма оператору (amnezia-vpn-server-m3f1) — туда же: таймер звал бы
+# удалённый бинарник раз в минуту.
+for unit in amnezia-vpn-update-check.timer amnezia-vpn-update-check.service \
+            amnezia-vpn-mail.timer amnezia-vpn-mail.service; do
     if [ -f "$SYSTEMD_DIR/$unit" ]; then
         if [ "$DO_IT" -eq 1 ]; then
             systemctl disable --now "$unit" >/dev/null 2>&1 || true

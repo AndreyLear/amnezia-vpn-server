@@ -264,6 +264,17 @@ if [ "${1:-}" = "compose" ]; then
             # writes it would make the restart path untestable.
             [ "${COMPOSE_RUN_RC:-0}" = "0" ] || exit "${COMPOSE_RUN_RC}"
             case "$COMPOSE_ARGS" in
+                *"--entrypoint cat panel-init /app/awgmail"*)
+                    # awgmail копируется из образа панели на хост
+                    # (amnezia-vpn-server-m3f1). FAKE_AWGMAIL=bad — образ,
+                    # который отвечает не тем файлом, fail — не отвечает.
+                    case "${FAKE_AWGMAIL:-ok}" in
+                        fail) exit 1 ;;
+                        bad) echo "cat: can't open '/app/awgmail'"; exit 0 ;;
+                    esac
+                    printf '\177ELF-fake-awgmail\n'
+                    exit 0
+                    ;;
                 *"/app/panel capabilities"*)
                     # Установщик спрашивает образ, что тот умеет, прежде чем
                     # трогать хост (amnezia-vpn-server-v4xj). По умолчанию
@@ -2679,6 +2690,69 @@ test_watchdog_units_installed_by_default() {
     fi
 }
 
+# Письма оператору (amnezia-vpn-server-m3f1): бинарник из образа панели на
+# хосте, юниты, таймер после подъёма стека.
+test_mail_units_and_binary_installed() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "mail default: exit $rc"
+    local svc="$SYSTEMD_DIR_TEST/amnezia-vpn-mail.service"
+    local timer="$SYSTEMD_DIR_TEST/amnezia-vpn-mail.timer"
+    [ -x "$ROOT/bin/awgmail" ] && head -c 4 "$ROOT/bin/awgmail" | grep -q ELF \
+        && pass "awgmail copied out of the panel image" \
+        || fail "awgmail missing from $ROOT/bin"
+    grep -q "run --rm --no-deps -T --entrypoint cat panel-init /app/awgmail" "$FAKE_CALLS" \
+        && pass "awgmail comes from the pinned panel image" \
+        || fail "awgmail was not taken from the panel image"
+    [ ! -e "$ROOT/bin/awgmail.new" ] \
+        && pass "no half-installed awgmail left behind" \
+        || fail "awgmail.new left in $ROOT/bin"
+    grep -Fq "ExecStart=${ROOT}/bin/awgmail" "$svc" \
+        && grep -Fq "Environment=AMNEZIA_MAIL_ROOT=${ROOT}" "$svc" \
+        && pass "mail service runs the host binary for this deployment" \
+        || fail "mail service ExecStart/root wrong"
+    grep -Fq "ConditionPathExists=${ROOT}/bin/awgmail" "$svc" \
+        && pass "mail service does not fail every minute without the binary" \
+        || fail "mail service has no ConditionPathExists on the binary"
+    grep -q "^ProtectSystem=strict" "$svc" && grep -Fq "ReadWritePaths=${ROOT}/status" "$svc" \
+        && pass "mail service may write only status/" \
+        || fail "mail service is not confined to status/"
+    grep -q "OnUnitActiveSec=1min" "$timer" && grep -q "Persistent=false" "$timer" \
+        && pass "mail runs once a minute without catching up" \
+        || fail "mail timer cadence wrong"
+    local up_n enable_n
+    up_n="$(grep -nE 'docker compose .*[[:space:]]up([[:space:]]|$)' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    enable_n="$(grep -n 'systemctl enable --now amnezia-vpn-mail.timer' "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    if [ -n "$up_n" ] && [ -n "$enable_n" ] && [ "$enable_n" -gt "$up_n" ]; then
+        pass "mail timer enabled only after the stack is up"
+    else
+        fail "mail timer enable must follow compose up (up=$up_n enable=$enable_n)"
+    fi
+}
+
+# Образ без awgmail или сбой копирования не срывают установку и не портят
+# уже стоящий бинарник.
+test_mail_binary_failure_is_not_fatal() {
+    local mode
+    for mode in bad fail; do
+        fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+        mkdir -p "$ROOT/bin"
+        printf '\177ELF-previous\n' > "$ROOT/bin/awgmail"
+        chmod 0755 "$ROOT/bin/awgmail"
+        rc="$(FAKE_AWGMAIL=$mode AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+        [ "$rc" = "0" ] || fail "awgmail $mode: install exit $rc"
+        grep -q "ELF-previous" "$ROOT/bin/awgmail" \
+            && pass "awgmail $mode: previous binary kept" \
+            || fail "awgmail $mode: previous binary replaced"
+        [ ! -e "$ROOT/bin/awgmail.new" ] \
+            && pass "awgmail $mode: nothing half-installed" \
+            || fail "awgmail $mode: awgmail.new left behind"
+        grep -q "WARNING: .*awgmail" "$TMP_TEST/out" "$TMP_TEST/err" \
+            && pass "awgmail $mode: the installer says so" \
+            || fail "awgmail $mode: failure was silent"
+    done
+}
+
 test_watchdog_can_be_declined() {
     fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-watchdog)"
@@ -3047,6 +3121,8 @@ test_image_capability_gate_passes_with_a_matching_image
 test_image_older_than_scripts_is_refused
 test_image_without_capabilities_command_is_refused
 test_watchdog_units_installed_by_default
+test_mail_units_and_binary_installed
+test_mail_binary_failure_is_not_fatal
 test_watchdog_can_be_declined
 test_watchdog_removed_on_rerun_with_flag
 test_update_check_installed_by_default
