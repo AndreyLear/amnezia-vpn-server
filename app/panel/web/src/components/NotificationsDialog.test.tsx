@@ -69,7 +69,9 @@ describe("уведомления", () => {
   it("сохраняет поля и не показывает пароль после сохранения", async () => {
     const user = userEvent.setup();
     render(<NotificationsDialog open onOpenChange={() => {}} />);
-    await user.type(await screen.findByLabelText("Сервер SMTP"), "smtp.example.org");
+    const host = await screen.findByLabelText("Сервер SMTP");
+    await waitFor(() => expect(host).toBeEnabled());
+    await user.type(host, "smtp.example.org");
     await user.type(screen.getByLabelText("Логин"), "vpn@example.org");
     await user.type(screen.getByLabelText("Пароль"), "secret-pass");
     await user.type(screen.getByLabelText("Куда присылать"), "owner@example.org");
@@ -93,6 +95,34 @@ describe("уведомления", () => {
     expect(screen.getByText(/Отправляем пробное письмо/)).toBeInTheDocument();
   });
 
+  // Ответ с настройками пришёл позже, чем начали вводить, и затёр набранное —
+  // сохранилась пустая форма (amnezia-vpn-server-2pdq, тестовый сервер).
+  it("не даёт вводить, пока настройки не пришли, и не затирает ввод", async () => {
+    const user = userEvent.setup();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const plain = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        await gate;
+        return plain(url, init);
+      }),
+    );
+    render(<NotificationsDialog open onOpenChange={() => {}} />);
+    const host = screen.getByLabelText("Сервер SMTP");
+    expect(host).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+
+    release();
+    await waitFor(() => expect(host).toBeEnabled());
+    await user.type(host, "smtp.example.org");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(host).toHaveValue("smtp.example.org");
+  });
+
   it("показывает отказ пробного письма и ответ почтового сервера", async () => {
     current = {
       ...saved,
@@ -106,7 +136,8 @@ describe("уведомления", () => {
   it("подсвечивает поле, которое отверг сервер", async () => {
     const user = userEvent.setup();
     render(<NotificationsDialog open onOpenChange={() => {}} />);
-    await screen.findByLabelText("Сервер SMTP");
+    const host = await screen.findByLabelText("Сервер SMTP");
+    await waitFor(() => expect(host).toBeEnabled());
     putReply = { ok: false, field: "recipient", message: "Укажите адрес почты" };
     await user.click(screen.getByRole("button", { name: "Сохранить" }));
     const recipient = screen.getByLabelText("Куда присылать");
