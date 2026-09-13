@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
-import { MoreHorizontalIcon } from "lucide-react";
+import { MoreHorizontalIcon, XIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { AboutDialog } from "@/components/AboutDialog";
@@ -175,6 +175,9 @@ export function HeaderMenu({
   const [servicesOpen, setServicesOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  // Открытое меню показывает крестик вместо многоточия: видно, что оно
+  // открыто и чем его закрыть (amnezia-vpn-server-3vec).
+  const [menuOpen, setMenuOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   // Radix возвращает фокус на кнопку при закрытии меню. Для клавиатуры это
   // единственно верно; для мыши кольцо фокуса остаётся гореть, будто меню всё
@@ -296,7 +299,7 @@ export function HeaderMenu({
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
@@ -313,7 +316,7 @@ export function HeaderMenu({
               }
             }}
           >
-            <MoreHorizontalIcon />
+            {menuOpen ? <XIcon data-testid="menu-close-icon" /> : <MoreHorizontalIcon data-testid="menu-more-icon" />}
             {pendingUpdate ? (
               // Напоминание о невзятом выпуске. Гаснет, когда версия
               // обновлена, — не когда полосу закрыли крестиком.
