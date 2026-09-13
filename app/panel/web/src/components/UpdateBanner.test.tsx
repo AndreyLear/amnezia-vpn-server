@@ -765,3 +765,36 @@ describe("окно не мигает чужим содержимым на зак
     vi.unstubAllGlobals();
   });
 });
+
+// Точное состояние со снимка владельца (amnezia-vpn-server-zhhl): окно
+// открыто, обновление только что установлено, новее ничего нет — поэтому
+// номер и описание пустые. Раньше окно рисовало тут «Версия», «Описание
+// выпуска не пришло» и кнопку «Обновить».
+describe("пустое предложение обновиться не рисуется", () => {
+  it("открытое окно без хода, без итога и без доступной версии не показывается", () => {
+    render(
+      <UpdateDialog
+        info={info({ available: false, latest: "", notes: "", state: "ok", state_at_utc: "2026-09-13T08:00:00Z", outcome_seen: "2026-09-13T08:00:00Z" })}
+        open
+        onOpenChange={() => {}}
+        onStarted={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Обновить" })).toBeNull();
+    expect(screen.queryByText(/Описание выпуска не пришло/)).toBeNull();
+  });
+
+  it("то же окно при доступной версии показывает предложение", () => {
+    render(
+      <UpdateDialog
+        info={info({ available: true, latest: "2.10.22" })}
+        open
+        onOpenChange={() => {}}
+        onStarted={() => {}}
+      />,
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Обновить" })).toBeInTheDocument();
+  });
+});

@@ -251,6 +251,21 @@ export function UpdateDialog({
     if (outcomeReady) setLatchedOutcome(true);
   }, [open, outcomeReady]);
   const showOutcome = outcomeReady || latchedOutcome;
+
+  // Окно показывается, только когда ему есть что показать
+  // (amnezia-vpn-server-zhhl): идёт обновление, готов итог или вышла версия,
+  // на которую можно обновиться.
+  //
+  // Без этого открытое окно в остальное время рисовало себя предложением
+  // обновиться — даже когда предлагать нечего. Владелец дважды присылал
+  // снимок: «Версия» без номера, «Описание выпуска не пришло», кнопка
+  // «Обновить» — сразу после установки, когда новее уже ничего нет. Путей
+  // туда много: перезагрузка посреди хода, медленный ответ сервера, порядок,
+  // в котором установщик поднимает панель и пишет итог. Чинить каждый по
+  // отдельности уже пробовали трижды; здесь закрыт сам источник — пустое
+  // предложение нарисовать нельзя.
+  const hasOffer = Boolean(info?.available && info.latest);
+  const visible = open && (running || showOutcome || hasOffer);
   const outcomeFailed = info?.state !== "ok";
 
   async function start() {
@@ -305,7 +320,7 @@ export function UpdateDialog({
   );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={visible} onOpenChange={onOpenChange}>
       {/*
         Стандартные sm:max-w-sm — это ~55 знаков в строке при text-sm, и
         собранный пункт описания выпуска в них ломается через слово.
