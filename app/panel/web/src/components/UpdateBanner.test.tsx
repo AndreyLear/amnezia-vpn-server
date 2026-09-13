@@ -356,11 +356,15 @@ describe("ход обновления", () => {
   // Критерий задачи amnezia-vpn-server-mrjh: упавший по сети запрос во
   // время перезапуска панели — не признак неудачи. Окно остаётся открытым
   // и говорящим, а не гаснет.
+  // Об этом говорит заголовок, отдельной строки под полосой нет
+  // (amnezia-vpn-server-dywt).
   it("запрос упал по сети — окно не закрывается и говорит, что панель перезапускается", () => {
     const onOpenChange = vi.fn();
     openDialog({ state: "running" }, { restarting: true, onOpenChange });
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText(/панель перезапускается/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Перезапускаем панель…" })).toBeInTheDocument();
+    expect(screen.queryByText(/ожидаемая часть обновления/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Панель перезапускается/)).not.toBeInTheDocument();
     // Полоса прогресса остаётся на месте — это не отдельный отказ, а тот же ход.
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalled();
@@ -643,9 +647,9 @@ describe("тост о ходе обновления", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Обновляем/ })).toBeInTheDocument(),
+      expect(screen.getByRole("button", { name: /Перезапускаем панель/ })).toBeInTheDocument(),
     );
-    expect(screen.getByText("Панель перезапускается")).toBeInTheDocument();
+    expect(screen.queryByText("Панель перезапускается")).not.toBeInTheDocument();
   });
 
   // Требование задачи: окно и тост обязаны показывать один и тот же ход, а

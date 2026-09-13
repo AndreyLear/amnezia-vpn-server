@@ -67,12 +67,12 @@ export function UpdateProgressToast({
           onClick={onOpen}
           className="flex w-full flex-col gap-2 rounded-lg border border-border bg-popover p-4 text-left text-sm text-popover-foreground shadow-lg"
         >
+          {/* Тот же заголовок, что в окне хода (amnezia-vpn-server-dywt). */}
           <p className="font-medium">
-            Обновляем
+            {restarting ? "Перезапускаем панель" : "Обновляем"}
             <RunningEllipsis />
           </p>
           <UpdateProgressBar percent={percent} />
-          {restarting && <p className="text-muted-foreground">Панель перезапускается</p>}
         </button>
       ),
       { id: TOAST_ID, duration: Infinity },

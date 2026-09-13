@@ -174,3 +174,30 @@ test("крестик виден в окнах со шапкой", async ({ page 
   }
 });
 
+// Пока панель перезапускается в ходе обновления, об этом говорит заголовок
+// окна, а не строка под полосой (amnezia-vpn-server-dywt). Перезапуск
+// изображается оборванными запросами к /api/update.
+test("во время перезапуска заголовок окна — «Перезапускаем панель»", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  let down = false;
+  await page.route("**/api/update", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    if (down) return route.abort("connectionreset");
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: { ...body, state: "running", state_from: body.installed, state_to: "99.9.9", state_at_utc: new Date().toISOString() },
+    });
+  });
+  await login(page);
+  // Ход обновления при закрытом окне показывает тост; он и открывает окно.
+  await page.getByRole("button", { name: /Обновляем/ }).first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Обновляем…" })).toBeVisible();
+
+  down = true;
+  await expect(dialog.getByRole("heading", { name: "Перезапускаем панель…" })).toBeVisible({ timeout: 20_000 });
+  await expect(dialog.getByText(/ожидаемая часть обновления/)).toHaveCount(0);
+  await page.screenshot({ path: "test-results/update-restarting.png" });
+});
