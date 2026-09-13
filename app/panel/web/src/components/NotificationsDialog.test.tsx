@@ -20,6 +20,7 @@ function mail(over: Partial<MailInfo> = {}): MailInfo {
     password_set: false,
     verified: false,
     test: { state: "none" },
+    channel: "off",
     ...over,
   };
 }
@@ -131,6 +132,21 @@ describe("уведомления", () => {
     render(<NotificationsDialog open onOpenChange={() => {}} />);
     expect(await screen.findByText(/Пробное письмо не ушло/)).toBeInTheDocument();
     expect(screen.getByText("535 5.7.8 Authentication failed")).toBeInTheDocument();
+  });
+
+  // Письмо правил не ушло после всех повторов — окно называет его
+  // (amnezia-vpn-server-pz2r).
+  it("называет письмо, от которого служба отказалась", async () => {
+    current = {
+      ...saved,
+      verified: true,
+      test: { state: "ok", at_utc: "2026-09-14T01:00:00Z" },
+      channel: "failing",
+      last_failure: { subject: "Туннель не работает 5 минут", error: "535 auth", at_utc: "2026-09-14T02:00:00Z" },
+    };
+    render(<NotificationsDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText(/«Туннель не работает 5 минут» не отправлено/)).toBeInTheDocument();
+    expect(screen.getByText("535 auth")).toBeInTheDocument();
   });
 
   it("подсвечивает поле, которое отверг сервер", async () => {

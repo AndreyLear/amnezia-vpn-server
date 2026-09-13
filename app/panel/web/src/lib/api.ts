@@ -292,7 +292,17 @@ export type MailInfo = {
     requested_at_utc?: string;
     at_utc?: string;
   };
+  /**
+   * Дошли бы письма сейчас (amnezia-vpn-server-pz2r). "off" — почта не
+   * настроена, и это не ошибка; "failing" и "password_missing" — письма не
+   * уходят, и панель говорит об этом на видном месте.
+   */
+  channel: MailChannel;
+  last_success_at_utc?: string;
+  last_failure?: { subject: string; error: string; at_utc: string };
 };
+
+export type MailChannel = "off" | "password_missing" | "unverified" | "ok" | "failing";
 
 export type MailSavePayload = {
   host: string;

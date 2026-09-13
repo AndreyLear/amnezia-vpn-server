@@ -56,14 +56,40 @@ type mailJSON struct {
 	// есть только на бумаге, хуже честного «не настроено».
 	Verified bool         `json:"verified"`
 	Test     mailTestJSON `json:"test"`
+	// Channel — дошли ли бы письма сейчас, по последнему известному исходу
+	// (amnezia-vpn-server-pz2r): "off" — почта не настроена, и это не
+	// ошибка; "password_missing" — после восстановления нет пароля;
+	// "unverified" — после сохранения ещё ничего не отправлялось; "ok" —
+	// последнее письмо дошло; "failing" — последнее письмо не ушло.
+	Channel string `json:"channel"`
+	// LastSuccessAtUTC — когда служба в последний раз отправила письмо
+	// (не пробное).
+	LastSuccessAtUTC string `json:"last_success_at_utc,omitempty"`
+	// LastFailure — письмо, от которого служба отказалась после всех
+	// повторов. Пусто, если с тех пор письмо дошло.
+	LastFailure *mailFailureJSON `json:"last_failure,omitempty"`
 }
+
+type mailFailureJSON struct {
+	Subject string `json:"subject"`
+	Error   string `json:"error"`
+	AtUTC   string `json:"at_utc"`
+}
+
+const (
+	mailChannelOff             = "off"
+	mailChannelPasswordMissing = "password_missing"
+	mailChannelUnverified      = "unverified"
+	mailChannelOK              = "ok"
+	mailChannelFailing         = "failing"
+)
 
 func (s *Server) mailTestRequestPath() string {
 	return mailconf.TestRequestPath(s.cfg.MailConfPath)
 }
 
 func (s *Server) mailView() (mailJSON, error) {
-	out := mailJSON{OK: true, Port: db.MailDefaultPort, Test: mailTestJSON{State: mailTestNone}}
+	out := mailJSON{OK: true, Port: db.MailDefaultPort, Test: mailTestJSON{State: mailTestNone}, Channel: mailChannelOff}
 	settings, err := db.LoadMailSettings(s.db())
 	if errors.Is(err, db.ErrMailNotConfigured) {
 		return out, nil
@@ -92,14 +118,53 @@ func (s *Server) mailView() (mailJSON, error) {
 		}
 	}
 
-	if out.PasswordSet {
-		saved := settings.UpdatedAt
-		if out.Test.State == mailTestOK && !req.AtUTC.Before(saved) {
+	st, _ := mailer.LoadState(filepath.Join(s.statusDir(), "mail-state.json"))
+	if st != nil && st.LastSuccessAt != nil {
+		out.LastSuccessAtUTC = st.LastSuccessAt.UTC().Format(time.RFC3339)
+	}
+	if st != nil && st.LastFailure != nil {
+		out.LastFailure = &mailFailureJSON{
+			Subject: st.LastFailure.Subject,
+			Error:   st.LastFailure.Error,
+			AtUTC:   st.LastFailure.At.UTC().Format(time.RFC3339),
+		}
+	}
+
+	if !out.PasswordSet {
+		out.Channel = mailChannelPasswordMissing
+		return out, nil
+	}
+
+	// Исходы, случившиеся после последнего сохранения: прежние говорят о
+	// прежних настройках. Решает самый поздний из них.
+	saved := settings.UpdatedAt
+	type outcome struct {
+		at time.Time
+		ok bool
+	}
+	var outcomes []outcome
+	if req != nil && res != nil && res.ID == req.ID && !req.AtUTC.Before(saved) {
+		outcomes = append(outcomes, outcome{res.AtUTC, res.OK})
+	}
+	if st != nil && st.LastSuccessAt != nil && !st.LastSuccessAt.Before(saved) {
+		outcomes = append(outcomes, outcome{*st.LastSuccessAt, true})
+	}
+	if st != nil && st.LastFailure != nil && !st.LastFailure.At.Before(saved) {
+		outcomes = append(outcomes, outcome{st.LastFailure.At, false})
+	}
+	out.Channel = mailChannelUnverified
+	var latest time.Time
+	for _, o := range outcomes {
+		if o.ok {
 			out.Verified = true
 		}
-		if st, err := mailer.LoadState(filepath.Join(s.statusDir(), "mail-state.json")); err == nil &&
-			st.LastSuccessAt != nil && !st.LastSuccessAt.Before(saved) {
-			out.Verified = true
+		if !o.at.Before(latest) {
+			latest = o.at
+			if o.ok {
+				out.Channel = mailChannelOK
+			} else {
+				out.Channel = mailChannelFailing
+			}
 		}
 	}
 	return out, nil

@@ -73,6 +73,24 @@ function MailStatus({ info, now }: { info: MailInfo; now: number }) {
     );
   }
   const { test } = info;
+  // Письмо правил, от которого служба отказалась после всех повторов, — позже
+  // пробного: о нём и говорим (amnezia-vpn-server-pz2r).
+  const failure = info.last_failure;
+  if (
+    info.channel === "failing" &&
+    failure &&
+    test.state !== "pending" &&
+    (test.state !== "failed" || !test.at_utc || failure.at_utc >= test.at_utc)
+  ) {
+    return (
+      <div className="grid gap-1 text-sm">
+        <p className="text-destructive">
+          «{failure.subject}» не отправлено {formatHandshake(failure.at_utc)}
+        </p>
+        <p className="break-words font-mono text-xs text-muted-foreground">{failure.error}</p>
+      </div>
+    );
+  }
   if (test.state === "pending") {
     const requested = test.requested_at_utc ? new Date(test.requested_at_utc).getTime() : now;
     if (now - requested > WAIT_MS) {
