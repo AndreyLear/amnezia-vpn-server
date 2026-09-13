@@ -26,8 +26,14 @@ RUN go mod download
 
 COPY app/panel/ ./
 RUN go build -trimpath -ldflags="-s -w" -o /out/panel .
+# awgmail runs on the host, not in this image (amnezia-vpn-server-m3f1): it
+# is carried here only so install.sh can copy it out. The image is the one
+# thing every deployment already fetches for its exact version, and
+# CGO_ENABLED=0 makes the binary independent of the host's libc.
+RUN go build -trimpath -ldflags="-s -w" -o /out/awgmail ./cmd/awgmail
 
 # --- runtime stage: Alpine, only the binary ----
 FROM alpine:${ALPINE_VERSION}
 
 COPY --from=build /out/panel /app/panel
+COPY --from=build /out/awgmail /app/awgmail
