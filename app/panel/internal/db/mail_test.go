@@ -2,9 +2,13 @@ package db
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 )
 
 func sampleMail() MailSettings {
@@ -117,5 +121,49 @@ func TestMailSettingsValidate(t *testing.T) {
 	ok.Password = ""
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("пустой пароль отвергнут: %v — после восстановления настройки без пароля законны", err)
+	}
+}
+
+// mail.conf повторяет строку базы; когда отправлять нечем, файла нет —
+// иначе служба пыталась бы войти со старым паролем (amnezia-vpn-server-2kr4).
+func TestRenderMailConf(t *testing.T) {
+	d := openSessionsDB(t)
+	path := filepath.Join(t.TempDir(), "mail.conf")
+
+	if err := os.WriteFile(path, []byte(`{"password":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenderMailConf(d.h, path); err != nil {
+		t.Fatalf("не настроено: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("почта не настроена, а файл остался: %v", err)
+	}
+
+	if err := SaveMailSettings(d.h, sampleMail(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenderMailConf(d.h, path); err != nil {
+		t.Fatalf("RenderMailConf: %v", err)
+	}
+	got, err := mailconf.Load(path)
+	if err != nil {
+		t.Fatalf("mailconf.Load: %v", err)
+	}
+	m := sampleMail()
+	want := mailconf.File{Host: m.Host, Port: m.Port, Username: m.Username, Password: m.Password, Recipient: m.Recipient}
+	if *got != want {
+		t.Fatalf("в файле %+v, ждали %+v", got, want)
+	}
+
+	m.Password = ""
+	if err := SaveMailSettings(d.h, m, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenderMailConf(d.h, path); err != nil {
+		t.Fatalf("без пароля: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("пароля нет, а файл со старым паролем остался: %v", err)
 	}
 }

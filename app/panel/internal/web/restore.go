@@ -36,7 +36,6 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
-	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 )
 
 const (
@@ -373,7 +372,7 @@ func (s *Server) applyRestoreNow(keepUsername string) (int, error) {
 	// strips it), so this removes a mail.conf left from before the restore
 	// instead of letting an old password outlive its row. Mail is not worth
 	// failing a restore over: the error is logged and the restore stands.
-	if err := mailconf.Render(next, s.cfg.MailConfPath); err != nil {
+	if err := db.RenderMailConf(next, s.cfg.MailConfPath); err != nil {
 		s.cfg.Logger.Printf("restore apply: mail settings: %v", err)
 	}
 	if _, err := db.AuthUserByUsername(next, keepUsername); err != nil {

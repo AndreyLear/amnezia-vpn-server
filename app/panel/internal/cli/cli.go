@@ -388,7 +388,7 @@ func (a *app) cmdInit(args []string) int {
 	// mail.conf is derived from the database too (amnezia-vpn-server-2kr4).
 	// A failure here must not keep the tunnel from starting: the error is
 	// reported and init still succeeds.
-	if err := mailconf.Render(handle, mailconf.PathFor(dbPath)); err != nil {
+	if err := db.RenderMailConf(handle, mailconf.PathFor(dbPath)); err != nil {
 		fmt.Fprintf(a.stderr, "panel init: warning: mail settings: %v\n", err)
 	}
 	return 0

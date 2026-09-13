@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 )
 
 // Mail settings for the operator's notifications (amnezia-vpn-server-2kr4,
@@ -14,7 +16,7 @@ import (
 // The database is the only truth about them. The host service that
 // actually talks to SMTP cannot read SQLite — sqlite3 is not installed on
 // the host — so the panel renders a derived file from this row
-// (internal/mailconf), the same way awg0.conf is rendered from the server
+// (RenderMailConf, internal/mailconf), the same way awg0.conf is rendered from the server
 // and clients tables.
 //
 // One row, id = 1: there is exactly one mailbox the server writes from.
@@ -140,4 +142,28 @@ func DeleteMailSettings(handle *sql.DB) error {
 		return fmt.Errorf("db: delete mail settings: %w", err)
 	}
 	return nil
+}
+
+// RenderMailConf writes mail.conf at path from the stored settings, or
+// removes it when there is nothing a sender could use: mail was never set
+// up, or the password is missing (after a restore). On a write failure the
+// previous file stays intact.
+func RenderMailConf(handle *sql.DB, path string) error {
+	settings, err := LoadMailSettings(handle)
+	if errors.Is(err, ErrMailNotConfigured) {
+		return mailconf.Write(path, nil)
+	}
+	if err != nil {
+		return err
+	}
+	if settings.PasswordMissing() {
+		return mailconf.Write(path, nil)
+	}
+	return mailconf.Write(path, &mailconf.File{
+		Host:      settings.Host,
+		Port:      settings.Port,
+		Username:  settings.Username,
+		Password:  settings.Password,
+		Recipient: settings.Recipient,
+	})
 }
