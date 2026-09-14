@@ -30,3 +30,23 @@ test("начальный экран даёт восстановить бэкап
   await page.getByRole("button", { name: "Бэкап" }).click();
   await expect(page.getByRole("heading", { name: "Загрузить бэкап" })).toBeVisible();
 });
+
+// Отказ почты виден и на экране без клиентов (amnezia-vpn-server-063p).
+test("полоса «письма не уходят» видна и без клиентов", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.route("**/api/mail", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({
+      json: {
+        ok: true, configured: true, host: "smtp.example.org", port: 587, username: "vpn@example.org",
+        recipient: "owner@example.org", password_set: false, verified: false,
+        test: { state: "none" }, channel: "password_missing",
+      },
+    });
+  });
+  await login(page);
+  await expect(page.getByRole("button", { name: "Добавить клиента" })).toBeVisible();
+  const alert = page.getByRole("alert").filter({ hasText: "Письма о сбоях не уходят" });
+  await expect(alert).toBeVisible();
+  await page.screenshot({ path: "test-results/mail-banner-empty.png" });
+});
