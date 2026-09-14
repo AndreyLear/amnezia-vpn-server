@@ -294,7 +294,10 @@ for (const width of [1280, 375]) {
     expect(box!.x + box!.width).toBeLessThanOrEqual(width);
     await page.screenshot({ path: `test-results/mail-banner-${width}.png` });
     await alert.getByRole("button", { name: "Открыть настройки" }).click();
-    await expect(page.getByRole("dialog", { name: "Уведомления" })).toBeVisible();
+    const notifications = page.getByRole("dialog", { name: "Уведомления" });
+    await expect(notifications).toBeVisible();
+    await expect(notifications.getByText("Почтовый сервер не принял логин или пароль")).toBeVisible();
+    await page.screenshot({ path: `test-results/mail-dialog-failure-${width}.png` });
   });
 }
 

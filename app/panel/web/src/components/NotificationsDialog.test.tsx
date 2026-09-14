@@ -140,6 +140,8 @@ describe("уведомления", () => {
     render(<NotificationsDialog open onOpenChange={() => {}} />);
     expect(await screen.findByText(/Пробное письмо не ушло/)).toBeInTheDocument();
     expect(screen.getByText("Почтовый сервер не принял логин или пароль")).toBeInTheDocument();
+    // Последнее предложение без точки, как везде в панели (amnezia-vpn-server-k6r9).
+    expect(screen.getByText("Пробное письмо не ушло. Настройки сохранены, но не проверены")).toBeInTheDocument();
     expect(screen.getByText("535 5.7.8 Authentication failed")).toBeInTheDocument();
   });
 

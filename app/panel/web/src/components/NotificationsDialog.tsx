@@ -98,7 +98,7 @@ function MailStatus({ info, now }: { info: MailInfo; now: number }) {
       return (
         <p className="text-sm text-destructive">
           Сервер не ответил за {WAIT_MS / 1000} секунд, пробное письмо не отправлено. Проверьте
-          состояние служб.
+          состояние служб
         </p>
       );
     }
@@ -112,7 +112,7 @@ function MailStatus({ info, now }: { info: MailInfo; now: number }) {
   if (test.state === "failed") {
     return (
       <div className="grid gap-1 text-sm">
-        <p className="text-destructive">Пробное письмо не ушло. Настройки сохранены, но не проверены.</p>
+        <p className="text-destructive">Пробное письмо не ушло. Настройки сохранены, но не проверены</p>
         {test.summary ? <p>{test.summary}</p> : null}
         {test.error ? (
           <p className="break-words font-mono text-xs text-muted-foreground">{test.error}</p>
