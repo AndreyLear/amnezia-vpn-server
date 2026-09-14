@@ -21,25 +21,27 @@ func TestDefaultMTULeavesRoomForEncapsulation(t *testing.T) {
 	}
 }
 
-// Fitting the server's own uplink is not enough. The packet also has to
-// cross the client's last mile, and that is the shorter path: a mobile
-// carrier measured on a live deployment carried 1411 bytes while the
-// server's uplink carried 1476. The server cannot probe the client's
-// path — it differs per client and changes as the phone moves between
-// mobile, home and someone else's Wi-Fi — so the default has to be small
-// enough to survive the worst of them.
-//
-// The failure this prevents is not a broken tunnel but a subtly bad one:
-// small packets arrive, full-size ones are dropped or fragmented, and the
-// user sees pages loading while video stalls.
+// The default has to carry QUIC from TikTok: its CDN sends 1348-byte packets
+// and does not shrink them on «fragmentation needed», so a smaller route
+// drops every one and the app stalls waiting for TCP (measured 14.09.2026,
+// amnezia-vpn-server-dy91, -rplm).
+func TestDefaultMTUCarriesTikTokQUIC(t *testing.T) {
+	const tiktokQUICPacket = 1348
+	if DefaultMTU < tiktokQUICPacket {
+		t.Fatalf("DefaultMTU %d drops TikTok's %d-byte QUIC packets", DefaultMTU, tiktokQUICPacket)
+	}
+}
+
+// It still has to survive a mobile last mile, which is shorter than the
+// server's uplink and which the server cannot probe. The owner raised the
+// default from 1340 (1400 on the wire) by 20 bytes to carry TikTok and chose
+// to watch; this pins that step so the default does not creep further without
+// a new decision (amnezia-vpn-server-rplm).
 func TestDefaultMTUSurvivesAMobileLastMile(t *testing.T) {
-	// Mobile networks routinely sit near 1400 because the carrier tunnels
-	// subscriber traffic itself; 1400 on the wire is the value that holds
-	// across the ones seen in practice.
-	const mobileLastMilePMTU = 1400
-	if got := int(DefaultMTU) + EncapsulationOverhead; got > mobileLastMilePMTU {
-		t.Fatalf("a full packet is %d bytes (MTU %d + %d overhead), which a %d-byte mobile path drops",
-			got, DefaultMTU, EncapsulationOverhead, mobileLastMilePMTU)
+	const mobileLastMileBudget = 1420
+	if got := int(DefaultMTU) + EncapsulationOverhead; got > mobileLastMileBudget {
+		t.Fatalf("a full packet is %d bytes (MTU %d + %d overhead), over the %d-byte mobile budget",
+			got, DefaultMTU, EncapsulationOverhead, mobileLastMileBudget)
 	}
 }
 

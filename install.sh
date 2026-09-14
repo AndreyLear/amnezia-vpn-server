@@ -1526,7 +1526,11 @@ TUNNEL_ENCAP_OVERHEAD=60
 # full-size packets to be dropped out there — pages load, video stalls.
 # The ceiling therefore is what mobile networks carry, not what this
 # server can reach; the measurement still wins whenever it is worse.
-TUNNEL_MTU_CEILING=1340   # 1400 bytes on the wire: mobile networks carry it
+# 1360, not the earlier 1340: TikTok's CDN sends 1348-byte QUIC packets and
+# ignores «fragmentation needed», so 1340 dropped them all and video stalled
+# (amnezia-vpn-server-dy91, owner decision -rplm). Must match
+# awgconf.DefaultMTU.
+TUNNEL_MTU_CEILING=1360   # 1420 bytes on the wire plus S4
 TUNNEL_MTU_FLOOR=1280     # IPv6 minimum link MTU: every path must carry it
 # ${VAR-default}, not ${VAR:-default}: an explicitly empty value means
 # "do not measure" (the harnesses set it that way for the runs that are

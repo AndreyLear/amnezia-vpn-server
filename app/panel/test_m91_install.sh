@@ -2862,7 +2862,7 @@ test_device_mtu_recorded() {
     [ "$max" -ge "$mtu" ] \
         && pass "the ceiling is never below what clients get ($max >= $mtu)" \
         || fail "ceiling $max is below the client value $mtu"
-    # На чистом пути 1500 сервер тянет больше, чем осторожные 1340 — иначе
+    # На чистом пути 1500 сервер тянет больше, чем осторожные 1360 — иначе
     # раздавать маршрутами было бы нечего.
     [ "$max" -gt "$mtu" ] \
         && pass "a clean uplink leaves room to hand out ($max > $mtu)" \
@@ -3333,8 +3333,8 @@ test_pmtu_preflight_caps_at_a_mobile_safe_size() {
     state_set FAKE_PMTU 1476
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "pmtu flow: exit $rc"
-    grep -q "^TUNNEL_MTU=1340$" "$ROOT/.env" \
-        && pass "1476-byte uplink -> TUNNEL_MTU capped at 1340 (mobile-safe)" \
+    grep -q "^TUNNEL_MTU=1360$" "$ROOT/.env" \
+        && pass "1476-byte uplink -> TUNNEL_MTU capped at 1360 (mobile-safe, carries TikTok QUIC)" \
         || fail "1476-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
 }
 
@@ -3346,8 +3346,8 @@ test_pmtu_preflight_caps_a_clean_uplink_too() {
     state_set FAKE_PMTU 1500
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "pmtu cap flow: exit $rc"
-    grep -q "^TUNNEL_MTU=1340$" "$ROOT/.env" \
-        && pass "1500-byte uplink -> TUNNEL_MTU still 1340" \
+    grep -q "^TUNNEL_MTU=1360$" "$ROOT/.env" \
+        && pass "1500-byte uplink -> TUNNEL_MTU still 1360" \
         || fail "1500-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
 }
 
