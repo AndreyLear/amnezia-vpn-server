@@ -430,7 +430,7 @@ rate_plan() {
 # её не было (awg0 живёт с noqueue), и ставить её ради никого значит менять
 # поведение всем сразу.
 sync_rates() {
-    local plan cidr rate addresses family classid n=0
+    local plan cidr rate addresses family classid burst n=0
     plan="$(rate_plan "${CONFIG_DEST}")" || return 0
 
     if [ -z "${plan}" ]; then
@@ -466,8 +466,16 @@ sync_rates() {
         [ -n "${rate}" ] && [ -n "${addresses}" ] || continue
         n=$((n + 1))
         classid="1:$((n + 100))"
+        # Запас на всплеск — 10 мс трафика на пределе, но не меньше 64k: пачка
+        # GSO на awg0 бывает до 27 КБ. Запас задаётся и для rate, и для ceil.
+        # Без cburst ядро ставило ceil-запас 1600b, пачка в него не влезала,
+        # и класс держал поток: на стенде при пределе 100 было 78 Мбит/с, с
+        # cburst — 86–88 (amnezia-vpn-server-xhl7).
+        burst=$((rate * 5 / 4))
+        [ "${burst}" -ge 64 ] || burst=64
         if ! ${TC_BIN} class add dev "${IFACE}" parent 1: classid "${classid}" \
-                htb rate "${rate}mbit" ceil "${rate}mbit" burst 64k >/dev/null 2>&1; then
+                htb rate "${rate}mbit" ceil "${rate}mbit" \
+                burst "${burst}k" cburst "${burst}k" >/dev/null 2>&1; then
             log "error: не удалось задать предел ${rate} Мбит для ${addresses}"
             exit 1
         fi
