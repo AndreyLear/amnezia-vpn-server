@@ -41,10 +41,12 @@ type TestRequest struct {
 // TestResult is the outcome of the request with the same ID. Error is the
 // sender's error, already free of the password (internal/mailer redacts it).
 type TestResult struct {
-	ID    string    `json:"id"`
-	OK    bool      `json:"ok"`
-	Error string    `json:"error,omitempty"`
-	AtUTC time.Time `json:"at_utc"`
+	ID string `json:"id"`
+	OK bool   `json:"ok"`
+	// Summary explains a failure in words; Error is the sender's error text.
+	Summary string    `json:"summary,omitempty"`
+	Error   string    `json:"error,omitempty"`
+	AtUTC   time.Time `json:"at_utc"`
 }
 
 // WriteTestRequest leaves a new request with a fresh id.

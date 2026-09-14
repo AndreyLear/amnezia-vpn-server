@@ -5,6 +5,14 @@
 // оставленной рядом с mail.conf, и кладёт итог в status/. Панель лишь
 // сравнивает, на какую просьбу пришёл ответ.
 //
+// ИСКЛЮЧЕНИЕ из правила «ошибки клиенту — общие» (CLAUDE.md): ответ
+// почтового сервера на пробное письмо и на письмо, от которого служба
+// отказалась, отдаётся как есть. Так решил владелец (amnezia-vpn-server-8fg2):
+// без него человек не узнает, что именно не так с его ящиком. Рядом всегда
+// идёт объяснение словами (summary, amnezia-vpn-server-idd6). Ответ проходит
+// через redact в internal/mailer и пароля не содержит; других данных запроса
+// в нём нет.
+//
 // Пароль от почтового ящика не возвращается никогда — ни после сохранения,
 // ни в каком-либо другом ответе. Пустой пароль при сохранении значит
 // «оставить прежний»: иначе каждое исправление адреса требовало бы вводить
@@ -37,7 +45,9 @@ const (
 )
 
 type mailTestJSON struct {
-	State          string `json:"state"`
+	State string `json:"state"`
+	// Summary объясняет отказ словами, Error — ответ почтового сервера.
+	Summary        string `json:"summary,omitempty"`
 	Error          string `json:"error,omitempty"`
 	RequestedAtUTC string `json:"requested_at_utc,omitempty"`
 	AtUTC          string `json:"at_utc,omitempty"`
@@ -72,6 +82,7 @@ type mailJSON struct {
 
 type mailFailureJSON struct {
 	Subject string `json:"subject"`
+	Summary string `json:"summary,omitempty"`
 	Error   string `json:"error"`
 	AtUTC   string `json:"at_utc"`
 }
@@ -113,6 +124,7 @@ func (s *Server) mailView() (mailJSON, error) {
 			out.Test.AtUTC = res.AtUTC.Format(time.RFC3339)
 		default:
 			out.Test.State = mailTestFailed
+			out.Test.Summary = res.Summary
 			out.Test.Error = res.Error
 			out.Test.AtUTC = res.AtUTC.Format(time.RFC3339)
 		}
@@ -125,6 +137,7 @@ func (s *Server) mailView() (mailJSON, error) {
 	if st != nil && st.LastFailure != nil {
 		out.LastFailure = &mailFailureJSON{
 			Subject: st.LastFailure.Subject,
+			Summary: st.LastFailure.Summary,
 			Error:   st.LastFailure.Error,
 			AtUTC:   st.LastFailure.At.UTC().Format(time.RFC3339),
 		}

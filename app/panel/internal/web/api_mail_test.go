@@ -37,12 +37,16 @@ func decodeMail(t *testing.T, rec *httptest.ResponseRecorder) mailJSON {
 }
 
 func (f *fixture) answerTest(ok bool, errText string) {
+	f.answerTestWith(ok, "", errText)
+}
+
+func (f *fixture) answerTestWith(ok bool, summary, errText string) {
 	f.t.Helper()
 	req, err := mailconf.ReadTestRequest(f.server.mailTestRequestPath())
 	if err != nil || req == nil {
 		f.t.Fatalf("нет просьбы о пробном письме: %v", err)
 	}
-	res := &mailconf.TestResult{ID: req.ID, OK: ok, Error: errText, AtUTC: time.Now().UTC()}
+	res := &mailconf.TestResult{ID: req.ID, OK: ok, Summary: summary, Error: errText, AtUTC: time.Now().UTC()}
 	if err := mailconf.WriteTestResult(filepath.Join(f.server.statusDir(), mailconf.TestResultName), res); err != nil {
 		f.t.Fatal(err)
 	}
@@ -327,4 +331,25 @@ func TestAPIMailChannel(t *testing.T) {
 			t.Fatalf("channel = %q, отказ по прежним настройкам принят за нынешний", got.Channel)
 		}
 	})
+}
+
+// Отказ приходит в панель с объяснением словами и ответом сервера
+// (amnezia-vpn-server-idd6).
+func TestAPIMailFailureSummary(t *testing.T) {
+	f := newFixture(t)
+	decodeMail(t, f.apiCSRF(http.MethodPut, "/api/mail", mailBody(mailSecret)))
+	f.answerTestWith(false, "Почтовый сервер не принял логин или пароль", "535 auth")
+	got := decodeMail(t, f.get("/api/mail"))
+	if got.Test.Summary != "Почтовый сервер не принял логин или пароль" || got.Test.Error != "535 auth" {
+		t.Fatalf("пробное: %+v", got.Test)
+	}
+	at := time.Now().Add(time.Minute).UTC()
+	st := &mailer.State{LastFailure: &mailer.Failure{Key: "tunnel", Subject: "s", Summary: "Почтовый сервер не отвечает: проверьте адрес и порт", Error: "i/o timeout", At: at}}
+	if err := st.Save(filepath.Join(f.server.statusDir(), "mail-state.json")); err != nil {
+		t.Fatal(err)
+	}
+	got = decodeMail(t, f.get("/api/mail"))
+	if got.LastFailure == nil || got.LastFailure.Summary != "Почтовый сервер не отвечает: проверьте адрес и порт" {
+		t.Fatalf("письмо правил: %+v", got.LastFailure)
+	}
 }

@@ -288,6 +288,9 @@ export type MailInfo = {
   verified: boolean;
   test: {
     state: MailTestState;
+    /** Объяснение отказа словами (amnezia-vpn-server-idd6). */
+    summary?: string;
+    /** Ответ почтового сервера как есть. */
     error?: string;
     requested_at_utc?: string;
     at_utc?: string;
@@ -299,7 +302,7 @@ export type MailInfo = {
    */
   channel: MailChannel;
   last_success_at_utc?: string;
-  last_failure?: { subject: string; error: string; at_utc: string };
+  last_failure?: { subject: string; summary?: string; error: string; at_utc: string };
 };
 
 export type MailChannel = "off" | "password_missing" | "unverified" | "ok" | "failing";

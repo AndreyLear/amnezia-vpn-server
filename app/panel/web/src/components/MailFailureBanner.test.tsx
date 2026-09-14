@@ -60,10 +60,17 @@ describe("полоса «письма не уходят»", () => {
     current = {
       ...base,
       channel: "failing",
-      last_failure: { subject: "Туннель не работает 5 минут", error: "535 5.7.8 auth failed", at_utc: "2026-09-14T02:00:00Z" },
+      last_failure: {
+        subject: "Туннель не работает 5 минут",
+        summary: "Почтовый сервер не принял логин или пароль",
+        error: "535 5.7.8 auth failed",
+        at_utc: "2026-09-14T02:00:00Z",
+      },
     };
     render(<MailFailureBanner />);
     const alert = await screen.findByRole("alert");
+    // Объяснение словами идёт рядом с ответом сервера (amnezia-vpn-server-idd6).
+    expect(alert).toHaveTextContent("Почтовый сервер не принял логин или пароль");
     expect(alert).toHaveTextContent("Письма о сбоях не уходят");
     expect(alert).toHaveTextContent("«Туннель не работает 5 минут» не отправлено");
     expect(alert).toHaveTextContent("535 5.7.8 auth failed");

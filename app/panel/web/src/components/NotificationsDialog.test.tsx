@@ -130,10 +130,16 @@ describe("уведомления", () => {
   it("показывает отказ пробного письма и ответ почтового сервера", async () => {
     current = {
       ...saved,
-      test: { state: "failed", error: "535 5.7.8 Authentication failed", at_utc: new Date().toISOString() },
+      test: {
+        state: "failed",
+        summary: "Почтовый сервер не принял логин или пароль",
+        error: "535 5.7.8 Authentication failed",
+        at_utc: new Date().toISOString(),
+      },
     };
     render(<NotificationsDialog open onOpenChange={() => {}} />);
     expect(await screen.findByText(/Пробное письмо не ушло/)).toBeInTheDocument();
+    expect(screen.getByText("Почтовый сервер не принял логин или пароль")).toBeInTheDocument();
     expect(screen.getByText("535 5.7.8 Authentication failed")).toBeInTheDocument();
   });
 

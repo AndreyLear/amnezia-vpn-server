@@ -279,6 +279,7 @@ for (const width of [1280, 375]) {
           channel: "failing",
           last_failure: {
             subject: "Туннель не работает 5 минут",
+            summary: "Почтовый сервер не принял логин или пароль",
             error: "mailer: login as vpn@example.org: 535 5.7.8 Error: authentication failed",
             at_utc: "2026-09-14T02:00:00Z",
           },

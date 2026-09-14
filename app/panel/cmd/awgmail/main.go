@@ -210,6 +210,7 @@ func sendTestLetter(ctx context.Context, stdout, stderr io.Writer, d deps, cfg *
 	res := &mailconf.TestResult{ID: req.ID, OK: true, AtUTC: now.UTC()}
 	if err := d.send(ctx, cfg, notify.TestLetter(cfg.Server)); err != nil {
 		res.OK = false
+		res.Summary = mailer.Summary(err)
 		res.Error = err.Error()
 		fmt.Fprintf(stderr, "awgmail: пробное письмо не отправлено: %v\n", err)
 	} else {
