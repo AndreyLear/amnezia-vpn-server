@@ -439,6 +439,45 @@ describe("описание выпуска", () => {
     "  «Проверено -34940 сек назад». Исправлено.",
   ].join("\n");
 
+  // Отставший на два выпуска видит два раздельных списка, и перед каждым —
+  // его версия (amnezia-vpn-server-l4bf).
+  it("разделяет описания выпусков и называет версию каждого", () => {
+    render(
+      <UpdateDialog
+        info={info({
+          notes: "- третье\n\n- второе",
+          releases: [
+            { version: "2.9.3", notes: "- третье\n- ещё третье" },
+            { version: "2.9.2", notes: "- второе" },
+          ],
+        })}
+        open
+        onOpenChange={() => {}}
+        onStarted={() => {}}
+      />,
+    );
+    const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(headings).toEqual(["Версия 2.9.3", "Версия 2.9.2"]);
+    const lists = screen.getAllByRole("list");
+    expect(lists).toHaveLength(2);
+    expect(lists[0]).toHaveTextContent("третье");
+    expect(lists[0]).not.toHaveTextContent("второе");
+    expect(lists[1]).toHaveTextContent("второе");
+  });
+
+  it("один выпуск — без подзаголовка версии", () => {
+    render(
+      <UpdateDialog
+        info={info({ notes: "- одно", releases: [{ version: "2.9.3", notes: "- одно" }] })}
+        open
+        onOpenChange={() => {}}
+        onStarted={() => {}}
+      />,
+    );
+    expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(0);
+    expect(screen.getByRole("listitem")).toHaveTextContent("одно");
+  });
+
   it("собирает пункт из переносов в один элемент списка", () => {
     openDialog(release21013);
 

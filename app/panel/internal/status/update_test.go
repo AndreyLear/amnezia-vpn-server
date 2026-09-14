@@ -98,6 +98,34 @@ func TestNotesSinceGathersEveryReleaseInBetween(t *testing.T) {
 	}
 }
 
+// Описания соседних выпусков не слипаются в один список, и у каждого есть
+// своя версия (amnezia-vpn-server-l4bf).
+func TestNotesSinceKeepsReleasesApart(t *testing.T) {
+	releases := []Release{
+		{TagName: "v2.9.1", Body: "- первое"},
+		{TagName: "v2.9.3", Body: "- третье\n- ещё третье"},
+		{TagName: "v2.9.2", Body: "- второе"},
+		{TagName: "v2.9.0", Body: "- уже стоит"},
+	}
+	latest, each := NotesSinceEach(releases, "2.9.0")
+	if latest != "2.9.3" || len(each) != 3 {
+		t.Fatalf("latest = %q, выпусков %d: %+v", latest, len(each), each)
+	}
+	for i, want := range []ReleaseNotes{
+		{Version: "2.9.3", Notes: "- третье\n- ещё третье"},
+		{Version: "2.9.2", Notes: "- второе"},
+		{Version: "2.9.1", Notes: "- первое"},
+	} {
+		if each[i] != want {
+			t.Errorf("выпуск %d: %+v, ждали %+v", i, each[i], want)
+		}
+	}
+	_, joined := NotesSince(releases, "2.9.0")
+	if !strings.Contains(joined, "- ещё третье\n\n- второе") {
+		t.Fatalf("выпуски не разделены пустой строкой:\n%s", joined)
+	}
+}
+
 // Свежая версия уже стоит — предлагать нечего.
 func TestNotesSinceOffersNothingWhenUpToDate(t *testing.T) {
 	releases := []Release{{TagName: "v2.9.3", Body: "x"}}

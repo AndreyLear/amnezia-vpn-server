@@ -22,6 +22,9 @@ type updateJSON struct {
 	Latest    string `json:"latest"`
 	Available bool   `json:"available"`
 	Notes     string `json:"notes"`
+	// Releases — те же описания по выпускам, чтобы окно могло назвать версию
+	// перед её пунктами (amnezia-vpn-server-l4bf).
+	Releases []status.ReleaseNotes `json:"releases"`
 
 	// Про последнюю проверку: когда и чем кончилась. «Ни разу не
 	// проверяли» и «проверяли, не вышло» — разные новости.
@@ -79,6 +82,7 @@ func (s *Server) apiUpdate(w http.ResponseWriter, r *http.Request) {
 	// изменится у него (amnezia-vpn-server-tjoq).
 	if releases, err := status.ReadReleases(filepath.Join(dir, "update-latest.json")); err == nil {
 		out.Latest, out.Notes = status.NotesSince(releases, out.Installed)
+		_, out.Releases = status.NotesSinceEach(releases, out.Installed)
 	}
 	out.Available = status.IsNewer(out.Latest, out.Installed)
 

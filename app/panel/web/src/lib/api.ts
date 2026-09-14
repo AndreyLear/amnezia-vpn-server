@@ -229,6 +229,11 @@ export type UpdateInfo = {
   latest: string;
   available: boolean;
   notes: string;
+  /**
+   * Те же описания по выпускам, от свежего к старому (amnezia-vpn-server-l4bf).
+   * null или пусто — у старого сервера этого поля нет.
+   */
+  releases?: { version: string; notes: string }[] | null;
   checked_at_utc: string;
   check_result: string;
   check_reason: string;

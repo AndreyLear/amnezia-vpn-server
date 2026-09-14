@@ -201,3 +201,31 @@ test("во время перезапуска заголовок окна — «�
   await expect(dialog.getByText(/ожидаемая часть обновления/)).toHaveCount(0);
   await page.screenshot({ path: "test-results/update-restarting.png" });
 });
+
+// Отставший на несколько выпусков видит их описания раздельно, с версией
+// перед каждым (amnezia-vpn-server-l4bf).
+test("описания нескольких выпусков не сливаются", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.route("**/api/update", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: {
+        ...body,
+        releases: [
+          { version: "99.9.9", notes: "- Новое в девяносто девятой\n- Ещё пункт" },
+          { version: "99.9.8", notes: "- Новое в предыдущей" },
+        ],
+      },
+    });
+  });
+  await login(page);
+  await page.getByRole("button", { name: "Показать подробности" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Версия 99.9.8" })).toBeVisible();
+  await expect(dialog.getByRole("list")).toHaveCount(2);
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: "test-results/release-notes-split.png" });
+});
