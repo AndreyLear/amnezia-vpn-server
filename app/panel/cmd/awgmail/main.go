@@ -116,7 +116,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 	}
 	statePath := d.getenv("AMNEZIA_MAIL_STATE_PATH")
 	if statePath == "" {
-		statePath = filepath.Join(root, "status", "mail-state.json")
+		statePath = filepath.Join(root, "status", mailer.StateName)
 	}
 
 	notifyPath := d.getenv("AMNEZIA_NOTIFY_STATE_PATH")
@@ -138,8 +138,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 
 	now := d.now()
 	// The test letter first: someone is looking at the panel and waiting.
-	sendTestLetter(ctx, stdout, stderr, d, cfg, mailconf.TestRequestPath(confPath),
-		filepath.Join(filepath.Dir(statePath), mailconf.TestResultName), now)
+	sendTestLetter(ctx, stdout, stderr, d, cfg, mailconf.TestLetterRequestPath(confPath),
+		filepath.Join(filepath.Dir(statePath), mailconf.TestLetterResultName), now)
 
 	rules, err := notify.LoadState(notifyPath)
 	if err != nil {
@@ -206,7 +206,7 @@ const testRequestMaxAge = 15 * time.Minute
 // sendTestLetter answers the panel's request for a test letter
 // (amnezia-vpn-server-8fg2), once per request id.
 func sendTestLetter(ctx context.Context, stdout, stderr io.Writer, d deps, cfg *mailconf.File, requestPath, resultPath string, now time.Time) {
-	req, err := mailconf.ReadTestRequest(requestPath)
+	req, err := mailconf.ReadTestLetterRequest(requestPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "awgmail: %v\n", err)
 		return
@@ -214,10 +214,10 @@ func sendTestLetter(ctx context.Context, stdout, stderr io.Writer, d deps, cfg *
 	if req == nil || now.Sub(req.AtUTC) > testRequestMaxAge {
 		return
 	}
-	if res, err := mailconf.ReadTestResult(resultPath); err == nil && res != nil && res.ID == req.ID {
+	if res, err := mailconf.ReadTestLetterResult(resultPath); err == nil && res != nil && res.ID == req.ID {
 		return
 	}
-	res := &mailconf.TestResult{ID: req.ID, OK: true, AtUTC: now.UTC()}
+	res := &mailconf.TestLetterResult{ID: req.ID, OK: true, AtUTC: now.UTC()}
 	if err := d.send(ctx, cfg, notify.TestLetter(cfg.Server)); err != nil {
 		res.OK = false
 		res.Summary = mailer.Summary(err)
@@ -226,7 +226,7 @@ func sendTestLetter(ctx context.Context, stdout, stderr io.Writer, d deps, cfg *
 	} else {
 		fmt.Fprintln(stdout, "awgmail: пробное письмо отправлено")
 	}
-	if err := mailconf.WriteTestResult(resultPath, res); err != nil {
+	if err := mailconf.WriteTestLetterResult(resultPath, res); err != nil {
 		fmt.Fprintf(stderr, "awgmail: итог пробного письма не записан: %v\n", err)
 	}
 }

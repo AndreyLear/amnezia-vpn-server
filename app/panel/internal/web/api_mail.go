@@ -96,7 +96,7 @@ const (
 )
 
 func (s *Server) mailTestRequestPath() string {
-	return mailconf.TestRequestPath(s.cfg.MailConfPath)
+	return mailconf.TestLetterRequestPath(s.cfg.MailConfPath)
 }
 
 func (s *Server) mailView() (mailJSON, error) {
@@ -112,8 +112,8 @@ func (s *Server) mailView() (mailJSON, error) {
 	out.Host, out.Port, out.Username, out.Recipient = settings.Host, settings.Port, settings.Username, settings.Recipient
 	out.PasswordSet = !settings.PasswordMissing()
 
-	req, _ := mailconf.ReadTestRequest(s.mailTestRequestPath())
-	res, _ := mailconf.ReadTestResult(filepath.Join(s.statusDir(), mailconf.TestResultName))
+	req, _ := mailconf.ReadTestLetterRequest(s.mailTestRequestPath())
+	res, _ := mailconf.ReadTestLetterResult(filepath.Join(s.statusDir(), mailconf.TestLetterResultName))
 	if req != nil {
 		out.Test.RequestedAtUTC = req.AtUTC.Format(time.RFC3339)
 		switch {
@@ -130,7 +130,7 @@ func (s *Server) mailView() (mailJSON, error) {
 		}
 	}
 
-	st, _ := mailer.LoadState(filepath.Join(s.statusDir(), "mail-state.json"))
+	st, _ := mailer.LoadState(filepath.Join(s.statusDir(), mailer.StateName))
 	if st != nil && st.LastSuccessAt != nil {
 		out.LastSuccessAtUTC = st.LastSuccessAt.UTC().Format(time.RFC3339)
 	}
@@ -184,12 +184,7 @@ func (s *Server) mailView() (mailJSON, error) {
 }
 
 func (s *Server) apiMail(w http.ResponseWriter, r *http.Request) {
-	view, err := s.mailView()
-	if err != nil {
-		internalFailure(w, r, s, "api mail", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, view)
+	s.writeMailView(w, r)
 }
 
 type mailSaveRequest struct {
@@ -262,7 +257,7 @@ func (s *Server) apiMailSave(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, auditMailSave, next.Recipient, "")
 	// Пробное письмо уходит при каждом сохранении: не дошло — настройки всё
 	// равно сохранены, а окно покажет отказ.
-	if _, err := mailconf.WriteTestRequest(s.mailTestRequestPath(), time.Now()); err != nil {
+	if _, err := mailconf.WriteTestLetterRequest(s.mailTestRequestPath(), time.Now()); err != nil {
 		s.cfg.Logger.Printf("api mail test request: %v", err)
 	}
 	s.writeMailView(w, r)
@@ -280,7 +275,7 @@ func (s *Server) apiMailTest(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api mail test", err)
 		return
 	}
-	if _, err := mailconf.WriteTestRequest(s.mailTestRequestPath(), time.Now()); err != nil {
+	if _, err := mailconf.WriteTestLetterRequest(s.mailTestRequestPath(), time.Now()); err != nil {
 		internalFailure(w, r, s, "api mail test request", err)
 		return
 	}

@@ -23,24 +23,24 @@ import (
 // a guess about timing, and a request is never answered twice — awgmail does
 // not delete the request, because its sandbox may write only status/.
 
-// TestRequestPath is where the panel leaves the request: beside mail.conf,
+// TestLetterRequestPath is where the panel leaves the request: beside mail.conf,
 // in the directory the panel writes and the host reads.
-func TestRequestPath(confPath string) string {
+func TestLetterRequestPath(confPath string) string {
 	return filepath.Join(filepath.Dir(confPath), "mail-test-request.json")
 }
 
-// TestResultName is the outcome's file name in the status directory.
-const TestResultName = "mail-test.json"
+// TestLetterResultName is the outcome's file name in the status directory.
+const TestLetterResultName = "mail-test.json"
 
-// TestRequest asks for one test letter.
-type TestRequest struct {
+// TestLetterRequest asks for one test letter.
+type TestLetterRequest struct {
 	ID    string    `json:"id"`
 	AtUTC time.Time `json:"at_utc"`
 }
 
-// TestResult is the outcome of the request with the same ID. Error is the
+// TestLetterResult is the outcome of the request with the same ID. Error is the
 // sender's error, already free of the password (internal/mailer redacts it).
-type TestResult struct {
+type TestLetterResult struct {
 	ID string `json:"id"`
 	OK bool   `json:"ok"`
 	// Summary explains a failure in words; Error is the sender's error text.
@@ -49,22 +49,22 @@ type TestResult struct {
 	AtUTC   time.Time `json:"at_utc"`
 }
 
-// WriteTestRequest leaves a new request with a fresh id.
-func WriteTestRequest(path string, now time.Time) (*TestRequest, error) {
+// WriteTestLetterRequest leaves a new request with a fresh id.
+func WriteTestLetterRequest(path string, now time.Time) (*TestLetterRequest, error) {
 	var raw [8]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return nil, fmt.Errorf("mailconf: request id: %w", err)
 	}
-	req := &TestRequest{ID: hex.EncodeToString(raw[:]), AtUTC: now.UTC()}
+	req := &TestLetterRequest{ID: hex.EncodeToString(raw[:]), AtUTC: now.UTC()}
 	if err := writeJSON(path, req); err != nil {
 		return nil, err
 	}
 	return req, nil
 }
 
-// ReadTestRequest returns nil, nil when there is no request.
-func ReadTestRequest(path string) (*TestRequest, error) {
-	var req TestRequest
+// ReadTestLetterRequest returns nil, nil when there is no request.
+func ReadTestLetterRequest(path string) (*TestLetterRequest, error) {
+	var req TestLetterRequest
 	found, err := readJSON(path, &req)
 	if err != nil || !found {
 		return nil, err
@@ -72,14 +72,14 @@ func ReadTestRequest(path string) (*TestRequest, error) {
 	return &req, nil
 }
 
-// WriteTestResult records an outcome.
-func WriteTestResult(path string, res *TestResult) error {
+// WriteTestLetterResult records an outcome.
+func WriteTestLetterResult(path string, res *TestLetterResult) error {
 	return writeJSON(path, res)
 }
 
-// ReadTestResult returns nil, nil when there is no outcome yet.
-func ReadTestResult(path string) (*TestResult, error) {
-	var res TestResult
+// ReadTestLetterResult returns nil, nil when there is no outcome yet.
+func ReadTestLetterResult(path string) (*TestLetterResult, error) {
+	var res TestLetterResult
 	found, err := readJSON(path, &res)
 	if err != nil || !found {
 		return nil, err

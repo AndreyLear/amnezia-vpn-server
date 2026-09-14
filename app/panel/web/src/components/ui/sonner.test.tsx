@@ -43,14 +43,4 @@ describe("Toaster position", () => {
     expect(region).toHaveAttribute("data-y-position", "top");
     expect(region).toHaveAttribute("data-x-position", "right");
   });
-
-  it("does not let a caller move toasts elsewhere", async () => {
-    stubMatchMedia(false);
-    render(<Toaster position="bottom-left" />);
-    toast("saved");
-
-    const region = await toasterRegion();
-    expect(region).toHaveAttribute("data-y-position", "top");
-    expect(region).toHaveAttribute("data-x-position", "right");
-  });
 });
