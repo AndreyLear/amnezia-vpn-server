@@ -12,9 +12,10 @@ import (
 
 // EncapsulationOverhead is what AmneziaWG adds to every transport packet
 // on the wire: 32 bytes of WireGuard header and Poly1305 tag, 8 bytes of
-// UDP and 20 bytes of IPv4. The obfuscation parameters (Jc/S1/S2, the
-// I-tags) pad handshakes and junk packets, not transport packets, so they
-// do not enter this budget.
+// UDP and 20 bytes of IPv4. Jc/S1/S2/S3 and the I-tags pad handshakes and
+// junk packets only; S4 (AWG 2.0) does pad every transport packet and adds
+// to this on a real server — it is per-server and random, so it is not
+// folded into the constant (amnezia-vpn-server-rplm).
 const EncapsulationOverhead = 32 + 8 + 20
 
 // MTU bounds. The floor is the IPv6 minimum link MTU, which every path is
@@ -42,12 +43,20 @@ const (
 // leaves full-size packets to be dropped or fragmented out there, which
 // shows up as pages loading normally while video stalls.
 //
-// 1340 puts a full packet at 1400 bytes on the wire, which the mobile
-// paths seen in practice carry, and still leaves room under PPPoE (1492)
-// and a tunnelled hosting uplink (1476). The cost against 1420 is about
-// 5% of payload per packet — far less than one dropped packet in a video
-// stream costs.
-const DefaultMTU uint16 = 1340
+// 1360 is the smallest round value that carries QUIC from TikTok: its CDN
+// sends 1348-byte packets and ignores «fragmentation needed», so a 1340
+// route dropped every one of them and the app waited for a TCP fallback —
+// the feed loaded slowly and video stalled (measured on the test server
+// 14.09.2026, amnezia-vpn-server-dy91). The earlier 1340 was sized for a
+// mobile path measured at 1411 bytes; 1360 costs 20 bytes more on the wire,
+// and the owner chose to raise it and watch rather than stay below TikTok
+// (amnezia-vpn-server-rplm). A client whose last mile cannot carry it gets
+// its own MTU in the panel.
+//
+// The wire cost is MTU + EncapsulationOverhead + S4: AWG 2.0 pads transport
+// packets by S4 as well, so on a server with S4 = 29 a full 1360 packet is
+// 1449 bytes, not 1420.
+const DefaultMTU uint16 = 1360
 
 // settingsMTUKey is the settings key holding the tunnel MTU. install.sh
 // measures the uplink path MTU and pins the value; when the key is absent
