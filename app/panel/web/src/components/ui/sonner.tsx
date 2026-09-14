@@ -8,7 +8,9 @@ import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon
 // amnezia-vpn-server-1f31). Раньше на телефоне они стояли сверху по центру,
 // а на компьютере — снизу справа, и одно и то же сообщение появлялось в
 // разных местах. На узком экране Sonner сам растягивает тост во всю ширину.
-function Toaster({ ...props }: ToasterProps) {
+// position в пропсах нет: место тостов решено один раз для всей панели, и
+// переданное значение молча перебивалось бы (amnezia-vpn-server-o79j).
+function Toaster({ ...props }: Omit<ToasterProps, "position">) {
   return (
     <Sonner
       theme="system"

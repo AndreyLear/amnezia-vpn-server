@@ -312,9 +312,9 @@ func TestImageVersion(t *testing.T) {
 func TestTestLetterAnsweredOnce(t *testing.T) {
 	e := newEnv(t)
 	e.writeConf(t)
-	reqPath := mailconf.TestRequestPath(filepath.Join(e.root, "data", "mail.conf"))
-	resPath := filepath.Join(e.root, "status", mailconf.TestResultName)
-	req, err := mailconf.WriteTestRequest(reqPath, e.now)
+	reqPath := mailconf.TestLetterRequestPath(filepath.Join(e.root, "data", "mail.conf"))
+	resPath := filepath.Join(e.root, "status", mailconf.TestLetterResultName)
+	req, err := mailconf.WriteTestLetterRequest(reqPath, e.now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestTestLetterAnsweredOnce(t *testing.T) {
 	if len(e.sent) != 1 || e.sent[0].Subject != notify.TestLetter("").Subject {
 		t.Fatalf("отправлено %+v", e.sent)
 	}
-	res, err := mailconf.ReadTestResult(resPath)
+	res, err := mailconf.ReadTestLetterResult(resPath)
 	if err != nil || res == nil || res.ID != req.ID || !res.OK {
 		t.Fatalf("итог %+v, %v", res, err)
 	}
@@ -336,11 +336,11 @@ func TestTestLetterAnsweredOnce(t *testing.T) {
 
 	// Неудача: итог с ошибкой, пароля нет ни в итоге, ни в журнале.
 	e.fail = errors.New("535 5.7.8 Authentication failed")
-	if _, err := mailconf.WriteTestRequest(reqPath, e.now); err != nil {
+	if _, err := mailconf.WriteTestLetterRequest(reqPath, e.now); err != nil {
 		t.Fatal(err)
 	}
 	e.run()
-	res, _ = mailconf.ReadTestResult(resPath)
+	res, _ = mailconf.ReadTestLetterResult(resPath)
 	if res == nil || res.OK || !strings.Contains(res.Error, "535") {
 		t.Fatalf("итог неудачи %+v", res)
 	}
@@ -352,7 +352,7 @@ func TestTestLetterAnsweredOnce(t *testing.T) {
 	// Просьба, которой больше пятнадцати минут, не исполняется.
 	e.fail = nil
 	sent := len(e.sent)
-	if _, err := mailconf.WriteTestRequest(reqPath, e.now.Add(-time.Hour)); err != nil {
+	if _, err := mailconf.WriteTestLetterRequest(reqPath, e.now.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	e.run()

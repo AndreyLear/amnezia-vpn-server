@@ -42,12 +42,12 @@ func (f *fixture) answerTest(ok bool, errText string) {
 
 func (f *fixture) answerTestWith(ok bool, summary, errText string) {
 	f.t.Helper()
-	req, err := mailconf.ReadTestRequest(f.server.mailTestRequestPath())
+	req, err := mailconf.ReadTestLetterRequest(f.server.mailTestRequestPath())
 	if err != nil || req == nil {
 		f.t.Fatalf("нет просьбы о пробном письме: %v", err)
 	}
-	res := &mailconf.TestResult{ID: req.ID, OK: ok, Summary: summary, Error: errText, AtUTC: time.Now().UTC()}
-	if err := mailconf.WriteTestResult(filepath.Join(f.server.statusDir(), mailconf.TestResultName), res); err != nil {
+	res := &mailconf.TestLetterResult{ID: req.ID, OK: ok, Summary: summary, Error: errText, AtUTC: time.Now().UTC()}
+	if err := mailconf.WriteTestLetterResult(filepath.Join(f.server.statusDir(), mailconf.TestLetterResultName), res); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -189,7 +189,7 @@ func TestAPIMailTestOutcome(t *testing.T) {
 func TestAPIMailOldTestDoesNotVerifyNewSettings(t *testing.T) {
 	f := newFixture(t)
 	decodeMail(t, f.apiCSRF(http.MethodPut, "/api/mail", mailBody(mailSecret)))
-	req := &mailconf.TestRequest{ID: "old", AtUTC: time.Now().Add(-time.Hour).UTC()}
+	req := &mailconf.TestLetterRequest{ID: "old", AtUTC: time.Now().Add(-time.Hour).UTC()}
 	data, _ := json.Marshal(req)
 	if err := os.WriteFile(f.server.mailTestRequestPath(), data, 0o600); err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func TestAPIMailVerifiedByDeliveredLetter(t *testing.T) {
 	st := &mailer.State{}
 	at := time.Now().Add(time.Minute).UTC()
 	st.LastSuccessAt = &at
-	if err := st.Save(filepath.Join(f.server.statusDir(), "mail-state.json")); err != nil {
+	if err := st.Save(filepath.Join(f.server.statusDir(), mailer.StateName)); err != nil {
 		t.Fatal(err)
 	}
 	if got := decodeMail(t, f.get("/api/mail")); !got.Verified {
@@ -263,7 +263,7 @@ func TestPlausibleAddress(t *testing.T) {
 // настроено — не ошибка; сломалось — видно; прежние отказы не говорят о
 // новых настройках.
 func TestAPIMailChannel(t *testing.T) {
-	statePath := func(f *fixture) string { return filepath.Join(f.server.statusDir(), "mail-state.json") }
+	statePath := func(f *fixture) string { return filepath.Join(f.server.statusDir(), mailer.StateName) }
 	writeState := func(t *testing.T, f *fixture, success, failure *time.Time) {
 		t.Helper()
 		st := &mailer.State{LastSuccessAt: success}
@@ -345,7 +345,7 @@ func TestAPIMailFailureSummary(t *testing.T) {
 	}
 	at := time.Now().Add(time.Minute).UTC()
 	st := &mailer.State{LastFailure: &mailer.Failure{Key: "tunnel", Subject: "s", Summary: "Почтовый сервер не отвечает: проверьте адрес и порт", Error: "i/o timeout", At: at}}
-	if err := st.Save(filepath.Join(f.server.statusDir(), "mail-state.json")); err != nil {
+	if err := st.Save(filepath.Join(f.server.statusDir(), mailer.StateName)); err != nil {
 		t.Fatal(err)
 	}
 	got = decodeMail(t, f.get("/api/mail"))

@@ -11,6 +11,10 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
 
+// StateName is the outbox file's name in the status directory, where both
+// awgmail and the panel find it.
+const StateName = "mail-state.json"
+
 // RetryDelays are the pauses after the first, second and third failed
 // attempt. After the last one the message is dropped and the refusal
 // remembered.
