@@ -28,15 +28,19 @@ type versionsJSON struct {
 	Latest         string `json:"latest"`
 	AmneziaWGGo    string `json:"amneziawg_go"`
 	AmneziaWGTools string `json:"amneziawg_tools"`
-	Protocol       string `json:"protocol"`
-	Schema         string `json:"schema"`
-	TunnelIPv6     *bool  `json:"tunnel_ipv6"`
-	TunnelDNS      *bool  `json:"tunnel_dns"`
-	Watchdog       *bool  `json:"watchdog"`
-	Fail2ban       *bool  `json:"fail2ban"`
-	UpdateCheck    *bool  `json:"update_check"`
-	OS             string `json:"os"`
-	Docker         string `json:"docker"`
+	// TunnelDriver и AmneziaWGModule — на чём работает туннель и версия
+	// модуля ядра, если на нём (amnezia-vpn-server-y7bp).
+	TunnelDriver    string `json:"tunnel_driver"`
+	AmneziaWGModule string `json:"amneziawg_module"`
+	Protocol        string `json:"protocol"`
+	Schema          string `json:"schema"`
+	TunnelIPv6      *bool  `json:"tunnel_ipv6"`
+	TunnelDNS       *bool  `json:"tunnel_dns"`
+	Watchdog        *bool  `json:"watchdog"`
+	Fail2ban        *bool  `json:"fail2ban"`
+	UpdateCheck     *bool  `json:"update_check"`
+	OS              string `json:"os"`
+	Docker          string `json:"docker"`
 }
 
 // productVersion is what this deployment runs; empty when the container
@@ -87,6 +91,8 @@ func (s *Server) apiVersions(w http.ResponseWriter, r *http.Request) {
 	if v, err := status.ReadVersions(filepath.Join(dir, "versions.json")); err == nil && v != nil {
 		out.AmneziaWGGo = v.AmneziaWGGo
 		out.AmneziaWGTools = v.AmneziaWGTools
+		out.TunnelDriver = v.TunnelDriver
+		out.AmneziaWGModule = v.AmneziaWGModule
 	}
 	if releases, err := status.ReadReleases(filepath.Join(dir, "update-latest.json")); err == nil {
 		for i := range releases {

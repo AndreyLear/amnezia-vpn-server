@@ -208,6 +208,13 @@ export type Versions = {
   latest: string;
   amneziawg_go: string;
   amneziawg_tools: string;
+  /**
+   * На чём работает туннель: "kernel" — модуль ядра на хосте, "userspace" —
+   * amneziawg-go из образа, пусто — неизвестно (amnezia-vpn-server-y7bp).
+   */
+  tunnel_driver?: string;
+  /** Версия модуля ядра, когда туннель на нём. */
+  amneziawg_module?: string;
   /** «AmneziaWG 2.0» — выводится из набора параметров, а не хранится. */
   protocol: string;
   // Версия схемы SQLite сюда намеренно не попадает: оператору она ничего

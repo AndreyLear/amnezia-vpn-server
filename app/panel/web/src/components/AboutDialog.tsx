@@ -86,7 +86,15 @@ export function AboutDialog({
         <dl className="divide-y divide-border text-sm">
           <Row label="Версия" value={product} />
           <Row label="Протокол" value={text(versions?.protocol)} />
-          <Row label="amneziawg-go" value={text(versions?.amneziawg_go)} />
+          {/* Версия того, на чём туннель работает на самом деле: модуль ядра на
+              хосте или amneziawg-go из образа. Показывать amneziawg-go, когда
+              туннель на модуле, значило бы называть версию того, что не
+              используется (amnezia-vpn-server-y7bp). Неизвестно — как раньше. */}
+          {versions?.tunnel_driver === "kernel" ? (
+            <Row label="Модуль ядра" value={text(versions.amneziawg_module)} />
+          ) : (
+            <Row label="amneziawg-go" value={text(versions?.amneziawg_go)} />
+          )}
           <Row label="amneziawg-tools" value={text(versions?.amneziawg_tools)} />
           <Row label="IPv6 в туннеле" value={flag(versions?.tunnel_ipv6)} />
           <Row label="Резолвер в туннеле" value={flag(versions?.tunnel_dns)} />

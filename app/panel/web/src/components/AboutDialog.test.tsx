@@ -59,4 +59,25 @@ describe("о версиях", () => {
     expect(screen.queryByText("Схема базы")).not.toBeInTheDocument();
     expect(screen.queryByText("8")).not.toBeInTheDocument();
   });
+
+  // Туннель на модуле ядра — показываем модуль, а не amneziawg-go из образа,
+  // который не используется (amnezia-vpn-server-y7bp).
+  it("показывает модуль ядра, когда туннель работает на нём", async () => {
+    reply({ product: "2.10.37", amneziawg_go: "3.1.20260828", tunnel_driver: "kernel", amneziawg_module: "3.1.20260812" });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText("Модуль ядра")).toBeInTheDocument();
+    expect(screen.getByText("3.1.20260812")).toBeInTheDocument();
+    expect(screen.queryByText("amneziawg-go")).not.toBeInTheDocument();
+  });
+
+  it("показывает amneziawg-go, когда туннель на нём или неизвестно на чём", async () => {
+    for (const driver of ["userspace", undefined]) {
+      reply({ product: "2.10.37", amneziawg_go: "3.1.20260828", tunnel_driver: driver });
+      const { unmount } = render(<AboutDialog open onOpenChange={() => {}} />);
+      expect(await screen.findByText("amneziawg-go")).toBeInTheDocument();
+      expect(screen.getByText("3.1.20260828")).toBeInTheDocument();
+      expect(screen.queryByText("Модуль ядра")).not.toBeInTheDocument();
+      unmount();
+    }
+  });
 });
