@@ -48,6 +48,10 @@ type clientJSON struct {
 	// RateLimit — предел скорости к этому клиенту в мегабитах; 0 означает
 	// «без предела» (amnezia-vpn-server-jzzu).
 	RateLimit int64 `json:"rate_limit"`
+	// MTUMax — наибольший MTU, который можно задать клиенту на этом
+	// сервере: потолок интерфейса с учётом добивки S4
+	// (amnezia-vpn-server-bctr). 0 — неизвестно.
+	MTUMax int64 `json:"mtu_max"`
 }
 
 type clientCreateReq struct {
@@ -151,7 +155,19 @@ func (s *Server) clientAddress6(c db.ClientRecord) string {
 }
 
 func (s *Server) writeClientJSON(w http.ResponseWriter, code int, c db.ClientRecord) {
-	writeJSON(w, code, clientToJSON(c, s.loadStatus(), s.loadDNSSeen(), s.clientAddress6(c), time.Now()))
+	out := clientToJSON(c, s.loadStatus(), s.loadDNSSeen(), s.clientAddress6(c), time.Now())
+	out.MTUMax = s.clientMTUMax()
+	writeJSON(w, code, out)
+}
+
+// clientMTUMax — потолок MTU клиента на этом сервере или 0, если его не
+// удалось узнать; тогда панель опирается на общую границу из db.
+func (s *Server) clientMTUMax() int64 {
+	max, err := awgconf.ClientMTUMax(s.db())
+	if err != nil {
+		return 0
+	}
+	return int64(max)
 }
 
 func (s *Server) apiClientsList(w http.ResponseWriter, r *http.Request) {
@@ -169,10 +185,13 @@ func (s *Server) apiClientsList(w http.ResponseWriter, r *http.Request) {
 		serverAddress, serverAddress6 = server.Address, server.Address6
 	}
 	now := time.Now()
+	mtuMax := s.clientMTUMax()
 	out := make([]clientJSON, 0, len(clients))
 	for _, c := range clients {
 		addr6, _ := db.ClientAddress6(serverAddress, serverAddress6, c.Address)
-		out = append(out, clientToJSON(c, st, dns, addr6, now))
+		item := clientToJSON(c, st, dns, addr6, now)
+		item.MTUMax = mtuMax
+		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -302,6 +321,16 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.MTU != nil {
+		// Выше потолка сервера клиенту не выпишут маршрут, а до потолка пакет
+		// проходит без нарезки. Отказ, а не зажим: человек вводил число
+		// руками и должен узнать настоящую границу (amnezia-vpn-server-bctr).
+		if max := s.clientMTUMax(); max > 0 && *req.MTU > max {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"ok":      false,
+				"message": fmt.Sprintf("MTU должен быть от %d до %d", db.ClientMTUFloor, max),
+			})
+			return
+		}
 		if err := db.UpdateClientMTU(s.db(), id, *req.MTU); err != nil {
 			if errors.Is(err, db.ErrClientNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": flashNotFound})

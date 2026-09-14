@@ -34,7 +34,11 @@ import { cn } from "@/lib/utils";
 // провод с обычными 1500 байтами. Сервер всё равно проверит своё, но человек
 // не должен упираться в отказ, уже нажав «Сохранить» (amnezia-vpn-server-h2pg).
 const mtuFloor = 1280;
-const mtuCeiling = 1440;
+// Общая граница, когда сервер не сообщил свою (старый сервер или потолок не
+// измеряли). Настоящий потолок приходит в client.mtu_max: он учитывает
+// добивку S4, и выше него пакет режется на пути сервера
+// (amnezia-vpn-server-bctr).
+const mtuCeilingFallback = 1440;
 
 // Границы предела скорости повторяют серверные (db.ClientRateFloor/Ceiling):
 // ниже мегабита ограничение перестаёт быть ограничением и становится обрывом
@@ -202,6 +206,7 @@ export function ClientInfoDialog({
       Number(rateDraftValue) < rateFloor ||
       Number(rateDraftValue) > rateCeiling);
 
+  const mtuCeiling = client?.mtu_max && client.mtu_max > 0 ? client.mtu_max : mtuCeilingFallback;
   const mtuDraftValue = mtuDraft.trim();
   const mtuOutOfRange =
     mtuDraftValue !== "" &&
@@ -355,7 +360,14 @@ export function ClientInfoDialog({
                           value in this card (amnezia-vpn-server-4cnf). The
                           input placeholder below stays lowercase — it reads
                           as an inline hint, not a standalone value. */}
-                      {viewMTU === 0 ? "Как у сервера" : viewMTU}
+                      {viewMTU === 0
+                        ? "Как у сервера"
+                        : // Значение выше потолка сервера сервер зажимает до
+                          // потолка — говорим, какое действует на самом деле
+                          // (amnezia-vpn-server-bctr).
+                          client?.mtu_max && viewMTU > client.mtu_max
+                          ? `${viewMTU}, действует ${client.mtu_max}`
+                          : viewMTU}
                     </dd>
                   </ReadOnlyProperty>
                   <ReadOnlyProperty
@@ -552,10 +564,10 @@ export function ClientInfoDialog({
               />
               <p className="text-sm text-muted-foreground">
                 Пусто — как у сервера. Своё значение задаётся в пределах от{" "}
-                {mtuFloor} до {mtuCeiling}: больше не помещается на обычном
-                канале в 1500 байт, потому что сам туннель занимает 60. Поднять
-                имеет смысл там, где канал заведомо хороший, — например роутер
-                на проводе.
+                {mtuFloor} до {mtuCeiling}: больше не проходит канал сервера без
+                нарезки пакетов, потому что часть места занимает сам туннель.
+                Поднять имеет смысл там, где канал заведомо хороший, — например
+                роутер на проводе.
               </p>
               <p className="text-sm text-muted-foreground">
                 Значение попадёт в настройки, которые вы выдадите после этого.
