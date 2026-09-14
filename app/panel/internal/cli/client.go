@@ -352,6 +352,13 @@ func (a *app) cmdClientSetMTU(args []string) int {
 		return a.fatal(opClientSetMTU, err)
 	}
 	defer handle.Close()
+	// Потолок сервера с учётом добивки S4 (amnezia-vpn-server-bctr): выше
+	// него пакет режется на пути сервера, а маршрут всё равно зажмётся.
+	if max, err := awgconf.ClientMTUMax(handle); err == nil && max > 0 && mtu > int64(max) {
+		return a.usageError(opClientSetMTU, fmt.Sprintf(
+			"MTU %d is above this server's ceiling %d: a full packet plus the tunnel overhead (including S4 padding) would not fit its uplink",
+			mtu, max))
+	}
 	if err := db.UpdateClientMTU(handle, id, mtu); err != nil {
 		return a.fatal(opClientSetMTU, err)
 	}

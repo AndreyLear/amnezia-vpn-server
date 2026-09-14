@@ -122,19 +122,95 @@ const deviceMTUEnv = "TUNNEL_MTU_MAX"
 // получает потолок, равный осторожному значению, — то есть ровно то, что
 // было до этой возможности.
 func DeviceMTU(clientMTU uint16) uint16 {
+	device, _ := TunnelMTUs(clientMTU, 0)
+	return device
+}
+
+// TransportPadding — сколько AWG 2.0 добавляет к каждому транспортному
+// пакету сверх EncapsulationOverhead: S4. Параметр случайный и свой у
+// каждого сервера, поэтому в константу не входит (amnezia-vpn-server-bctr).
+func TransportPadding(p *Params) uint16 {
+	if p == nil || p.S4 == nil {
+		return 0
+	}
+	return *p.S4
+}
+
+// TunnelMTUs возвращает MTU интерфейса awg0 и общее значение для клиентов с
+// учётом добивки S4 (amnezia-vpn-server-bctr).
+//
+// Установщик кладёт в TUNNEL_MTU_MAX путь сервера минус 60 байт — заголовок
+// AmneziaWG, UDP и IPv4. Но AWG 2.0 добивает каждый транспортный пакет ещё на
+// S4 байт, и на пути 1500 при S4 = 29 без нарезки проходит 1411, а не 1440:
+// всё выше сервер резал на куски (на тестовом — почти половину исходящего).
+// Поэтому потолок интерфейса — измеренное минус S4, а общее значение для
+// клиентов не больше потолка. Где потолок не измеряли, S4 не вычитается: там
+// значения совпадают с осторожным, и поведение прежнее.
+func TunnelMTUs(clientMTU, padding uint16) (device, clientDefault uint16) {
 	raw := strings.TrimSpace(os.Getenv(deviceMTUEnv))
 	if raw == "" {
-		return clientMTU
+		return clientMTU, clientMTU
 	}
 	v, err := strconv.ParseUint(raw, 10, 16)
 	if err != nil {
-		return clientMTU
+		return clientMTU, clientMTU
 	}
-	device := uint16(v)
-	if ValidateMTU(device) != nil || device < clientMTU {
-		return clientMTU
+	measured := uint16(v)
+	if ValidateMTU(measured) != nil {
+		return clientMTU, clientMTU
 	}
-	return device
+	// Без добивки — прежнее правило wc2l: потолок не бывает ниже осторожного
+	// значения. Установщик и не пишет такого (осторожное значение он сам
+	// зажимает измеренным), так что случай возможен только вручную.
+	if padding == 0 {
+		if measured < clientMTU {
+			return clientMTU, clientMTU
+		}
+		return measured, clientMTU
+	}
+	device = measured
+	if padding > 0 {
+		if measured-MinMTU > padding {
+			device = measured - padding
+		} else {
+			device = MinMTU
+		}
+	}
+	clientDefault = clientMTU
+	if clientDefault > device {
+		clientDefault = device
+	}
+	if device < clientDefault {
+		device = clientDefault
+	}
+	return device, clientDefault
+}
+
+// ClientMTUMax — наибольший MTU, который панель разрешает задать клиенту на
+// этом сервере: потолок интерфейса. Больше ядро всё равно не выпишет в
+// маршрут, а до потолка пакет проходит путь сервера без нарезки
+// (amnezia-vpn-server-bctr).
+//
+// 0 — потолок не измеряли (TUNNEL_MTU_MAX не задан): сказать нечего, и
+// действует общая граница db.ClientMTUCeiling, как до этой задачи.
+func ClientMTUMax(handle *sql.DB) (uint16, error) {
+	if strings.TrimSpace(os.Getenv(deviceMTUEnv)) == "" {
+		return 0, nil
+	}
+	server, err := db.ServerRow(handle)
+	if err != nil {
+		return 0, err
+	}
+	params, err := ParseParams(server.AWGParams)
+	if err != nil {
+		return 0, err
+	}
+	mtu, err := MTUFromSettings(handle)
+	if err != nil {
+		return 0, err
+	}
+	device, _ := TunnelMTUs(mtu, TransportPadding(params))
+	return device, nil
 }
 
 // PeerRouteMTU — размер для строки этого пира, или 0, когда строка не нужна.

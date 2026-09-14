@@ -89,6 +89,30 @@ describe("MTU клиента", () => {
     expect(save).toBeEnabled();
   });
 
+  // Потолок приходит с сервера и учитывает добивку S4: на пути 1500 при S4 = 29
+  // это 1411, а не 1440 (amnezia-vpn-server-bctr).
+  it("берёт потолок у сервера и не даёт сохранить выше него", async () => {
+    const user = userEvent.setup();
+    render(
+      <ClientInfoDialog client={{ ...client, mtu_max: 1411 }} onSave={vi.fn().mockResolvedValue(true)} onOpenChange={() => {}} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Изменить MTU" }));
+    const field = await screen.findByLabelText("Размер пакета, байт");
+    expect(field).toHaveAttribute("max", "1411");
+    const dialog = screen.getByRole("dialog", { name: "MTU" });
+    expect(within(dialog).getByText(/от 1280 до 1411/)).toBeInTheDocument();
+    await user.type(field, "1420");
+    expect(screen.getByRole("button", { name: "Сохранить MTU" })).toBeDisabled();
+    await user.clear(field);
+    await user.type(field, "1411");
+    expect(screen.getByRole("button", { name: "Сохранить MTU" })).toBeEnabled();
+  });
+
+  it("говорит, какое значение действует, если своё выше потолка", () => {
+    render(<ClientInfoDialog client={{ ...client, mtu: 1420, mtu_max: 1411 }} onOpenChange={() => {}} />);
+    expect(screen.getByText("1420, действует 1411")).toBeInTheDocument();
+  });
+
   it("поле объявляет границы и браузеру", async () => {
     const user = userEvent.setup();
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);

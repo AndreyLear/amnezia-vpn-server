@@ -45,7 +45,9 @@ func Generate(handle *sql.DB, path string) error {
 	// значение раздаётся маршрутами (amnezia-vpn-server-wc2l). Там, где
 	// потолок не измеряли, они совпадают, и файл остаётся прежним до
 	// байта — вместе с поведением.
-	device := DeviceMTU(mtu)
+	// Потолок и общее значение — с учётом добивки S4: иначе полный пакет
+	// выходит за путь сервера и режется (amnezia-vpn-server-bctr).
+	device, mtu := TunnelMTUs(mtu, TransportPadding(params))
 	cfg := ServerConfig{
 		PrivateKey: server.PrivateKey,
 		Address:    server.Address,

@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
@@ -70,5 +71,37 @@ func TestAPIClientMTUOutOfRangeIsRefused(t *testing.T) {
 	}
 	if stored.MTU != 0 {
 		t.Fatalf("отклонённое значение записалось: %d", stored.MTU)
+	}
+}
+
+// Потолок MTU клиента на сервере с добивкой S4 (amnezia-vpn-server-bctr):
+// выше 1411 пакет на пути 1500 режется, и панель должна это сказать, а не
+// принять число, которое всё равно зажмётся.
+func TestAPIClientMTUCeilingAccountsForS4(t *testing.T) {
+	t.Setenv("TUNNEL_MTU_MAX", "1440")
+	f := newFixture(t)
+	params := `{"jc":3,"jmin":1,"jmax":5,"s1":1,"s2":2,"s3":3,"s4":29}`
+	if _, err := db.UpdateServer(f.h, nil, &params, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	c, _, _ := f.addClient("mtu-s4")
+	path := fmt.Sprintf("/api/clients/%d", c.ID)
+
+	if got := decodeAPI(t, f.apiCSRF(http.MethodGet, path, nil)); got["mtu_max"] != float64(1411) {
+		t.Fatalf("mtu_max = %v, ждали 1411", got["mtu_max"])
+	}
+	rec := f.apiCSRF(http.MethodPatch, path, map[string]any{"mtu": 1412})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "до 1411") {
+		t.Fatalf("1412 принят или граница не названа: код %d, тело=%s", rec.Code, rec.Body.String())
+	}
+	if stored, _ := db.ClientByID(f.h, c.ID); stored.MTU != 0 {
+		t.Fatalf("отвергнутое значение записалось: %d", stored.MTU)
+	}
+	if rec := f.apiCSRF(http.MethodPatch, path, map[string]any{"mtu": 1411}); rec.Code != http.StatusOK {
+		t.Fatalf("1411 отвергнут: код %d, тело=%s", rec.Code, rec.Body.String())
+	}
+	list := decodeClientList(t, f.get("/api/clients"))
+	if len(list) == 0 || list[0]["mtu_max"] != float64(1411) {
+		t.Fatalf("в списке нет mtu_max 1411: %v", list)
 	}
 }
