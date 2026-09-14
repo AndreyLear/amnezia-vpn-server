@@ -1021,6 +1021,10 @@ esac
     printf '  ssh %s@%s "cd %s && docker compose --env-file versions.lock run --rm -T panel-init /app/panel auth set-password admin --password-stdin"\n' \
         "$SSH_USER" "$SSH_HOST" "$ROOT_DIR"
     printf 'Upload a backup on Backups to restore clients (does not change the panel user).\n'
+    # Одна строка, а не вопросы мастера: четыре поля SMTP в текстовом мастере
+    # по SSH — опечатку не видно и проверить нечем. Настраивается в панели,
+    # там же пробное письмо (dfs2 п.2, amnezia-vpn-server-fj11).
+    printf 'Уведомления о сбоях на почту настраиваются в панели: меню «Ещё» → «Уведомления»\n'
 } 
 
 exit 0

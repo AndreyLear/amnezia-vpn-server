@@ -486,6 +486,9 @@ test_key_flags_domain_client_domain() {
         || fail "key+domain: login missing"
     grep -q "Password:  TmpP4ssw0rd+/BASE64" "$TMP_TEST/out" && pass "key+domain: temp password in summary" \
         || fail "key+domain: password missing from summary"
+    grep -q "Уведомления о сбоях на почту настраиваются в панели" "$TMP_TEST/out" \
+        && pass "summary points to notifications in the panel (amnezia-vpn-server-fj11)" \
+        || fail "summary does not mention where notifications are set up"
     # The panel no longer changes passwords; the summary hands over the
     # server command instead of pointing at a form that does not exist.
     grep -q "auth set-password" "$TMP_TEST/out" && pass "key+domain: change-password command in summary" \
