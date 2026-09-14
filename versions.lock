@@ -14,9 +14,11 @@ GO_VERSION=1.25.12
 # Base Linux image
 ALPINE_VERSION=3.22.5
 
-# AmneziaWG 2.x
-AMNEZIAWG_GO_VERSION=0.2.19
-AMNEZIAWG_GO_COMMIT=1cc94272ca8e9e223a5fe76382f5880f09d3c12d
+# AmneziaWG: движок 3.1, протокол по-прежнему 2.0 — параметры 3.x (защита
+# заголовков, добивка, хвосты, тайминги) не задаются, пока клиенты на 1.5 и
+# 2.0 (решение владельца 14.09.2026, amnezia-vpn-server-61at)
+AMNEZIAWG_GO_VERSION=3.1.20260828
+AMNEZIAWG_GO_COMMIT=b5928efb6ca19f0153958460c3d141f04abc5c2e
 
 AMNEZIAWG_TOOLS_VERSION=3.1.20260812
 AMNEZIAWG_TOOLS_COMMIT=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
