@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -119,12 +120,19 @@ func ReadReleases(path string) ([]Release, error) {
 	return []Release{one}, nil
 }
 
-// NotesSince собирает описания всех выпусков новее installed, от свежего к
-// старому. Человек, отставший на три выпуска, должен прочитать все три: он
-// решает, стоит ли обновляться, по тому, что изменится у него, а не по
-// последней записи.
-func NotesSince(releases []Release, installed string) (latest string, notes string) {
-	var parts []string
+// ReleaseNotes — описание одного выпуска для человека.
+type ReleaseNotes struct {
+	Version string `json:"version"`
+	Notes   string `json:"notes"`
+}
+
+// NotesSinceEach собирает описания всех выпусков новее installed, по одному на
+// выпуск, от свежего к старому. Человек, отставший на три выпуска, должен
+// прочитать все три — и видеть, что к какой версии относится: склеенные в
+// одну строку, пункты соседних выпусков сливались в один список
+// (amnezia-vpn-server-l4bf).
+func NotesSinceEach(releases []Release, installed string) (latest string, notes []ReleaseNotes) {
+	var newer []Release
 	for i := range releases {
 		version := releases[i].Version()
 		if !IsNewer(version, installed) {
@@ -133,13 +141,32 @@ func NotesSince(releases []Release, installed string) (latest string, notes stri
 		if latest == "" || IsNewer(version, latest) {
 			latest = version
 		}
-		if body := releases[i].Notes(); body != "" {
-			parts = append(parts, body)
+		newer = append(newer, releases[i])
+	}
+	// Порядок — по версии, а не по порядку в ответе GitHub: список выпусков
+	// сортирован по дате публикации, и перевыпущенный старый встал бы первым.
+	sort.SliceStable(newer, func(a, b int) bool {
+		return IsNewer(newer[a].Version(), newer[b].Version())
+	})
+	for i := range newer {
+		if body := newer[i].Notes(); body != "" {
+			notes = append(notes, ReleaseNotes{Version: newer[i].Version(), Notes: body})
 		}
+	}
+	return latest, notes
+}
+
+// NotesSince — те же описания одной строкой, выпуски разделены пустой
+// строкой, чтобы списки соседних выпусков не слипались.
+func NotesSince(releases []Release, installed string) (latest string, notes string) {
+	latest, each := NotesSinceEach(releases, installed)
+	parts := make([]string, 0, len(each))
+	for _, n := range each {
+		parts = append(parts, n.Notes)
 	}
 	// Ни одного новее — значит показывать нечего, и «свежая версия» здесь
 	// определяется тем же сравнением, что и предложение обновиться.
-	return latest, strings.Join(parts, "\n")
+	return latest, strings.Join(parts, "\n\n")
 }
 
 // ReadUpdateCheck loads the record of the last check. Missing file → nil.

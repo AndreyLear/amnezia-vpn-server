@@ -116,6 +116,30 @@ function parseNotes(notes: string): NotesBlock[] {
   return blocks;
 }
 
+/**
+ * Описания всех выпусков новее установленного. Когда их больше одного, перед
+ * пунктами каждого стоит его версия: иначе отставший на три выпуска читает
+ * сплошной перечень и не видит, что к какой версии относится
+ * (amnezia-vpn-server-l4bf). Один выпуск — без подзаголовка: версию уже
+ * называет заголовок окна.
+ */
+function ReleasesNotes({ info }: { info: UpdateInfo | null }) {
+  const releases = info?.releases ?? [];
+  if (releases.length <= 1) {
+    return <Notes notes={releases[0]?.notes ?? info?.notes ?? ""} />;
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      {releases.map((release) => (
+        <section key={release.version} className="flex flex-col gap-2">
+          <h3 className="text-sm font-medium">Версия {release.version}</h3>
+          <Notes notes={release.notes} />
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function Notes({ notes }: { notes: string }) {
   const blocks = parseNotes(notes);
   if (blocks.length === 0) {
@@ -371,7 +395,7 @@ export function UpdateDialog({
           <p className={outcomeFailed ? "text-destructive" : undefined}>{outcomeMessage(info!)}</p>
         ) : (
           <>
-            <Notes notes={info?.notes ?? ""} />
+            <ReleasesNotes info={info} />
             <p className="text-sm text-muted-foreground">
               Клиенты будут без связи, пока идёт обновление. Обычно около минуты
             </p>
