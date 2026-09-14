@@ -769,6 +769,10 @@ sleep 0.6
 check "flow-j: очередь заведена" grep -q "tc qdisc add dev awg0 root handle 1: htb" "${STUB_LOG}"
 check "flow-j: предел ограниченному клиенту" \
     grep -q "tc class add dev awg0 parent 1: classid 1:101 htb rate 50mbit" "${STUB_LOG}"
+# Без cburst ядро ставит ceil-запас 1600b: пачка GSO в него не влезает, и
+# предел 100 давал 78 Мбит/с (amnezia-vpn-server-xhl7).
+check "flow-j: запас на всплеск и для ceil" \
+    grep -q "classid 1:101 htb rate 50mbit ceil 50mbit burst 64k cburst 64k" "${STUB_LOG}"
 check "flow-j: правило на его адрес" \
     grep -q "match ip dst 10.8.0.3/32" "${STUB_LOG}"
 # Предел принадлежит клиенту, а не адресу. Пока класс заводился на адрес,
