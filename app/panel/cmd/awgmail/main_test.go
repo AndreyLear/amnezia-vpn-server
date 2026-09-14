@@ -188,8 +188,16 @@ func TestArguments(t *testing.T) {
 	if code := e.run("--help"); code != 0 || !strings.Contains(e.stdout.String(), "awgmail") {
 		t.Fatalf("--help: %d %q", code, e.stdout.String())
 	}
+	// Справка с примерами, отказ — с правильным вызовом (cli-for-agents,
+	// amnezia-vpn-server-537w).
+	if !strings.Contains(e.stdout.String(), "Примеры:") || !strings.Contains(e.stdout.String(), "AMNEZIA_MAIL_ROOT=") {
+		t.Errorf("в --help нет примеров:\n%s", e.stdout.String())
+	}
 	if code := e.run("--password=" + password); code != 2 {
 		t.Fatalf("аргумент принят: exit %d", code)
+	}
+	if !strings.Contains(e.stderr.String(), "«awgmail»") {
+		t.Errorf("отказ не показывает правильный вызов: %q", e.stderr.String())
 	}
 	if strings.Contains(e.stderr.String(), password) {
 		t.Fatal("аргумент с паролем повторён в выводе")
