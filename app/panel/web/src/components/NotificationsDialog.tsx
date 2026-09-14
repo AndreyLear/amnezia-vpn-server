@@ -355,7 +355,16 @@ export function NotificationsDialog({
               <FieldError name="recipient" message={errors.recipient} />
             </div>
           </div>
-          <div aria-live="polite">{info ? <MailStatus info={info} now={now} /> : null}</div>
+          <div aria-live="polite" className="grid gap-2">
+            {info ? <MailStatus info={info} now={now} /> : null}
+            {/* Когда в последний раз ушло настоящее письмо, а не пробное
+                (amnezia-vpn-server-3lgl, pz2r). */}
+            {info?.configured && info.last_success_at_utc ? (
+              <p className="text-sm text-muted-foreground">
+                Последнее уведомление ушло {formatHandshake(info.last_success_at_utc)}
+              </p>
+            ) : null}
+          </div>
           <DialogFooter>
             <Button
               type="button"

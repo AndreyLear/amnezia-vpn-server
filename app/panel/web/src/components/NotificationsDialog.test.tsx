@@ -160,6 +160,26 @@ describe("уведомления", () => {
     expect(screen.getByText("535 auth")).toBeInTheDocument();
   });
 
+  // Когда ушло последнее настоящее письмо (amnezia-vpn-server-3lgl).
+  it("говорит, когда ушло последнее уведомление", async () => {
+    current = {
+      ...saved,
+      verified: true,
+      channel: "ok",
+      test: { state: "ok", at_utc: "2026-09-13T01:00:00Z" },
+      last_success_at_utc: "2026-09-14T02:00:00Z",
+    };
+    render(<NotificationsDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText(/Последнее уведомление ушло 14 сен/)).toBeInTheDocument();
+  });
+
+  it("молчит о последнем уведомлении, если писем ещё не было", async () => {
+    current = { ...saved, verified: true, channel: "ok", test: { state: "ok", at_utc: "2026-09-13T01:00:00Z" } };
+    render(<NotificationsDialog open onOpenChange={() => {}} />);
+    await screen.findByText(/Пробное письмо отправлено/);
+    expect(screen.queryByText(/Последнее уведомление/)).toBeNull();
+  });
+
   it("подсвечивает поле, которое отверг сервер", async () => {
     const user = userEvent.setup();
     render(<NotificationsDialog open onOpenChange={() => {}} />);

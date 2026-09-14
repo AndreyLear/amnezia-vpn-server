@@ -277,6 +277,7 @@ for (const width of [1280, 375]) {
           verified: true,
           test: { state: "ok", at_utc: "2026-09-14T01:00:00Z" },
           channel: "failing",
+          last_success_at_utc: "2026-09-13T20:00:00Z",
           last_failure: {
             subject: "Туннель не работает 5 минут",
             summary: "Почтовый сервер не принял логин или пароль",
@@ -297,6 +298,7 @@ for (const width of [1280, 375]) {
     const notifications = page.getByRole("dialog", { name: "Уведомления" });
     await expect(notifications).toBeVisible();
     await expect(notifications.getByText("Почтовый сервер не принял логин или пароль")).toBeVisible();
+    await page.waitForTimeout(400); // снимок после анимации открытия, а не посреди неё
     await page.screenshot({ path: `test-results/mail-dialog-failure-${width}.png` });
   });
 }
