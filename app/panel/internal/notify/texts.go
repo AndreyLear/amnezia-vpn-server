@@ -121,7 +121,7 @@ func (e *eval) clientsDown(since time.Time) mailer.Message {
 	return mailer.Message{
 		Subject: "Все клиенты разом пропали со связи",
 		Body: e.body(
-			"В "+e.clock(since)+" все клиенты одновременно пропали со связи. За "+span(DownThreshold)+" никто не вернулся. Сам туннель при этом работает.",
+			"В " + e.clock(since) + " все клиенты одновременно пропали со связи. За " + span(DownThreshold) + " никто не вернулся. Сам туннель при этом работает.",
 		),
 	}
 }
@@ -192,6 +192,15 @@ func (e *eval) updateOutcome(u *status.UpdateState) mailer.Message {
 		Body: e.body(
 			"Обновление до версии "+u.To+" не удалось, и вернуть версию "+u.From+" тоже не вышло.",
 			checkServices,
+		),
+	}
+}
+
+func (e *eval) serverRecovered(since time.Time) mailer.Message {
+	return mailer.Message{
+		Subject: "Сервер снова работает",
+		Body: e.body(
+			"После неудачного обновления сервер снова в порядке: туннель и службы работают с " + e.clock(since) + ".",
 		),
 	}
 }

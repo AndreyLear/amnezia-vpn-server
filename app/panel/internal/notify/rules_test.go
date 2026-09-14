@@ -344,8 +344,83 @@ func TestUpdateOutcomes(t *testing.T) {
 			if !strings.Contains(got[0].Message.Body, "2.10.27") {
 				t.Errorf("в письме нет версии: %q", got[0].Message.Body)
 			}
-			wantKeys(t, w.minutes(10, func() { w.clientsActive("a", "b") }))
+			after := w.minutes(10, func() { w.clientsActive("a", "b") })
+			if state == "failed" {
+				// Сервер при этом исправен — через пять минут письмо о
+				// возврате к норме (amnezia-vpn-server-crar).
+				wantKeys(t, after, keyUpdate)
+				return
+			}
+			wantKeys(t, after)
 		})
+	}
+}
+
+// Обновление не удалось и не откатилось — после письма об этом приходит
+// письмо о возврате к норме, когда сервер исправен 5 минут подряд
+// (dfs2 «ОБЯЗАТЕЛЬНО о возврате к норме», amnezia-vpn-server-crar).
+func TestUpdateFailedThenRecovered(t *testing.T) {
+	w := newWorld(t)
+	active := func() { w.clientsActive("a", "b") }
+	var updateLetters []string
+	collect := func(ls []Letter) {
+		for _, l := range ls {
+			if l.Key == keyUpdate {
+				updateLetters = append(updateLetters, l.Message.Subject)
+			}
+		}
+	}
+	w.step(time.Minute)
+	w.in.TunnelUp = false
+	w.in.Update = &status.UpdateState{State: "failed", From: "2.10.26", To: "2.10.27", AtUTC: w.clock.Format(time.RFC3339)}
+	collect(w.step(time.Minute))
+	if len(updateLetters) != 1 {
+		t.Fatalf("нет письма о неудаче: %v", updateLetters)
+	}
+	updateLetters = nil
+	w.minutes(3, nil) // туннель ещё лежит
+	w.in.TunnelUp = true
+	collect(w.minutes(4, active)) // исправен, но меньше пяти минут
+	if len(updateLetters) != 0 {
+		t.Fatalf("письмо о возврате раньше срока: %v", updateLetters)
+	}
+	// Сбой службы сбрасывает отсчёт.
+	w.in.Services.Services[0].State = "fail"
+	collect(w.minutes(2, active))
+	w.in.Services.Services[0].State = "ok"
+	collect(w.minutes(4, active))
+	if len(updateLetters) != 0 {
+		t.Fatalf("отсчёт не сброшен сбоем службы: %v", updateLetters)
+	}
+	collect(w.minutes(3, active))
+	if len(updateLetters) != 1 || updateLetters[0] != "Сервер снова работает" {
+		t.Fatalf("письма об обновлении %v, ждали одно «Сервер снова работает»", updateLetters)
+	}
+	collect(w.minutes(30, active))
+	if len(updateLetters) != 1 {
+		t.Fatalf("письмо о возврате повторилось: %v", updateLetters)
+	}
+}
+
+// Удачное обновление после неудачного — одно письмо «Обновление
+// установлено», без отдельного «Сервер снова работает».
+func TestUpdateFailedThenInstalled(t *testing.T) {
+	w := newWorld(t)
+	active := func() { w.clientsActive("a", "b") }
+	w.step(time.Minute)
+	w.in.Update = &status.UpdateState{State: "failed", From: "2.10.26", To: "2.10.27", AtUTC: w.clock.Format(time.RFC3339)}
+	w.in.TunnelUp = false
+	w.step(time.Minute)
+	w.in.TunnelUp = true
+	w.in.Update = &status.UpdateState{State: "ok", From: "2.10.26", To: "2.10.27", AtUTC: w.clock.Add(time.Second).Format(time.RFC3339)}
+	var subjects []string
+	for _, l := range w.minutes(20, active) {
+		if l.Key == keyUpdate {
+			subjects = append(subjects, l.Message.Subject)
+		}
+	}
+	if len(subjects) != 1 || subjects[0] != "Обновление установлено" {
+		t.Fatalf("письма об обновлении %v", subjects)
 	}
 }
 
