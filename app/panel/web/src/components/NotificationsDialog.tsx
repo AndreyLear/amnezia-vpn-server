@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -159,6 +169,8 @@ export function NotificationsDialog({
   // иначе пришедший ответ затирал уже набранное, и сохранялась пустая форма
   // (amnezia-vpn-server-2pdq, поймано на тестовом сервере).
   const [loaded, setLoaded] = useState(false);
+  const [confirmOff, setConfirmOff] = useState(false);
+  const [disabling, setDisabling] = useState(false);
   const hostRef = useRef<HTMLInputElement>(null);
 
   function accept(next: MailInfo) {
@@ -242,6 +254,26 @@ export function NotificationsDialog({
     }
   }
 
+  // Выключить уведомления (amnezia-vpn-server-sjkk): настройки удаляются
+  // целиком, вместе с паролем. Спрашиваем подтверждение — вернуть можно,
+  // только введя всё заново.
+  async function disable() {
+    setDisabling(true);
+    try {
+      const res = await api<MailInfo | MailSaveError>("/api/mail", { method: "DELETE" });
+      if (isMailInfo(res)) {
+        accept(res);
+        setErrors({});
+        toast.success("Уведомления выключены");
+        return;
+      }
+      toast.error((res as MailSaveError | undefined)?.message || "Не удалось выключить уведомления");
+    } finally {
+      setDisabling(false);
+      setConfirmOff(false);
+    }
+  }
+
   async function sendTest() {
     setTesting(true);
     try {
@@ -257,7 +289,7 @@ export function NotificationsDialog({
     }
   }
 
-  const busy = saving || testing || !loaded;
+  const busy = saving || testing || disabling || !loaded;
   const canTest = Boolean(info?.configured && info.password_set) && !dirty && !pending && !busy;
 
   function fieldProps(key: Field) {
@@ -365,6 +397,19 @@ export function NotificationsDialog({
               </p>
             ) : null}
           </div>
+          {info?.configured ? (
+            <div>
+              <Button
+                type="button"
+                variant="link"
+                className="h-auto px-0 text-destructive"
+                disabled={busy}
+                onClick={() => setConfirmOff(true)}
+              >
+                Выключить уведомления
+              </Button>
+            </div>
+          ) : null}
           <DialogFooter>
             <Button
               type="button"
@@ -383,6 +428,22 @@ export function NotificationsDialog({
           </DialogFooter>
         </form>
       </DialogContent>
+      <AlertDialog open={confirmOff} onOpenChange={setConfirmOff}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Выключить уведомления?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Настройки почты будут удалены, письма о сбоях и обновлениях перестанут приходить
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" disabled={disabling} onClick={() => void disable()}>
+              Выключить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

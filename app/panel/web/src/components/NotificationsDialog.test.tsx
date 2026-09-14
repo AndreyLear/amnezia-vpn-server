@@ -49,6 +49,9 @@ beforeEach(() => {
       requests.push({ method, url, body: init?.body as string | undefined });
       let body: unknown = current;
       let status = 200;
+      if (method === "DELETE") {
+        body = mail();
+      }
       if (method === "PUT") {
         body = putReply ?? current;
         status = (putReply as { ok?: boolean } | undefined)?.ok === false ? 400 : 200;
@@ -178,6 +181,25 @@ describe("уведомления", () => {
     render(<NotificationsDialog open onOpenChange={() => {}} />);
     await screen.findByText(/Пробное письмо отправлено/);
     expect(screen.queryByText(/Последнее уведомление/)).toBeNull();
+  });
+
+  // Уведомления выключаются в окне, с подтверждением (amnezia-vpn-server-sjkk).
+  it("выключает уведомления после подтверждения", async () => {
+    const user = userEvent.setup();
+    current = { ...saved, verified: true, channel: "ok", test: { state: "ok", at_utc: "2026-09-14T01:00:00Z" } };
+    render(<NotificationsDialog open onOpenChange={() => {}} />);
+    await user.click(await screen.findByRole("button", { name: "Выключить уведомления" }));
+    expect(requests.some((r) => r.method === "DELETE")).toBe(false);
+    await user.click(await screen.findByRole("button", { name: "Выключить" }));
+    await waitFor(() => expect(requests.some((r) => r.method === "DELETE" && r.url === "/api/mail")).toBe(true));
+    await waitFor(() => expect(screen.getByLabelText("Сервер SMTP")).toHaveValue(""));
+    expect(screen.queryByRole("button", { name: "Выключить уведомления" })).toBeNull();
+  });
+
+  it("не предлагает выключить то, что не настроено", async () => {
+    render(<NotificationsDialog open onOpenChange={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Сервер SMTP")).toBeEnabled());
+    expect(screen.queryByRole("button", { name: "Выключить уведомления" })).toBeNull();
   });
 
   it("подсвечивает поле, которое отверг сервер", async () => {

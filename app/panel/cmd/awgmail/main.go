@@ -126,8 +126,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 
 	cfg, err := mailconf.Load(confPath)
 	if errors.Is(err, os.ErrNotExist) {
-		if err := os.Remove(notifyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(stderr, "awgmail: %v\n", err)
+		// Почта выключена: память правил и очередь больше ни о чём. Письма,
+		// ждавшие отправки, после повторного включения были бы вчерашними
+		// (amnezia-vpn-server-sjkk).
+		for _, stale := range []string{notifyPath, statePath} {
+			if err := os.Remove(stale); err != nil && !errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintf(stderr, "awgmail: %v\n", err)
+			}
 		}
 		return 0
 	}

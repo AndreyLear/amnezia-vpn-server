@@ -32,8 +32,9 @@ import (
 )
 
 const (
-	auditMailSave = "mail.save"
-	auditMailTest = "mail.test"
+	auditMailSave   = "mail.save"
+	auditMailTest   = "mail.test"
+	auditMailDelete = "mail.delete"
 )
 
 // Состояния пробного письма.
@@ -280,6 +281,30 @@ func (s *Server) apiMailTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, auditMailTest, settings.Recipient, "")
+	s.writeMailView(w, r)
+}
+
+// apiMailDelete выключает уведомления (amnezia-vpn-server-sjkk): настройки
+// удаляются из базы, mail.conf — с диска. Служба писем, не найдя файла,
+// сама сбрасывает свою память и очередь.
+func (s *Server) apiMailDelete(w http.ResponseWriter, r *http.Request) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	recipient := ""
+	if prev, err := db.LoadMailSettings(s.db()); err == nil {
+		recipient = prev.Recipient
+	}
+	if err := db.DeleteMailSettings(s.db()); err != nil {
+		internalFailure(w, r, s, "api mail delete", err)
+		return
+	}
+	if err := db.RenderMailConf(s.db(), s.cfg.MailConfPath); err != nil {
+		internalFailure(w, r, s, "api mail delete render", err)
+		return
+	}
+	if recipient != "" {
+		s.audit(r, auditMailDelete, recipient, "")
+	}
 	s.writeMailView(w, r)
 }
 

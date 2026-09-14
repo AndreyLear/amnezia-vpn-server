@@ -324,3 +324,34 @@ test("кнопка меню показывает крестик, пока мен
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expect(trigger.getByTestId("menu-more-icon")).toBeVisible();
 });
+
+// Уведомления выключаются в окне, с подтверждением (amnezia-vpn-server-sjkk).
+test("уведомления можно выключить", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login(page);
+  await page.getByRole("button", { name: "Ещё" }).click();
+  await page.getByRole("menuitem", { name: "Уведомления" }).click();
+  const dialog = page.getByRole("dialog", { name: "Уведомления" });
+  await dialog.getByLabel("Сервер SMTP").fill("smtp.example.org");
+  await dialog.getByLabel("Логин").fill("vpn@example.org");
+  await dialog.getByLabel("Пароль").fill("disable-check-password");
+  await dialog.getByLabel("Куда присылать").fill("owner@example.org");
+  await dialog.getByRole("button", { name: "Сохранить" }).click();
+  await expect(dialog.getByRole("button", { name: "Выключить уведомления" })).toBeVisible();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: "test-results/mail-disable-button.png" });
+
+  await dialog.getByRole("button", { name: "Выключить уведомления" }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Выключить уведомления?" });
+  await expect(confirm).toBeVisible();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: "test-results/mail-disable-confirm.png" });
+  await confirm.getByRole("button", { name: "Выключить" }).click();
+
+  await expect(dialog.getByLabel("Сервер SMTP")).toHaveValue("");
+  await expect(dialog.getByRole("button", { name: "Выключить уведомления" })).toHaveCount(0);
+  await page.reload();
+  await page.getByRole("button", { name: "Ещё" }).click();
+  await page.getByRole("menuitem", { name: "Уведомления" }).click();
+  await expect(page.getByRole("dialog", { name: "Уведомления" }).getByLabel("Сервер SMTP")).toHaveValue("");
+});
