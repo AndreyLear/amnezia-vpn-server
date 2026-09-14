@@ -222,7 +222,10 @@ test("описания нескольких выпусков не сливают
     });
   });
   await login(page);
-  await page.getByRole("button", { name: "Показать подробности" }).click();
+  // Через пункт меню, а не кнопку на полосе: соседний тест закрывает полосу на
+  // сервере, и в порядке CI её здесь уже нет (amnezia-vpn-server-s1iu).
+  await page.getByRole("button", { name: "Ещё" }).click();
+  await page.getByRole("menuitem", { name: "Доступна новая версия" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "Версия 99.9.8" })).toBeVisible();
   await expect(dialog.getByRole("list")).toHaveCount(2);
