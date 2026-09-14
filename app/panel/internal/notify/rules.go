@@ -70,6 +70,7 @@ func Evaluate(in Inputs, st *State) []Letter {
 	e.tellTrouble(&st.Clients, groupTunnel, keyClients, e.clientsDown, e.clientsUp)
 	e.tellRestarts()
 	e.tellUpdate(first)
+	e.tellUpdateRecovered()
 	e.tellRelease(first)
 
 	st.Initialized = true
@@ -286,10 +287,48 @@ func (e *eval) tellUpdate(first bool) {
 		return
 	}
 	e.st.UpdateSeen = stamp
+	// Любой новый итог отменяет ожидание возврата к норме: об удачном
+	// обновлении или откате и так будет письмо.
+	e.st.UpdateBroken, e.st.UpdateHealthySince = nil, nil
 	if first {
 		return
 	}
 	e.emit(keyUpdate, e.updateOutcome(u))
+	if u.State == "failed" {
+		at := e.now
+		e.st.UpdateBroken = &at
+	}
+}
+
+// tellUpdateRecovered пишет, что сервер снова в порядке после обновления,
+// которое не удалось и не откатилось (amnezia-vpn-server-crar). «В порядке» —
+// туннель работает и все службы, которые проверяет сторож, исправны
+// DownThreshold подряд: столько же, сколько нужно беде, чтобы о ней написать.
+func (e *eval) tellUpdateRecovered() {
+	if e.st.UpdateBroken == nil {
+		return
+	}
+	healthy := e.in.TunnelUp
+	if e.in.Services != nil {
+		for _, svc := range e.in.Services.Services {
+			if !svc.Healthy() {
+				healthy = false
+			}
+		}
+	}
+	if !healthy {
+		e.st.UpdateHealthySince = nil
+		return
+	}
+	if e.st.UpdateHealthySince == nil {
+		at := e.now
+		e.st.UpdateHealthySince = &at
+	}
+	if e.now.Sub(*e.st.UpdateHealthySince) < DownThreshold {
+		return
+	}
+	e.emit(keyUpdate, e.serverRecovered(*e.st.UpdateHealthySince))
+	e.st.UpdateBroken, e.st.UpdateHealthySince = nil, nil
 }
 
 func (e *eval) tellRelease(first bool) {

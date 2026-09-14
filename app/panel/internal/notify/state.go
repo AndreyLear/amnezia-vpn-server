@@ -56,8 +56,14 @@ type State struct {
 	Clients      Trouble            `json:"clients"`
 	Restarts     map[string]Restart `json:"restarts,omitempty"`
 	UpdateSeen   string             `json:"update_seen,omitempty"`
-	Release      string             `json:"release_seen,omitempty"`
-	Flaps        map[string]Flap    `json:"flaps,omitempty"`
+	// UpdateBroken — письмо сказало, что обновление не удалось и откатить не
+	// вышло; UpdateHealthySince — с какого момента сервер после этого
+	// непрерывно исправен. Нужны для письма о возврате к норме
+	// (amnezia-vpn-server-crar).
+	UpdateBroken       *time.Time      `json:"update_broken_utc,omitempty"`
+	UpdateHealthySince *time.Time      `json:"update_healthy_since_utc,omitempty"`
+	Release            string          `json:"release_seen,omitempty"`
+	Flaps              map[string]Flap `json:"flaps,omitempty"`
 }
 
 // LoadState reads the rules' memory. A missing file is a first run. A file
