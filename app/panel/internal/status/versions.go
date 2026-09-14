@@ -21,6 +21,12 @@ type Versions struct {
 	Schema         string `json:"schema"`
 	AmneziaWGGo    string `json:"amneziawg_go"`
 	AmneziaWGTools string `json:"amneziawg_tools"`
+	// TunnelDriver — на чём поднят туннель: "kernel" (модуль ядра amneziawg
+	// на хосте) или "userspace" (amneziawg-go из образа); пусто — неизвестно.
+	// AmneziaWGModule — версия загруженного модуля, когда туннель на нём
+	// (amnezia-vpn-server-y7bp).
+	TunnelDriver    string `json:"tunnel_driver"`
+	AmneziaWGModule string `json:"amneziawg_module"`
 }
 
 // ReadVersions loads the snapshot. A missing file is not an error: the

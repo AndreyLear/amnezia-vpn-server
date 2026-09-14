@@ -96,14 +96,43 @@ generate_dns_seen() {
 # означает «неизвестно», а не поломку.
 VERSIONS_FILE="${VERSIONS_FILE:-$(dirname "${STATUS_FILE}")/versions.json}"
 
+# На чём работает туннель (amnezia-vpn-server-y7bp). awg-quick поднимает awg0
+# на модуле ядра amneziawg, если он есть на хосте, и только без него — на
+# amneziawg-go из этого образа. Версия образа тогда ничего не говорит о
+# туннеле, и панель должна показывать версию модуля. Узнаём по sysfs хоста
+# (контейнер в сети хоста): у устройства модуля DEVTYPE=amneziawg, у
+# tun-устройства amneziawg-go есть tun_flags. Не узнали — пусто, «неизвестно».
+# AWG_SYS_ROOT — для харнесса, в контейнере пуст.
+tunnel_driver() {
+    local sys="${AWG_SYS_ROOT:-}/sys"
+    if grep -qsx 'DEVTYPE=amneziawg' "${sys}/class/net/${IFACE}/uevent"; then
+        printf 'kernel'
+    elif [ -e "${sys}/class/net/${IFACE}/tun_flags" ]; then
+        printf 'userspace'
+    fi
+}
+
+# Версия загруженного модуля; только безопасные для JSON символы.
+kernel_module_version() {
+    local sys="${AWG_SYS_ROOT:-}/sys" v
+    v="$(head -c 64 "${sys}/module/amneziawg/version" 2>/dev/null | tr -d '\n')"
+    case "${v}" in
+        *[!A-Za-z0-9._+~-]*) v="" ;;
+    esac
+    printf '%s' "${v}"
+}
+
 generate_versions() {
     local dir tmp
     dir="$(dirname "${VERSIONS_FILE}")"
     [ -d "${dir}" ] || return 0
     tmp="${VERSIONS_FILE}.tmp"
     {
-        printf '{"schema":"v1","amneziawg_go":"%s","amneziawg_tools":"%s"}\n' \
-            "${AMNEZIAWG_GO_VERSION:-}" "${AMNEZIAWG_TOOLS_VERSION:-}"
+        local driver module=""
+        driver="$(tunnel_driver)"
+        [ "${driver}" = "kernel" ] && module="$(kernel_module_version)"
+        printf '{"schema":"v1","amneziawg_go":"%s","amneziawg_tools":"%s","tunnel_driver":"%s","amneziawg_module":"%s"}\n' \
+            "${AMNEZIAWG_GO_VERSION:-}" "${AMNEZIAWG_TOOLS_VERSION:-}" "${driver}" "${module}"
     } > "${tmp}" 2>/dev/null && mv -f "${tmp}" "${VERSIONS_FILE}" || {
         log "warning: could not write ${VERSIONS_FILE}; the tunnel is unaffected"
         rm -f "${tmp}" 2>/dev/null || true

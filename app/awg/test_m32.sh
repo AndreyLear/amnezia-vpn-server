@@ -411,6 +411,32 @@ check "mmh6: default.disable_ipv6=1 is unusable" not env AWG_PROC_ROOT="$(mmh6_p
 check "mmh6: a kernel without IPv6 is unusable"  not env AWG_PROC_ROOT="$(mmh6_proc 0 0 --no-inet6)" bash -c "source '${MMH6_FUNCS}'; ipv6_usable"
 check "mmh6: an unreadable /proc reads as unusable" not env AWG_PROC_ROOT="${TMP}/nowhere" bash -c "source '${MMH6_FUNCS}'; ipv6_usable"
 
+# --- y7bp: на чём работает туннель и версия модуля ---------------------
+# Панель показывает версию модуля ядра, а не образа, когда туннель на модуле
+# (amnezia-vpn-server-y7bp). Решение — по sysfs хоста, подложенному харнессом.
+Y7_FUNCS="${TMP}/y7bp-funcs.sh"
+sed -n '/^tunnel_driver() {/,/^generate_versions() {/p' entrypoint.sh | sed '$d' > "${Y7_FUNCS}"
+y7_sys() { # y7_sys kernel|userspace|none [version]
+    local root="${TMP}/sys-$1-${2:-x}"
+    mkdir -p "${root}/sys/class/net/awg0" "${root}/sys/module/amneziawg"
+    case "$1" in
+        kernel) printf 'DEVTYPE=amneziawg\nINTERFACE=awg0\n' > "${root}/sys/class/net/awg0/uevent" ;;
+        userspace) printf 'INTERFACE=awg0\n' > "${root}/sys/class/net/awg0/uevent"; : > "${root}/sys/class/net/awg0/tun_flags" ;;
+    esac
+    [ -n "${2:-}" ] && printf '%s\n' "$2" > "${root}/sys/module/amneziawg/version"
+    printf '%s' "${root}"
+}
+check "y7bp: module interface reads as kernel" \
+    [ "$(env IFACE=awg0 AWG_SYS_ROOT="$(y7_sys kernel 3.1.20260812)" bash -c "source '${Y7_FUNCS}'; tunnel_driver")" = "kernel" ]
+check "y7bp: tun interface reads as userspace" \
+    [ "$(env IFACE=awg0 AWG_SYS_ROOT="$(y7_sys userspace)" bash -c "source '${Y7_FUNCS}'; tunnel_driver")" = "userspace" ]
+check "y7bp: no interface reads as unknown" \
+    [ -z "$(env IFACE=awg0 AWG_SYS_ROOT="$(y7_sys none)" bash -c "source '${Y7_FUNCS}'; tunnel_driver")" ]
+check "y7bp: module version is read" \
+    [ "$(env AWG_SYS_ROOT="$(y7_sys kernel 3.1.20260812)" bash -c "source '${Y7_FUNCS}'; kernel_module_version")" = "3.1.20260812" ]
+check "y7bp: a version with JSON-breaking characters is dropped" \
+    [ -z "$(env AWG_SYS_ROOT="$(y7_sys kernel '3.1"x')" bash -c "source '${Y7_FUNCS}'; kernel_module_version")" ]
+
 # --- 3.1 reload on mtime change; filtered config reaches syncconf ----
 DIR_A="${TMP}/flow-a"
 mkdir -p "${DIR_A}/config" "${DIR_A}/etc"

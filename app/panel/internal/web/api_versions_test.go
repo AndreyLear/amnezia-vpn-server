@@ -19,9 +19,11 @@ func TestAPIVersionsReportsWhatIsKnown(t *testing.T) {
 	t.Setenv("AMNEZIA_VERSION", "2.9.0")
 
 	versions := status.Versions{
-		Schema:         "v1",
-		AmneziaWGGo:    "0.2.19",
-		AmneziaWGTools: "3.1.20260812",
+		Schema:          "v1",
+		AmneziaWGGo:     "0.2.19",
+		AmneziaWGTools:  "3.1.20260812",
+		TunnelDriver:    "kernel",
+		AmneziaWGModule: "3.1.20260812",
 	}
 	data, err := json.Marshal(versions)
 	if err != nil {
@@ -37,6 +39,10 @@ func TestAPIVersionsReportsWhatIsKnown(t *testing.T) {
 	}
 	if got["amneziawg_go"] != "0.2.19" || got["amneziawg_tools"] != "3.1.20260812" {
 		t.Fatalf("версии AmneziaWG не дошли: %v", got)
+	}
+	// На чём работает туннель и версия модуля (amnezia-vpn-server-y7bp).
+	if got["tunnel_driver"] != "kernel" || got["amneziawg_module"] != "3.1.20260812" {
+		t.Fatalf("модуль ядра не дошёл: %v", got)
 	}
 	if got["schema"] != db.SchemaVersion {
 		t.Fatalf("schema = %v, ожидалось %q", got["schema"], db.SchemaVersion)
