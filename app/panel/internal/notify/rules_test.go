@@ -184,6 +184,12 @@ func TestClientsCollapse(t *testing.T) {
 	wantKeys(t, w.minutes(4, nil))
 	got := w.step(time.Minute)
 	wantKeys(t, got, keyClients)
+	// Только факт, без догадок о причине (dfs2 п.11, amnezia-vpn-server-daqa).
+	for _, guess := range []string{"Так бывает", "блокировка", "хостер"} {
+		if strings.Contains(got[0].Message.Body, guess) {
+			t.Errorf("в письме догадка о причине: %q", got[0].Message.Body)
+		}
+	}
 	wantKeys(t, w.minutes(10, nil))
 	w.step(0)
 	w.clientsActive("b")
