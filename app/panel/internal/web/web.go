@@ -273,6 +273,7 @@ func New(cfg Config) (*Server, error) {
 	s.mux.Handle("GET /api/mail", s.auth.RequireAPI(http.HandlerFunc(s.apiMail)))
 	s.mux.Handle("PUT /api/mail", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiMailSave))))
 	s.mux.Handle("POST /api/mail/test", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiMailTest))))
+	s.mux.Handle("DELETE /api/mail", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiMailDelete))))
 	// RequireCSRF, как у любой мутации: RequireAPI проверяет сессию и
 	// только её. SameSite=Lax роняет чужие межсайтовые POST и потому
 	// прикрывает этот пропуск, но заведён он вторым слоем, а не

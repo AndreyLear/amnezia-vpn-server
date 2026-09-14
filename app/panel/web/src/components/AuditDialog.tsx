@@ -31,6 +31,7 @@ const actions: Record<string, string> = {
   logout: "Выход",
   "client.add": "Клиент добавлен",
   "mail.save": "Настройки почты сохранены",
+  "mail.delete": "Уведомления выключены",
   "mail.test": "Пробное письмо запрошено",
   "client.edit": "Клиент изменён",
   "client.mtu": "MTU клиента",

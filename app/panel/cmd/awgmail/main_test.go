@@ -99,12 +99,13 @@ func (e *env) queue(t *testing.T, subject string) {
 	}
 }
 
-// Почта не настроена — служба молчит, не падает и ничего не пишет на
-// диск, даже если в очереди что-то лежит (amnezia-vpn-server-hxgr).
+// Почта не настроена — служба молчит, не падает и ничего не отправляет,
+// даже если в очереди что-то лежит (amnezia-vpn-server-hxgr); саму очередь
+// выбрасывает, чтобы после включения не ушли вчерашние письма
+// (amnezia-vpn-server-sjkk).
 func TestNoMailConfIsSilent(t *testing.T) {
 	e := newEnv(t)
 	e.queue(t, "Туннель не работает 5 минут")
-	before, _ := os.ReadFile(e.statePath())
 	if code := e.run(); code != 0 {
 		t.Fatalf("exit %d, stderr %s", code, e.stderr.String())
 	}
@@ -114,8 +115,8 @@ func TestNoMailConfIsSilent(t *testing.T) {
 	if len(e.sent) != 0 {
 		t.Fatal("письмо ушло без настроек")
 	}
-	if after, _ := os.ReadFile(e.statePath()); !bytes.Equal(before, after) {
-		t.Fatal("очередь переписана без настроек")
+	if _, err := os.Stat(e.statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("очередь с вчерашними письмами осталась без настроек: %v", err)
 	}
 }
 
@@ -229,6 +230,7 @@ func TestMailOffDropsRulesMemory(t *testing.T) {
 	if _, err := os.Stat(notifyPath); err != nil {
 		t.Fatalf("память правил не записана: %v", err)
 	}
+	e.queue(t, "Туннель не работает 5 минут")
 	if err := os.Remove(filepath.Join(e.root, "data", "mail.conf")); err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +239,9 @@ func TestMailOffDropsRulesMemory(t *testing.T) {
 	}
 	if _, err := os.Stat(notifyPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("память правил осталась при выключенной почте: %v", err)
+	}
+	if _, err := os.Stat(e.statePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("очередь писем осталась при выключенной почте: %v", err)
 	}
 }
 

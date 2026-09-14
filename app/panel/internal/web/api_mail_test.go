@@ -353,3 +353,45 @@ func TestAPIMailFailureSummary(t *testing.T) {
 		t.Fatalf("письмо правил: %+v", got.LastFailure)
 	}
 }
+
+// Уведомления выключаются в панели: настроек нет ни в базе, ни на диске, в
+// журнале — запись без пароля (amnezia-vpn-server-sjkk).
+func TestAPIMailDelete(t *testing.T) {
+	f := newFixture(t)
+	decodeMail(t, f.apiCSRF(http.MethodPut, "/api/mail", mailBody(mailSecret)))
+	if _, err := os.Stat(f.server.cfg.MailConfPath); err != nil {
+		t.Fatalf("mail.conf не записан: %v", err)
+	}
+	got := decodeMail(t, f.apiCSRF(http.MethodDelete, "/api/mail", nil))
+	if got.Configured || got.Channel != mailChannelOff {
+		t.Fatalf("после выключения %+v", got)
+	}
+	if _, err := db.LoadMailSettings(f.h); err == nil {
+		t.Fatal("настройки остались в базе")
+	}
+	if _, err := os.Stat(f.server.cfg.MailConfPath); !os.IsNotExist(err) {
+		t.Fatalf("mail.conf остался: %v", err)
+	}
+	entries, _ := db.AuditTail(f.h, 10)
+	found := false
+	for _, e := range entries {
+		if e.Action == auditMailDelete {
+			found = true
+			if strings.Contains(e.Subject+e.Detail, mailSecret) {
+				t.Fatal("пароль в журнале")
+			}
+		}
+	}
+	if !found {
+		t.Error("выключение не попало в журнал")
+	}
+	// Повторное выключение — не ошибка.
+	decodeMail(t, f.apiCSRF(http.MethodDelete, "/api/mail", nil))
+
+	req := apiJSON(t, http.MethodDelete, "/api/mail", nil)
+	rec := httptest.NewRecorder()
+	f.serve(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("без CSRF: code = %d", rec.Code)
+	}
+}
