@@ -197,7 +197,13 @@ export default function HomePage() {
         timedOut={updateTimedOut}
         onChanged={reloadUpdate}
       />
-      {clients && clients.length > 0 ? <MailFailureBanner /> : null}
+      {/* И на экране первого запуска: отказ почты не должен прятаться в окне
+          только потому, что клиентов пока нет (amnezia-vpn-server-063p). На
+          пустом экране колонка центрирована, поэтому полоса на всю ширину и
+          без своего верхнего отступа — его даёт gap колонки. */}
+      {clients === null ? null : (
+        <MailFailureBanner className={clients.length === 0 ? "mt-0 w-full" : undefined} />
+      )}
       {clients === null ? null : clients.length === 0 ? (
         <EmptyClients onAdd={() => setAddOpen(true)} restorePending={restorePending} />
       ) : (

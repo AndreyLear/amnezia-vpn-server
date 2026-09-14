@@ -4,6 +4,7 @@ import { NotificationsDialog } from "@/components/NotificationsDialog";
 import { Button } from "@/components/ui/button";
 import { api, type MailInfo } from "@/lib/api";
 import { formatHandshake } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 /**
  * Полоса «письма не уходят» (amnezia-vpn-server-pz2r).
@@ -48,7 +49,7 @@ function describe(
   };
 }
 
-export function MailFailureBanner() {
+export function MailFailureBanner({ className }: { className?: string } = {}) {
   const [info, setInfo] = useState<MailInfo | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -77,7 +78,10 @@ export function MailFailureBanner() {
       {problem ? (
         <div
           role="alert"
-          className="mt-4 flex items-center gap-3 rounded-lg border border-destructive/40 bg-card px-4 py-3 max-sm:flex-col max-sm:items-stretch"
+          className={cn(
+            "mt-4 flex items-center gap-3 rounded-lg border border-destructive/40 bg-card px-4 py-3 max-sm:flex-col max-sm:items-stretch",
+            className,
+          )}
         >
           <div className="grid min-w-0 flex-1 gap-1">
             <p className="text-destructive">{problem.title}</p>
