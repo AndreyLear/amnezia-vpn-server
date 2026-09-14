@@ -63,6 +63,16 @@ data/mail.conf, которые записывает панель; нет фай�
 
 Ключи:
   --help    показать эту справку
+
+Примеры:
+  # один проход, как его делает таймер
+  awgmail
+
+  # проход по развёртыванию в другом каталоге
+  AMNEZIA_MAIL_ROOT=/srv/amnezia-vpn awgmail
+
+  # что происходило: журнал службы
+  journalctl -u amnezia-vpn-mail.service --since today
 `
 
 type deps struct {
@@ -92,7 +102,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 	if len(args) > 0 {
 		// The argument is not echoed: whatever was typed there might be
 		// the very thing that must not reach the journal.
-		fmt.Fprintln(stderr, "awgmail: аргументы не принимаются, см. --help")
+		fmt.Fprintln(stderr, "awgmail: аргументы не принимаются; запуск — просто «awgmail», пути задаются переменными окружения (см. awgmail --help)")
 		return 2
 	}
 
