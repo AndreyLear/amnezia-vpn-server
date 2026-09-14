@@ -61,6 +61,7 @@ type fakeSMTP struct {
 	authMethods string // advertised AUTH methods, "" for none
 	user, pass  string
 	echoLogin   bool // a careless server quoting the credentials in its refusal
+	rejectRcpt  bool // the recipient is refused with 550
 
 	tlsConfig *tls.Config
 	pool      *x509.CertPool
@@ -203,6 +204,8 @@ func (f *fakeSMTP) serve(raw net.Conn) {
 				return
 			}
 			login(decode(u), decode(p))
+		case strings.HasPrefix(upper, "RCPT TO:") && f.rejectRcpt:
+			reply("550 5.1.1 Mailbox unavailable")
 		case strings.HasPrefix(upper, "MAIL FROM:"), strings.HasPrefix(upper, "RCPT TO:"):
 			reply("250 2.1.0 OK")
 		case upper == "DATA":

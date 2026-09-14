@@ -87,6 +87,7 @@ function MailStatus({ info, now }: { info: MailInfo; now: number }) {
         <p className="text-destructive">
           «{failure.subject}» не отправлено {formatHandshake(failure.at_utc)}
         </p>
+        {failure.summary ? <p>{failure.summary}</p> : null}
         <p className="break-words font-mono text-xs text-muted-foreground">{failure.error}</p>
       </div>
     );
@@ -112,6 +113,7 @@ function MailStatus({ info, now }: { info: MailInfo; now: number }) {
     return (
       <div className="grid gap-1 text-sm">
         <p className="text-destructive">Пробное письмо не ушло. Настройки сохранены, но не проверены.</p>
+        {test.summary ? <p>{test.summary}</p> : null}
         {test.error ? (
           <p className="break-words font-mono text-xs text-muted-foreground">{test.error}</p>
         ) : null}

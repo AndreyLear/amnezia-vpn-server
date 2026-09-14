@@ -22,7 +22,7 @@ const POLL_MS = 60_000;
 
 function describe(
   info: MailInfo,
-): { title: string; detail?: string; serverReply?: string } | null {
+): { title: string; detail?: string; summary?: string; serverReply?: string } | null {
   if (info.channel === "password_missing") {
     return {
       title: "Письма о сбоях не уходят",
@@ -37,6 +37,7 @@ function describe(
     return {
       title: "Письма о сбоях не уходят",
       detail: `«${failure.subject}» не отправлено ${formatHandshake(failure.at_utc)}`,
+      summary: failure.summary,
       serverReply: failure.error,
     };
   }
@@ -83,6 +84,9 @@ export function MailFailureBanner() {
             {problem.detail ? (
               <p className="break-words text-sm text-muted-foreground">{problem.detail}</p>
             ) : null}
+            {/* Что это значит — словами, под ним ответ сервера как есть
+                (amnezia-vpn-server-idd6). */}
+            {problem.summary ? <p className="text-sm">{problem.summary}</p> : null}
             {problem.serverReply ? (
               <p className="break-words font-mono text-xs text-muted-foreground">{problem.serverReply}</p>
             ) : null}

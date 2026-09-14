@@ -46,7 +46,11 @@ type Sender struct {
 // Send delivers msg from cfg.Username to cfg.Recipient. Errors never
 // contain the password.
 func (s *Sender) Send(ctx context.Context, cfg *mailconf.File, msg Message) error {
-	return redact(s.send(ctx, cfg, msg), cfg)
+	err := s.send(ctx, cfg, msg)
+	if err == nil {
+		return nil
+	}
+	return &SendError{Summary: explain(err), err: redact(err, cfg)}
 }
 
 func (s *Sender) send(ctx context.Context, cfg *mailconf.File, msg Message) error {

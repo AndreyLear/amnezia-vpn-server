@@ -28,8 +28,10 @@ type Pending struct {
 // Failure is a message given up on. The panel shows it so that a silent
 // channel is not mistaken for a quiet server (amnezia-vpn-server-pz2r).
 type Failure struct {
-	Key     string    `json:"key"`
-	Subject string    `json:"subject"`
+	Key     string `json:"key"`
+	Subject string `json:"subject"`
+	// Summary explains the failure in words; Error is the server's reply.
+	Summary string    `json:"summary,omitempty"`
 	Error   string    `json:"error"`
 	At      time.Time `json:"at_utc"`
 }
@@ -89,7 +91,7 @@ func (s *State) Deliver(ctx context.Context, now time.Time, send func(context.Co
 		}
 		if p.Attempts > len(RetryDelays) {
 			o.GaveUp = true
-			s.LastFailure = &Failure{Key: p.Key, Subject: p.Message.Subject, Error: err.Error(), At: now.UTC()}
+			s.LastFailure = &Failure{Key: p.Key, Subject: p.Message.Subject, Summary: Summary(err), Error: err.Error(), At: now.UTC()}
 			outcomes = append(outcomes, o)
 			continue
 		}
