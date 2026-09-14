@@ -842,11 +842,11 @@ if [ "$HAVE_BBR" = "1" ]; then
 fi
 
 # --- 6. AmneziaWG client stack (amneziawg + amneziawg-tools) ----------
-# The host keeps a kernel-native AmneziaWG stack (module + CLI tools)
-# NEXT TO the userspace awg container: the awg runtime stays in Docker,
-# while the kernel module lets the box itself act as a tunnel client
-# (tests, diagnostics, management access) and guarantees the full
-# client stack is present for a trouble-free operation. This is the
+# The host keeps a kernel-native AmneziaWG stack (module + CLI tools). The
+# tunnel itself runs on this module: awg-quick in the awg container creates
+# awg0 as «type amneziawg», and amneziawg-go in the image is only the
+# fallback for a host without the module (checked on the test server
+# 14.09.2026, amnezia-vpn-server-61at). This is the
 # official install path (amnezia-vpn/amneziawg-linux-kernel-module):
 # PPA ppa:amnezia/ppa, packages amneziawg (DKMS module) and
 # amneziawg-tools. Idempotent: a working module plus the awg binary
@@ -894,6 +894,37 @@ else
     cmd modprobe amneziawg || die_op "amneziawg kernel module failed to load after installation"
     log "AmneziaWG client stack installed: $(cmd awg version 2>/dev/null | head -1)"
 fi
+
+# Hold the AmneziaWG packages (amnezia-vpn-server-jylg). Every other version
+# of this stack is pinned in versions.lock, but the module came from the PPA
+# and unattended-upgrades moved it on its own: the test server was running a
+# build nobody had chosen, and the next one was already waiting. A module
+# change is a change to the tunnel of every client, so it happens when the
+# operator decides, not overnight. DKMS still rebuilds the held module for a
+# new kernel. To take a newer build deliberately:
+#   apt-mark unhold amneziawg amneziawg-dkms amneziawg-tools
+#   apt-get install --only-upgrade amneziawg amneziawg-dkms amneziawg-tools
+#   apt-mark hold amneziawg amneziawg-dkms amneziawg-tools
+# Runs on every install, so existing servers get held by their next update.
+hold_amneziawg_packages() {
+    local pkg held=""
+    for pkg in amneziawg amneziawg-dkms amneziawg-tools; do
+        if cmd dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null | grep -q '^installed$'; then
+            held="$held $pkg"
+        fi
+    done
+    if [ -z "$held" ]; then
+        log "AmneziaWG packages not installed from the PPA; nothing to hold"
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    if cmd apt-mark hold $held >/dev/null 2>&1; then
+        log "AmneziaWG packages held at their installed versions:${held}"
+    else
+        log "WARNING: apt-mark hold failed; system updates may still replace the AmneziaWG module"
+    fi
+}
+hold_amneziawg_packages
 
 # Persist the module for the next boot whichever branch ran. Writing it only
 # where the installer had installed the package left hosts that already had it

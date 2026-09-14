@@ -772,6 +772,29 @@ sed "s/^${setstate_val}=.*/${setstate_val}=1/" "$FAKE_STATE" > "$FAKE_STATE.new"
 exit 0
 FAKE_EOF
 
+# dpkg-query answers whether a package is installed; AWG_PKGS_INSTALLED lists
+# the PPA packages present (amnezia-vpn-server-jylg). apt-mark only records.
+cat > "$FAKE_DIR/dpkg-query" <<'FAKE_EOF'
+#!/bin/bash
+echo "dpkg-query $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+pkg="${!#}"
+case " ${AWG_PKGS_INSTALLED-amneziawg amneziawg-dkms amneziawg-tools} " in
+    *" $pkg "*) printf 'installed' ;;
+    *) printf 'not-installed' ;;
+esac
+exit 0
+FAKE_EOF
+
+cat > "$FAKE_DIR/apt-mark" <<'FAKE_EOF'
+#!/bin/bash
+echo "apt-mark $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+exit "${APT_MARK_RC:-0}"
+FAKE_EOF
+
+chmod +x "$FAKE_DIR/dpkg-query" "$FAKE_DIR/apt-mark"
+
 chmod +x "$FAKE_DIR/modprobe" "$FAKE_DIR/awg" "$FAKE_DIR/uname" \
     "$FAKE_DIR/add-apt-repository" "$FAKE_DIR/iptables"
 
@@ -1328,6 +1351,43 @@ test_failed_ppa_stops_with_its_own_message() {
     stderr | grep -qi "ppa\|repository" \
         && pass "the failure names the repository step" \
         || fail "the failure must name the repository step"
+}
+
+# Модуль и утилиты AmneziaWG закреплены на установленной версии: системные
+# обновления не должны менять туннель всем клиентам без решения оператора
+# (amnezia-vpn-server-jylg). Держим и на свежей установке, и на сервере, где
+# стек уже стоял, — иначе существующие серверы не закрепились бы никогда.
+test_amneziawg_packages_are_held() {
+    local mode
+    for mode in fresh present; do
+        fakes_reset
+        os_release ubuntu 24.04 noble
+        if [ "$mode" = fresh ]; then
+            rc="$(AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1 run_install)"
+        else
+            rc="$(run_install)"
+        fi
+        [ "$rc" = "0" ] || fail "hold ($mode): exit $rc"
+        grep -q "^apt-mark hold amneziawg amneziawg-dkms amneziawg-tools$" "$FAKE_CALLS" \
+            && pass "hold ($mode): module, dkms and tools are held" \
+            || fail "hold ($mode): AmneziaWG packages were not held"
+    done
+    # Держать нечего — не ошибка и не пустой вызов apt-mark.
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(AWG_PKGS_INSTALLED="" run_install)"
+    [ "$rc" = "0" ] || fail "hold (none): exit $rc"
+    grep -q "^apt-mark hold" "$FAKE_CALLS" \
+        && fail "hold (none): apt-mark called with nothing installed" \
+        || pass "hold (none): nothing to hold, apt-mark not called"
+    # Сбой apt-mark не срывает установку, но о нём сказано.
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(APT_MARK_RC=1 run_install)"
+    [ "$rc" = "0" ] || fail "hold (apt-mark fails): install must go on, exit $rc"
+    grep -q "WARNING: apt-mark hold failed" "$TMP_TEST/out" "$TMP_TEST/err" \
+        && pass "hold (apt-mark fails): the installer says so" \
+        || fail "hold (apt-mark fails): failure was silent"
 }
 
 test_apt_is_never_interactive() {
@@ -3133,6 +3193,7 @@ test_image_capability_gate_passes_with_a_matching_image
 test_image_older_than_scripts_is_refused
 test_image_without_capabilities_command_is_refused
 test_watchdog_units_installed_by_default
+test_amneziawg_packages_are_held
 test_mail_units_and_binary_installed
 test_mail_binary_failure_is_not_fatal
 test_watchdog_can_be_declined
