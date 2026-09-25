@@ -45,11 +45,15 @@ func ifaceStateJSON(state InterfaceState) string {
 	}
 }
 
+// hostCPUPeriod is the window of the CPU figure; tests shorten it.
+var hostCPUPeriod = hostmetrics.CPUPeriod
+
 func (s *Server) apiStatsHost(w http.ResponseWriter, r *http.Request) {
-	s.hostMu.Lock()
-	snap, next := hostmetrics.Read(s.cfg.HostProcDir, s.cfg.HostDiskPath, s.hostCPU)
-	s.hostCPU = next
-	s.hostMu.Unlock()
+	// CPU is measured in the background over fixed windows; a request only
+	// reads the last figure, so several open tabs do not shrink the window
+	// to milliseconds (amnezia-vpn-server-76mp.23).
+	snap := hostmetrics.ReadMemDisk(s.cfg.HostProcDir, s.cfg.HostDiskPath)
+	snap.CPU = hostmetrics.SharedCPUMeter(s.cfg.HostProcDir, hostCPUPeriod).Percent()
 
 	st, readErr := status.ReadStatus(s.cfg.StatusPath)
 	rec := Reconcile(nil, st, readErr, time.Now().UTC())

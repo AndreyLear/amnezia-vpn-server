@@ -26,6 +26,23 @@ type Trouble struct {
 	// ToldSince is the start of the occurrence the letter was about, for
 	// the «it is over» letter.
 	ToldSince *time.Time `json:"told_since_utc,omitempty"`
+	// EndedAt is when the occurrence the letter was about ended. The «it
+	// is over» letter can go out much later than that — after an hour of
+	// silence for flapping — and must name this moment, not its own
+	// (amnezia-vpn-server-76mp.14).
+	EndedAt *time.Time `json:"ended_utc,omitempty"`
+	// Missed sums up occurrences long enough for a letter that ended while
+	// the group was muted and were never written about. The next letter of
+	// this trouble mentions them (amnezia-vpn-server-76mp.14).
+	Missed *Missed `json:"missed,omitempty"`
+}
+
+// Missed is what the silence swallowed: how many occurrences, and the
+// longest of them.
+type Missed struct {
+	Count int       `json:"count"`
+	Since time.Time `json:"since_utc"`
+	Until time.Time `json:"until_utc"`
 }
 
 // Restart tracks what the watchdog did to one service.

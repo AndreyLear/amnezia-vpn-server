@@ -23,7 +23,10 @@
 //
 // Flapping is its own diagnosis. More than three changes within an hour in
 // one group give one letter «… мигает» and an hour of silence for that
-// group: the flapping matters more than each separate drop.
+// group: the flapping matters more than each separate drop. The silence
+// hides the flapping, not a long outage inside it: a drop long enough for
+// a letter that began and ended while muted is mentioned in the first
+// letter of that trouble after the silence (amnezia-vpn-server-76mp.14).
 //
 // On the first run (State.Initialized false) the rules only take a
 // baseline: a restart, an update outcome or a release that happened before
@@ -48,6 +51,14 @@ const (
 	// and stamps whole seconds, so two peers cut at the same instant can
 	// land in adjacent samples a little more than 5 seconds apart.
 	CollapseTolerance = 7 * time.Second
+	// KeepaliveWindow is the longest a connected client can stay silent:
+	// the config the panel writes has PersistentKeepalive = 25, and awg
+	// samples every 5 seconds. An idle client's last move therefore says
+	// only that it was on the line at some point in the next 30 seconds
+	// (amnezia-vpn-server-76mp.15).
+	KeepaliveWindow = 30 * time.Second
+	// stampSlack: samples are stamped in whole seconds.
+	stampSlack = 2 * time.Second
 	// FlapWindow and FlapLimit: more than FlapLimit changes in FlapWindow is
 	// flapping; the group is then muted for FlapWindow.
 	FlapWindow = time.Hour

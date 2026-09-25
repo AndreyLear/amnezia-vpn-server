@@ -20,6 +20,11 @@ type RxActivity struct {
 	// counter was higher than the one before. Peers that did not move in
 	// the window are absent.
 	LastMove map[string]time.Time
+	// PrevMove is the move before LastMove, for peers that moved at least
+	// twice. The gap between the two is the peer's rhythm: every sample
+	// while it is busy, once per keepalive while it idles — how late its
+	// next move could have come (amnezia-vpn-server-76mp.15).
+	PrevMove map[string]time.Time
 	// LastSample is the newest sample in the window; zero when there is
 	// none, which means the log says nothing about now.
 	LastSample time.Time
@@ -44,7 +49,7 @@ func ReadRxActivity(path string, from, to time.Time) (*RxActivity, error) {
 	}
 	buf = append(buf, live...)
 
-	out := &RxActivity{LastMove: map[string]time.Time{}}
+	out := &RxActivity{LastMove: map[string]time.Time{}, PrevMove: map[string]time.Time{}}
 	lastRx := map[string]uint64{}
 	for line := range strings.SplitSeq(string(buf), "\n") {
 		fields := strings.Fields(line)
@@ -75,6 +80,9 @@ func ReadRxActivity(path string, from, to time.Time) (*RxActivity, error) {
 			// A counter lower than before is a reset (the tunnel restarted):
 			// it is a new baseline, not traffic.
 			if prev, seen := lastRx[key]; seen && rx > prev {
+				if last, moved := out.LastMove[key]; moved {
+					out.PrevMove[key] = last
+				}
 				out.LastMove[key] = at
 			}
 			lastRx[key] = rx

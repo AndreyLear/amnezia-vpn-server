@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Same /proc/stat samples as hostmetrics_test.go:
@@ -102,6 +103,9 @@ func TestHostStatsAuthenticatedKeysPresent(t *testing.T) {
 }
 
 func TestHostStatsCPUFirstNullThenPercent(t *testing.T) {
+	old := hostCPUPeriod
+	hostCPUPeriod = 10 * time.Millisecond
+	t.Cleanup(func() { hostCPUPeriod = old })
 	f := newFixture(t)
 	proc := t.TempDir()
 	writeHostStatsProc(t, proc, hostStatsStat1, hostStatsMem)
@@ -133,19 +137,36 @@ func TestHostStatsCPUFirstNullThenPercent(t *testing.T) {
 		t.Fatalf("ram_total_bytes = %v, want %v", got["ram_total_bytes"], wantTotal)
 	}
 
+	// CPU is sampled in the background (amnezia-vpn-server-76mp.23): the
+	// figure appears once the meter has taken the new counters.
 	writeHostStatsProc(t, proc, hostStatsStat2, hostStatsMem)
-	second := f.get("/api/stats/host")
-	if second.Code != http.StatusOK {
-		t.Fatalf("second GET code = %d, want 200; body=%s", second.Code, second.Body.String())
-	}
-	got = decodeHostStatsMap(t, second)
-	assertHostStatsKeys(t, got)
-	cpu, ok := got["cpu_percent"].(float64)
-	if !ok {
-		t.Fatalf("second cpu_percent = %v, want ~73.333", got["cpu_percent"])
+	var cpu float64
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		second := f.get("/api/stats/host")
+		if second.Code != http.StatusOK {
+			t.Fatalf("second GET code = %d, want 200; body=%s", second.Code, second.Body.String())
+		}
+		got = decodeHostStatsMap(t, second)
+		assertHostStatsKeys(t, got)
+		if v, ok := got["cpu_percent"].(float64); ok {
+			cpu = v
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cpu_percent = %v, want ~73.333", got["cpu_percent"])
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if cpu < hostStatsCPU-0.01 || cpu > hostStatsCPU+0.01 {
 		t.Fatalf("second cpu_percent = %v, want %v", cpu, hostStatsCPU)
+	}
+	// Requests in a row read the same window, they do not start new ones.
+	for i := 0; i < 3; i++ {
+		again := decodeHostStatsMap(t, f.get("/api/stats/host"))
+		if again["cpu_percent"] != cpu {
+			t.Fatalf("cpu_percent between samples = %v, want %v", again["cpu_percent"], cpu)
+		}
 	}
 }
 
