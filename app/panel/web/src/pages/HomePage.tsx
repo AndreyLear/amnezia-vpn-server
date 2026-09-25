@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { AddClientDialog } from "@/components/AddClientDialog";
@@ -46,8 +46,16 @@ export default function HomePage() {
     timedOut: updateTimedOut,
   } = useUpdateInfo();
 
+  // Номер последней начатой загрузки: ответ более ранней, пришедший позже,
+  // устарел — опрос, ушедший до PATCH, иначе возвращал карточке прежнее
+  // состояние при тосте «Клиент отключён» (amnezia-vpn-server-76mp.17).
+  const loadSeq = useRef(0);
+  const pollInFlight = useRef(false);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     const list = await api<unknown>("/api/clients");
+    if (seq !== loadSeq.current) return;
     if (Array.isArray(list)) setClients(list);
     if (DEMO_HOST_OVERLAY) {
       setHost((prev) => nextDemoHost(prev));
@@ -55,6 +63,7 @@ export default function HomePage() {
     }
     try {
       const snap = await api<HostSnapshot>("/api/stats/host");
+      if (seq !== loadSeq.current) return;
       if (snap && typeof snap === "object") {
         setHost({
           cpu_percent: snap.cpu_percent ?? null,
@@ -87,13 +96,28 @@ export default function HomePage() {
     }
 
     void boot();
-    const timer = window.setInterval(() => {
-      if (!stopped) void load();
-    }, 5000);
+    // Скрытая вкладка не опрашивает: GET сессию не продлевает, и за ночь в
+    // фоне опрос копил тысячи запросов, ждущих повторного входа
+    // (amnezia-vpn-server-76mp.7). Вернулся на вкладку — спросить сразу.
+    // Следующий опрос не начинается, пока не вернулся предыдущий: на
+    // медленном сервере они перекрывались (amnezia-vpn-server-76mp.17).
+    const poll = () => {
+      if (stopped || pollInFlight.current || document.visibilityState !== "visible") return;
+      pollInFlight.current = true;
+      void load()
+        .catch(() => {})
+        .finally(() => {
+          pollInFlight.current = false;
+        });
+    };
+    const timer = window.setInterval(poll, 5000);
+    const onVisible = poll;
+    document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       stopped = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [load]);
 

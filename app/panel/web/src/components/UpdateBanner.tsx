@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { XIcon } from "lucide-react";
+import { toast } from "sonner";
 
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { UpdateOutcomeDialog } from "@/components/UpdateOutcomeDialog";
@@ -78,12 +79,19 @@ export function UpdateBanner({
   async function dismiss() {
     if (!info || hiding) return;
     setHiding(true);
-    const data = await api<MutationResponse>("/api/update/dismiss", {
-      method: "POST",
-      body: JSON.stringify({ version: info.latest }),
-    });
-    if (mutationOk(data)) onChanged();
-    setHiding(false);
+    // Сетевой сбой оставлял крестик недоступным до перезагрузки страницы
+    // (amnezia-vpn-server-76mp.35): флаг снимается в finally.
+    try {
+      const data = await api<MutationResponse>("/api/update/dismiss", {
+        method: "POST",
+        body: JSON.stringify({ version: info.latest }),
+      });
+      if (mutationOk(data)) onChanged();
+    } catch {
+      toast.error("Не удалось скрыть уведомление о новой версии");
+    } finally {
+      setHiding(false);
+    }
   }
 
   // Returns whether the outcome is actually recorded as seen — both the
@@ -100,10 +108,17 @@ export function UpdateBanner({
     // Запоминается ДО запроса: смысл в том, чтобы итог не всплыл снова,
     // даже если запрос не дойдёт вовсе.
     if (info.state_at_utc) setSeenOutcome(info.state_at_utc);
-    const data = await api<MutationResponse>("/api/update/dismiss", {
-      method: "POST",
-      body: JSON.stringify({ outcome: info.state_at_utc }),
-    });
+    let data: MutationResponse | undefined;
+    try {
+      data = await api<MutationResponse>("/api/update/dismiss", {
+        method: "POST",
+        body: JSON.stringify({ outcome: info.state_at_utc }),
+      });
+    } catch {
+      // Сеть оборвалась: отметка не записана, окно остаётся открытым для
+      // повтора, а mutationOk ниже назовёт сбой (amnezia-vpn-server-76mp.35).
+      data = undefined;
+    }
     if (!mutationOk(data)) return false;
     await onChanged();
     return true;

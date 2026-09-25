@@ -46,13 +46,15 @@ export function SpeedChart({ clientId }: { clientId: number }) {
   const [series, setSeries] = useState<SpeedSeries | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
-  const alive = useRef(true);
-
+  // Флаг «ещё нужен» свой у каждого запуска эффекта. Общий ref cleanup
+  // сбрасывал, а новый запуск тут же поднимал обратно — и ответ прошлого
+  // периода, пришедший последним, рисовался под кнопкой нового
+  // (amnezia-vpn-server-76mp.16).
   const load = useCallback(
-    async (r: Range) => {
+    async (r: Range, alive: () => boolean) => {
       try {
         const data = await fetchSpeed(clientId, r, COLUMNS[r]);
-        if (!alive.current) return;
+        if (!alive()) return;
         if (!data || !Array.isArray(data.down_max_bps)) {
           setFailed(true);
           return;
@@ -61,25 +63,33 @@ export function SpeedChart({ clientId }: { clientId: number }) {
         setUnit(speedUnit(speedScale(data)));
         setFailed(false);
       } catch {
-        if (alive.current) setFailed(true);
+        if (alive()) setFailed(true);
       } finally {
-        if (alive.current) setLoading(false);
+        if (alive()) setLoading(false);
       }
     },
     [clientId],
   );
 
   useEffect(() => {
-    alive.current = true;
+    let active = true;
+    const alive = () => active;
     setLoading(true);
-    void load(range);
+    void load(range, alive);
     // Обновление только в коротком окне. В сутках один новый замер из
     // 17 280 не меняет ни пикселя, и запрос раз в пять секунд был бы
     // работой впустую на каждой открытой вкладке.
-    if (range !== "10min") return () => void (alive.current = false);
-    const timer = setInterval(() => void load(range), REFRESH_MS);
+    if (range !== "10min") {
+      return () => {
+        active = false;
+      };
+    }
+    // На скрытой вкладке не опрашиваем (amnezia-vpn-server-76mp.7).
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load(range, alive);
+    }, REFRESH_MS);
     return () => {
-      alive.current = false;
+      active = false;
       clearInterval(timer);
     };
   }, [load, range]);

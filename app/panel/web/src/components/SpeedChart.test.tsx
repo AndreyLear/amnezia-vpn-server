@@ -816,3 +816,32 @@ describe("промежутки без связи", () => {
     expect(offline()).toHaveLength(0);
   });
 });
+
+// Переключили период, пока прежний запрос был в пути: его ответ пришёл
+// последним и рисовался под кнопкой нового периода. Флаг «жив» был один на
+// все запуски эффекта (amnezia-vpn-server-76mp.16).
+describe("график скорости: смена периода", () => {
+  it("не рисует ответ прошлого периода, пришедший после нового", async () => {
+    let releaseShort: (() => void) | null = null;
+    fetchSpeed.mockImplementation((_id: number, window: "10min" | "day") => {
+      if (window === "10min") {
+        return new Promise<SpeedSeries>((resolve) => {
+          releaseShort = () =>
+            resolve(series({ window: "10min", down_max_bps: [5_000_000], down_min_bps: [5_000_000] }));
+        });
+      }
+      return Promise.resolve(
+        series({ window: "day", down_max_bps: [5_000], down_min_bps: [5_000] }),
+      );
+    });
+
+    render(<SpeedChart clientId={1} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Сутки" }));
+    expect(await screen.findByText("Скорость, Кбит/с")).toBeInTheDocument();
+
+    releaseShort!();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText("Скорость, Кбит/с")).toBeInTheDocument();
+  });
+});
+

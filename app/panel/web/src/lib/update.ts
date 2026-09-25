@@ -132,7 +132,11 @@ export function useUpdateInfo(reloadPage: () => void = () => window.location.rel
     // само выключится, как только панель поднимется и пришлёт настоящее
     // состояние тем же опросом (amnezia-vpn-server-mrjh).
     if (info?.state !== "running" && unreachableSince === null) return;
-    const timer = window.setInterval(() => void reload(), 3000);
+    // Скрытая вкладка не стучится: вернётся — спросит сама, см. выше
+    // (amnezia-vpn-server-76mp.7).
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void reload();
+    }, 3000);
     return () => window.clearInterval(timer);
   }, [info?.state, unreachableSince]);
 

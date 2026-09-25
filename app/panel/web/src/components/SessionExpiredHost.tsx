@@ -12,13 +12,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  api,
   completeSessionRelogin,
   getLastUsername,
+  login,
   setCsrf,
   setLastUsername,
   subscribeSessionExpired,
-  type LoginResponse,
   type MeResponse,
   type SessionLossReason,
 } from "@/lib/api";
@@ -53,6 +52,13 @@ export function SessionExpiredHost() {
   const [pending, setPending] = useState(false);
   const submitting = useRef(false);
   const openRef = useRef(false);
+  const passwordRef = useRef<HTMLInputElement>(null);
+
+  // Поле отключено на время запроса, и фокус с него слетает; после отказа
+  // возвращаем его в поле пароля (amnezia-vpn-server-76mp.38).
+  useEffect(() => {
+    if (open && error && !pending) passwordRef.current?.focus();
+  }, [open, error, pending]);
 
   useEffect(() => {
     return subscribeSessionExpired((next, nextReason) => {
@@ -81,13 +87,7 @@ export function SessionExpiredHost() {
     setPending(true);
     setError("");
     try {
-      const res = await api<LoginResponse>("/api/login", {
-        method: "POST",
-        body: JSON.stringify({
-          username: getLastUsername(),
-          password,
-        }),
-      });
+      const res = await login(getLastUsername(), password);
       if (!res.ok) {
         setError(reloginError(res.message));
         return;
@@ -132,6 +132,7 @@ export function SessionExpiredHost() {
             <div className="grid gap-2">
               <Label htmlFor="session-expired-password">Пароль</Label>
               <Input
+                ref={passwordRef}
                 id="session-expired-password"
                 name="password"
                 type="password"
@@ -139,9 +140,15 @@ export function SessionExpiredHost() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={pending}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "session-expired-error" : undefined}
               />
             </div>
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+            {error ? (
+              <p id="session-expired-error" role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            ) : null}
           </div>
           <DialogFooter>
             <Button type="submit" disabled={pending} className="max-sm:h-12 max-sm:w-full">

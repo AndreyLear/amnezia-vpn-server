@@ -185,11 +185,19 @@ export function NotificationsDialog({
     let alive = true;
     setErrors({});
     setLoaded(false);
-    void api<MailInfo>("/api/mail").then((next) => {
-      if (!alive) return;
-      if (isMailInfo(next)) accept(next);
-      setLoaded(true);
-    });
+    // Сетевой сбой оставлял поля закрытыми до переоткрытия окна
+    // (amnezia-vpn-server-76mp.35): поля открываются в любом исходе, а
+    // неудача называется тостом.
+    void api<MailInfo>("/api/mail")
+      .then((next) => {
+        if (alive && isMailInfo(next)) accept(next);
+      })
+      .catch(() => {
+        if (alive) toast.error("Не удалось загрузить настройки уведомлений");
+      })
+      .finally(() => {
+        if (alive) setLoaded(true);
+      });
     return () => {
       alive = false;
     };
@@ -208,9 +216,13 @@ export function NotificationsDialog({
     let alive = true;
     const timer = window.setInterval(() => {
       setNow(Date.now());
-      void api<MailInfo>("/api/mail").then((next) => {
-        if (alive && isMailInfo(next)) setInfo(next);
-      });
+      void api<MailInfo>("/api/mail")
+        .then((next) => {
+          if (alive && isMailInfo(next)) setInfo(next);
+        })
+        .catch(() => {
+          // Один сорвавшийся опрос не повод для тоста: следующий через такт.
+        });
     }, POLL_MS);
     return () => {
       alive = false;

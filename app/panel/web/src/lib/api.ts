@@ -7,6 +7,12 @@ export type SessionLossReason = "idle" | "replaced" | "gone";
 
 let sessionExpiredWaiters: Array<() => void> = [];
 let sessionExpiredListeners: Array<(open: boolean, reason?: SessionLossReason) => void> = [];
+// Сессия потеряна, вход ещё не повторён (amnezia-vpn-server-76mp.7). Пока
+// так, запросы не ходят на сервер за заведомым 401, а ждут входа; чтения
+// одного пути ждут вместе — ответ один на всех.
+let sessionLost = false;
+let sessionLossReason: SessionLossReason | undefined;
+const readsAwaitingRelogin = new Map<string, Promise<Response>>();
 
 export function setCsrf(token: string) {
   csrf = token;
@@ -34,10 +40,26 @@ export function subscribeSessionExpired(
 }
 
 export function completeSessionRelogin() {
+  sessionLost = false;
+  sessionLossReason = undefined;
   const waiters = sessionExpiredWaiters;
   sessionExpiredWaiters = [];
   for (const wait of waiters) wait();
   for (const listener of sessionExpiredListeners) listener(false);
+}
+
+/**
+ * Только для тестов: забыть потерю сессии и всех, кто ждёт входа, НЕ
+ * отпуская их. completeSessionRelogin() в afterEach отпускал ожидающих, и
+ * их повтор уходил уже в настоящий fetch после снятия заглушки — отказ
+ * никто не ловил, и vitest завершался с ошибкой.
+ */
+export function resetSessionStateForTests() {
+  sessionLost = false;
+  sessionLossReason = undefined;
+  sessionExpiredWaiters = [];
+  readsAwaitingRelogin.clear();
+  csrfWaiters = [];
 }
 
 function waitForCsrf(): Promise<void> {
@@ -55,14 +77,41 @@ function waitForCsrf(): Promise<void> {
   });
 }
 
-function waitForSessionRelogin(reason?: SessionLossReason): Promise<void> {
+function waitForSessionRelogin(): Promise<void> {
   return new Promise((resolve) => {
     sessionExpiredWaiters.push(resolve);
-    for (const listener of sessionExpiredListeners) listener(true, reason);
+    for (const listener of sessionExpiredListeners) listener(true, sessionLossReason);
   });
 }
 
-function sessionLossReason(body: unknown): SessionLossReason | undefined {
+function isRead(init: RequestInit): boolean {
+  const method = (init.method ?? "GET").toUpperCase();
+  return method === "GET" || method === "HEAD";
+}
+
+/**
+ * Повтор запроса после повторного входа. Опрос на фоновой вкладке за ночь
+ * ставил в очередь тысячи одинаковых чтений, и после ввода пароля они
+ * уходили залпом (amnezia-vpn-server-76mp.7). Теперь чтение одного пути
+ * ждёт одно: остальные получают копию того же ответа. Мутации — действия
+ * человека, каждая повторяется своя.
+ */
+function retryAfterRelogin(path: string, init: RequestInit): Promise<Response> {
+  if (!isRead(init)) return waitForSessionRelogin().then(() => apiRequest(path, init));
+  const key = `${(init.method ?? "GET").toUpperCase()} ${path}`;
+  let shared = readsAwaitingRelogin.get(key);
+  if (!shared) {
+    shared = waitForSessionRelogin().then(() => apiRequest(path, init));
+    readsAwaitingRelogin.set(key, shared);
+    const forget = () => void readsAwaitingRelogin.delete(key);
+    shared.then(forget, forget);
+  }
+  // Тело ответа читается один раз, поэтому каждому ждавшему — своя копия.
+  // Копии снимаются в реакциях на shared, раньше, чем кто-то прочтёт тело.
+  return shared.then((res) => res.clone());
+}
+
+function parseLossReason(body: unknown): SessionLossReason | undefined {
   if (!body || typeof body !== "object" || !("reason" in body)) return undefined;
   const reason = (body as { reason?: unknown }).reason;
   if (reason === "idle" || reason === "replaced" || reason === "gone") return reason;
@@ -75,16 +124,46 @@ function mutationNeedsCsrf(path: string, init: RequestInit): boolean {
   return path !== "/api/login";
 }
 
-export async function apiRequest(path: string, init: RequestInit = {}): Promise<Response> {
-  if (mutationNeedsCsrf(path, init)) {
+/** Спрашивает у сервера действующий CSRF-токен; пусто — узнать не удалось. */
+async function refreshCsrf(): Promise<string> {
+  try {
+    const meRes = await fetch("/api/me", { credentials: "same-origin" });
+    if (!meRes.ok) return "";
+    const me = (await meRes.json()) as MeResponse;
+    if (me.csrf) setCsrf(me.csrf);
+    return me.csrf ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export async function apiRequest(
+  path: string,
+  init: RequestInit = {},
+  csrfRetried = false,
+): Promise<Response> {
+  if (sessionLost && path !== "/api/login") return retryAfterRelogin(path, init);
+  const needsCsrf = mutationNeedsCsrf(path, init);
+  if (needsCsrf) {
     await waitForCsrf();
   }
+  const sentCsrf = csrf;
   const headers = new Headers(init.headers);
-  if (csrf) headers.set("X-CSRF-Token", csrf);
+  if (sentCsrf) headers.set("X-CSRF-Token", sentCsrf);
   if (init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
   const res = await fetch(path, { ...init, headers, credentials: "same-origin" });
+  // Токен ждётся недолго: зависнуть кнопке хуже, чем сходить дважды. Если
+  // /api/me ответил позже, мутация ушла без токена (или со старым) и
+  // получила 403 — сервер её не выполнил. Узнаём токен и повторяем ровно
+  // один раз, иначе действие терялось с тостом «Сессия устарела»
+  // (amnezia-vpn-server-76mp.37). С тем же токеном не повторяем: отказ
+  // тогда не про CSRF.
+  if (res.status === 403 && needsCsrf && !csrfRetried) {
+    const fresh = await refreshCsrf();
+    if (fresh && fresh !== sentCsrf) return apiRequest(path, init, true);
+  }
   if (res.status === 401 && path !== "/api/login") {
     if (!csrf) {
       window.location.assign("/login");
@@ -92,12 +171,13 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
     }
     let reason: SessionLossReason | undefined;
     try {
-      reason = sessionLossReason(await res.json());
+      reason = parseLossReason(await res.json());
     } catch {
       reason = undefined;
     }
-    await waitForSessionRelogin(reason);
-    return apiRequest(path, init);
+    sessionLost = true;
+    if (reason) sessionLossReason = reason;
+    return retryAfterRelogin(path, init);
   }
   return res;
 }
@@ -105,15 +185,8 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await apiRequest(path, init);
   if (res.status === 403 && path !== "/api/me" && path !== "/api/login") {
-    try {
-      const meRes = await fetch("/api/me", { credentials: "same-origin" });
-      if (meRes.ok) {
-        const me = (await meRes.json()) as MeResponse;
-        if (me.csrf) setCsrf(me.csrf);
-      }
-    } catch {
-      // keep going so the original JSON body can still be parsed
-    }
+    // Мутацию apiRequest уже сверил с /api/me; здесь — только чтение.
+    if (!mutationNeedsCsrf(path, init)) await refreshCsrf();
     // Standalone toast sentence, capitalized (amnezia-vpn-server-4cnf).
     toast.error("Сессия устарела");
   }
@@ -166,6 +239,45 @@ export type LoginResponse = {
   ok: boolean;
   message?: string;
 };
+
+/**
+ * Вход по паролю. Ответ всегда разобран: форма показывает message, а не
+ * падает на не-JSON. Лимит попыток отвечал 429 text/plain, api() отдавал
+ * undefined, и форма молчала — человек не знал, что его ограничили
+ * (amnezia-vpn-server-76mp.8). Свой текст сервера важнее: общий — только
+ * когда разобрать нечего.
+ */
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  let res: Response;
+  try {
+    res = await apiRequest("/api/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    return { ok: false, message: "Панель не отвечает. Проверьте подключение и попробуйте снова" };
+  }
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    data = undefined;
+  }
+  const parsed =
+    data && typeof data === "object" && "ok" in data ? (data as LoginResponse) : undefined;
+  if (parsed?.ok === true) return parsed;
+  if (parsed?.message?.trim()) return parsed;
+  if (res.status === 429) return { ok: false, message: loginLimitMessage(res.headers.get("Retry-After")) };
+  if (parsed) return parsed;
+  return { ok: false, message: "Не удалось войти. Сервер ответил с ошибкой" };
+}
+
+function loginLimitMessage(retryAfter: string | null): string {
+  const seconds = retryAfter && /^\d+$/.test(retryAfter.trim()) ? Number(retryAfter.trim()) : 0;
+  if (seconds <= 0) return "Слишком много попыток входа. Подождите немного и попробуйте снова";
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return `Слишком много попыток входа. Подождите ${minutes} мин и попробуйте снова`;
+}
 
 export type MeResponse = {
   username: string;

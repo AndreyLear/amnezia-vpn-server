@@ -84,8 +84,15 @@ function useBackupMenuState(restorePending: boolean) {
     const a = document.createElement("a");
     a.href = url;
     a.download = filenameFromDisposition(res.headers.get("Content-Disposition"));
+    // Safari может сохранить пустой файл или не скачать вовсе, если ссылки
+    // нет в документе, а blob отозван сразу после click: скачивание в нём
+    // начинается уже после возврата из click (amnezia-vpn-server-76mp.36).
+    // Ссылка — в документе на время клика, отзыв — позже.
+    a.style.display = "none";
+    document.body.append(a);
     a.click();
-    URL.revokeObjectURL(url);
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   return {

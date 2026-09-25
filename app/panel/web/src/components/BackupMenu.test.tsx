@@ -162,3 +162,50 @@ describe("BackupMenu mobile sheet", () => {
     expect(document.querySelector('input[type="file"]')).toBeInTheDocument();
   });
 });
+
+// Safari может сохранить пустой файл, если blob отозван сразу после клика
+// по ссылке, которой нет в документе (amnezia-vpn-server-76mp.36).
+describe("BackupMenu download", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    setCsrf("");
+  });
+
+  it("clicks a link that is in the document and revokes the blob later", async () => {
+    setCsrf("csrf");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response("archive", {
+          status: 200,
+          headers: { "Content-Disposition": 'attachment; filename="backup.tar.gz"' },
+        }),
+      ),
+    );
+    const createObjectURL = vi.fn(() => "blob:backup");
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    let clickedInDocument: boolean | null = null;
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clickedInDocument = document.body.contains(this);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+    });
+
+    const user = userEvent.setup();
+    render(<BackupMenu />);
+    await user.click(screen.getByRole("button", { name: "Бэкап" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Скачать" }));
+    await waitFor(() => expect(clickedInDocument).not.toBeNull());
+
+    expect(clickedInDocument).toBe(true);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(document.querySelector('a[href="blob:backup"]')).toBeNull();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:backup"), {
+      timeout: 3000,
+    });
+  });
+});
