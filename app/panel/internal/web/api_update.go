@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
@@ -63,6 +64,40 @@ const dismissedSetting = "update_banner_dismissed"
 // закончится в другую секунду и покажется само (amnezia-vpn-server-tjoq).
 const outcomeSeenSetting = "update_outcome_seen"
 
+// updateRunningStale — срок, после которого running в update-state.json
+// считается брошенным (amnezia-vpn-server-4x8y). Агент сам помечает
+// прерванный прогон failed — при остановке службы и при следующем запуске,
+// — но при пропаже питания не случается ни того, ни другого, и панель
+// навсегда отвечала «Обновление уже идёт». at_utc агент обновляет на каждом
+// шаге; самые долгие шаги — установка и откат, до часа каждый, а systemd
+// снимает весь прогон через 150 минут (TimeoutStartSec в install.sh). Три
+// часа без новой записи живой агент не молчит.
+const updateRunningStale = 3 * time.Hour
+
+// updateInterruptedMessage — тот же текст, которым агент сам помечает
+// прерванный прогон (reap_interrupted в update-agent.sh): итог один и тот
+// же, кто бы его ни заметил.
+const updateInterruptedMessage = "обновление прервалось, не дойдя до конца: сервер мог остаться в промежуточном состоянии"
+
+// readUpdateState reads what the agent last wrote and names an abandoned
+// running for what it is: failed, with the step it stopped on and the
+// time of its last word. A missing or unreadable at_utc keeps running:
+// the agent always writes it, and guessing wrong here asks for a second
+// installer on top of a live one.
+func readUpdateState(path string, now time.Time) (*status.UpdateState, error) {
+	st, err := status.ReadUpdateState(path)
+	if err != nil || st == nil || st.State != "running" {
+		return st, err
+	}
+	at, perr := time.Parse(time.RFC3339, st.AtUTC)
+	if perr != nil || now.Sub(at) <= updateRunningStale {
+		return st, nil
+	}
+	st.State = "failed"
+	st.Message = updateInterruptedMessage
+	return st, nil
+}
+
 func (s *Server) statusDir() string {
 	return filepath.Dir(s.cfg.StatusPath)
 }
@@ -97,7 +132,7 @@ func (s *Server) apiUpdate(w http.ResponseWriter, r *http.Request) {
 	if v, ok, err := db.GetSetting(s.db(), outcomeSeenSetting); err == nil && ok {
 		out.OutcomeSeen = v
 	}
-	if st, err := status.ReadUpdateState(filepath.Join(dir, "update-state.json")); err == nil && st != nil {
+	if st, err := readUpdateState(filepath.Join(dir, "update-state.json"), time.Now()); err == nil && st != nil {
 		out.State = st.State
 		out.StateFrom = st.From
 		out.StateTo = st.To
