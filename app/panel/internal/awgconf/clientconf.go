@@ -203,9 +203,14 @@ func GenerateClient(handle *sql.DB, clientID int64) ([]byte, error) {
 	// процентами каждого пакета, и вернуть их можно только адресно
 	// (amnezia-vpn-server-h2pg). Ноль означает «как у сервера» и является
 	// нормальным состоянием.
-	if client.MTU != 0 {
-		mtu = uint16(client.MTU)
-	}
+	//
+	// Считается той же функцией, что и маршрут этого клиента в awg0.conf:
+	// с вычетом добивки S4 и не выше потолка устройства. Иначе клиент со
+	// своими 1420 на сервере с S4 = 29 слал пакеты 1420 + 60 + 29 = 1509
+	// байт, и путь 1500 их резал, — правка bctr зажала только сторону
+	// сервера (amnezia-vpn-server-76mp.2).
+	device, clientDefault := TunnelMTUs(mtu, TransportPadding(params))
+	mtu = RouteMTU(uint16(client.MTU), clientDefault, device)
 	address6, err := db.ClientAddress6(server.Address, server.Address6, client.Address)
 	if err != nil {
 		return nil, fmt.Errorf("client config: %w", err)
