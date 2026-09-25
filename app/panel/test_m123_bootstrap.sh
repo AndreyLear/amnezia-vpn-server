@@ -106,6 +106,24 @@ case "$last" in
         ;;
 esac
 . "${FAKE_STATE:?}"
+# Главное соединение, через которое мастер ходит при входе по паролю через
+# expect (amnezia-vpn-server-76mp.6). Как настоящий ssh: спрашивает пароль на
+# терминале с выключенным эхом и без него не пускает.
+case "$*" in
+    *ControlMaster=yes*)
+        printf '%s' "root@fake's password: " > /dev/tty
+        stty -echo < /dev/tty 2>/dev/null
+        IFS= read -r pw < /dev/tty
+        stty echo < /dev/tty 2>/dev/null
+        printf '\n' > /dev/tty
+        if [ -n "${FAKE_SSH_PASSWORD:-}" ] && [ "$pw" = "$FAKE_SSH_PASSWORD" ]; then
+            echo "ssh-master-authenticated" >> "$LOG"
+            exit 0
+        fi
+        echo "root@fake: Permission denied (password)." >&2
+        exit 255
+        ;;
+esac
 if [ "${SSH_RC:-0}" != "0" ]; then
     # Real ssh says on stderr which of several different failures happened;
     # a fake that stays silent would let the wizard's message claim any
@@ -1406,6 +1424,95 @@ test_real_adduser_failure_still_aborts() {
         || fail "a real add-user failure must abort"
 }
 
+# Вход по паролю на macOS: sshpass там нет, есть /usr/bin/expect. Раньше
+# expect собирал команду строкой и исполнял её через Tcl eval: переводы строк,
+# [ ... ] и $var в удалённой команде становились синтаксисом Tcl, и установка
+# не запускалась (amnezia-vpn-server-76mp.6). Здесь настоящий expect против
+# фейкового ssh, который спрашивает пароль на терминале, — весь мастер от
+# начала до конца.
+expect_path_for_test() { # prints a PATH with expect and without sshpass
+    local exp bin="$TMP_TEST/expect-bin"
+    exp="$(command -v expect 2>/dev/null)" || return 1
+    rm -rf "$bin"; mkdir -p "$bin"
+    ln -s "$exp" "$bin/expect"
+    [ ! -x /usr/bin/sshpass ] && [ ! -x /bin/sshpass ] || return 1
+    printf '%s' "$FAKE_DIR:$bin:/usr/bin:/bin:/usr/sbin:/sbin"
+}
+
+test_password_login_through_expect() {
+    fakes_reset
+    local path
+    if ! path="$(expect_path_for_test)"; then
+        printf 'skip password login through expect: no expect, or a system sshpass would be used instead\n'
+        return 0
+    fi
+    rm -f "$FAKE_HOME/.ssh/id_ed25519" "$FAKE_HOME/.ssh/id_rsa" "$FAKE_DIR/sshpass"
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$path" SSH_TEST_PW='pw with $dollar [and] "quotes"' \
+        FAKE_SSH_PASSWORD='pw with $dollar [and] "quotes"' \
+        bash "$BOOTSTRAP_SH" --ip 2.26.93.192 --password-env SSH_TEST_PW --panel-port 8443 \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err" < /dev/null
+        echo $?
+    )"
+    [ "$rc" = "0" ] \
+        && pass "expect: the password wizard runs to the end" \
+        || { fail "expect: exit $rc"; tail -5 "$TMP_TEST/err" >&2; }
+    grep -q "ssh-master-authenticated" "$FAKE_CALLS" \
+        && pass "expect: the password was typed where ssh asked for it" \
+        || fail "expect: ssh never got the password"
+    grep -q "bash ./install.sh --root" "$FAKE_CALLS" \
+        && pass "expect: the multi-line install command reached the server intact" \
+        || fail "expect: the install command never reached the server"
+    [ -f "$FAKE_DIR/bad-shell.log" ] \
+        && fail "expect: a remote command arrived mangled: $(cat "$FAKE_DIR/bad-shell.log")" \
+        || pass "expect: every remote command arrived as valid shell"
+    grep -q "Password:  TmpP4ssw0rd" "$TMP_TEST/out" \
+        && pass "expect: the admin was created with the generated password" \
+        || fail "expect: no admin password in the summary"
+    if grep -F 'pw with $dollar' "$FAKE_CALLS" "$TMP_TEST/err" "$TMP_TEST/out" >/dev/null 2>&1; then
+        fail "expect: the SSH password leaked into argv or output"
+    else
+        pass "expect: the SSH password stays out of argv and output"
+    fi
+}
+
+# Код возврата удалённой команды доходит до мастера и через expect: упавшая
+# установка — это ошибка, а не успех.
+test_expect_carries_the_remote_exit_code() {
+    fakes_reset
+    local path
+    if ! path="$(expect_path_for_test)"; then
+        printf 'skip expect exit code: no expect, or a system sshpass would be used instead\n'
+        return 0
+    fi
+    rm -f "$FAKE_HOME/.ssh/id_ed25519" "$FAKE_HOME/.ssh/id_rsa" "$FAKE_DIR/sshpass"
+    setstate INSTALL_RC 3 "$FAKE_STATE"
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$path" SSH_TEST_PW=hunter2 FAKE_SSH_PASSWORD=hunter2 \
+        bash "$BOOTSTRAP_SH" --ip 2.26.93.192 --password-env SSH_TEST_PW --panel-port 8443 \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err" < /dev/null
+        echo $?
+    )"
+    [ "$rc" != "0" ] \
+        && pass "expect: a failed install is reported as failed" \
+        || fail "expect: a failed install was reported as success"
+    grep -q "install.sh failed on the server (exit 3)" "$TMP_TEST/err" \
+        && pass "expect: the installer's own exit code reaches the wizard" \
+        || fail "expect: the installer's exit code was lost"
+    # И неверный пароль — это отказ SSH с понятной причиной.
+    fakes_reset
+    rm -f "$FAKE_HOME/.ssh/id_ed25519" "$FAKE_HOME/.ssh/id_rsa" "$FAKE_DIR/sshpass"
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$path" SSH_TEST_PW=wrong FAKE_SSH_PASSWORD=hunter2 \
+        bash "$BOOTSTRAP_SH" --ip 2.26.93.192 --password-env SSH_TEST_PW --panel-port 8443 \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err" < /dev/null
+        echo $?
+    )"
+    [ "$rc" != "0" ] && grep -q "rejected the credentials" "$TMP_TEST/err" \
+        && pass "expect: a wrong password is named as such" \
+        || fail "expect: a wrong password was not reported (exit $rc)"
+}
+
 # Выключатели служб решает install.sh и помнит их в .env; мастер только
 # передаёт флаги. Без парных флагов включить службу обратно из мастера было
 # бы нечем (amnezia-vpn-server-76mp.5).
@@ -1475,6 +1582,8 @@ test_explicit_empty_domain_returns_to_the_ip
 test_fresh_install_without_a_domain_uses_the_ip
 test_apply_failure_aborts_instead_of_reporting_success
 test_service_switches_pass_through
+test_password_login_through_expect
+test_expect_carries_the_remote_exit_code
 }
 
 # Named tests, like the install harness: a suite that only runs whole is a

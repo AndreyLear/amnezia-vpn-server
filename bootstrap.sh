@@ -61,6 +61,7 @@ C_RED=""
 
 BIND_CLIENTS=0
 AUTH_MODE="" # key | password
+PASS_HELPER="" # sshpass | expect (password auth only)
 SSH_PASSWORD=""
 ADMIN_PASSWORD=""
 PUBLIC_IP=""
@@ -520,12 +521,26 @@ cleanup() {
         # Best-effort; ignore failures so a previous error is preserved.
         remote_cmd "rm -rf '$REMOTE_TMP'" >/dev/null 2>&1 || true
     fi
+    ssh_master_stop
 }
 trap cleanup EXIT
 
 # ssh/scp wrappers. Password is only in the environment (sshpass -e) or
 # in the expect script's env — never on argv. Commands that carry a
 # secret on stdin are not logged.
+#
+# Без sshpass (macOS: там есть только /usr/bin/expect) пароль вводит expect,
+# но один раз — в главное соединение ssh (ControlMaster), а все команды и
+# копирование идут дальше через него обычным ssh (amnezia-vpn-server-76mp.6).
+# Раньше expect запускал каждую команду сам и собирал её строкой через Tcl
+# eval: переводы строк, [ ... ] и $var в удалённой команде становились
+# синтаксисом Tcl, установка не запускалась, а мастер шёл дальше как после
+# успеха. Но и без eval команда через expect шла бы по терминалу: stdout и
+# stderr слиты, stdin (пароль администратора) не доходит, а срок ожидания
+# пароля обрывал бы сборку. Через главное соединение у команды настоящие
+# stdin, stdout, stderr и код возврата — как при входе по ключу.
+SSH_CONTROL=""
+SSH_CONTROL_DIR=""
 
 ssh_base_opts() {
     SSH_OPTS=(
@@ -540,9 +555,18 @@ ssh_base_opts() {
     )
     if [ "$AUTH_MODE" = "key" ]; then
         SSH_OPTS+=(-i "$KEY_FILE" -o BatchMode=yes -o IdentitiesOnly=yes)
+    elif [ "$PASS_HELPER" = "expect" ] && [ -n "$SSH_CONTROL" ]; then
+        # Вход уже сделан главным соединением. Если его нет, ssh не должен
+        # спрашивать пароль сам — лучше отказ, чем мастер, повисший на вопросе.
+        SSH_OPTS+=(-o "ControlPath=${SSH_CONTROL}" -o ControlMaster=no -o BatchMode=yes)
     else
         SSH_OPTS+=(-o BatchMode=no -o PreferredAuthentications=password -o PubkeyAuthentication=no)
     fi
+}
+
+# uses_plain_ssh: key auth, or password auth through the expect master.
+uses_plain_ssh() {
+    [ "$AUTH_MODE" = "key" ] || [ "$PASS_HELPER" = "expect" ]
 }
 
 run_sshpass() { # run_sshpass ssh|scp args...
@@ -550,68 +574,101 @@ run_sshpass() { # run_sshpass ssh|scp args...
     SSHPASS="$SSH_PASSWORD" sshpass -e "$@"
 }
 
-run_expect_ssh() {
-    # argv of expect does not include the password; expect reads SSHPASS.
+# run_expect ARGV... — spawn ARGV under expect and answer its password
+# prompts. The argv travels as separate environment entries and is spliced
+# into spawn as a list ({*}), never parsed as Tcl: whatever the arguments
+# contain stays data. The password is read from SSHPASS, not argv. ssh's
+# own messages (a wrong password, a changed host key) go to stderr, where
+# ssh_probe_failed looks for them.
+run_expect() {
     set +x
-    SSHPASS="$SSH_PASSWORD" expect -c '
-        set timeout '"$SSH_CONNECT_TIMEOUT"'
-        log_user 1
-        eval spawn -noecho $env(AMNEZIA_EXPECT_ARGV)
-        expect {
-            -re "(?i)password:" { send -- "$env(SSHPASS)\r"; exp_continue }
-            eof {}
-            timeout { exit 124 }
+    local i=0 arg
+    local -a env_args=()
+    for arg in "$@"; do
+        env_args+=("AMNEZIA_EXPECT_ARG_${i}=${arg}")
+        i=$((i + 1))
+    done
+    env "${env_args[@]}" AMNEZIA_EXPECT_ARGC="$i" \
+        AMNEZIA_EXPECT_TIMEOUT="$SSH_CONNECT_TIMEOUT" SSHPASS="$SSH_PASSWORD" \
+        expect -c '
+        set timeout $env(AMNEZIA_EXPECT_TIMEOUT)
+        log_user 0
+        set argv_list {}
+        for {set i 0} {$i < $env(AMNEZIA_EXPECT_ARGC)} {incr i} {
+            lappend argv_list $env(AMNEZIA_EXPECT_ARG_$i)
         }
+        spawn -noecho {*}$argv_list
+        set tries 0
+        expect {
+            -re "(?i)password:" {
+                incr tries
+                if {$tries > 3} { exit 255 }
+                send -- "$env(SSHPASS)\r"
+                exp_continue
+            }
+            eof {}
+            timeout {
+                puts stderr "ssh: connect to host: Connection timed out"
+                exit 124
+            }
+        }
+        set tail [string trim $expect_out(buffer)]
+        if {$tail ne ""} { puts stderr $tail }
         catch wait result
         exit [lindex $result 3]
     '
 }
 
+# ssh_master_start: authenticate once and leave the connection in the
+# background for every later ssh/scp. The socket lives in /tmp: a unix
+# socket path is limited to ~100 bytes, and macOS TMPDIR alone is half that.
+ssh_master_start() {
+    SSH_CONTROL_DIR="$(mktemp -d /tmp/amnezia-ssh.XXXXXX)" || return 1
+    chmod 0700 "$SSH_CONTROL_DIR"
+    SSH_CONTROL="$SSH_CONTROL_DIR/m"
+    run_expect ssh \
+        -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT}" \
+        -o "StrictHostKeyChecking=accept-new" \
+        -o "ServerAliveInterval=15" \
+        -o "ServerAliveCountMax=20" \
+        -o BatchMode=no -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+        -o ControlMaster=yes -o "ControlPath=${SSH_CONTROL}" -o ControlPersist=10m \
+        -f -N "${SSH_USER}@${SSH_HOST}"
+}
+
+ssh_master_stop() {
+    [ -n "$SSH_CONTROL" ] || return 0
+    ssh -o "ControlPath=${SSH_CONTROL}" -O exit "${SSH_USER}@${SSH_HOST}" >/dev/null 2>&1 || true
+    rm -rf "$SSH_CONTROL_DIR"
+    SSH_CONTROL=""
+}
+
 remote_cmd() { # remote_cmd "shell text" — stdout of the remote command
-    local rc
     ssh_base_opts
-    if [ "$AUTH_MODE" = "key" ]; then
+    if uses_plain_ssh; then
         ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
         return $?
     fi
-    if [ "$PASS_HELPER" = "sshpass" ]; then
-        run_sshpass ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
-        return $?
-    fi
-    AMNEZIA_EXPECT_ARGV="ssh ${SSH_OPTS[*]} ${SSH_USER}@${SSH_HOST} $1"
-    export AMNEZIA_EXPECT_ARGV
-    run_expect_ssh
+    run_sshpass ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
 }
 
 remote_cmd_in() { # stdin is forwarded (used for --password-stdin). Do not log.
     set +x
     ssh_base_opts
-    if [ "$AUTH_MODE" = "key" ]; then
+    if uses_plain_ssh; then
         ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
         return $?
     fi
-    if [ "$PASS_HELPER" = "sshpass" ]; then
-        run_sshpass ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
-        return $?
-    fi
-    AMNEZIA_EXPECT_ARGV="ssh ${SSH_OPTS[*]} ${SSH_USER}@${SSH_HOST} $1"
-    export AMNEZIA_EXPECT_ARGV
-    run_expect_ssh
+    run_sshpass ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
 }
 
 remote_copy() { # remote_copy local remote-path
     ssh_base_opts
-    if [ "$AUTH_MODE" = "key" ]; then
+    if uses_plain_ssh; then
         scp "${SSH_OPTS[@]}" "$1" "${SSH_USER}@${SSH_HOST}:$2"
         return $?
     fi
-    if [ "$PASS_HELPER" = "sshpass" ]; then
-        run_sshpass scp "${SSH_OPTS[@]}" "$1" "${SSH_USER}@${SSH_HOST}:$2"
-        return $?
-    fi
-    AMNEZIA_EXPECT_ARGV="scp ${SSH_OPTS[*]} $1 ${SSH_USER}@${SSH_HOST}:$2"
-    export AMNEZIA_EXPECT_ARGV
-    run_expect_ssh
+    run_sshpass scp "${SSH_OPTS[@]}" "$1" "${SSH_USER}@${SSH_HOST}:$2"
 }
 
 # ssh_probe_failed: ssh already knows which of several different things
@@ -649,6 +706,9 @@ ssh_probe_failed() {
 
 log "connecting to ${SSH_USER}@${SSH_HOST} (${AUTH_MODE} auth)"
 SSH_PROBE_ERR="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-ssh.XXXXXX")"
+if [ "$AUTH_MODE" = "password" ] && [ "$PASS_HELPER" = "expect" ]; then
+    ssh_master_start 2>"$SSH_PROBE_ERR" || ssh_probe_failed
+fi
 REMOTE_TMP="$(remote_cmd 'mktemp -d /tmp/amnezia-bootstrap.XXXXXX' 2>"$SSH_PROBE_ERR")" \
     || ssh_probe_failed
 rm -f "$SSH_PROBE_ERR"
