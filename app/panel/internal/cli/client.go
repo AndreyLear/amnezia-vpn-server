@@ -115,8 +115,8 @@ func tsvCell(s string) string {
 
 // cmdClientAdd generates the keys, allocates the first free address and
 // inserts the client (one transaction), then regenerates awg0.conf. The
-// flag --expires-at is stored via db.SetClientExpiry right after the
-// insert; a failed Generate returns exit 1, the previous config stays
+// flag --expires-at is stored by the same insert (one transaction,
+// amnezia-vpn-server-76mp.24); a failed Generate returns exit 1, the previous config stays
 // intact and the database is not rolled back. Success prints exactly
 // "id:" and "public_key:".
 func (a *app) cmdClientAdd(args []string) int {
@@ -163,16 +163,12 @@ func (a *app) cmdClientAdd(args []string) int {
 		PrivateKey:   privateKey,
 		PublicKey:    publicKey,
 		PresharedKey: presharedKey,
+		ExpiresAt:    expiresAt,
 	})
 	if err != nil {
 		// ErrClientNameExists (duplicate name) and any other failure
 		// surface the same way; errors.Is still distinguishes them.
 		return a.fatal(opClientAdd, fmt.Errorf("create client: %w", err))
-	}
-	if expiresAt != "" {
-		if err := db.SetClientExpiry(handle, record.ID, expiresAt); err != nil {
-			return a.fatal(opClientAdd, fmt.Errorf("set expiry: %w", err))
-		}
 	}
 	if err := a.regenerate(handle); err != nil {
 		return a.fatal(opClientAdd, fmt.Errorf("generate config: %w", err))

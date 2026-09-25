@@ -802,6 +802,10 @@ type NewClient struct {
 	PublicKey    string
 	PresharedKey string // optional
 	Description  string // optional; empty string allowed; never written to awg0.conf
+	// ExpiresAt is the RFC3339 expiry, empty for none. It is written by the
+	// same INSERT: set afterwards, a failed second write left the client
+	// enabled with no expiry at all (amnezia-vpn-server-76mp.24).
+	ExpiresAt string
 }
 
 // CreateClient allocates the first free /32 host address in the server
@@ -860,9 +864,9 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 
 	now := stamp()
 	res, err := tx.Exec(
-		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, description)
-		 VALUES (?, ?, ?, NULLIF(?, ''), ?, 1, ?, ?, ?)`,
-		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now, nc.Description,
+		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, description, expires_at)
+		 VALUES (?, ?, ?, NULLIF(?, ''), ?, 1, ?, ?, ?, NULLIF(?, ''))`,
+		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now, nc.Description, nc.ExpiresAt,
 	)
 	if err != nil {
 		if mapped := mapNameConstraint(err); errors.Is(mapped, ErrClientNameExists) {
@@ -888,6 +892,7 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 		CreatedAt:    now,
 		UpdatedAt:    now,
 		Description:  nc.Description,
+		ExpiresAt:    nc.ExpiresAt,
 	}, nil
 }
 
