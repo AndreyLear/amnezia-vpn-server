@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
@@ -15,9 +16,56 @@ import (
 // wrapped so the message matches the M3 contract verbatim.
 var ErrNoServerRow = errors.New("no server row (id=1); insert server configuration first")
 
+// lockSuffix names the advisory lock next to awg0.conf that serializes
+// generations across processes (amnezia-vpn-server-76mp.18).
+const lockSuffix = ".lock"
+
 // Generate loads the server and enabled clients from handle, renders the
 // AmneziaWG configuration and writes it atomically to path (awg0.conf).
+//
+// Read, render and write happen under an exclusive flock on path+".lock",
+// and the reads share one transaction. The web panel's mutex covers only
+// its own process: a CLI that read the clients before the web disabled one
+// used to write its file after the web's, and the disabled peer kept its
+// access until the next change (amnezia-vpn-server-76mp.18). Under the lock
+// whoever writes last has also read last, after every committed mutation
+// whose own Generate is still waiting. The lock file sits next to the
+// config, so it follows AMNEZIA_CONFIG_PATH; awg watches only awg0.conf's
+// mtime and never sees it.
 func Generate(handle *sql.DB, path string) error {
+	unlock, err := lockConfig(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	// A read-only snapshot: nothing is written, so the transaction is
+	// always rolled back.
+	tx, err := handle.Begin()
+	if err != nil {
+		return fmt.Errorf("begin config read: %w", err)
+	}
+	defer tx.Rollback()
+	return generate(tx, path)
+}
+
+// lockConfig takes the exclusive, blocking flock serializing generations.
+// Blocking rather than non-blocking: a mutation must not be lost because
+// another process happened to be regenerating at the same moment.
+func lockConfig(path string) (func(), error) {
+	f, err := os.OpenFile(path+lockSuffix, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("awgconf: open lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("awgconf: lock %s: %w", f.Name(), err)
+	}
+	// Closing the descriptor releases the flock.
+	return func() { f.Close() }, nil
+}
+
+func generate(handle db.Querier, path string) error {
 	server, err := db.ServerRow(handle)
 	if err != nil {
 		if errors.Is(err, db.ErrServerNotFound) {

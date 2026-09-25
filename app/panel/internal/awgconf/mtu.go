@@ -78,7 +78,7 @@ func ValidateMTU(mtu uint16) error {
 // settings key is absent. A present but unusable value is an error rather
 // than a silent fallback: a wrong MTU breaks large transfers in a way that
 // is hard to attribute, so the operator must see it.
-func MTUFromSettings(handle *sql.DB) (uint16, error) {
+func MTUFromSettings(handle db.Querier) (uint16, error) {
 	raw, ok, err := db.GetSetting(handle, settingsMTUKey)
 	if err != nil {
 		return 0, fmt.Errorf("read mtu setting: %w", err)
