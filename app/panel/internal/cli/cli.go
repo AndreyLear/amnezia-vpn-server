@@ -252,6 +252,28 @@ func (a *app) openDB() (*sql.DB, error) {
 	return handle, nil
 }
 
+// errRestorePending refuses a change to clients or the server while a
+// prepared restore waits for the restart.
+var errRestorePending = errors.New("a restore is pending: restart the stack to apply it first " +
+	"(the restored database will replace the current one, and this change would be lost)")
+
+// openDBForChange is openDB for commands that change clients or the
+// server row. With a restore pending, panel-init swaps the database for
+// the archive's image at the next restart: a client added now got its
+// config issued and then silently vanished (amnezia-vpn-server-76mp.9).
+// The web panel shows the same state as restore_pending. Auth changes are
+// not refused: the restore keeps the live auth table (backup.KeepLiveAuth).
+func (a *app) openDBForChange() (*sql.DB, error) {
+	_, pending, err := backup.PendingPath(db.DefaultPath())
+	if err != nil {
+		return nil, fmt.Errorf("check pending restore: %w", err)
+	}
+	if pending {
+		return nil, errRestorePending
+	}
+	return a.openDB()
+}
+
 // regenerate renders config/awg0.conf from the database. The config is
 // derived state: a failure leaves the previous config intact (WriteAtomic)
 // and does not touch the database.

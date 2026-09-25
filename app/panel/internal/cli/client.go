@@ -148,7 +148,7 @@ func (a *app) cmdClientAdd(args []string) int {
 		return a.fatal(opClientAdd, fmt.Errorf("generate preshared key: %w", err))
 	}
 
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientAdd, err)
 	}
@@ -266,7 +266,7 @@ func (a *app) cmdClientSetEnabled(args []string, enabled bool) int {
 	if err != nil {
 		return a.usageError(op, err.Error())
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(op, err)
 	}
@@ -299,7 +299,7 @@ func (a *app) cmdClientRename(args []string) int {
 	if err != nil {
 		return a.usageError(opClientRename, err.Error())
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientRename, err)
 	}
@@ -347,7 +347,7 @@ func (a *app) cmdClientSetMTU(args []string) int {
 				mtu, db.ClientMTUFloor, db.ClientMTUCeiling))
 		}
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientSetMTU, err)
 	}
@@ -399,7 +399,7 @@ func (a *app) cmdClientSetRate(args []string) int {
 				rate, db.ClientRateFloor, db.ClientRateCeiling))
 		}
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientSetRate, err)
 	}
@@ -439,7 +439,7 @@ func (a *app) cmdClientSetExpiry(args []string) int {
 			return a.usageError(opClientSetExpiry, err.Error())
 		}
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientSetExpiry, err)
 	}
@@ -468,7 +468,7 @@ func (a *app) cmdClientDelete(args []string) int {
 	if err != nil {
 		return a.usageError(opClientDelete, err.Error())
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientDelete, err)
 	}

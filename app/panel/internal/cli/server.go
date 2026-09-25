@@ -131,7 +131,7 @@ func (a *app) cmdServerInit(args []string) int {
 		return a.fatal(opServerInit, fmt.Errorf("generate server keys: %w", keyErr))
 	}
 
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opServerInit, err)
 	}
@@ -305,7 +305,7 @@ func (a *app) cmdServerUpdate(args []string) int {
 		}
 	}
 
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opServerUpdate, err)
 	}
