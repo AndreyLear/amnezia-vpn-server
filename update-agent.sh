@@ -26,6 +26,26 @@
 
 set -u
 
+# ПОЧЕМУ АГЕНТ ИДЁТ ИЗ КОПИИ. bash читает скрипт по ходу выполнения, а
+# установщик выпуска кладёт в развёртывание новый update-agent.sh — тот
+# самый файл, который сейчас исполняется. Переписанный поверх, он менялся у
+# агента под ногами: после неудачной установки вместо отката исполнялся
+# обрывок чужого текста (amnezia-vpn-server-76mp.4). Копия принадлежит только
+# этому запуску, и что бы установщик ни сделал с файлом в развёртывании,
+# дочитывается то, что начали. Копия удаляется сразу: открытый файл живёт,
+# пока его читают.
+if [ -z "${AMNEZIA_UPDATE_AGENT_COPY:-}" ]; then
+    agent_copy="$(mktemp "${TMPDIR:-/tmp}/amnezia-update-agent.XXXXXX")" \
+        && cat "${BASH_SOURCE[0]}" > "${agent_copy}" \
+        && AMNEZIA_UPDATE_AGENT_COPY="${agent_copy}" exec bash "${agent_copy}" "$@"
+    # Сюда доходим, только если копию сделать не удалось. Обновление от этого
+    # не опаснее, чем было до копии, поэтому идём дальше, но говорим об этом.
+    printf 'update-agent: предупреждение: не удалось запуститься из копии; продолжаю из %s\n' "${BASH_SOURCE[0]}" >&2
+    [ -n "${agent_copy:-}" ] && rm -f "${agent_copy}"
+else
+    rm -f "${AMNEZIA_UPDATE_AGENT_COPY}"
+fi
+
 ROOT_DIR="${AMNEZIA_UPDATE_ROOT:-/opt/amnezia-vpn}"
 REQUEST_FILE="${AMNEZIA_UPDATE_REQUEST:-${ROOT_DIR}/data/update-request.json}"
 STATE_FILE="${AMNEZIA_UPDATE_STATE:-${ROOT_DIR}/status/update-state.json}"

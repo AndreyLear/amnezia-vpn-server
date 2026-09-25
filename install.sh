@@ -954,6 +954,23 @@ copy_tree() { # cp -a with per-file error stop
     fi
 }
 
+# Скрипты кладутся новым файлом, а не поверх старого (amnezia-vpn-server-76mp.4).
+# Пока этот установщик работает, агент обновления, который его запустил, ещё
+# выполняется из $ROOT_DIR/update-agent.sh, а bash дочитывает скрипт с диска
+# по ходу дела. `cp -a` поверх пишет в тот же inode, и агент после неудачной
+# установки вместо отката исполнял обрывок нового текста. Переименование
+# меняет только запись в каталоге: кто читал старый файл, дочитает его.
+install_file() { # install_file SRC DEST_DIR — copy beside, then rename over
+    local name dest tmp
+    name="$(basename "$1")"
+    dest="$2/$name"
+    tmp="$2/.$name.new.$$"
+    if ! cp -p "$1" "$tmp" 2>/dev/null || ! mv -f "$tmp" "$dest" 2>/dev/null; then
+        rm -f "$tmp"
+        die_op "copying deployment files failed: $1 $2/"
+    fi
+}
+
 # Установщик кладёт рядом с развёртыванием и сам себя
 # (amnezia-vpn-server-nukf). Не ради удобства: агент обновления снимает копию
 # развёртывания перед тем, как ставить новый выпуск, и откатывать её должен
@@ -967,13 +984,13 @@ copy_tree() { # cp -a with per-file error stop
 if [ "$SCRIPT_DIR" = "$ROOT_DIR" ]; then
     log "running from the deployment itself: the files are already in place"
 else
-    copy_tree "$SCRIPT_DIR/compose.yaml" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/versions.lock" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/watchdog.sh" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/update-check.sh" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/update-agent.sh" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/install.sh" "$ROOT_DIR/"
+    install_file "$SCRIPT_DIR/compose.yaml" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/versions.lock" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/watchdog.sh" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/update-check.sh" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/update-agent.sh" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/install.sh" "$ROOT_DIR"
     # Build context is the repository root (compose.yaml build.context = "."):
     # the app/ tree (panel Dockerfile + Go module incl. embedded templates,
     # awg Dockerfile + entrypoint scripts, dns Dockerfile + entrypoint) must

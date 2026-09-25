@@ -221,6 +221,46 @@ check "the state says the server is back on the old release" \
     grep -q '"state":"rolled-back"' <<<"$(state)"
 check "and it names the release it is running" grep -q '2.8.2' <<<"$(state)"
 
+# --- the installer rewrites the running agent --------------------------
+# Настоящий юнит запускает агента из развёртывания, а установщик выпуска
+# кладёт туда новый update-agent.sh. bash читает скрипт по ходу выполнения:
+# переписанный поверх (cp -a, тот же inode) файл менялся у агента под ногами,
+# и после неудачной установки вместо отката исполнялся обрывок чужого текста
+# (amnezia-vpn-server-76mp.4). Новый текст — сплошь «exit 42»: куда бы ни
+# пришлось смещение, дальше агент не пошёл бы.
+setup_deployment 2.8.2
+cp "$AGENT" "$ROOT/update-agent.sh"
+build_release 2.9.0
+# Пересобирается архив: установщик этого выпуска переписывает агента на
+# месте и падает.
+rel="$TMP/rel-2.9.0/amnezia-vpn-server-2.9.0"
+cat > "$rel/install.sh" <<'INST'
+#!/bin/bash
+echo "new-installer $*" >> "${AGENT_CALLS:?}"
+root="$2"
+i=0
+while [ "$i" -lt 2000 ]; do printf 'exit 42 #\n'; i=$((i + 1)); done > "$root/update-agent.sh.junk"
+# Поверх, в тот же файл — ровно как cp -a.
+cat "$root/update-agent.sh.junk" > "$root/update-agent.sh"
+exit 1
+INST
+chmod +x "$rel/install.sh"
+(cd "$TMP/rel-2.9.0" && tar -czf sources.tar.gz amnezia-vpn-server-2.9.0)
+SHA="$(shasum -a 256 "$ASSET" 2>/dev/null || sha256sum "$ASSET")"; SHA="${SHA%% *}"
+BODY="$(release_body "$SHA")"
+request 2.9.0
+: > "$CALLS"
+env PATH="$FAKE_DIR:$PATH" AGENT_CALLS="$CALLS" AMNEZIA_UPDATE_ROOT="$ROOT" \
+    AMNEZIA_UPDATE_API="https://api.example.invalid" \
+    AMNEZIA_UPDATE_DOWNLOADS="https://dl.example.invalid" \
+    RELEASE_BODY="$BODY" ASSET_FILE="$ASSET" \
+    bash "$ROOT/update-agent.sh" >/dev/null 2>&1; rc=$?
+check "the rewritten agent still reaches the rollback" \
+    grep -q "rollback-installer --root $ROOT" "$CALLS"
+check "and the state says the server is back on the old release" \
+    grep -q '"state":"rolled-back"' <<<"$(state)"
+check_not "the agent never ran the text it was replaced with" test "$rc" = "42"
+
 # --- a rollback that fails too is not called success -------------------
 setup_deployment 2.8.2
 request 2.9.0

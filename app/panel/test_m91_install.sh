@@ -2956,6 +2956,42 @@ test_installer_keeps_a_copy_of_itself() {
         || fail "no install.sh in the deployment: a rollback would have nothing to run"
 }
 
+# Агент обновления запускает установщик выпуска, пока сам ещё выполняется из
+# $ROOT/update-agent.sh. bash дочитывает скрипт с диска по ходу дела, и
+# установщик, переписавший этот файл поверх (cp -a — тот же inode), подменял
+# агенту текст на середине: после неудачной установки вместо отката шёл
+# обрывок нового скрипта (amnezia-vpn-server-76mp.4). Скрипты развёртывания
+# должны заменяться новым файлом, а старый — оставаться нетронутым у того,
+# кто его читает. Жёсткая ссылка здесь и есть «тот, кто читает».
+test_deployed_scripts_are_replaced_not_rewritten() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "script replace setup: exit $rc"
+    local f held
+    for f in update-agent.sh install.sh watchdog.sh update-check.sh docker-prune.sh; do
+        printf '#!/bin/bash\n# running copy of %s\n' "$f" > "$ROOT/$f"
+        held="$TMP_TEST/held-$f"
+        rm -f "$held"
+        ln "$ROOT/$f" "$held"
+    done
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "script replace rerun: exit $rc"
+    for f in update-agent.sh install.sh watchdog.sh update-check.sh docker-prune.sh; do
+        held="$TMP_TEST/held-$f"
+        grep -q "running copy of $f" "$held" \
+            && pass "$f: the running copy was left alone" \
+            || fail "$f was rewritten in place under whoever was executing it"
+        cmp -s "$M91_HOME/$f" "$ROOT/$f" \
+            && pass "$f: the deployment got the new one" \
+            || fail "$f in the deployment is not the new one"
+        [ -x "$ROOT/$f" ] || fail "$f lost its execute bit"
+        rm -f "$held"
+    done
+    ls "$ROOT"/.*.new.* >/dev/null 2>&1 \
+        && fail "a temporary copy was left in the deployment" \
+        || pass "no temporary copies left behind"
+}
+
 # Раз установщик лежит в развёртывании, его оттуда и запустят — руками или
 # откатом. `cp -a` файла на самого себя падает, а не молчит.
 test_rerun_from_inside_the_deployment() {
@@ -3210,6 +3246,7 @@ test_on_demand_check_armed
 test_on_demand_check_follows_the_flag
 test_update_agent_installed
 test_installer_keeps_a_copy_of_itself
+test_deployed_scripts_are_replaced_not_rewritten
 test_rerun_from_inside_the_deployment
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
