@@ -716,8 +716,84 @@ test_no_flush_no_drop() {
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "no-flush flow: exit $rc"
     assert_not_in "flush ruleset" "$NFT_SYS_FILE" "never flushes the host ruleset"
-    assert_not_in_rules " drop" "$NFT_SYS_FILE" "no drop rules anywhere"
+    assert_only_tunnel_drops "$NFT_SYS_FILE" "drops touch nothing but traffic through the tunnel"
     assert_not_in "policy drop" "$NFT_SYS_FILE" "no drop policies"
+}
+
+# assert_only_tunnel_drops FILE LABEL — правило drop допустимо только про
+# трафик, идущий через туннель (amnezia-vpn-server-76mp.13): каждое называет
+# awg0. Всё чужое — SSH, контейнеры, сам хост — по-прежнему не трогается.
+assert_only_tunnel_drops() {
+    local stray
+    stray="$(grep -v '^[[:space:]]*#' "$1" | grep -E '\bdrop\b' | grep -v '"awg0"' || true)"
+    if [ -z "$stray" ]; then
+        pass "$2"
+    else
+        fail "$2 (drop without awg0: $(printf '%s' "$stray" | head -1))"
+    fi
+}
+
+# rule_line PATTERN [TABLE] — номер первой строки правила (комментарии не в
+# счёт) внутри таблицы ip amnezia или ip6 amnezia.
+rule_line() {
+    local table="${2:-ip}"
+    awk -v t="table ${table} amnezia {" -v p="$1" '
+        $0 == t { on = 1 }
+        on && /^}/ { on = 0 }
+        on && !/^[[:space:]]*#/ && index($0, p) { print NR; exit }
+    ' "$NFT_SYS_FILE"
+}
+
+# Клиент VPN доставал адрес метаданных хостера 169.254.169.254 (DO, Hetzner,
+# Vultr отдают там user-data), а сосед хостера с маршрутом на подсеть туннеля
+# открывал новые соединения к устройствам клиентов
+# (amnezia-vpn-server-76mp.13). drop стоит раньше accept подсети: accept
+# завершает цепочку, и после него drop не встретился бы.
+test_forward_guards_the_tunnel() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward guard flow: exit $rc"
+    local ll est new acc
+    ll="$(rule_line 'iifname "awg0" ip daddr 169.254.0.0/16 drop')"
+    est="$(rule_line 'oifname "awg0" iifname != "awg0" ct state established,related accept')"
+    new="$(rule_line 'oifname "awg0" iifname != "awg0" drop')"
+    acc="$(rule_line 'ip saddr 10.8.0.0/24 accept')"
+    [ -n "$ll" ] && [ -n "$acc" ] && [ "$ll" -lt "$acc" ] \
+        && pass "forward: link-local 169.254.0.0/16 from the tunnel dropped before the subnet accept" \
+        || fail "forward: link-local drop missing or after the accept (drop=${ll:-none} accept=${acc:-none})"
+    [ -n "$est" ] && [ -n "$new" ] && [ "$est" -lt "$new" ] && [ "$new" -lt "$acc" ] \
+        && pass "forward: into the tunnel from outside only established,related" \
+        || fail "forward: established/new guard into the tunnel (est=${est:-none} new=${new:-none} accept=${acc:-none})"
+    # Клиент ↔ клиент: пакет входит и выходит через awg0, и ни одно правило
+    # drop его не касается.
+    if grep -v '^[[:space:]]*#' "$NFT_SYS_FILE" | grep -E '\bdrop\b' \
+        | grep -Ev 'iifname != "awg0"|ip daddr 169\.254\.0\.0/16' | grep -q .; then
+        fail "forward: a drop could catch client-to-client traffic"
+    else
+        pass "forward: client-to-client traffic inside the tunnel is never dropped"
+    fi
+    # Частные сети хостера — решение владельца, установщик их не закрывает.
+    assert_not_in_rules "10.0.0.0/8\|172.16.0.0/12\|192.168.0.0/16" "$NFT_SYS_FILE" \
+        "forward: the hoster's private networks are left alone"
+    # DNS на адресе сервера — вход, а не forward: перенаправление и учёт на
+    # месте.
+    assert_dns_rule udp "forward guard: tunnel DNS still accepted"
+    assert_in 'iifname "awg0" udp dport 53 redirect to :53' "$NFT_SYS_FILE" "forward guard: DNS redirect kept"
+}
+
+test_forward_guards_the_tunnel_ipv6() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "forward guard v6 flow: exit $rc"
+    local est new acc
+    est="$(rule_line 'oifname "awg0" iifname != "awg0" ct state established,related accept' ip6)"
+    new="$(rule_line 'oifname "awg0" iifname != "awg0" drop' ip6)"
+    acc="$(rule_line 'ip6 saddr ' ip6)"
+    [ -n "$est" ] && [ -n "$new" ] && [ -n "$acc" ] && [ "$est" -lt "$new" ] && [ "$new" -lt "$acc" ] \
+        && pass "ipv6 forward: into the tunnel from outside only established,related" \
+        || fail "ipv6 forward: established/new guard (est=${est:-none} new=${new:-none} accept=${acc:-none})"
 }
 
 test_fragments_identical() {
@@ -1219,18 +1295,16 @@ test_ipv6_mss_clamp_in_its_own_table() {
     fi
 }
 
-# The project invariant: not one drop rule in anything we manage. It
-# carries into IPv6 without exception.
+# The project invariant: nothing we manage drops foreign traffic — the only
+# drops are the tunnel guards (amnezia-vpn-server-76mp.13), and each names
+# awg0. It carries into IPv6 without exception.
 test_ipv6_no_drop_rules() {
     fakes_reset
     os_release debian 12 bookworm
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
     [ "$rc" = "0" ] || fail "ipv6 no-drop flow: exit $rc"
-    if grep -v "^[[:space:]]*#" "$NFT_SYS_FILE" | grep -qE "\\bdrop\\b|policy drop"; then
-        fail "ipv6: a drop rule reached the managed ruleset"
-    else
-        pass "ipv6: no drop rules anywhere in the managed ruleset"
-    fi
+    assert_only_tunnel_drops "$NFT_SYS_FILE" "ipv6: drops touch nothing but traffic through the tunnel"
+    assert_not_in "policy drop" "$NFT_SYS_FILE" "ipv6: no drop policies"
 }
 
 # The rollback the owner actually cares about: a deployment that had IPv6
@@ -1332,6 +1406,8 @@ m92_run_all() {
     test_atomic_replace_on_rerun
     test_custom_values
     test_no_flush_no_drop
+    test_forward_guards_the_tunnel
+    test_forward_guards_the_tunnel_ipv6
     test_fragments_identical
     test_check_before_apply
     test_syntax_failure_rollback

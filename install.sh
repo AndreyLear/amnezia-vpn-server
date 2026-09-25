@@ -1890,10 +1890,12 @@ vpn_subnet_effective() {
 # render_nftables: the managed ruleset fragment. The table owns only
 # what the ТЗ §9 contract needs: NAT for vpn subnet -> WAN (never to
 # the tunnel itself), forwarding in both directions for the subnet,
-# UDP AWG_PORT acceptance. No policies, no drops: SSH and all foreign
-# traffic are untouched by construction. $3 carries pre-rendered extra
-# input-chain accepts, additively and only for a panel TLS mode: with
-# a panel domain (T-121) tcp 80 for ACME plus tcp 443 (or --panel-port);
+# UDP AWG_PORT acceptance. No policies, and no drops except the tunnel
+# guards in forward, each of which names awg0 (amnezia-vpn-server-76mp.13):
+# SSH and all foreign traffic are untouched by construction. $3 carries
+# pre-rendered extra input-chain accepts, additively and only for a
+# panel TLS mode: with a panel domain (T-121) tcp 80 for ACME plus tcp
+# 443 (or --panel-port);
 # with --panel-port and no domain (T-124) only that tcp port. Loopback-only
 # installs never open any of them.
 #
@@ -1978,6 +1980,23 @@ table ip amnezia {
         # large transfers stall. The clamp must precede the accepts —
         # accept terminates the chain.
         tcp flags syn tcp option maxseg size set rt mtu
+        # The tunnel guards (amnezia-vpn-server-76mp.13) — the only drops
+        # in this ruleset, and each names awg0, so SSH, containers and
+        # everything else on the host stay untouched. They precede the
+        # subnet accepts: accept ends the chain, a drop after it would
+        # never be met. A drop here is final for the packet; an accept is
+        # not (a later chain at the same hook still sees it).
+        #
+        # Link-local is the hoster's, not the internet: 169.254.169.254
+        # hands out the instance metadata and user-data at DO, Hetzner,
+        # Vultr and others, and a client reached it through masquerade.
+        iifname "awg0" ip daddr 169.254.0.0/16 drop
+        # Nothing opens a new connection INTO the tunnel from outside it:
+        # a neighbour of the hoster with a route to the tunnel subnet could
+        # otherwise reach the clients' devices. Replies pass; traffic that
+        # enters and leaves through awg0 (client to client) is not matched.
+        oifname "awg0" iifname != "awg0" ct state established,related accept
+        oifname "awg0" iifname != "awg0" drop
         ip saddr $1 accept
         ip daddr $1 accept
     }
@@ -2025,6 +2044,11 @@ table ip6 amnezia {
         # IPv6 would have no segment-size protection at all, which is
         # worse than the IPv4 case rather than equal to it — see below.
         tcp flags syn tcp option maxseg size set rt mtu
+        # Same guard as in the ip table (amnezia-vpn-server-76mp.13). The
+        # addresses are ULA behind NAT66, so the internet cannot name them,
+        # but the hoster's link can.
+        oifname "awg0" iifname != "awg0" ct state established,related accept
+        oifname "awg0" iifname != "awg0" drop
         ip6 saddr $subnet6 accept
         ip6 daddr $subnet6 accept
     }
