@@ -2118,6 +2118,15 @@ render_nftables_deploy() {
     }
 }
 
+# ipv6_ra_uplinks: interfaces whose IPv6 default route was learned from
+# router advertisements ("proto ra"), one per line (amnezia-vpn-server-76mp.21).
+ipv6_ra_uplinks() {
+    cmd ip -6 route show default 2>/dev/null | awk '
+        / proto ra( |$)/ {
+            for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1)
+        }' | sort -u
+}
+
 # nftables_persist: hook the fragment into the distro nftables.conf
 # inside a managed marker block and pin the boot order in front of
 # Docker. Foreign content of nftables.conf is left untouched.
@@ -2178,17 +2187,38 @@ nftables_persist() {
     if [ -n "$TUNNEL_SUBNET6" ]; then
         cmd nft list table ip6 amnezia >/dev/null 2>&1 \
             || die_op "the tunnel asks for IPv6 but the ip6 amnezia table is not present after reload"
-        printf '# amnezia-vpn managed (amnezia-vpn-server-nxp2): the tunnel carries IPv6.\nnet.ipv6.conf.all.forwarding = 1\n' \
+        # forwarding=1 turns the kernel's RA processing off unless the
+        # interface says accept_ra=2. On a host that got its IPv6 default
+        # route by SLAAC the check below passed and the route then
+        # expired with its RA lifetime, ~30 minutes later
+        # (amnezia-vpn-server-76mp.21). So every interface whose default
+        # route came by RA gets 2 — first, before forwarding is on, and
+        # first in the drop-in, which sysctl applies top to bottom. A
+        # statically configured uplink is left as it is.
+        local ra_ifaces iface key lines=""
+        ra_ifaces="$(ipv6_ra_uplinks)"
+        for iface in $ra_ifaces; do
+            # sysctl's dotted names spell a VLAN's dot as a slash.
+            key="net.ipv6.conf.$(printf '%s' "$iface" | tr '.' '/').accept_ra"
+            lines="${lines}${key} = 2
+"
+            apply_sysctl_warn "${key}=2" || true
+            log "IPv6 uplink $iface takes its route from router advertisements: accept_ra=2 so forwarding does not drop it"
+        done
+        printf '# amnezia-vpn managed (amnezia-vpn-server-nxp2): the tunnel carries IPv6.\n%snet.ipv6.conf.all.forwarding = 1\n' "$lines" \
             > "$SYSCTL_DIR/amnezia-vpn-ipv6.conf"
         chmod 0644 "$SYSCTL_DIR/amnezia-vpn-ipv6.conf"
         apply_sysctl_warn net.ipv6.conf.all.forwarding=1 || true
         log "IPv6 forwarding enabled for tunnel subnet $TUNNEL_SUBNET6 (rules were already in place)"
-    else
-        # Unconditional on every run, not only at the moment of switching
-        # off: otherwise the state would depend on the order in which the
-        # operator happened to toggle things.
+    elif [ -f "$SYSCTL_DIR/amnezia-vpn-ipv6.conf" ]; then
+        # Switched off: undo what an earlier run switched on, and only
+        # that. Forcing 0 on every run broke IPv6 for whatever else on
+        # the host forwards it — Docker's IPv6 networks, another VPN
+        # (amnezia-vpn-server-76mp.21). The drop-in is the record that
+        # the value is ours.
         rm -f "$SYSCTL_DIR/amnezia-vpn-ipv6.conf"
         apply_sysctl_warn net.ipv6.conf.all.forwarding=0 || true
+        log "IPv6 forwarding switched off: this installer had switched it on"
     fi
 
     mkdir -p "$SYSTEMD_DIR/docker.service.d" || die_op "cannot create systemd drop-in dir"

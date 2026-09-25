@@ -114,6 +114,7 @@ V6_FW_IN_ACCEPT=0
 V6_FW_OUT_ACCEPT=0
 UFW_ACTIVE=no
 UFW_RC=0
+IP6_DEFAULT_ROUTE="default via fe80::1 dev ens3 proto ra metric 100 expires 1790sec pref medium"
 EOF
     # nft fake is hidden between runs (fakes_reset removes it) so the
     # "nft absent -> apt-get install nftables" path can be exercised;
@@ -326,6 +327,12 @@ if { [ "${1:-}" = "-4" ] || [ "${1:-}" = "-6" ]; } && [ "${2:-}" = "addr" ] \
             esac
             ;;
     esac
+    exit 0
+fi
+# Маршрут IPv6 по умолчанию: IP6_DEFAULT_ROUTE — строка, как её печатает ip
+# (amnezia-vpn-server-76mp.21). Пусто — маршрута нет.
+if [ "${1:-}" = "-6" ] && [ "${2:-}" = "route" ] && [ "${3:-}" = "show" ] && [ "${4:-}" = "default" ]; then
+    [ -n "${IP6_DEFAULT_ROUTE:-}" ] && printf '%s\n' "$IP6_DEFAULT_ROUTE"
     exit 0
 fi
 if [ "${1:-}" = "-brief" ] && [ "${2:-}" = "addr" ]; then
@@ -1440,6 +1447,66 @@ test_ipv6_switch_off_after_on() {
     assert_in "^table ip amnezia {" "$NFT_SYS_FILE" "switch-off: the IPv4 table survived untouched"
 }
 
+# forwarding=1 выключает приём RA ядром, если accept_ra не 2: на хосте со
+# SLAAC маршрут IPv6 по умолчанию истекал через ~30 минут после установки
+# (amnezia-vpn-server-76mp.21). accept_ra=2 ставится раньше forwarding и
+# только интерфейсу, чей маршрут пришёл по RA.
+test_ipv6_forwarding_keeps_ra() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "accept_ra flow: exit $rc"
+    local dropin="$SYSCTL_TEST/amnezia-vpn-ipv6.conf" ra fw
+    assert_in "^net.ipv6.conf.ens3.accept_ra = 2$" "$dropin" "accept_ra=2 persisted for the RA uplink"
+    ra="$(grep -n "accept_ra" "$dropin" | head -1 | cut -d: -f1)"
+    fw="$(grep -n "all.forwarding" "$dropin" | head -1 | cut -d: -f1)"
+    [ -n "$ra" ] && [ -n "$fw" ] && [ "$ra" -lt "$fw" ] \
+        && pass "accept_ra precedes forwarding in the drop-in" \
+        || fail "accept_ra must precede forwarding (ra=${ra:-none} fw=${fw:-none})"
+    ra="$(grep -n "sysctl -w net.ipv6.conf.ens3.accept_ra=2" "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    fw="$(grep -n "sysctl -w net.ipv6.conf.all.forwarding=1" "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    [ -n "$ra" ] && [ -n "$fw" ] && [ "$ra" -lt "$fw" ] \
+        && pass "accept_ra=2 applied before forwarding=1" \
+        || fail "accept_ra=2 must be applied before forwarding=1 (ra=${ra:-none} fw=${fw:-none})"
+
+    # Статический маршрут: RA не нужен, и настройка интерфейса не трогается.
+    fakes_reset
+    setstate IP6_DEFAULT_ROUTE '"default via 2001:db8::1 dev ens3 proto static metric 1024"' "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "static v6 route flow: exit $rc"
+    grep -q "accept_ra" "$SYSCTL_TEST/amnezia-vpn-ipv6.conf" "$FAKE_CALLS" \
+        && fail "static route: accept_ra touched" \
+        || pass "static route: accept_ra left alone"
+}
+
+# С выключенным IPv6 установщик не выключал чужой forwarding принудительно на
+# каждом запуске: это ломало IPv6-сети Docker и другие VPN
+# (amnezia-vpn-server-76mp.21). Выключает только то, что включил сам.
+test_ipv6_off_leaves_forwarding_alone() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "ipv6-off forwarding flow: exit $rc"
+    grep -q "net.ipv6.conf.all.forwarding" "$FAKE_CALLS" \
+        && fail "ipv6 off: forwarding touched on a host where we never enabled it" \
+        || pass "ipv6 off: foreign IPv6 forwarding left alone"
+
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 on-then-off first run: exit $rc"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --no-ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 on-then-off second run: exit $rc"
+    grep -q "sysctl -w net.ipv6.conf.all.forwarding=0" "$FAKE_CALLS" \
+        && pass "ipv6 switched off: the forwarding we enabled is switched off" \
+        || fail "ipv6 switched off: forwarding we enabled stays on"
+    [ -f "$SYSCTL_TEST/amnezia-vpn-ipv6.conf" ] \
+        && fail "ipv6 switched off: drop-in left behind" \
+        || pass "ipv6 switched off: drop-in removed"
+}
+
 # Настоящий nft вместо фальшивки (amnezia-vpn-server-ofq9).
 #
 # Фальшивка отвечает успехом на всё, включая nft -c -f. Из-за этого 131
@@ -1519,6 +1586,8 @@ m92_run_all() {
     test_ipv6_mss_clamp_in_its_own_table
     test_ipv6_no_drop_rules
     test_ipv6_switch_off_after_on
+    test_ipv6_forwarding_keeps_ra
+    test_ipv6_off_leaves_forwarding_alone
     test_dns_interception
     test_dns_interception_absent_when_resolver_stands_down
     test_atomic_replace_on_rerun
