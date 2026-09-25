@@ -851,3 +851,48 @@ describe("пустое предложение обновиться не рису
     expect(screen.getByRole("button", { name: "Обновить" })).toBeInTheDocument();
   });
 });
+
+// Сетевой сбой оставлял starting/hiding поднятыми: кнопка недоступна до
+// перезагрузки страницы (amnezia-vpn-server-76mp.35).
+describe("полоса о новом выпуске: сетевой сбой", () => {
+  function failPosts() {
+    const errorSpy = vi.spyOn(toast, "error");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "POST") throw new TypeError("Failed to fetch");
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+    return errorSpy;
+  }
+
+  it("«Обновить» снова доступна и сбой назван тостом", async () => {
+    const errorSpy = failPosts();
+    const user = userEvent.setup();
+    render(<UpdateBanner info={info()} onChanged={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: "Показать подробности" }));
+    const start = await screen.findByRole("button", { name: "Обновить" });
+    await user.click(start);
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith("Не удалось запустить обновление"));
+    expect(screen.getByRole("button", { name: "Обновить" })).toBeEnabled();
+    errorSpy.mockRestore();
+  });
+
+  it("крестик снова доступен и сбой назван тостом", async () => {
+    const errorSpy = failPosts();
+    const user = userEvent.setup();
+    render(<UpdateBanner info={info()} onChanged={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: "Скрыть до следующего выпуска" }));
+    await waitFor(() =>
+      expect(errorSpy).toHaveBeenCalledWith("Не удалось скрыть уведомление о новой версии"),
+    );
+    expect(screen.getByRole("button", { name: "Скрыть до следующего выпуска" })).toBeEnabled();
+    errorSpy.mockRestore();
+  });
+});
+

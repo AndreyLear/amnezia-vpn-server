@@ -2,6 +2,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { toast } from "sonner";
+
 import { NotificationsDialog } from "@/components/NotificationsDialog";
 import { setCsrf, type MailInfo } from "@/lib/api";
 
@@ -251,3 +253,23 @@ describe("уведомления", () => {
     expect(button).toBeDisabled();
   });
 });
+
+// Настройки не загрузились — поля оставались закрытыми до переоткрытия
+// окна, а человеку никто ничего не сказал (amnezia-vpn-server-76mp.35).
+describe("уведомления: сетевой сбой", () => {
+  it("открывает поля и называет сбой тостом, если настройки не пришли", async () => {
+    const errorSpy = vi.spyOn(toast, "error");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    render(<NotificationsDialog open onOpenChange={() => {}} />);
+    const host = screen.getByLabelText("Сервер SMTP");
+    await waitFor(() => expect(host).toBeEnabled());
+    expect(errorSpy).toHaveBeenCalledWith("Не удалось загрузить настройки уведомлений");
+    errorSpy.mockRestore();
+  });
+});
+

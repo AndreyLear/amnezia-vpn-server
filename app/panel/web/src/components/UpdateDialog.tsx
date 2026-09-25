@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -295,9 +296,16 @@ export function UpdateDialog({
   async function start() {
     if (starting || running) return;
     setStarting(true);
-    const data = await api<MutationResponse>("/api/update/start", { method: "POST" });
-    if (mutationOk(data)) onStarted();
-    setStarting(false);
+    // Сетевой сбой оставлял кнопку недоступной до перезагрузки страницы
+    // (amnezia-vpn-server-76mp.35): флаг снимается в finally.
+    try {
+      const data = await api<MutationResponse>("/api/update/start", { method: "POST" });
+      if (mutationOk(data)) onStarted();
+    } catch {
+      toast.error("Не удалось запустить обновление");
+    } finally {
+      setStarting(false);
+    }
   }
 
   // Fixes the flash of a second outcome popup after clicking "Понятно"
@@ -324,8 +332,12 @@ export function UpdateDialog({
   async function acknowledgeAndClose() {
     if (acknowledging) return;
     setAcknowledging(true);
-    const acknowledged = await onAcknowledge();
-    setAcknowledging(false);
+    let acknowledged = false;
+    try {
+      acknowledged = await onAcknowledge();
+    } finally {
+      setAcknowledging(false);
+    }
     if (acknowledged) onOpenChange(false);
   }
 
