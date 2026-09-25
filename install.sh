@@ -1860,10 +1860,22 @@ NFT_END='# --- amnezia-vpn end ---'
 # over .env/parameter; a missing config falls back to the deployment
 # value. The comments explain the precedence contract (M9.2 audit).
 vpn_subnet_effective() {
-    local addr
+    local line addr="" part
     if [ -f "$ROOT_DIR/config/awg0.conf" ]; then
-        addr="$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$ROOT_DIR/config/awg0.conf" | head -1)"
-        if [ -n "$addr" ] && validate_cidr "$addr"; then
+        line="$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$ROOT_DIR/config/awg0.conf" | head -1)"
+        # With IPv6 on, the panel writes both families on one line
+        # ("10.8.0.1/24, fd..::1/64"). The line as a whole is no CIDR, and
+        # reading it as "no Address" built NAT and forward for the subnet
+        # from .env or --vpn-subnet instead — someone else's, when the
+        # flag is passed again (amnezia-vpn-server-76mp.32). The IPv4 part
+        # is looked for among all of them: the order is not a promise.
+        for part in $(printf '%s' "$line" | tr ',' ' '); do
+            if validate_cidr "$part"; then
+                addr="$part"
+                break
+            fi
+        done
+        if [ -n "$addr" ]; then
             log "VPN subnet derived from config/awg0.conf (server.address): $addr" >&2
             network_of_host_cidr "$addr"
             return 0

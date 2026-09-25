@@ -888,6 +888,26 @@ test_subnet_from_awg0_conf() {
     assert_not_in "10.8.0.0/24" "$NFT_SYS_FILE" "flag subnet ignored when awg0.conf is authoritative"
 }
 
+# На развёртывании с IPv6 панель пишет обе части в одну строку, и вся строка
+# целиком не CIDR. Раньше это читалось как «Address нет», и правила строились
+# для подсети из .env или флага — чужой, если --vpn-subnet передан заново
+# (amnezia-vpn-server-76mp.32).
+test_subnet_from_awg0_conf_with_ipv6() {
+    fakes_reset
+    os_release debian 12 bookworm
+    mkdir -p "$ROOT/config"
+    printf '[Interface]\nAddress = 10.9.0.5/16, fd12:3456:789a::1/64\nListenPort = 51820\n' > "$ROOT/config/awg0.conf"
+    rc="$(run_install --vpn-subnet 10.8.0.0/24)"
+    [ "$rc" = "0" ] || fail "awg0.conf dual-stack flow: exit $rc"
+    assert_in "ip saddr 10.9.0.0/16 accept" "$NFT_SYS_FILE" "dual-stack Address: the IPv4 part of awg0.conf wins over the flag"
+    assert_not_in "10.8.0.0/24" "$NFT_SYS_FILE" "dual-stack Address: flag subnet ignored"
+    # Порядок частей панели не обещан: IPv4 ищется среди всех.
+    printf '[Interface]\nAddress = fd12:3456:789a::1/64,10.9.0.5/16\n' > "$ROOT/config/awg0.conf"
+    rc="$(run_install --vpn-subnet 10.8.0.0/24)"
+    [ "$rc" = "0" ] || fail "awg0.conf v6-first flow: exit $rc"
+    assert_in "ip saddr 10.9.0.0/16 accept" "$NFT_SYS_FILE" "dual-stack Address: IPv4 found after the IPv6 part too"
+}
+
 test_subnet_awg0_conf_invalid_fallback() {
     fakes_reset
     os_release debian 12 bookworm
@@ -1322,6 +1342,7 @@ m92_run_all() {
     test_persistence_foreign_content
     test_persistence_dropin
     test_subnet_from_awg0_conf
+    test_subnet_from_awg0_conf_with_ipv6
     test_subnet_awg0_conf_invalid_fallback
     test_nft_absent_installs_package
     test_generated_ruleset_survives_a_real_kernel
