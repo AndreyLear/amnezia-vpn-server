@@ -18,6 +18,7 @@ describe("api CSRF", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.clearAllMocks();
     setCsrf("");
   });
 
@@ -79,5 +80,52 @@ describe("api CSRF", () => {
       "/api/me",
       expect.objectContaining({ credentials: "same-origin" }),
     );
+  });
+
+  // Медленный /api/me: мутация ушла без токена, сервер ответил 403. Токен
+  // пришёл — действие повторяется один раз, а не теряется с тостом
+  // «Сессия устарела» (amnezia-vpn-server-76mp.37).
+  it("retries a mutation once with the fresh token after 403 without CSRF", async () => {
+    const posts: Array<string | null> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/me") return jsonResponse({ csrf: "late-token" });
+      if (path === "/api/mail") {
+        const token = new Headers(init?.headers).get("X-CSRF-Token");
+        posts.push(token);
+        if (token !== "late-token") return jsonResponse({ ok: false, message: "Forbidden." }, 403);
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(path);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const data = await api<{ ok?: boolean }>("/api/mail", {
+      method: "PUT",
+      body: JSON.stringify({ host: "smtp" }),
+    });
+
+    expect(data.ok).toBe(true);
+    expect(posts).toEqual([null, "late-token"]);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a 403 mutation when the token did not change", async () => {
+    setCsrf("same-token");
+    let puts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === "/api/me") return jsonResponse({ csrf: "same-token" });
+        puts += 1;
+        return jsonResponse({ ok: false, message: "Forbidden." }, 403);
+      }),
+    );
+
+    await api("/api/mail", { method: "PUT", body: "{}" });
+
+    expect(puts).toBe(1);
+    expect(toast.error).toHaveBeenCalledWith("Сессия устарела");
   });
 });

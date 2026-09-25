@@ -75,16 +75,45 @@ function mutationNeedsCsrf(path: string, init: RequestInit): boolean {
   return path !== "/api/login";
 }
 
-export async function apiRequest(path: string, init: RequestInit = {}): Promise<Response> {
-  if (mutationNeedsCsrf(path, init)) {
+/** Спрашивает у сервера действующий CSRF-токен; пусто — узнать не удалось. */
+async function refreshCsrf(): Promise<string> {
+  try {
+    const meRes = await fetch("/api/me", { credentials: "same-origin" });
+    if (!meRes.ok) return "";
+    const me = (await meRes.json()) as MeResponse;
+    if (me.csrf) setCsrf(me.csrf);
+    return me.csrf ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export async function apiRequest(
+  path: string,
+  init: RequestInit = {},
+  csrfRetried = false,
+): Promise<Response> {
+  const needsCsrf = mutationNeedsCsrf(path, init);
+  if (needsCsrf) {
     await waitForCsrf();
   }
+  const sentCsrf = csrf;
   const headers = new Headers(init.headers);
-  if (csrf) headers.set("X-CSRF-Token", csrf);
+  if (sentCsrf) headers.set("X-CSRF-Token", sentCsrf);
   if (init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
   const res = await fetch(path, { ...init, headers, credentials: "same-origin" });
+  // Токен ждётся недолго: зависнуть кнопке хуже, чем сходить дважды. Если
+  // /api/me ответил позже, мутация ушла без токена (или со старым) и
+  // получила 403 — сервер её не выполнил. Узнаём токен и повторяем ровно
+  // один раз, иначе действие терялось с тостом «Сессия устарела»
+  // (amnezia-vpn-server-76mp.37). С тем же токеном не повторяем: отказ
+  // тогда не про CSRF.
+  if (res.status === 403 && needsCsrf && !csrfRetried) {
+    const fresh = await refreshCsrf();
+    if (fresh && fresh !== sentCsrf) return apiRequest(path, init, true);
+  }
   if (res.status === 401 && path !== "/api/login") {
     if (!csrf) {
       window.location.assign("/login");
@@ -105,15 +134,8 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await apiRequest(path, init);
   if (res.status === 403 && path !== "/api/me" && path !== "/api/login") {
-    try {
-      const meRes = await fetch("/api/me", { credentials: "same-origin" });
-      if (meRes.ok) {
-        const me = (await meRes.json()) as MeResponse;
-        if (me.csrf) setCsrf(me.csrf);
-      }
-    } catch {
-      // keep going so the original JSON body can still be parsed
-    }
+    // Мутацию apiRequest уже сверил с /api/me; здесь — только чтение.
+    if (!mutationNeedsCsrf(path, init)) await refreshCsrf();
     // Standalone toast sentence, capitalized (amnezia-vpn-server-4cnf).
     toast.error("Сессия устарела");
   }
