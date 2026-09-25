@@ -33,6 +33,11 @@ type ArchiveSettings struct {
 func Inspect(srcPath string) (ArchiveSettings, error) {
 	var out ArchiveSettings
 
+	// Held until the temporary copy is gone: no two unpacked copies at
+	// once (amnezia-vpn-server-76mp.29).
+	unpackMu.Lock()
+	defer unpackMu.Unlock()
+
 	dir, err := os.MkdirTemp("", "panel-inspect-*")
 	if err != nil {
 		return out, fmt.Errorf("backup: inspect: create temp dir: %w", err)
