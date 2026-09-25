@@ -2202,6 +2202,34 @@ EOF
     cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed"
 }
 
+# ufw_open_ports AWG_PORT INPUT_RULES — mirror the managed input accepts in
+# an active ufw (amnezia-vpn-server-76mp.20). The tcp ports come from the
+# rendered input rules, so nft and ufw can never disagree about what the
+# panel mode opens. Never fatal: the nft rules are in place already, and a
+# ufw that refuses is the operator's to look at.
+ufw_active() {
+    command -v ufw >/dev/null 2>&1 || return 1
+    cmd ufw status 2>/dev/null | head -1 | grep -q '^Status: active'
+}
+
+ufw_open_ports() {
+    local awg_port="$1" rules="${2:-}" tcp failed=0
+    ufw_active || return 0
+    log "ufw is active: opening the tunnel and panel ports in it"
+    cmd ufw allow "${awg_port}/udp" comment 'amnezia-vpn tunnel' >/dev/null 2>&1 || failed=1
+    # The resolver answers on the tunnel address only; opening 53 on
+    # every interface would make an open resolver of the host.
+    cmd ufw allow in on awg0 to any port 53 comment 'amnezia-vpn dns' >/dev/null 2>&1 || failed=1
+    for tcp in $(printf '%s\n' "$rules" | sed -n 's/^[[:space:]]*tcp dport \([0-9][0-9]*\) accept$/\1/p'); do
+        cmd ufw allow "${tcp}/tcp" comment 'amnezia-vpn panel' >/dev/null 2>&1 || failed=1
+    done
+    if [ "$failed" = "1" ]; then
+        log "WARNING: ufw refused some of the rules; check 'ufw status' — the tunnel or the panel may be unreachable"
+    else
+        log "ufw: tunnel port ${awg_port}/udp, resolver on awg0 and the panel ports allowed"
+    fi
+}
+
 net_setup() {
     log "host networking (nftables, M9.2): preparing the managed ruleset"
 
@@ -2272,21 +2300,24 @@ RULES
     # never rewrites) — or of FORWARD when DOCKER-USER is absent.
     # Additive only: nothing is flushed, nothing is dropped, and a
     # re-run never duplicates the rules (iptables -C guard).
+    #
+    # Both families: Docker sets the IPv6 FORWARD policy to DROP as well,
+    # and with the exception made in iptables alone the tunnel's IPv6
+    # went nowhere (amnezia-vpn-server-76mp.20). The IPv6 accept is
+    # harmless while the tunnel carries IPv4 only — forwarding is off
+    # then, and the rule names awg0.
     ensure_forward_accept() {
-        command -v iptables >/dev/null 2>&1 || {
-            log "forward accept: iptables not present; relying on the nft ruleset"
-            return 0
-        }
+        local t chain d any=0
         # Boot persistence: docker/ufw rebuild their chains on every
         # boot, so the insertion runs again from a one-shot unit
         # (idempotent; no-op when the rules are already present).
         # Quoted delimiter: the unit file must receive the literal
-        # "$chain"/"$d" (expanded at boot by /bin/sh), NOT the
+        # "$chain"/"$d"/"$t" (expanded at boot by /bin/sh), NOT the
         # installer's PID ("$$" would be expanded by this shell).
         cat > "$SYSTEMD_DIR/amnezia-vpn-forward.service" <<'EOF'
 # amnezia-vpn managed (M9.2): tunnel egress forward accept for
-# docker/ufw coexistence. Runs after docker and nftables, never
-# flushes or drops anything, idempotent on every boot.
+# docker/ufw coexistence, IPv4 and IPv6. Runs after docker and nftables,
+# never flushes or drops anything, idempotent on every boot.
 [Unit]
 Description=Amnezia VPN forward accept for the tunnel interface
 After=docker.service nftables.service
@@ -2295,23 +2326,33 @@ Wants=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'command -v iptables >/dev/null 2>&1 || exit 0; chain=FORWARD; iptables -t filter -L DOCKER-USER >/dev/null 2>&1 && chain=DOCKER-USER; for d in "-i awg0" "-o awg0"; do iptables -t filter -C "$chain" $d -j ACCEPT 2>/dev/null || iptables -t filter -I "$chain" 1 $d -j ACCEPT; done'
+ExecStart=/bin/sh -c 'for t in iptables ip6tables; do command -v "$t" >/dev/null 2>&1 || continue; chain=FORWARD; "$t" -t filter -L DOCKER-USER >/dev/null 2>&1 && chain=DOCKER-USER; for d in "-i awg0" "-o awg0"; do "$t" -t filter -C "$chain" $d -j ACCEPT 2>/dev/null || "$t" -t filter -I "$chain" 1 $d -j ACCEPT; done; done'
 
 [Install]
 WantedBy=multi-user.target
 EOF
         chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-forward.service"
-        local chain="FORWARD" d=""
-        if cmd iptables -t filter -L DOCKER-USER >/dev/null 2>&1; then
-            chain="DOCKER-USER"
-        fi
-        for d in "-i awg0" "-o awg0"; do
-            if ! cmd iptables -t filter -C "$chain" $d -j ACCEPT >/dev/null 2>&1; then
-                cmd iptables -t filter -I "$chain" 1 $d -j ACCEPT \
-                    || die_op "iptables forward accept failed ($chain $d)"
-                log "forward accept: inserted $d -j ACCEPT into $chain"
+        for t in iptables ip6tables; do
+            if ! command -v "$t" >/dev/null 2>&1; then
+                log "forward accept: $t not present; relying on the nft ruleset"
+                continue
             fi
+            any=1
+            chain="FORWARD"
+            if cmd "$t" -t filter -L DOCKER-USER >/dev/null 2>&1; then
+                chain="DOCKER-USER"
+            fi
+            for d in "-i awg0" "-o awg0"; do
+                # shellcheck disable=SC2086 # $d is two words on purpose
+                if ! cmd "$t" -t filter -C "$chain" $d -j ACCEPT >/dev/null 2>&1; then
+                    # shellcheck disable=SC2086
+                    cmd "$t" -t filter -I "$chain" 1 $d -j ACCEPT \
+                        || die_op "$t forward accept failed ($chain $d)"
+                    log "forward accept: inserted $d -j ACCEPT into $t $chain"
+                fi
+            done
         done
+        [ "$any" = "1" ] || return 0
         cmd systemctl daemon-reload >/dev/null 2>&1 \
             || die_op "systemctl daemon-reload failed (forward accept unit)"
         cmd systemctl enable amnezia-vpn-forward.service >/dev/null 2>&1 \
@@ -2322,6 +2363,14 @@ EOF
     }
 
     ensure_forward_accept
+
+    # An active ufw drops incoming packets in its own chain, after ours,
+    # and an accept in table amnezia does not overrule a later drop: the
+    # tunnel port, the panel and the resolver inside the tunnel went
+    # silent while the self-check passed (amnezia-vpn-server-76mp.20).
+    # The same openings as the input chain above are made in ufw's own
+    # terms. An inactive or absent ufw is left exactly as it is.
+    ufw_open_ports "$port" "$input_rules"
 }
 
 net_setup

@@ -107,6 +107,13 @@ DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
 FW_IN_ACCEPT=0
 FW_OUT_ACCEPT=0
+V6_DU_CHAIN=yes
+V6_DU_IN_ACCEPT=0
+V6_DU_OUT_ACCEPT=0
+V6_FW_IN_ACCEPT=0
+V6_FW_OUT_ACCEPT=0
+UFW_ACTIVE=no
+UFW_RC=0
 EOF
     # nft fake is hidden between runs (fakes_reset removes it) so the
     # "nft absent -> apt-get install nftables" path can be exercised;
@@ -424,7 +431,13 @@ FAKE_EOF
 
 cat > "$FAKE_DIR/iptables" <<'FAKE_EOF'
 #!/bin/bash
-echo "iptables $*" >> "${FAKE_CALLS:?}"
+# One shim for both families: as ip6tables it keeps its own state under the
+# V6_ prefix, so the IPv6 exception is checked apart from the IPv4 one
+# (amnezia-vpn-server-76mp.20).
+tool="$(basename "$0")"
+pre=""
+[ "$tool" = "ip6tables" ] && pre="V6_"
+echo "$tool $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 act=""; chain=""; dir=""; inf=""
 for a in "$@"; do
@@ -442,20 +455,40 @@ for a in "$@"; do
     esac
 done
 if [ "$act" = "L" ]; then
-    [ "$chain" = "DU" ] && [ "${DU_CHAIN:-yes}" = "no" ] && exit 1
+    eval "du=\${${pre}DU_CHAIN:-yes}"
+    [ "$chain" = "DU" ] && [ "$du" = "no" ] && exit 1
     exit 0
 fi
 if [ "$act" = "C" ]; then
-    eval "v=\${${chain}_${inf}_ACCEPT:-0}"
+    eval "v=\${${pre}${chain}_${inf}_ACCEPT:-0}"
     [ "$v" = "1" ] && exit 0 || exit 1
 fi
-setstate_val="${chain}_${inf}_ACCEPT"
+setstate_val="${pre}${chain}_${inf}_ACCEPT"
 sed "s/^${setstate_val}=.*/${setstate_val}=1/" "$FAKE_STATE" > "$FAKE_STATE.new" \
     && mv "$FAKE_STATE.new" "$FAKE_STATE"
 exit 0
 FAKE_EOF
 
 chmod +x "$FAKE_DIR/modprobe" "$FAKE_DIR/awg" "$FAKE_DIR/add-apt-repository" "$FAKE_DIR/iptables"
+# ufw is shadowed in every run: a CI host may have the real one, and it must
+# never be asked. UFW_ACTIVE=yes stands for a host whose firewall is on
+# (amnezia-vpn-server-76mp.20).
+cat > "$FAKE_DIR/ufw" <<'FAKE_EOF'
+#!/bin/bash
+echo "ufw $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "status" ]; then
+    if [ "${UFW_ACTIVE:-no}" = "yes" ]; then
+        echo "Status: active"
+    else
+        echo "Status: inactive"
+    fi
+    exit 0
+fi
+exit "${UFW_RC:-0}"
+FAKE_EOF
+cp "$FAKE_DIR/iptables" "$FAKE_DIR/ip6tables"
+chmod +x "$FAKE_DIR/ufw" "$FAKE_DIR/ip6tables"
 cp "$FAKE_DIR/nft" "$FAKE_DIR/nft.hidden"
 
 # --- harness plumbing ---------------------------------------------------
@@ -1173,9 +1206,9 @@ test_forward_accept_docker_user() {
     [ -f "$unit" ] || fail "forward-accept unit missing"
     grep -q "After=docker.service nftables.service" "$unit" && pass "unit ordered after docker+nftables" \
         || fail "unit ordering missing"
-    grep -q 'iptables -t filter -C "\$chain" \$d -j ACCEPT' "$unit" && pass "unit ExecStart keeps literal \$chain (no \$\$ PID expansion)" \
+    grep -q '"\$t" -t filter -C "\$chain" \$d -j ACCEPT' "$unit" && pass "unit ExecStart keeps literal \$chain (no \$\$ PID expansion)" \
         || fail "unit ExecStart expanded \$\$ (installer PID leaked into the unit)"
-    grep -q 'iptables -t filter -I "\$chain" 1 \$d -j ACCEPT' "$unit" && pass "unit ExecStart insert path intact" \
+    grep -q '"\$t" -t filter -I "\$chain" 1 \$d -j ACCEPT' "$unit" && pass "unit ExecStart insert path intact" \
         || fail "unit ExecStart insert path missing"
     grep -q "systemctl enable amnezia-vpn-forward.service" "$FAKE_CALLS" && pass "unit enabled" \
         || fail "unit not enabled"
@@ -1200,6 +1233,91 @@ test_forward_accept_no_docker_user() {
     grep -q "iptables -t filter -I FORWARD 1 -o awg0 -j ACCEPT" "$FAKE_CALLS" \
         && pass "-o awg0 insert into FORWARD" \
         || fail "-o awg0 FORWARD insert missing"
+}
+
+# Docker ставит политику DROP и для IPv6 FORWARD, и исключение только в
+# iptables оставляло IPv6 клиентов без выхода (amnezia-vpn-server-76mp.20).
+test_forward_accept_ipv6() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward-accept v6 flow: exit $rc"
+    grep -q "ip6tables -t filter -I DOCKER-USER 1 -i awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "ip6tables: -i awg0 inserted into DOCKER-USER" \
+        || fail "ip6tables: -i awg0 missing from DOCKER-USER"
+    grep -q "ip6tables -t filter -I DOCKER-USER 1 -o awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "ip6tables: -o awg0 inserted into DOCKER-USER" \
+        || fail "ip6tables: -o awg0 missing from DOCKER-USER"
+    unit="$SYSTEMD_DIR_TEST/amnezia-vpn-forward.service"
+    grep -q 'for t in iptables ip6tables' "$unit" \
+        && pass "ip6tables: the boot unit repeats the IPv6 exception" \
+        || fail "ip6tables: the boot unit covers IPv4 only"
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward-accept v6 rerun: exit $rc"
+    [ "$(grep -c "ip6tables -t filter -I DOCKER-USER" "$FAKE_CALLS")" = "2" ] \
+        && pass "ip6tables: rerun adds no duplicates" \
+        || fail "ip6tables: inserts duplicated: $(grep -c "ip6tables -t filter -I DOCKER-USER" "$FAKE_CALLS")"
+    fakes_reset
+    setstate V6_DU_CHAIN no "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward-accept v6 no-DOCKER-USER flow: exit $rc"
+    grep -q "ip6tables -t filter -I FORWARD 1 -o awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "ip6tables: falls back to FORWARD when DOCKER-USER is absent" \
+        || fail "ip6tables: FORWARD fallback missing"
+}
+
+# Включённый ufw отбрасывает входящее в своей цепочке позже нашей, и accept в
+# таблице amnezia его не отменяет: туннель молчал (amnezia-vpn-server-76mp.20).
+test_ufw_active_opens_the_ports() {
+    fakes_reset
+    setstate UFW_ACTIVE yes "$FAKE_STATE"
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "ufw flow: exit $rc"
+    grep -q "^ufw allow 4500/udp" "$FAKE_CALLS" && pass "ufw: the AWG port opened" \
+        || fail "ufw: the AWG port was not opened"
+    grep -q "^ufw allow 8443/tcp" "$FAKE_CALLS" && pass "ufw: the panel port opened" \
+        || fail "ufw: the panel port was not opened"
+    grep -q "^ufw allow in on awg0 to any port 53" "$FAKE_CALLS" \
+        && pass "ufw: the in-tunnel resolver reachable from the tunnel" \
+        || fail "ufw: DNS from the tunnel stays blocked"
+    grep -Eq "^ufw allow (80|443)/tcp" "$FAKE_CALLS" \
+        && fail "ufw: 80/443 opened without a panel domain" \
+        || pass "ufw: nothing beyond what the mode needs"
+    grep -q "^ufw allow .*53.*" "$FAKE_CALLS" && ! grep -q "^ufw allow 53" "$FAKE_CALLS" \
+        && pass "ufw: DNS never opened off the tunnel" \
+        || fail "ufw: DNS opened off the tunnel"
+
+    fakes_reset
+    setstate UFW_ACTIVE yes "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "ufw domain flow: exit $rc"
+    grep -q "^ufw allow 80/tcp" "$FAKE_CALLS" && pass "ufw domain: tcp 80 for ACME" \
+        || fail "ufw domain: tcp 80 missing"
+    grep -q "^ufw allow 443/tcp" "$FAKE_CALLS" && pass "ufw domain: tcp 443" \
+        || fail "ufw domain: tcp 443 missing"
+
+    # Отказ ufw не роняет установку: туннель уже поднят правилами nft, а
+    # оператор получает предупреждение.
+    fakes_reset
+    setstate UFW_ACTIVE yes "$FAKE_STATE"
+    setstate UFW_RC 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "ufw failure flow: exit $rc"
+    grep -q "WARNING: ufw" "$TMP_TEST/out" && pass "ufw failure: warned, install continued" \
+        || fail "ufw failure: no warning"
+}
+
+test_ufw_inactive_is_left_alone() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "ufw inactive flow: exit $rc"
+    grep -q "^ufw allow" "$FAKE_CALLS" && fail "ufw inactive: rules were added" \
+        || pass "ufw inactive: no rules added"
 }
 
 test_nft_panel_domain_with_panel_port() {
@@ -1433,6 +1551,9 @@ m92_run_all() {
     test_awg_stack_forced_install
     test_forward_accept_docker_user
     test_forward_accept_no_docker_user
+    test_forward_accept_ipv6
+    test_ufw_active_opens_the_ports
+    test_ufw_inactive_is_left_alone
     test_nft_panel_domain_with_panel_port
     test_nft_panel_domain_default_443
 }

@@ -152,6 +152,10 @@ DEFAULT_IFACE=ens3
 TC_RC=0
 GITHUB_RELEASE_RC=0
 GITHUB_RELEASE_HTTP=200
+V6_DU_IN_ACCEPT=0
+V6_DU_OUT_ACCEPT=0
+UFW_ACTIVE=no
+UFW_RC=0
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -742,7 +746,13 @@ FAKE_EOF
 
 cat > "$FAKE_DIR/iptables" <<'FAKE_EOF'
 #!/bin/bash
-echo "iptables $*" >> "${FAKE_CALLS:?}"
+# One shim for both families: as ip6tables it keeps its own state under the
+# V6_ prefix, so the IPv6 exception is checked apart from the IPv4 one
+# (amnezia-vpn-server-76mp.20).
+tool="$(basename "$0")"
+pre=""
+[ "$tool" = "ip6tables" ] && pre="V6_"
+echo "$tool $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 act=""; chain=""; inf=""
 for a in "$@"; do
@@ -759,14 +769,15 @@ for a in "$@"; do
     esac
 done
 if [ "$act" = "L" ]; then
-    [ "$chain" = "DU" ] && [ "${DU_CHAIN:-yes}" = "no" ] && exit 1
+    eval "du=\${${pre}DU_CHAIN:-yes}"
+    [ "$chain" = "DU" ] && [ "$du" = "no" ] && exit 1
     exit 0
 fi
 if [ "$act" = "C" ]; then
-    eval "v=\${${chain}_${inf}_ACCEPT:-0}"
+    eval "v=\${${pre}${chain}_${inf}_ACCEPT:-0}"
     [ "$v" = "1" ] && exit 0 || exit 1
 fi
-setstate_val="${chain}_${inf}_ACCEPT"
+setstate_val="${pre}${chain}_${inf}_ACCEPT"
 sed "s/^${setstate_val}=.*/${setstate_val}=1/" "$FAKE_STATE" > "$FAKE_STATE.new" \
     && mv "$FAKE_STATE.new" "$FAKE_STATE"
 exit 0
@@ -797,6 +808,26 @@ chmod +x "$FAKE_DIR/dpkg-query" "$FAKE_DIR/apt-mark"
 
 chmod +x "$FAKE_DIR/modprobe" "$FAKE_DIR/awg" "$FAKE_DIR/uname" \
     "$FAKE_DIR/add-apt-repository" "$FAKE_DIR/iptables"
+
+# ufw is shadowed in every run: a CI host may have the real one, and it must
+# never be asked. UFW_ACTIVE=yes stands for a host whose firewall is on
+# (amnezia-vpn-server-76mp.20).
+cat > "$FAKE_DIR/ufw" <<'FAKE_EOF'
+#!/bin/bash
+echo "ufw $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "status" ]; then
+    if [ "${UFW_ACTIVE:-no}" = "yes" ]; then
+        echo "Status: active"
+    else
+        echo "Status: inactive"
+    fi
+    exit 0
+fi
+exit "${UFW_RC:-0}"
+FAKE_EOF
+cp "$FAKE_DIR/iptables" "$FAKE_DIR/ip6tables"
+chmod +x "$FAKE_DIR/ufw" "$FAKE_DIR/ip6tables"
 
 # --- harness plumbing ---------------------------------------------------
 
