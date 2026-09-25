@@ -1537,20 +1537,37 @@ TUNNEL_MTU_FLOOR=1280     # IPv6 minimum link MTU: every path must carry it
 # not about MTU), while an unset variable takes the real targets.
 UPLINK_PMTU_TARGETS="${AMNEZIA_INSTALL_PMTU_TARGETS-1.1.1.1 8.8.8.8}"
 
+# ping_df TARGET SIZE: one unfragmented probe of SIZE payload bytes, tried
+# up to PMTU_PROBE_ATTEMPTS times. A single lost reply used to count as
+# "too big": the binary search then settled lower, and on a rerun the
+# lower MTU restarted the tunnel for every client
+# (amnezia-vpn-server-76mp.33). A loss is told from a limit by asking
+# again; a real limit fails every attempt. The retries wait 1 s instead
+# of 2, so a probe above the limit costs 4 s, not 6.
+PMTU_PROBE_ATTEMPTS=3
+ping_df() {
+    local target="$1" size="$2" i wait=2
+    for i in $(seq 1 "$PMTU_PROBE_ATTEMPTS"); do
+        cmd ping -c1 -W"$wait" -M do -s "$size" "$target" >/dev/null 2>&1 && return 0
+        wait=1
+    done
+    return 1
+}
+
 # probe_pmtu TARGET: largest ICMP payload that reaches TARGET unfragmented,
 # as a full IP packet size; empty when the target does not answer at all.
 probe_pmtu() {
     local target="$1" lo=1200 hi=1472 mid
     # Most uplinks are clean 1500: check that first so the common case
     # costs one probe instead of a full binary search.
-    if cmd ping -c1 -W2 -M do -s "$hi" "$target" >/dev/null 2>&1; then
+    if ping_df "$target" "$hi"; then
         printf '%s\n' "$(( hi + 28 ))"
         return 0
     fi
-    cmd ping -c1 -W2 -M do -s "$lo" "$target" >/dev/null 2>&1 || return 1
+    ping_df "$target" "$lo" || return 1
     while [ $((hi - lo)) -gt 1 ]; do
         mid=$(( (lo + hi) / 2 ))
-        if cmd ping -c1 -W2 -M do -s "$mid" "$target" >/dev/null 2>&1; then
+        if ping_df "$target" "$mid"; then
             lo="$mid"
         else
             hi="$mid"
@@ -1573,12 +1590,50 @@ measure_uplink_pmtu() {
     [ "$best" -gt 0 ] && printf '%s\n' "$best"
 }
 
+# pmtu_lowers_stored PMTU: true when this path would give the tunnel a
+# smaller MTU (clients' or the device's) than the deployment already has.
+pmtu_lowers_stored() {
+    local pmtu="$1" mtu device prev_mtu prev_max
+    mtu=$(( pmtu - TUNNEL_ENCAP_OVERHEAD ))
+    [ "$mtu" -gt "$TUNNEL_MTU_CEILING" ] && mtu="$TUNNEL_MTU_CEILING"
+    [ "$mtu" -lt "$TUNNEL_MTU_FLOOR" ] && mtu="$TUNNEL_MTU_FLOOR"
+    device=$(( pmtu - TUNNEL_ENCAP_OVERHEAD ))
+    [ "$device" -lt "$mtu" ] && device="$mtu"
+    [ "$device" -gt 1500 ] && device=1500
+    prev_mtu="$(env_read TUNNEL_MTU)"
+    prev_max="$(env_read TUNNEL_MTU_MAX)"
+    { [ -n "$prev_mtu" ] && [ "$mtu" -lt "$prev_mtu" ] 2>/dev/null; } && return 0
+    { [ -n "$prev_max" ] && [ "$device" -lt "$prev_max" ] 2>/dev/null; } && return 0
+    return 1
+}
+
 tunnel_mtu_preflight() {
-    local pmtu mtu
+    local pmtu mtu again
     pmtu="$(measure_uplink_pmtu)"
     if [ -z "$pmtu" ]; then
         log "WARNING: could not measure the uplink path MTU (ICMP filtered?); the built-in default applies"
         return 0
+    fi
+    # A rerun (every upgrade is one) measures the path again, and a lower
+    # reading restarts the tunnel for every client. So a reading below
+    # what the deployment already runs must be seen twice: the better of
+    # the two measurements wins, and a path that really shrank still
+    # shrinks the tunnel (amnezia-vpn-server-76mp.33). Raising needs no
+    # confirmation — that is how a higher ceiling reaches existing
+    # servers (amnezia-vpn-server-rplm).
+    if pmtu_lowers_stored "$pmtu"; then
+        log "uplink path MTU $pmtu would lower the tunnel below its stored $(env_read TUNNEL_MTU)/$(env_read TUNNEL_MTU_MAX); measuring again to confirm"
+        again="$(measure_uplink_pmtu)"
+        if [ -z "$again" ]; then
+            log "WARNING: the confirming measurement got no answer; the tunnel keeps its MTU"
+            return 0
+        fi
+        [ "$again" -gt "$pmtu" ] && pmtu="$again"
+        if pmtu_lowers_stored "$pmtu"; then
+            log "WARNING: the uplink path MTU is confirmed at $pmtu; lowering the tunnel MTU"
+        else
+            log "the second measurement gave $again: the lower reading was a loss, the tunnel keeps its MTU"
+        fi
     fi
     mtu=$(( pmtu - TUNNEL_ENCAP_OVERHEAD ))
     if [ "$mtu" -gt "$TUNNEL_MTU_CEILING" ]; then

@@ -90,6 +90,7 @@ setstate() { # portable in-place update: sed(1) -i differs on BSD/GNU
 fakes_reset() {
     unset AMNEZIA_INSTALL_SKIP_PRUNE
     : > "$FAKE_CALLS"
+    rm -f "$FAKE_DIR/ping.count"
     # A host that already has fail2ban, which is the ordinary case on a
     # rerun. Without this every run would install the package and the
     # assertions about apt-get not being invoked would be measuring this
@@ -148,6 +149,8 @@ ADD_APT_REPO_RC=0
 ADD_APT_REPO_FAILS=0
 APT_FUSER_BUSY_REMAINING=0
 FAKE_PMTU=1500
+FAKE_PING_LOSS=
+FAKE_PING_DROP_FIRST=0
 DEFAULT_IFACE=ens3
 TC_RC=0
 GITHUB_RELEASE_RC=0
@@ -504,6 +507,14 @@ echo "ping $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 limit="${FAKE_PMTU:-1500}"
 [ "$limit" = "0" ] && exit 1
+# Потери (amnezia-vpn-server-76mp.33): FAKE_PING_LOSS=alternate теряет каждый
+# нечётный пакет, FAKE_PING_DROP_FIRST=N — первые N пакетов подряд. Счётчик
+# общий на прогон и сбрасывается fakes_reset.
+n="$(cat "${FAKE_DIR:?}/ping.count" 2>/dev/null || echo 0)"
+n=$((n + 1))
+printf '%s\n' "$n" > "$FAKE_DIR/ping.count"
+[ "${FAKE_PING_LOSS:-}" = "alternate" ] && [ $((n % 2)) = 1 ] && exit 1
+[ "$n" -le "${FAKE_PING_DROP_FIRST:-0}" ] && exit 1
 size=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -3361,6 +3372,9 @@ test_pmtu_preflight_caps_a_clean_uplink_too
 test_pmtu_preflight_lets_a_worse_uplink_win
 test_pmtu_preflight_survives_filtered_icmp
 test_pmtu_preflight_clamps_a_tiny_path
+test_pmtu_probe_survives_packet_loss
+test_pmtu_rerun_does_not_lower_on_one_bad_measurement
+test_pmtu_rerun_lowers_when_confirmed
 test_rerun_applies_the_deployment_values_to_the_database
     test_changed_tunnel_parameters_restart_awg
     test_unreadable_tunnel_parameters_restart_awg
@@ -3468,6 +3482,57 @@ test_pmtu_preflight_clamps_a_tiny_path() {
     grep -q "^TUNNEL_MTU=1280$" "$ROOT/.env" \
         && pass "1300-byte uplink -> TUNNEL_MTU clamped to 1280" \
         || fail "1300-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
+}
+
+# Один потерянный ping на шаге поиска выдавал заниженный PMTU: каждое «нет»
+# считалось ответом пути, а не потерей (amnezia-vpn-server-76mp.33).
+test_pmtu_probe_survives_packet_loss() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1500
+    state_set FAKE_PING_LOSS alternate
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "lossy pmtu flow: exit $rc"
+    grep -q "^TUNNEL_MTU=1360$" "$ROOT/.env" && grep -q "^TUNNEL_MTU_MAX=1440$" "$ROOT/.env" \
+        && pass "every other probe lost -> still the true 1500-byte path (1360/1440)" \
+        || fail "lossy path measured wrong: $(grep TUNNEL_MTU "$ROOT/.env" | tr '\n' ' ')"
+}
+
+# Обновление перемеряло путь и молча понижало MTU по одному неудачному
+# замеру, перезапуская туннель для всех клиентов (amnezia-vpn-server-76mp.33).
+# Понижение принимается только тогда, когда его подтверждает второй замер.
+test_pmtu_rerun_does_not_lower_on_one_bad_measurement() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1500
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "pmtu rerun first pass: exit $rc"
+    grep -q "^TUNNEL_MTU_MAX=1440$" "$ROOT/.env" || fail "pmtu rerun: first pass did not store 1440"
+    # Всплеск потерь дольше всех попыток одного шага: первый замер занижен.
+    rm -f "$FAKE_DIR/ping.count"
+    state_set FAKE_PING_DROP_FIRST 3
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "pmtu rerun second pass: exit $rc"
+    grep -q "^TUNNEL_MTU=1360$" "$ROOT/.env" && grep -q "^TUNNEL_MTU_MAX=1440$" "$ROOT/.env" \
+        && pass "rerun: one bad measurement does not lower the MTU" \
+        || fail "rerun: MTU lowered by one bad measurement: $(grep TUNNEL_MTU "$ROOT/.env" | tr '\n' ' ')"
+    stdout | grep -q "measuring again" \
+        && pass "rerun: the lower reading was re-measured before anything changed" \
+        || fail "rerun: no confirmation measurement"
+}
+
+test_pmtu_rerun_lowers_when_confirmed() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1500
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "pmtu confirmed first pass: exit $rc"
+    state_set FAKE_PMTU 1380
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "pmtu confirmed second pass: exit $rc"
+    grep -q "^TUNNEL_MTU=1320$" "$ROOT/.env" \
+        && pass "rerun: a path that really shrank lowers the MTU after confirmation" \
+        || fail "rerun: confirmed lower path not applied: $(grep TUNNEL_MTU "$ROOT/.env" | tr '\n' ' ')"
 }
 
 # --- panel exposure survives a bare rerun (amnezia-vpn-server-35g3) -----
