@@ -1823,6 +1823,62 @@ EOF
         || fail "prune soft-fail: WARNING missing from stdout"
 }
 
+# Каждое обновление оставляло полный комплект образов прошлой версии, а
+# docker-prune удалял только бесхозные слои: на маленьком диске VPS место
+# уходило с каждым выпуском (amnezia-vpn-server-76mp.34). Удаляются образы
+# проекта, которых нет ни в текущем versions.lock, ни в снимке для отката
+# агента обновления (.rollback/versions.lock) — откат не должен идти в сеть
+# за образом, который только что стёрли.
+test_prune_removes_stale_project_images() {
+    local root="$TMP_TEST/prune-root" bin="$TMP_TEST/prune-bin" calls="$TMP_TEST/prune-calls"
+    rm -rf "$root" "$bin"
+    mkdir -p "$root/.rollback" "$bin"
+    : > "$calls"
+    cp "$M91_HOME/docker-prune.sh" "$root/docker-prune.sh"
+    printf 'IMAGE_REGISTRY=ghcr.io/example/amnezia\nIMAGE_VERSION=2.10.40\n' > "$root/versions.lock"
+    printf 'IMAGE_REGISTRY=ghcr.io/example/amnezia\nIMAGE_VERSION=2.10.39\n' > "$root/.rollback/versions.lock"
+    cat > "$bin/docker" <<'EOF'
+#!/bin/bash
+echo "docker $*" >> "$PRUNE_CALLS"
+if [ "${1:-}" = "images" ] && printf '%s' "$*" | grep -q -- '--format'; then
+    printf '%s\n' \
+        ghcr.io/example/amnezia/panel:2.10.40 \
+        ghcr.io/example/amnezia/awg:2.10.40 \
+        ghcr.io/example/amnezia/panel:2.10.39 \
+        ghcr.io/example/amnezia/dns:2.10.38 \
+        ghcr.io/example/amnezia/awg:2.10.37 \
+        ghcr.io/example/amnezia/panel:"<none>" \
+        ghcr.io/other/panel:2.10.30 \
+        alpine:3.22.5
+fi
+exit 0
+EOF
+    chmod +x "$bin/docker"
+    PRUNE_CALLS="$calls" PATH="$bin:$PATH" bash "$root/docker-prune.sh" >/dev/null 2>&1 \
+        || fail "prune stale images: exit non-zero"
+    for gone in dns:2.10.38 awg:2.10.37; do
+        grep -qx "docker rmi ghcr.io/example/amnezia/$gone" "$calls" \
+            && pass "prune: stale project image $gone removed" \
+            || fail "prune: stale project image $gone kept"
+    done
+    for kept in panel:2.10.40 awg:2.10.40 panel:2.10.39; do
+        grep -q "rmi ghcr.io/example/amnezia/$kept" "$calls" \
+            && fail "prune: $kept removed (current or rollback version)" \
+            || pass "prune: $kept kept (current or rollback version)"
+    done
+    grep -Eq "rmi (ghcr.io/other|alpine|.*<none>)" "$calls" \
+        && fail "prune: touched an image that is not the project's" \
+        || pass "prune: foreign and untagged images left to docker"
+
+    # Без versions.lock неизвестно, что текущее: не удаляется ничего.
+    rm -f "$root/versions.lock"
+    : > "$calls"
+    PRUNE_CALLS="$calls" PATH="$bin:$PATH" bash "$root/docker-prune.sh" >/dev/null 2>&1
+    grep -q "rmi ghcr.io/example" "$calls" \
+        && fail "prune without versions.lock: project images removed" \
+        || pass "prune without versions.lock: project images left alone"
+}
+
 test_skip_prune() {
     fakes_reset
     os_release debian 12 bookworm
@@ -3302,6 +3358,7 @@ test_panel_loopback_and_no_sock
 test_installed_compose_contract
 test_prune_soft_fail
 test_skip_prune
+test_prune_removes_stale_project_images
 test_layout_and_permissions
 test_versions_lock_used
 test_ip_forward_disabled

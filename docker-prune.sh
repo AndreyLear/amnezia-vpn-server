@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
 # docker-prune.sh — free golang toolchain images and Docker build cache
-# after install.sh builds the stack. Runtime panel/awg/alpine images,
-# compose services, and /opt data are left alone.
+# after install.sh builds the stack, and the project's images of versions
+# no longer deployed. The images of the version in versions.lock and of the
+# version the update agent keeps for a rollback, alpine, compose services
+# and /opt data are left alone.
 #
 # Idempotent: a second run is a no-op when there is nothing left.
 # Never uses `docker system prune -a` or `compose down`.
@@ -14,9 +16,11 @@ set -u
 
 usage() {
     cat <<'EOF'
-docker-prune.sh — remove golang toolchain images and Docker build cache.
+docker-prune.sh — remove golang toolchain images, Docker build cache and
+the project images of versions no longer deployed.
 
-Does not remove runtime panel/awg images, alpine, compose stacks, or /opt data.
+Keeps the images of the version in versions.lock and of the rollback
+snapshot, alpine, compose stacks and /opt data.
 
 Usage:
   ./docker-prune.sh
@@ -70,5 +74,46 @@ if [ -n "$golang_tags" ]; then
         esac
     done
 fi
+
+# Project images of earlier versions (amnezia-vpn-server-76mp.34). Every
+# update pulls a full set under a new tag and nothing ever removed the old
+# one: `image prune` only takes untagged layers, and on a small VPS disk the
+# sets pile up release after release.
+#
+# Kept: the version in versions.lock (what runs) and the version in the
+# update agent's rollback snapshot (update-agent.sh copies versions.lock
+# into ROLLBACK_DIR before it installs; while that snapshot exists the old
+# images are what a rollback starts from, possibly with the network being
+# the very thing that failed). Without a readable versions.lock nothing is
+# removed — "current" is then unknown. Only repositories under the
+# project's own IMAGE_REGISTRY are touched, and only tagged ones; a
+# running container's image refuses rmi, which is fine.
+PRUNE_ROOT="${AMNEZIA_PRUNE_ROOT:-$(cd "$(dirname "$0")" && pwd)}"
+ROLLBACK_DIR="${AMNEZIA_UPDATE_ROLLBACK:-${PRUNE_ROOT}/.rollback}"
+
+lock_value() { # lock_value FILE KEY
+    sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1
+}
+
+registry="$(lock_value "${PRUNE_ROOT}/versions.lock" IMAGE_REGISTRY)"
+current="$(lock_value "${PRUNE_ROOT}/versions.lock" IMAGE_VERSION)"
+rollback="$(lock_value "${ROLLBACK_DIR}/versions.lock" IMAGE_VERSION)"
+if [ -z "$registry" ] || [ -z "$current" ]; then
+    log "versions.lock not readable under ${PRUNE_ROOT}: project images left alone"
+    exit 0
+fi
+log "removing project images other than ${current}${rollback:+ and rollback ${rollback}}"
+docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | while IFS= read -r ref; do
+    case "$ref" in
+        "${registry}"/*:*) ;;
+        *) continue ;;
+    esac
+    tag="${ref##*:}"
+    case "$tag" in
+        "<none>" | "$current") continue ;;
+    esac
+    [ -n "$rollback" ] && [ "$tag" = "$rollback" ] && continue
+    docker rmi "$ref" >/dev/null 2>&1 || true
+done
 
 exit 0
