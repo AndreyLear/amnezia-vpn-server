@@ -61,6 +61,7 @@ C_RED=""
 
 BIND_CLIENTS=0
 AUTH_MODE="" # key | password
+PASS_HELPER="" # sshpass | expect (password auth only)
 SSH_PASSWORD=""
 ADMIN_PASSWORD=""
 PUBLIC_IP=""
@@ -115,6 +116,13 @@ Options:
   --no-update-check    do not ask GitHub once a day whether a newer
                        release is out. Any such check tells GitHub the
                        address of this server. Passed to install.sh.
+  --no-tunnel-dns      leave port 53 on the server to its own resolver; the
+                       panel hostname then does not open from inside the
+                       tunnel. Passed to install.sh.
+  --fail2ban, --watchdog, --update-check, --tunnel-dns
+                       turn the matching service back on. The server
+                       remembers a --no-* choice, so updates and reruns
+                       without flags keep it; only these turn it back on.
   --source URL         download a release tarball instead of packing the
                        local repository
   --help               print this message
@@ -236,7 +244,7 @@ while [ "$#" -gt 0 ]; do
             NONINTERACTIVE=1
             shift 2
             ;;
-        --ipv6|--no-ipv6|--no-fail2ban|--no-watchdog|--no-update-check)
+        --ipv6|--no-ipv6|--fail2ban|--no-fail2ban|--watchdog|--no-watchdog|--update-check|--no-update-check|--tunnel-dns|--no-tunnel-dns)
             # Passed straight through to install.sh, which owns the
             # decisions. The README tells people to run the wizard with
             # these, so the wizard has to understand them
@@ -513,12 +521,26 @@ cleanup() {
         # Best-effort; ignore failures so a previous error is preserved.
         remote_cmd "rm -rf '$REMOTE_TMP'" >/dev/null 2>&1 || true
     fi
+    ssh_master_stop
 }
 trap cleanup EXIT
 
 # ssh/scp wrappers. Password is only in the environment (sshpass -e) or
 # in the expect script's env — never on argv. Commands that carry a
 # secret on stdin are not logged.
+#
+# Без sshpass (macOS: там есть только /usr/bin/expect) пароль вводит expect,
+# но один раз — в главное соединение ssh (ControlMaster), а все команды и
+# копирование идут дальше через него обычным ssh (amnezia-vpn-server-76mp.6).
+# Раньше expect запускал каждую команду сам и собирал её строкой через Tcl
+# eval: переводы строк, [ ... ] и $var в удалённой команде становились
+# синтаксисом Tcl, установка не запускалась, а мастер шёл дальше как после
+# успеха. Но и без eval команда через expect шла бы по терминалу: stdout и
+# stderr слиты, stdin (пароль администратора) не доходит, а срок ожидания
+# пароля обрывал бы сборку. Через главное соединение у команды настоящие
+# stdin, stdout, stderr и код возврата — как при входе по ключу.
+SSH_CONTROL=""
+SSH_CONTROL_DIR=""
 
 ssh_base_opts() {
     SSH_OPTS=(
@@ -533,9 +555,18 @@ ssh_base_opts() {
     )
     if [ "$AUTH_MODE" = "key" ]; then
         SSH_OPTS+=(-i "$KEY_FILE" -o BatchMode=yes -o IdentitiesOnly=yes)
+    elif [ "$PASS_HELPER" = "expect" ] && [ -n "$SSH_CONTROL" ]; then
+        # Вход уже сделан главным соединением. Если его нет, ssh не должен
+        # спрашивать пароль сам — лучше отказ, чем мастер, повисший на вопросе.
+        SSH_OPTS+=(-o "ControlPath=${SSH_CONTROL}" -o ControlMaster=no -o BatchMode=yes)
     else
         SSH_OPTS+=(-o BatchMode=no -o PreferredAuthentications=password -o PubkeyAuthentication=no)
     fi
+}
+
+# uses_plain_ssh: key auth, or password auth through the expect master.
+uses_plain_ssh() {
+    [ "$AUTH_MODE" = "key" ] || [ "$PASS_HELPER" = "expect" ]
 }
 
 run_sshpass() { # run_sshpass ssh|scp args...
@@ -543,68 +574,101 @@ run_sshpass() { # run_sshpass ssh|scp args...
     SSHPASS="$SSH_PASSWORD" sshpass -e "$@"
 }
 
-run_expect_ssh() {
-    # argv of expect does not include the password; expect reads SSHPASS.
+# run_expect ARGV... — spawn ARGV under expect and answer its password
+# prompts. The argv travels as separate environment entries and is spliced
+# into spawn as a list ({*}), never parsed as Tcl: whatever the arguments
+# contain stays data. The password is read from SSHPASS, not argv. ssh's
+# own messages (a wrong password, a changed host key) go to stderr, where
+# ssh_probe_failed looks for them.
+run_expect() {
     set +x
-    SSHPASS="$SSH_PASSWORD" expect -c '
-        set timeout '"$SSH_CONNECT_TIMEOUT"'
-        log_user 1
-        eval spawn -noecho $env(AMNEZIA_EXPECT_ARGV)
-        expect {
-            -re "(?i)password:" { send -- "$env(SSHPASS)\r"; exp_continue }
-            eof {}
-            timeout { exit 124 }
+    local i=0 arg
+    local -a env_args=()
+    for arg in "$@"; do
+        env_args+=("AMNEZIA_EXPECT_ARG_${i}=${arg}")
+        i=$((i + 1))
+    done
+    env "${env_args[@]}" AMNEZIA_EXPECT_ARGC="$i" \
+        AMNEZIA_EXPECT_TIMEOUT="$SSH_CONNECT_TIMEOUT" SSHPASS="$SSH_PASSWORD" \
+        expect -c '
+        set timeout $env(AMNEZIA_EXPECT_TIMEOUT)
+        log_user 0
+        set argv_list {}
+        for {set i 0} {$i < $env(AMNEZIA_EXPECT_ARGC)} {incr i} {
+            lappend argv_list $env(AMNEZIA_EXPECT_ARG_$i)
         }
+        spawn -noecho {*}$argv_list
+        set tries 0
+        expect {
+            -re "(?i)password:" {
+                incr tries
+                if {$tries > 3} { exit 255 }
+                send -- "$env(SSHPASS)\r"
+                exp_continue
+            }
+            eof {}
+            timeout {
+                puts stderr "ssh: connect to host: Connection timed out"
+                exit 124
+            }
+        }
+        set tail [string trim $expect_out(buffer)]
+        if {$tail ne ""} { puts stderr $tail }
         catch wait result
         exit [lindex $result 3]
     '
 }
 
+# ssh_master_start: authenticate once and leave the connection in the
+# background for every later ssh/scp. The socket lives in /tmp: a unix
+# socket path is limited to ~100 bytes, and macOS TMPDIR alone is half that.
+ssh_master_start() {
+    SSH_CONTROL_DIR="$(mktemp -d /tmp/amnezia-ssh.XXXXXX)" || return 1
+    chmod 0700 "$SSH_CONTROL_DIR"
+    SSH_CONTROL="$SSH_CONTROL_DIR/m"
+    run_expect ssh \
+        -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT}" \
+        -o "StrictHostKeyChecking=accept-new" \
+        -o "ServerAliveInterval=15" \
+        -o "ServerAliveCountMax=20" \
+        -o BatchMode=no -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+        -o ControlMaster=yes -o "ControlPath=${SSH_CONTROL}" -o ControlPersist=10m \
+        -f -N "${SSH_USER}@${SSH_HOST}"
+}
+
+ssh_master_stop() {
+    [ -n "$SSH_CONTROL" ] || return 0
+    ssh -o "ControlPath=${SSH_CONTROL}" -O exit "${SSH_USER}@${SSH_HOST}" >/dev/null 2>&1 || true
+    rm -rf "$SSH_CONTROL_DIR"
+    SSH_CONTROL=""
+}
+
 remote_cmd() { # remote_cmd "shell text" — stdout of the remote command
-    local rc
     ssh_base_opts
-    if [ "$AUTH_MODE" = "key" ]; then
+    if uses_plain_ssh; then
         ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
         return $?
     fi
-    if [ "$PASS_HELPER" = "sshpass" ]; then
-        run_sshpass ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
-        return $?
-    fi
-    AMNEZIA_EXPECT_ARGV="ssh ${SSH_OPTS[*]} ${SSH_USER}@${SSH_HOST} $1"
-    export AMNEZIA_EXPECT_ARGV
-    run_expect_ssh
+    run_sshpass ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
 }
 
 remote_cmd_in() { # stdin is forwarded (used for --password-stdin). Do not log.
     set +x
     ssh_base_opts
-    if [ "$AUTH_MODE" = "key" ]; then
+    if uses_plain_ssh; then
         ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
         return $?
     fi
-    if [ "$PASS_HELPER" = "sshpass" ]; then
-        run_sshpass ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
-        return $?
-    fi
-    AMNEZIA_EXPECT_ARGV="ssh ${SSH_OPTS[*]} ${SSH_USER}@${SSH_HOST} $1"
-    export AMNEZIA_EXPECT_ARGV
-    run_expect_ssh
+    run_sshpass ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "$1"
 }
 
 remote_copy() { # remote_copy local remote-path
     ssh_base_opts
-    if [ "$AUTH_MODE" = "key" ]; then
+    if uses_plain_ssh; then
         scp "${SSH_OPTS[@]}" "$1" "${SSH_USER}@${SSH_HOST}:$2"
         return $?
     fi
-    if [ "$PASS_HELPER" = "sshpass" ]; then
-        run_sshpass scp "${SSH_OPTS[@]}" "$1" "${SSH_USER}@${SSH_HOST}:$2"
-        return $?
-    fi
-    AMNEZIA_EXPECT_ARGV="scp ${SSH_OPTS[*]} $1 ${SSH_USER}@${SSH_HOST}:$2"
-    export AMNEZIA_EXPECT_ARGV
-    run_expect_ssh
+    run_sshpass scp "${SSH_OPTS[@]}" "$1" "${SSH_USER}@${SSH_HOST}:$2"
 }
 
 # ssh_probe_failed: ssh already knows which of several different things
@@ -642,6 +706,9 @@ ssh_probe_failed() {
 
 log "connecting to ${SSH_USER}@${SSH_HOST} (${AUTH_MODE} auth)"
 SSH_PROBE_ERR="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-ssh.XXXXXX")"
+if [ "$AUTH_MODE" = "password" ] && [ "$PASS_HELPER" = "expect" ]; then
+    ssh_master_start 2>"$SSH_PROBE_ERR" || ssh_probe_failed
+fi
 REMOTE_TMP="$(remote_cmd 'mktemp -d /tmp/amnezia-bootstrap.XXXXXX' 2>"$SSH_PROBE_ERR")" \
     || ssh_probe_failed
 rm -f "$SSH_PROBE_ERR"
@@ -651,8 +718,42 @@ validate_safe "$REMOTE_TMP" || die_op "SSH failed: unexpected mktemp path from t
 
 # --- pack or download the project --------------------------------------
 
-PROJECT_TARBALL_URL="${AMNEZIA_PROJECT_TARBALL_URL:-https://codeload.github.com/AndreyLear/amnezia-vpn-server/tar.gz/refs/heads/main}"
+# Без репозитория рядом ставится последний выпуск, а не ветка main
+# (amnezia-vpn-server-76mp.22). В main может уже стоять версия, образы которой
+# ещё не опубликованы: pull падал, и сервер молча начинал собирать их сам на
+# 10–30 минут. Выпуск — это ровно то дерево, из которого собраны образы, и
+# проверяется он так же, как у агента обновления: сумма из тела выпуска,
+# архив из вложений. Подменивший файл должен ещё и отредактировать текст,
+# который люди читают на странице выпуска.
+PROJECT_REPO="AndreyLear/amnezia-vpn-server"
+PROJECT_API="${AMNEZIA_BOOTSTRAP_API:-https://api.github.com}"
+PROJECT_DOWNLOADS="${AMNEZIA_BOOTSTRAP_DOWNLOADS:-https://github.com}"
 BUNDLE="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-src.XXXXXX")"
+
+sha256_of() { # sha256_of FILE — hex digest; macOS has shasum, Linux sha256sum
+    local out
+    out="$(shasum -a 256 "$1" 2>/dev/null || sha256sum "$1" 2>/dev/null)" || return 1
+    printf '%s' "${out%% *}"
+}
+
+download_latest_release() { # download_latest_release OUT — verified archive
+    local json version sha got
+    json="$(curl -fsSL --max-time 30 -H 'Accept: application/vnd.github+json' \
+        "${PROJECT_API}/repos/${PROJECT_REPO}/releases/latest")" \
+        || die_op "cannot ask GitHub for the latest release of ${PROJECT_REPO} — check the network, or clone the repository and run ./bootstrap.sh from it"
+    version="$(printf '%s' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' | head -1)"
+    [ -n "$version" ] || die_op "the latest release of ${PROJECT_REPO} has no version tag like v1.2.3"
+    sha="$(printf '%s' "$json" | grep -Eo 'amnezia-sha256: [0-9a-f]{64}' | head -1 | awk '{print $2}')"
+    [ -n "$sha" ] || die_op "release v${version} carries no checksum (amnezia-sha256); refusing to install it unverified"
+    log "downloading the project from GitHub: release v${version} (no checkout beside this script)"
+    curl -fsSL --max-time 300 -o "$1" \
+        "${PROJECT_DOWNLOADS}/${PROJECT_REPO}/releases/download/v${version}/amnezia-vpn-server-${version}.tar.gz" \
+        || die_op "cannot download release v${version} from GitHub — check the network, or clone the repository and run ./bootstrap.sh from it"
+    got="$(sha256_of "$1")" || die_op "cannot compute the checksum of the downloaded release (need shasum or sha256sum)"
+    [ "$got" = "$sha" ] \
+        || die_op "checksum of release v${version} does not match the one published with it; refusing to install it"
+    log "release v${version}: checksum matches"
+}
 
 if [ -n "$SOURCE_URL" ]; then
     log "downloading source from --source"
@@ -673,12 +774,8 @@ else
     # tar up whatever the file was saved into — Downloads, or the home
     # directory — and fail on its size or on unreadable files.
     if [ "$packed" -eq 0 ] && [ ! -f "$SCRIPT_DIR/install.sh" ]; then
-        log "downloading the project from GitHub (no checkout beside this script)"
-        if curl -fsSL --max-time 120 -o "$BUNDLE" "$PROJECT_TARBALL_URL"; then
-            packed=1
-        else
-            die_op "cannot download the project from $PROJECT_TARBALL_URL — check the network, or clone the repository and run ./bootstrap.sh from it"
-        fi
+        download_latest_release "$BUNDLE"
+        packed=1
     fi
     if [ "$packed" -eq 0 ]; then
         log "packing the local repository (excluding .git/.beads/.worktrees and other bulk)"

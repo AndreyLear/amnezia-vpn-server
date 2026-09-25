@@ -180,6 +180,11 @@ follow releases yourself.
 
 `install.sh` takes the same flags when you run it on the server yourself.
 
+The choice is remembered on the server: an update from the panel or a rerun
+without flags turns nothing back on. To turn a service back on, pass the same
+flag without `no-`: `--fail2ban`, `--watchdog`, `--update-check`,
+`--tunnel-dns`.
+
 To turn IPv6 off later, rerun with the flag: everything that was added is
 removed — the ruleset, the forwarding and the addresses in client configs.
 `--ipv6` turns it back on.

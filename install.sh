@@ -174,6 +174,8 @@ Usage:
                [--panel-domain FQDN | --domain FQDN]
                [--vpn-domain FQDN | --client-domain FQDN]
                [--panel-port PORT] [--panel-tls-regen] [--build]
+               [--[no-]fail2ban] [--[no-]watchdog] [--[no-]update-check]
+               [--[no-]tunnel-dns] [--[no-]ipv6]
 
 Options:
   --root DIR        deployment root (default: /opt/amnezia-vpn)
@@ -212,12 +214,14 @@ Options:
                 server with a public address gets around the clock. The
                 tunnel port is never touched by it: there are no passwords
                 there, and a ban would cut off a real client.
+  --fail2ban    turn it back on after --no-fail2ban
   --no-watchdog do not install the watchdog timer. By default a timer
                 checks once a minute that the resolver still answers and
                 that the tunnel still writes its status, and restarts the
                 service that stopped doing so. restart: unless-stopped
                 only catches a dead process; a wedged one looks healthy to
                 Docker and stays broken until someone complains.
+  --watchdog    turn it back on after --no-watchdog
   --no-update-check
                 do not ask GitHub once a day whether a newer release is
                 out. By default the server checks and the panel shows the
@@ -226,6 +230,8 @@ Options:
                 GitHub the address of a server whose whole purpose is to
                 be hard to see. A rerun with this flag removes a timer an
                 earlier run installed.
+  --update-check
+                turn it back on after --no-update-check
   --ipv6        carry IPv6 inside the tunnel (NAT66 to the uplink). A
                 fresh install turns this on by itself when the host has a
                 working IPv6 uplink; an existing deployment never changes
@@ -243,6 +249,12 @@ Options:
                 panel hostname stops resolving to the tunnel address —
                 so the panel is no longer reachable from a device
                 connected to this VPN.
+  --tunnel-dns  turn it back on after --no-tunnel-dns
+
+                These four are deployment values, like the panel mode:
+                a --no-* flag is remembered in .env, so a rerun without
+                flags and every update from the panel keep the service
+                off. Only the paired flag turns it back on.
   --build       compile the images on this server instead of pulling the
                 published ones (slow: it downloads a Go toolchain and
                 builds amneziawg-go, amneziawg-tools and the panel)
@@ -327,7 +339,8 @@ BUILD_FROM_SOURCE=0
 # T-rnub: the split DNS that makes the panel hostname resolve to the
 # tunnel address for connected clients. On by default; --no-tunnel-dns
 # turns it off for deployments that run their own resolver on port 53.
-TUNNEL_DNS_ENABLED=1
+# Empty until decided: see service switches below.
+TUNNEL_DNS_ENABLED=""
 # TUNNEL_SUBNET6 is the tunnel's IPv6 CIDR; empty means the tunnel carries
 # IPv4 only, which is what every existing deployment does and what a host
 # without working IPv6 must keep doing. Deciding the value — probing the
@@ -346,16 +359,31 @@ TUNNEL_IPV6_MODE=auto
 # a newcomer a server with a public address and an open SSH port, and that
 # port is guessed at around the clock (amnezia-vpn-server-rswn). Anyone
 # who already runs their own protection passes --no-fail2ban.
-FAIL2BAN_ENABLED=1
+FAIL2BAN_ENABLED=""
 # Watchdog for the two services whose failure is silent (ptuo). On by
 # default for the same reason as fail2ban: the owner should not have to
 # know that a container can be up and useless at the same time.
-WATCHDOG_ENABLED=1
+WATCHDOG_ENABLED=""
 # Проверка обновлений (amnezia-vpn-server-zklt). Включена по умолчанию:
 # сервер, который не знает о вышедшем выпуске, не обновится никогда, а
 # обновления здесь — это в том числе починенный обход блокировок. Наружу
 # ходит хост, панель по-прежнему никуда не ходит.
-UPDATE_CHECK_ENABLED=1
+UPDATE_CHECK_ENABLED=""
+
+# Выключатели служб (amnezia-vpn-server-76mp.5). Каждый — решение
+# развёртывания, а не одного запуска: пустое значение значит «флага не было»,
+# и тогда действует то, что записано в .env, а без записи — «включено».
+# Раньше отказ жил ровно один запуск: агент обновления зовёт установщик без
+# флагов, и первое же обновление из панели снова включало сторожа, fail2ban,
+# ежедневный поход в GitHub (он раскрывает адрес сервера) и резолвер на :53
+# рядом с резолвером владельца. Включить обратно — парным флагом, как
+# --ipv6/--no-ipv6.
+switch_value() { # switch_value --X|--no-X — 1 or 0
+    case "$1" in
+        --no-*) printf '0' ;;
+        *) printf '1' ;;
+    esac
+}
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -406,16 +434,16 @@ while [ "$#" -gt 0 ]; do
             BUILD_FROM_SOURCE=1
             shift
             ;;
-        --no-fail2ban)
-            FAIL2BAN_ENABLED=0
+        --fail2ban | --no-fail2ban)
+            FAIL2BAN_ENABLED="$(switch_value "$1")"
             shift
             ;;
-        --no-watchdog)
-            WATCHDOG_ENABLED=0
+        --watchdog | --no-watchdog)
+            WATCHDOG_ENABLED="$(switch_value "$1")"
             shift
             ;;
-        --no-update-check)
-            UPDATE_CHECK_ENABLED=0
+        --update-check | --no-update-check)
+            UPDATE_CHECK_ENABLED="$(switch_value "$1")"
             shift
             ;;
         --ipv6)
@@ -426,8 +454,8 @@ while [ "$#" -gt 0 ]; do
             TUNNEL_IPV6_MODE=off
             shift
             ;;
-        --no-tunnel-dns)
-            TUNNEL_DNS_ENABLED=0
+        --tunnel-dns | --no-tunnel-dns)
+            TUNNEL_DNS_ENABLED="$(switch_value "$1")"
             shift
             ;;
         *)
@@ -442,6 +470,24 @@ done
 validate_port "$AWG_PORT" || die_usage "--awg-port must be an integer in 1..65535 (got: $AWG_PORT)"
 [ -n "$VPN_SUBNET" ] || die_usage "empty --vpn-subnet"
 validate_cidr "$VPN_SUBNET" || die_usage "--vpn-subnet must be an IPv4 CIDR like 10.8.0.0/24 (got: $VPN_SUBNET)"
+
+# Решается здесь, а не там, где читается остальной .env: юниты сторожа и
+# проверки обновлений пишутся раньше. В .env хранится только отказ
+# (<NAME>_DISABLED=1) — так же, как давно хранится TUNNEL_DNS_DISABLED, который
+# читают резолвер и сторож: развёртывание без записи остаётся при умолчании.
+recall_switch() { # recall_switch CURRENT KEY — the flag, else .env, else on
+    if [ -n "$1" ]; then
+        printf '%s' "$1"
+    elif [ "$(sed -n "s/^${2}=//p" "$ROOT_DIR/$ENV_FILE" 2>/dev/null | tail -1)" = "1" ]; then
+        printf '0'
+    else
+        printf '1'
+    fi
+}
+FAIL2BAN_ENABLED="$(recall_switch "$FAIL2BAN_ENABLED" FAIL2BAN_DISABLED)"
+WATCHDOG_ENABLED="$(recall_switch "$WATCHDOG_ENABLED" WATCHDOG_DISABLED)"
+UPDATE_CHECK_ENABLED="$(recall_switch "$UPDATE_CHECK_ENABLED" UPDATE_CHECK_DISABLED)"
+TUNNEL_DNS_ENABLED="$(recall_switch "$TUNNEL_DNS_ENABLED" TUNNEL_DNS_DISABLED)"
 
 # validate_fqdn: lowercase letters/digits/hyphens per label, dots
 # between labels, total length <= 253, no leading/trailing dot.
@@ -954,6 +1000,23 @@ copy_tree() { # cp -a with per-file error stop
     fi
 }
 
+# Скрипты кладутся новым файлом, а не поверх старого (amnezia-vpn-server-76mp.4).
+# Пока этот установщик работает, агент обновления, который его запустил, ещё
+# выполняется из $ROOT_DIR/update-agent.sh, а bash дочитывает скрипт с диска
+# по ходу дела. `cp -a` поверх пишет в тот же inode, и агент после неудачной
+# установки вместо отката исполнял обрывок нового текста. Переименование
+# меняет только запись в каталоге: кто читал старый файл, дочитает его.
+install_file() { # install_file SRC DEST_DIR — copy beside, then rename over
+    local name dest tmp
+    name="$(basename "$1")"
+    dest="$2/$name"
+    tmp="$2/.$name.new.$$"
+    if ! cp -p "$1" "$tmp" 2>/dev/null || ! mv -f "$tmp" "$dest" 2>/dev/null; then
+        rm -f "$tmp"
+        die_op "copying deployment files failed: $1 $2/"
+    fi
+}
+
 # Установщик кладёт рядом с развёртыванием и сам себя
 # (amnezia-vpn-server-nukf). Не ради удобства: агент обновления снимает копию
 # развёртывания перед тем, как ставить новый выпуск, и откатывать её должен
@@ -967,13 +1030,13 @@ copy_tree() { # cp -a with per-file error stop
 if [ "$SCRIPT_DIR" = "$ROOT_DIR" ]; then
     log "running from the deployment itself: the files are already in place"
 else
-    copy_tree "$SCRIPT_DIR/compose.yaml" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/versions.lock" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/watchdog.sh" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/update-check.sh" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/update-agent.sh" "$ROOT_DIR/"
-    copy_tree "$SCRIPT_DIR/install.sh" "$ROOT_DIR/"
+    install_file "$SCRIPT_DIR/compose.yaml" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/versions.lock" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/docker-prune.sh" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/watchdog.sh" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/update-check.sh" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/update-agent.sh" "$ROOT_DIR"
+    install_file "$SCRIPT_DIR/install.sh" "$ROOT_DIR"
     # Build context is the repository root (compose.yaml build.context = "."):
     # the app/ tree (panel Dockerfile + Go module incl. embedded templates,
     # awg Dockerfile + entrypoint scripts, dns Dockerfile + entrypoint) must
@@ -1129,10 +1192,18 @@ Description=Amnezia VPN update agent
 Type=oneshot
 Environment=AMNEZIA_UPDATE_ROOT=${ROOT_DIR}
 ExecStart=${ROOT_DIR}/update-agent.sh
-# Обновление перезапускает стек, в том числе панель, которая его и попросила.
-# Агент не должен уехать вместе с ней.
-KillMode=process
-TimeoutStartSec=30min
+# Остановить установку по сроку должен агент: он откатывает. Его собственные
+# сроки — час на установку и час на откат (amnezia-vpn-server-76mp.19), а
+# systemd ждёт дольше их суммы и остаётся последним рубежом.
+#
+# KillMode по умолчанию (control-group): если systemd всё-таки убивает, то
+# вместе с установщиком, а не бросает его работать без присмотра, как было при
+# KillMode=process. Стек это не задевает — контейнеры, в том числе панель,
+# живут в группах Docker, а не этой службы.
+TimeoutStartSec=150min
+# Агент, убитый systemd, итог не запишет, и в состоянии навсегда осталось бы
+# running: панель отвечала бы «Обновление уже идёт». Запись делает этот вызов.
+ExecStopPost=${ROOT_DIR}/update-agent.sh --after-stop
 EOF
 chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-update.service"
 cat > "$SYSTEMD_DIR/amnezia-vpn-update.path" <<EOF
@@ -1354,6 +1425,20 @@ EOF
     chmod 0600 "$ROOT_DIR/$ENV_FILE"
     log "$ENV_FILE created with AWG_PORT=${AWG_PORT}, VPN_SUBNET=${VPN_SUBNET} (0600)"
 fi
+
+# Выключатели служб запоминаются тем же способом, что и резолвер в туннеле:
+# отказ — строкой <NAME>_DISABLED=1, согласие — её отсутствием
+# (amnezia-vpn-server-76mp.5). TUNNEL_DNS_DISABLED пишет tunnel_dns_setup.
+remember_switch() { # remember_switch ENABLED KEY
+    if [ "$1" = "1" ]; then
+        env_forget "$2" "$2 removed from $ENV_FILE: switched back on"
+    else
+        env_remember "$2" 1
+    fi
+}
+remember_switch "$FAIL2BAN_ENABLED" FAIL2BAN_DISABLED
+remember_switch "$WATCHDOG_ENABLED" WATCHDOG_DISABLED
+remember_switch "$UPDATE_CHECK_ENABLED" UPDATE_CHECK_DISABLED
 
 # The effective mode is known only now, so this is where the flags are
 # judged against each other. Values are read, not flags: a domain the

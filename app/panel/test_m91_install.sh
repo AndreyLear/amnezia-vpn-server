@@ -2945,6 +2945,27 @@ test_update_agent_installed() {
         && pass "the request path is armed" || fail "the path unit was never enabled"
 }
 
+# Таймаут systemd не должен бросать установщик без присмотра
+# (amnezia-vpn-server-76mp.19): при KillMode=process systemd убивал только
+# агента, установка шла дальше без отката, а состояние оставалось running.
+test_update_agent_unit_does_not_orphan_the_installer() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "update agent unit: exit $rc"
+    local svc="$SYSTEMD_DIR_TEST/amnezia-vpn-update.service" minutes
+    grep -q '^KillMode=process' "$svc" \
+        && fail "the unit still kills only the agent and leaves the installer running" \
+        || pass "a stopped agent takes its installer with it"
+    grep -Fq "ExecStopPost=${ROOT}/update-agent.sh --after-stop" "$svc" \
+        && pass "the unit records an interrupted update when the agent dies" \
+        || fail "no ExecStopPost: a killed agent leaves the state running"
+    minutes="$(sed -n 's/^TimeoutStartSec=\([0-9]*\)min$/\1/p' "$svc")"
+    # Два срока агента — установка и откат по часу — должны уложиться.
+    [ -n "$minutes" ] && [ "$minutes" -gt 120 ] \
+        && pass "systemd waits longer than the agent's own deadlines (${minutes}min)" \
+        || fail "TimeoutStartSec ${minutes:-missing}min would cut the agent short"
+}
+
 # Откат ставит прежний выпуск установщиком той же версии. Качать его по сети
 # на откате нельзя — сеть и есть то, что могло сломаться.
 test_installer_keeps_a_copy_of_itself() {
@@ -2954,6 +2975,42 @@ test_installer_keeps_a_copy_of_itself() {
     [ -x "$ROOT/install.sh" ] \
         && pass "the deployment keeps the installer that made it" \
         || fail "no install.sh in the deployment: a rollback would have nothing to run"
+}
+
+# Агент обновления запускает установщик выпуска, пока сам ещё выполняется из
+# $ROOT/update-agent.sh. bash дочитывает скрипт с диска по ходу дела, и
+# установщик, переписавший этот файл поверх (cp -a — тот же inode), подменял
+# агенту текст на середине: после неудачной установки вместо отката шёл
+# обрывок нового скрипта (amnezia-vpn-server-76mp.4). Скрипты развёртывания
+# должны заменяться новым файлом, а старый — оставаться нетронутым у того,
+# кто его читает. Жёсткая ссылка здесь и есть «тот, кто читает».
+test_deployed_scripts_are_replaced_not_rewritten() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "script replace setup: exit $rc"
+    local f held
+    for f in update-agent.sh install.sh watchdog.sh update-check.sh docker-prune.sh; do
+        printf '#!/bin/bash\n# running copy of %s\n' "$f" > "$ROOT/$f"
+        held="$TMP_TEST/held-$f"
+        rm -f "$held"
+        ln "$ROOT/$f" "$held"
+    done
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "script replace rerun: exit $rc"
+    for f in update-agent.sh install.sh watchdog.sh update-check.sh docker-prune.sh; do
+        held="$TMP_TEST/held-$f"
+        grep -q "running copy of $f" "$held" \
+            && pass "$f: the running copy was left alone" \
+            || fail "$f was rewritten in place under whoever was executing it"
+        cmp -s "$M91_HOME/$f" "$ROOT/$f" \
+            && pass "$f: the deployment got the new one" \
+            || fail "$f in the deployment is not the new one"
+        [ -x "$ROOT/$f" ] || fail "$f lost its execute bit"
+        rm -f "$held"
+    done
+    ls "$ROOT"/.*.new.* >/dev/null 2>&1 \
+        && fail "a temporary copy was left in the deployment" \
+        || pass "no temporary copies left behind"
 }
 
 # Раз установщик лежит в развёртывании, его оттуда и запустят — руками или
@@ -3102,6 +3159,87 @@ test_fail2ban_can_be_declined() {
         && pass "--no-fail2ban says it skipped" || fail "--no-fail2ban was silent"
 }
 
+# Отказ — решение развёртывания, а не одного запуска
+# (amnezia-vpn-server-76mp.5). Агент обновления запускает установщик без
+# флагов, и мастер повторно — тоже: раньше первый же такой запуск снова
+# включал сторожа, fail2ban, ежедневный поход в GitHub и резолвер на :53.
+test_declined_services_stay_declined_on_rerun() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    local jail="$TMP_TEST/f2b-keep/amnezia-vpn-sshd.conf"
+    rm -rf "$TMP_TEST/f2b-keep"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail \
+        run_install --no-watchdog --no-fail2ban --no-update-check --no-tunnel-dns)"
+    [ "$rc" = "0" ] || fail "declined services: first run exit $rc"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "declined services: plain rerun exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer" ] \
+        && fail "a plain rerun brought the watchdog back" \
+        || pass "a plain rerun keeps the watchdog off"
+    [ -f "$jail" ] \
+        && fail "a plain rerun brought fail2ban back" \
+        || pass "a plain rerun keeps fail2ban off"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-update-check.timer" ] \
+        && fail "a plain rerun brought the daily update check back" \
+        || pass "a plain rerun keeps the update check off"
+    grep -q "api.github.com" "$FAKE_CALLS" \
+        && fail "a plain rerun went out to GitHub" \
+        || pass "a plain rerun does not go out to GitHub"
+    [ "$(env_value TUNNEL_DNS_DISABLED)" = "1" ] \
+        && pass "a plain rerun keeps the tunnel resolver off port 53" \
+        || fail "a plain rerun brought the tunnel resolver back"
+    grep -q '"watchdog":false' "$ROOT/status/deployment.json" \
+        && pass "the facts still say the watchdog is off" \
+        || fail "the facts claim a watchdog after a plain rerun"
+}
+
+# И обратно — явно, парным флагом, как у --ipv6/--no-ipv6.
+test_declined_services_can_be_turned_back_on() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    local jail="$TMP_TEST/f2b-back/amnezia-vpn-sshd.conf"
+    rm -rf "$TMP_TEST/f2b-back"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail \
+        run_install --no-watchdog --no-fail2ban --no-update-check --no-tunnel-dns)"
+    [ "$rc" = "0" ] || fail "turn back on: first run exit $rc"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail \
+        run_install --watchdog --fail2ban --update-check --tunnel-dns)"
+    [ "$rc" = "0" ] || fail "turn back on: exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer" ] \
+        && pass "--watchdog brings the watchdog back" \
+        || fail "--watchdog did not bring the watchdog back"
+    [ -f "$jail" ] \
+        && pass "--fail2ban brings fail2ban back" \
+        || fail "--fail2ban did not bring fail2ban back"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-update-check.timer" ] \
+        && pass "--update-check brings the update check back" \
+        || fail "--update-check did not bring the update check back"
+    [ -z "$(env_value TUNNEL_DNS_DISABLED)" ] \
+        && pass "--tunnel-dns brings the tunnel resolver back" \
+        || fail "--tunnel-dns left the tunnel resolver off"
+    local key
+    for key in WATCHDOG_DISABLED FAIL2BAN_DISABLED UPDATE_CHECK_DISABLED; do
+        [ -z "$(env_value "$key")" ] \
+            && pass "$key is gone from .env" \
+            || fail "$key stayed in .env after turning it back on"
+    done
+    # И это тоже запоминается: следующий запуск без флагов ничего не выключит.
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "turn back on: plain rerun exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer" ] \
+        && pass "a plain rerun after turning back on keeps the watchdog" \
+        || fail "a plain rerun after turning back on lost the watchdog"
+}
+
+test_service_switches_in_help() {
+    fakes_reset
+    rc="$(run_install --help)"
+    local flag
+    for flag in --watchdog --fail2ban --update-check --tunnel-dns; do
+        grep -q -- "^  $flag" "$TMP_TEST/out" \
+            && pass "--help documents $flag" \
+            || fail "--help does not document $flag"
+    done
+}
 
 # Switching IPv6 on writes a new interface address, and an interface
 # address is applied only when the interface is created — `awg syncconf`
@@ -3178,6 +3316,9 @@ test_ipv6_change_restarts_the_tunnel
 test_fail2ban_configured_by_default
 test_fail2ban_installs_the_package_when_missing
 test_fail2ban_can_be_declined
+test_declined_services_stay_declined_on_rerun
+test_declined_services_can_be_turned_back_on
+test_service_switches_in_help
 test_client_dns_has_no_fallback_without_ipv6
 test_client_dns_keeps_the_fallback_with_ipv6
 test_client_dns_follows_the_ipv6_switch
@@ -3210,6 +3351,8 @@ test_on_demand_check_armed
 test_on_demand_check_follows_the_flag
 test_update_agent_installed
 test_installer_keeps_a_copy_of_itself
+test_update_agent_unit_does_not_orphan_the_installer
+test_deployed_scripts_are_replaced_not_rewritten
 test_rerun_from_inside_the_deployment
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
