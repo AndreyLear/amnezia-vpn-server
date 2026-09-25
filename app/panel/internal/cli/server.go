@@ -271,8 +271,12 @@ func (a *app) cmdServerUpdate(args []string) int {
 	endpoint, hasEndpoint := parsed.flags["endpoint"]
 	rawMTU, hasMTU := parsed.flags["mtu"]
 	rawPort, hasPort := parsed.flags["listen-port"]
-	if !hasDNS && !hasParams && !hasEndpoint && !hasMTU && !hasPort {
-		return a.usageError(opServerUpdate, "nothing to update: pass --dns, --awg-params, --endpoint, --mtu and/or --listen-port")
+	// --address6 counts on its own: left out of this check, a manual
+	// `server update --address6 …` was refused as nothing to update
+	// (amnezia-vpn-server-76mp.27).
+	address6, hasAddress6 := parsed.flags["address6"]
+	if !hasDNS && !hasParams && !hasEndpoint && !hasMTU && !hasPort && !hasAddress6 {
+		return a.usageError(opServerUpdate, "nothing to update: pass --dns, --awg-params, --endpoint, --mtu, --listen-port and/or --address6")
 	}
 	var listenPort int64
 	if hasPort {
@@ -333,8 +337,8 @@ func (a *app) cmdServerUpdate(args []string) int {
 		// installer for an unrelated reason passes nothing and so
 		// cannot change a deployment's mind about IPv6.
 		var address6Arg *string
-		if v, ok := parsed.flags["address6"]; ok {
-			address6Arg = &v
+		if hasAddress6 {
+			address6Arg = &address6
 		}
 		carriedEndpoint, updateErr = db.UpdateServer(handle, dnsArg, paramsArg, endpointArg, address6Arg, portArg)
 	}
@@ -362,6 +366,9 @@ func (a *app) cmdServerUpdate(args []string) int {
 	}
 	if hasPort {
 		message += "; listen_port = " + strconv.FormatInt(listenPort, 10)
+	}
+	if hasAddress6 {
+		message += "; address6 = " + address6
 	}
 	if carriedEndpoint != "" {
 		// Not decoration: the operator changed one thing and two moved.
