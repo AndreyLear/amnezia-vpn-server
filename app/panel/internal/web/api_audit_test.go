@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -160,6 +161,66 @@ func TestAuditFailedLoginNameIsBounded(t *testing.T) {
 	}
 	if !strings.HasPrefix(actor, strings.Repeat("я", auditActorMaxRunes)) {
 		t.Fatalf("actor must keep the beginning of the name: %q", actor)
+	}
+}
+
+// SPA при каждом сохранении MTU или предела шлёт и имя с описанием. Правкой
+// имени это не является, и client.edit в журнале появляется, только когда
+// значение действительно изменилось (amnezia-vpn-server-76mp.31).
+func TestAuditClientEditOnlyOnRealChange(t *testing.T) {
+	f := newFixture(t)
+	c, _, _ := f.addClient("alice")
+	path := fmt.Sprintf("/api/clients/%d", c.ID)
+	countEdits := func() int {
+		t.Helper()
+		var n int
+		if err := f.h.QueryRow(`SELECT COUNT(*) FROM audit WHERE action = ?`, auditClientEdit).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	for _, body := range []map[string]any{
+		{"name": "alice", "description": "", "mtu": 1400},
+		{"name": "alice", "description": "", "rate_limit": 50},
+	} {
+		rec := f.apiCSRF(http.MethodPatch, path, body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %v: code %d; body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+	if n := countEdits(); n != 0 {
+		t.Fatalf("client.edit written %d times for unchanged name and description", n)
+	}
+	if _, ok := lastAudit(t, f, auditClientMTU); !ok {
+		t.Fatal("client.mtu must still be recorded")
+	}
+
+	rec := f.apiCSRF(http.MethodPatch, path, map[string]any{"name": "bob", "description": ""})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename: code %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var detail string
+	if err := f.h.QueryRow(
+		`SELECT detail FROM audit WHERE action = ? ORDER BY id DESC LIMIT 1`, auditClientEdit,
+	).Scan(&detail); err != nil {
+		t.Fatalf("rename not recorded: %v", err)
+	}
+	if detail != "имя" {
+		t.Fatalf("rename detail = %q, want только «имя»", detail)
+	}
+
+	rec = f.apiCSRF(http.MethodPatch, path, map[string]any{"name": "bob", "description": "ноутбук"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("describe: code %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if err := f.h.QueryRow(
+		`SELECT detail FROM audit WHERE action = ? ORDER BY id DESC LIMIT 1`, auditClientEdit,
+	).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail != "описание" {
+		t.Fatalf("description detail = %q, want только «описание»", detail)
 	}
 }
 

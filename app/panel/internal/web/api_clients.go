@@ -290,16 +290,25 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if _, err := db.ClientByID(s.db(), id); errors.Is(err, db.ErrClientNotFound) {
+	before, err := db.ClientByID(s.db(), id)
+	if errors.Is(err, db.ErrClientNotFound) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": flashNotFound})
 		return
 	} else if err != nil {
 		internalFailure(w, r, s, "api clients patch load", err)
 		return
 	}
+	// Правкой считается изменённое значение, а не присланное поле: SPA при
+	// сохранении MTU или предела шлёт и имя с описанием, и журнал
+	// показывал переименование, которого не было (amnezia-vpn-server-76mp.31).
 	changes := []string{}
-	if req.Name != nil {
+	if req.Name != nil && *req.Name != before.Name {
 		changes = append(changes, "имя")
+	}
+	if req.Description != nil && *req.Description != before.Description {
+		changes = append(changes, "описание")
+	}
+	if req.Name != nil {
 		if err := db.UpdateClientName(s.db(), id, *req.Name); err != nil {
 			if msg, ok := classifyExpected(err); ok {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": msg})
@@ -310,7 +319,6 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Description != nil {
-		changes = append(changes, "описание")
 		if err := db.UpdateClientDescription(s.db(), id, *req.Description); err != nil {
 			if msg, ok := classifyExpected(err); ok {
 				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": msg})
