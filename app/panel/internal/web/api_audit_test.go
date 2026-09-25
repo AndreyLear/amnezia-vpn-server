@@ -2,11 +2,13 @@ package web
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
@@ -121,5 +123,41 @@ func TestRestoreIsRecordedInTheRestoredDatabase(t *testing.T) {
 	}
 	if !strings.Contains(entries[0].Detail, "клиентов применено") {
 		t.Fatalf("не сказано, сколько применено: %+v", entries[0])
+	}
+}
+
+// lastAudit — последняя запись журнала с этим действием.
+func lastAudit(t *testing.T, f *fixture, action string) (actor string, ok bool) {
+	t.Helper()
+	err := f.h.QueryRow(
+		`SELECT actor FROM audit WHERE action = ? ORDER BY id DESC LIMIT 1`, action,
+	).Scan(&actor)
+	return actor, err == nil
+}
+
+// Неудачный вход пишет в журнал введённое имя. Без предела длины его можно
+// было раздуть до десятков килобайт на запись и вытеснить настоящие записи,
+// заодно сделав бэкап больше, чем панель согласна восстановить
+// (amnezia-vpn-server-76mp.11).
+func TestAuditFailedLoginNameIsBounded(t *testing.T) {
+	f := newFixture(t)
+	long := strings.Repeat("я", 30000)
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, apiLoginFrom(t, "203.0.113.90:1", long, "wrong-password"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", rec.Code)
+	}
+	actor, ok := lastAudit(t, f, auditLoginFailed)
+	if !ok {
+		t.Fatal("login.failed not recorded")
+	}
+	if n := utf8.RuneCountInString(actor); n > auditActorMaxRunes+1 {
+		t.Fatalf("actor length = %d runes, want <= %d", n, auditActorMaxRunes+1)
+	}
+	if !utf8.ValidString(actor) {
+		t.Fatal("truncated actor must stay valid UTF-8")
+	}
+	if !strings.HasPrefix(actor, strings.Repeat("я", auditActorMaxRunes)) {
+		t.Fatalf("actor must keep the beginning of the name: %q", actor)
 	}
 }
