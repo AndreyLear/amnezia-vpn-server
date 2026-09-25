@@ -28,6 +28,10 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+// Страница тяжёлая: под нагрузкой полного прогона первый рендер не
+// укладывается в секунду ожидания по умолчанию.
+const SLOW = { timeout: 10_000 };
+
 let visibility: DocumentVisibilityState = "visible";
 
 function setVisibility(next: DocumentVisibilityState) {
@@ -35,7 +39,7 @@ function setVisibility(next: DocumentVisibilityState) {
   document.dispatchEvent(new Event("visibilitychange"));
 }
 
-describe("HomePage polling", () => {
+describe("HomePage polling", { timeout: 30_000 }, () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -68,7 +72,7 @@ describe("HomePage polling", () => {
     );
 
     render(<HomePage />);
-    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    expect(await screen.findByText("Alice", undefined, SLOW)).toBeInTheDocument();
     const afterBoot = clientCalls;
 
     act(() => setVisibility("hidden"));
@@ -117,7 +121,7 @@ describe("HomePage polling", () => {
     );
 
     render(<HomePage />);
-    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    expect(await screen.findByText("Alice", undefined, SLOW)).toBeInTheDocument();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
@@ -125,8 +129,8 @@ describe("HomePage polling", () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Действия для Alice" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Отключить" }));
-    expect(await screen.findByText("Пауза")).toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitem", { name: "Отключить" }, SLOW));
+    expect(await screen.findByText("Пауза", undefined, SLOW)).toBeInTheDocument();
 
     await act(async () => {
       releaseStalePoll?.();
@@ -154,7 +158,7 @@ describe("HomePage polling", () => {
     );
 
     render(<HomePage />);
-    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    expect(await screen.findByText("Alice", undefined, SLOW)).toBeInTheDocument();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000 * 6);
     });
