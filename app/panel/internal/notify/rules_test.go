@@ -196,11 +196,52 @@ func TestClientsCollapse(t *testing.T) {
 	wantKeys(t, w.step(time.Second), keyClients)
 }
 
+// Двое простаивающих на связи: rx движется только от keepalive раз в
+// 25 секунд, последние движения до обрыва — за 2 и за 20 секунд. Это тот же
+// обрыв, что у активных, и письмо о нём приходит (amnezia-vpn-server-76mp.15).
+func TestClientsCollapseWhileIdle(t *testing.T) {
+	w := newWorld(t)
+	w.step(time.Minute)
+	cut := w.clock
+	w.in.Clients.LastMove["a"] = cut.Add(-2 * time.Second)
+	w.in.Clients.LastMove["b"] = cut.Add(-20 * time.Second)
+	w.in.Clients.PrevMove = map[string]time.Time{
+		"a": cut.Add(-27 * time.Second),
+		"b": cut.Add(-45 * time.Second),
+	}
+	wantKeys(t, w.minutes(4, nil))
+	got := w.step(time.Minute)
+	wantKeys(t, got, keyClients)
+	if !strings.Contains(got[0].Message.Body, "В 03:00 UTC") {
+		t.Errorf("момент обрыва — последнее движение: %q", got[0].Message.Body)
+	}
+}
+
 func TestClientsRuleIsNarrow(t *testing.T) {
 	cases := map[string]func(w *world){
 		"засыпали по очереди": func(w *world) {
 			w.in.Clients.LastMove["a"] = w.clock
 			w.in.Clients.LastMove["b"] = w.clock.Add(-20 * time.Second)
+		},
+		// Простаивающие клиенты шлют только keepalive раз в 25 секунд; b
+		// замолчал за 40 секунд до a — дольше, чем окно его keepalive, так
+		// что это не один обрыв (amnezia-vpn-server-76mp.15).
+		"простаивающие засыпали по очереди": func(w *world) {
+			w.in.Clients.LastMove["a"] = w.clock
+			w.in.Clients.LastMove["b"] = w.clock.Add(-40 * time.Second)
+			w.in.Clients.PrevMove = map[string]time.Time{
+				"a": w.clock.Add(-25 * time.Second),
+				"b": w.clock.Add(-65 * time.Second),
+			}
+		},
+		// Ритм, реже keepalive, не расширяет окно сверх него.
+		"редкий трафик не шире keepalive": func(w *world) {
+			w.in.Clients.LastMove["a"] = w.clock
+			w.in.Clients.LastMove["b"] = w.clock.Add(-40 * time.Second)
+			w.in.Clients.PrevMove = map[string]time.Time{
+				"a": w.clock.Add(-5 * time.Second),
+				"b": w.clock.Add(-10 * time.Minute),
+			}
 		},
 		"клиент один": func(w *world) {
 			delete(w.in.Clients.LastMove, "b")

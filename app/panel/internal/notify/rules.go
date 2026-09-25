@@ -133,7 +133,8 @@ func (e *eval) end(t *Trouble, group string) {
 }
 
 // observeClients applies the one narrow client rule: two or more clients
-// were on the line and all of them fell silent within one tick. Two devices
+// were on the line and all of them fell silent within one tick — for idle
+// clients, within one keepalive (see collapseTolerance). Two devices
 // do not fall asleep within seconds of each other; a cut drops everyone at
 // once. With a single client the rule never fires — «nobody uses it» and
 // «nobody can reach it» look the same from the server, and a guess is worse
@@ -165,10 +166,10 @@ func (e *eval) observeClients() {
 		return
 	}
 	online, together := 0, true
-	for _, at := range a.LastMove {
+	for key, at := range a.LastMove {
 		if latest.Sub(at) <= OnlineSilence {
 			online++
-			if latest.Sub(at) > CollapseTolerance {
+			if latest.Sub(at) > collapseTolerance(at, a.PrevMove[key]) {
 				together = false
 			}
 		}
@@ -183,6 +184,24 @@ func (e *eval) observeClients() {
 		e.change(groupTunnel)
 	}
 	c.Since = &latest
+}
+
+// collapseTolerance is how long after its last move a client may have been
+// cut and still count as dropped together with the others: until its next
+// move was due. A busy client moves every sample, so the tolerance stays at
+// one tick and clients falling asleep one after another are told apart. An
+// idle one moves only on keepalive; its cut could have come up to a
+// keepalive later, and a fixed tick would miss nearly every drop of idle
+// clients (amnezia-vpn-server-76mp.15). The rhythm is the gap to the move
+// before; without one the narrow tick stands — a missed letter is better
+// than a false one. The gap never widens it past the keepalive: a client
+// on the line cannot stay silent longer.
+func collapseTolerance(last, prev time.Time) time.Duration {
+	if prev.IsZero() || !prev.Before(last) {
+		return CollapseTolerance
+	}
+	gap := min(last.Sub(prev), KeepaliveWindow)
+	return max(gap+stampSlack, CollapseTolerance)
 }
 
 func (e *eval) observeRestarts(first bool) {

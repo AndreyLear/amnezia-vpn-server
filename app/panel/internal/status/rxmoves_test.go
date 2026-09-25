@@ -69,4 +69,32 @@ func TestReadRxActivity(t *testing.T) {
 	}
 }
 
+// Движение перед последним нужно правилу уведомлений: по нему видно, с каким
+// ритмом клиент шлёт трафик — каждые 5 секунд или раз в keepalive
+// (amnezia-vpn-server-76mp.15).
+func TestReadRxActivityPrevMove(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "speed.log")
+	base := time.Date(2026, 9, 13, 3, 0, 0, 0, time.UTC)
+	at := func(off int) string { return unixStr(base.Add(time.Duration(off) * time.Second).Unix()) }
+	body := strings.Join([]string{
+		at(0) + " a:100:0:1 b:100:0:1",
+		at(5) + " a:132:0:1 b:200:0:1",
+		at(10) + " a:132:0:1 b:300:0:1",
+		at(30) + " a:164:0:1 b:300:0:1",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadRxActivity(path, base, base.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.PrevMove["a"].Equal(base.Add(5*time.Second)) || !got.LastMove["a"].Equal(base.Add(30*time.Second)) {
+		t.Errorf("a: %v → %v", got.PrevMove["a"], got.LastMove["a"])
+	}
+	if !got.PrevMove["b"].Equal(base.Add(5*time.Second)) || !got.LastMove["b"].Equal(base.Add(10*time.Second)) {
+		t.Errorf("b: %v → %v", got.PrevMove["b"], got.LastMove["b"])
+	}
+}
+
 func unixStr(n int64) string { return strconv.FormatInt(n, 10) }

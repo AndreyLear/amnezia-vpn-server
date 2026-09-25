@@ -51,6 +51,14 @@ const (
 	// and stamps whole seconds, so two peers cut at the same instant can
 	// land in adjacent samples a little more than 5 seconds apart.
 	CollapseTolerance = 7 * time.Second
+	// KeepaliveWindow is the longest a connected client can stay silent:
+	// the config the panel writes has PersistentKeepalive = 25, and awg
+	// samples every 5 seconds. An idle client's last move therefore says
+	// only that it was on the line at some point in the next 30 seconds
+	// (amnezia-vpn-server-76mp.15).
+	KeepaliveWindow = 30 * time.Second
+	// stampSlack: samples are stamped in whole seconds.
+	stampSlack = 2 * time.Second
 	// FlapWindow and FlapLimit: more than FlapLimit changes in FlapWindow is
 	// flapping; the group is then muted for FlapWindow.
 	FlapWindow = time.Hour
