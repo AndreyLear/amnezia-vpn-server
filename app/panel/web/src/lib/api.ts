@@ -48,6 +48,20 @@ export function completeSessionRelogin() {
   for (const listener of sessionExpiredListeners) listener(false);
 }
 
+/**
+ * Только для тестов: забыть потерю сессии и всех, кто ждёт входа, НЕ
+ * отпуская их. completeSessionRelogin() в afterEach отпускал ожидающих, и
+ * их повтор уходил уже в настоящий fetch после снятия заглушки — отказ
+ * никто не ловил, и vitest завершался с ошибкой.
+ */
+export function resetSessionStateForTests() {
+  sessionLost = false;
+  sessionLossReason = undefined;
+  sessionExpiredWaiters = [];
+  readsAwaitingRelogin.clear();
+  csrfWaiters = [];
+}
+
 function waitForCsrf(): Promise<void> {
   if (csrf) return Promise.resolve();
   return new Promise((resolve) => {

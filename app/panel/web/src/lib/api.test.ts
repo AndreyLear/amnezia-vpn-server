@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
-import { api, completeSessionRelogin, setCsrf } from "@/lib/api";
+import { api, completeSessionRelogin, resetSessionStateForTests, setCsrf } from "@/lib/api";
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -135,7 +135,7 @@ describe("api CSRF", () => {
 // (amnezia-vpn-server-76mp.7).
 describe("api session loss", () => {
   afterEach(() => {
-    completeSessionRelogin();
+    resetSessionStateForTests();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     setCsrf("");
