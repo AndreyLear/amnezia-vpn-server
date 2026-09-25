@@ -784,6 +784,12 @@ rule_line() {
     ' "$NFT_SYS_FILE"
 }
 
+# Частные сети хостера (amnezia-vpn-server-ubjp): RFC 1918 и CGNAT
+# 100.64.0.0/10, где хостеры держат приватные сети. Подсеть туннеля
+# исключена первой проверкой правила.
+PRIVATE4_SET='{ 10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16 }'
+PRIVATE4_DROP_DEFAULT="iifname \"awg0\" ip daddr != 10.8.0.0/24 ip daddr $PRIVATE4_SET drop"
+
 # Клиент VPN доставал адрес метаданных хостера 169.254.169.254 (DO, Hetzner,
 # Vultr отдают там user-data), а сосед хостера с маршрутом на подсеть туннеля
 # открывал новые соединения к устройствам клиентов
@@ -808,14 +814,21 @@ test_forward_guards_the_tunnel() {
     # Клиент ↔ клиент: пакет входит и выходит через awg0, и ни одно правило
     # drop его не касается.
     if grep -v '^[[:space:]]*#' "$NFT_SYS_FILE" | grep -E '\bdrop\b' \
-        | grep -Ev 'iifname != "awg0"|ip daddr 169\.254\.0\.0/16' | grep -q .; then
+        | grep -Ev 'iifname != "awg0"|ip daddr 169\.254\.0\.0/16|ip daddr != 10\.8\.0\.0/24 ip daddr \{' | grep -q .; then
         fail "forward: a drop could catch client-to-client traffic"
     else
         pass "forward: client-to-client traffic inside the tunnel is never dropped"
     fi
-    # Частные сети хостера — решение владельца, установщик их не закрывает.
-    assert_not_in_rules "10.0.0.0/8\|172.16.0.0/12\|192.168.0.0/16" "$NFT_SYS_FILE" \
-        "forward: the hoster's private networks are left alone"
+    # Частные сети хостера закрыты, кроме подсети самого туннеля
+    # (amnezia-vpn-server-ubjp, решение владельца в 70lu): через masquerade
+    # клиент доставал внутренние сервисы хостера и соседние машины его
+    # приватной сети. Исключение подсети — чтобы клиент↔клиент не попал
+    # под drop, ведь 10.8.0.0/24 сама лежит в 10.0.0.0/8.
+    local priv
+    priv="$(rule_line "$PRIVATE4_DROP_DEFAULT")"
+    [ -n "$priv" ] && [ -n "$acc" ] && [ "$priv" -lt "$acc" ] \
+        && pass "forward: the hoster's private networks dropped before the subnet accept, the tunnel subnet excepted" \
+        || fail "forward: private-network drop missing or after the accept (drop=${priv:-none} accept=${acc:-none})"
     # DNS на адресе сервера — вход, а не forward: перенаправление и учёт на
     # месте.
     assert_dns_rule udp "forward guard: tunnel DNS still accepted"
@@ -834,6 +847,34 @@ test_forward_guards_the_tunnel_ipv6() {
     [ -n "$est" ] && [ -n "$new" ] && [ -n "$acc" ] && [ "$est" -lt "$new" ] && [ "$new" -lt "$acc" ] \
         && pass "ipv6 forward: into the tunnel from outside only established,related" \
         || fail "ipv6 forward: established/new guard (est=${est:-none} new=${new:-none} accept=${acc:-none})"
+    # ULA fc00::/7 — IPv6-аналог частных сетей (fd00:ec2::254 — метаданные
+    # AWS), но подсеть туннеля сама ULA: её обмен клиент↔клиент и резолвер
+    # на ::1 не трогаются (amnezia-vpn-server-ubjp).
+    local subnet6 ula
+    subnet6="$(sed -n 's/^TUNNEL_SUBNET6=//p' "$ROOT/.env" | tail -1)"
+    ula="$(rule_line "iifname \"awg0\" ip6 daddr != ${subnet6:-none} ip6 daddr fc00::/7 drop" ip6)"
+    [ -n "$subnet6" ] && [ -n "$ula" ] && [ -n "$acc" ] && [ "$ula" -lt "$acc" ] \
+        && pass "ipv6 forward: ULA fc00::/7 dropped before the subnet accept, the tunnel prefix excepted" \
+        || fail "ipv6 forward: ULA drop missing or after the accept (subnet6=${subnet6:-none} drop=${ula:-none} accept=${acc:-none})"
+}
+
+# Нестандартная --vpn-subnet из частной сети: исключение следует за ней, а
+# не за 10.8.0.0/24 — иначе клиент↔клиент в 192.168.77.0/29 попал бы под
+# drop всей 192.168.0.0/16 (amnezia-vpn-server-ubjp).
+test_forward_private_drop_follows_custom_subnet() {
+    local s rc line acc
+    for s in 192.168.77.0/29 10.20.0.0/24; do
+        fakes_reset
+        os_release debian 12 bookworm
+        rc="$(run_install --vpn-subnet "$s")"
+        [ "$rc" = "0" ] || fail "private drop custom subnet $s: exit $rc"
+        line="$(rule_line "iifname \"awg0\" ip daddr != $s ip daddr $PRIVATE4_SET drop")"
+        acc="$(rule_line "ip saddr $s accept")"
+        [ -n "$line" ] && [ -n "$acc" ] && [ "$line" -lt "$acc" ] \
+            && pass "forward: private drop excepts the custom subnet $s" \
+            || fail "forward: private drop does not except $s (drop=${line:-none} accept=${acc:-none})"
+        assert_not_in "10.8.0.0/24" "$NFT_SYS_FILE" "forward: default subnet absent with --vpn-subnet $s"
+    done
 }
 
 test_fragments_identical() {
@@ -1595,6 +1636,7 @@ m92_run_all() {
     test_no_flush_no_drop
     test_forward_guards_the_tunnel
     test_forward_guards_the_tunnel_ipv6
+    test_forward_private_drop_follows_custom_subnet
     test_fragments_identical
     test_check_before_apply
     test_syntax_failure_rollback
