@@ -5,7 +5,7 @@ import { BrandMark } from "@/components/BrandMark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type LoginResponse } from "@/lib/api";
+import { login } from "@/lib/api";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
@@ -29,10 +29,7 @@ export default function LoginPage() {
   async function submit() {
     setPending(true);
     try {
-      const res = await api<LoginResponse>("/api/login", {
-        method: "POST",
-        body: JSON.stringify({ username, password }),
-      });
+      const res = await login(username, password);
       if (!res.ok) {
         setError(res.message ?? "");
         return;

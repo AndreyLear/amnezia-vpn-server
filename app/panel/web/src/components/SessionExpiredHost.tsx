@@ -12,13 +12,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  api,
   completeSessionRelogin,
   getLastUsername,
+  login,
   setCsrf,
   setLastUsername,
   subscribeSessionExpired,
-  type LoginResponse,
   type MeResponse,
   type SessionLossReason,
 } from "@/lib/api";
@@ -81,13 +80,7 @@ export function SessionExpiredHost() {
     setPending(true);
     setError("");
     try {
-      const res = await api<LoginResponse>("/api/login", {
-        method: "POST",
-        body: JSON.stringify({
-          username: getLastUsername(),
-          password,
-        }),
-      });
+      const res = await login(getLastUsername(), password);
       if (!res.ok) {
         setError(reloginError(res.message));
         return;

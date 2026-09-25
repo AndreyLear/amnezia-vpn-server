@@ -226,6 +226,45 @@ export type LoginResponse = {
   message?: string;
 };
 
+/**
+ * Вход по паролю. Ответ всегда разобран: форма показывает message, а не
+ * падает на не-JSON. Лимит попыток отвечал 429 text/plain, api() отдавал
+ * undefined, и форма молчала — человек не знал, что его ограничили
+ * (amnezia-vpn-server-76mp.8). Свой текст сервера важнее: общий — только
+ * когда разобрать нечего.
+ */
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  let res: Response;
+  try {
+    res = await apiRequest("/api/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    return { ok: false, message: "Панель не отвечает. Проверьте подключение и попробуйте снова" };
+  }
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    data = undefined;
+  }
+  const parsed =
+    data && typeof data === "object" && "ok" in data ? (data as LoginResponse) : undefined;
+  if (parsed?.ok === true) return parsed;
+  if (parsed?.message?.trim()) return parsed;
+  if (res.status === 429) return { ok: false, message: loginLimitMessage(res.headers.get("Retry-After")) };
+  if (parsed) return parsed;
+  return { ok: false, message: "Не удалось войти. Сервер ответил с ошибкой" };
+}
+
+function loginLimitMessage(retryAfter: string | null): string {
+  const seconds = retryAfter && /^\d+$/.test(retryAfter.trim()) ? Number(retryAfter.trim()) : 0;
+  if (seconds <= 0) return "Слишком много попыток входа. Подождите немного и попробуйте снова";
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return `Слишком много попыток входа. Подождите ${minutes} мин и попробуйте снова`;
+}
+
 export type MeResponse = {
   username: string;
   csrf: string;

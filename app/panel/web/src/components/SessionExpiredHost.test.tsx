@@ -225,4 +225,42 @@ describe("session expired re-login", () => {
       expect.objectContaining({ method: "POST" }),
     );
   });
+
+  // Лимит попыток при повторном входе: 429 text/plain ронял разбор, окно
+  // молчало (amnezia-vpn-server-76mp.8).
+  it("explains the login limit when 429 is plain text", async () => {
+    setCsrf("live-csrf");
+    setLastUsername("admin");
+    vi.stubGlobal("location", { assign: vi.fn() });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === "/api/clients") {
+          return jsonResponse({ ok: false, message: "Unauthorized.", reason: "idle" }, 401);
+        }
+        if (path === "/api/login") {
+          return new Response("Too many", {
+            status: 429,
+            headers: { "Content-Type": "text/plain", "Retry-After": "60" },
+          });
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<SessionExpiredHost />);
+    void apiRequest("/api/clients");
+    expect(await screen.findByText("Сессия истекла")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Пароль"), "wrong");
+    await user.click(screen.getByRole("button", { name: "Повторить вход" }));
+
+    expect(
+      await screen.findByText("Слишком много попыток входа. Подождите 1 мин и попробуйте снова"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Повторить вход" })).toBeEnabled();
+  });
 });
+
