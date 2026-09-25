@@ -169,6 +169,9 @@ func classifyExpected(err error) (string, bool) {
 func (s *Server) mutateWith(w http.ResponseWriter, r *http.Request, okFlash string, payload func() (mutationPayload, error), fn func() error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	if s.changeBlockedByRestore(w, r, false) {
+		return
+	}
 	if err := fn(); err != nil {
 		if msg, ok := classifyExpected(err); ok {
 			s.answerMutation(w, r, false, msg, mutationPayload{})

@@ -76,6 +76,9 @@ const (
 	flashRestoreApplied     = "Восстановление применено. Активных клиентов: %d."
 	flashRestoreApplyFailed = "Бэкап подготовлен, но применить его не удалось. Требуется перезапуск."
 	flashRestoreNeedsChoice = "Бэкап снят на другом сервере: выберите, какой адрес использовать"
+	// flashRestoreBlocksChange отвечает на изменение клиента, пока
+	// восстановление ждёт перезапуска (amnezia-vpn-server-cb48).
+	flashRestoreBlocksChange = "Изменить сейчас нельзя: восстановление уже подготовлено — перезапустите стек, чтобы снова вносить изменения"
 )
 
 // pendingExists reports whether a restore is already pending next to
@@ -97,6 +100,33 @@ func (s *Server) pendingExistsReply(w http.ResponseWriter, jsonAPI bool) (bool, 
 		return false, false
 	}
 	return ok, true
+}
+
+// changeBlockedByRestore refuses a change to clients while a prepared
+// restore waits for the restart, and reports whether it answered. The
+// restart swaps the database for the archive's image: a client added now
+// got its config issued and then silently vanished
+// (amnezia-vpn-server-cb48; the CLI refuses the same since 76mp.9). Auth
+// changes are not refused: the restore keeps the live auth table
+// (backup.KeepLiveAuth).
+//
+// Callers must hold s.mutex: the web restore leaves the marker behind a
+// failed in-process apply under it, so a change queued behind that apply
+// still sees the marker.
+func (s *Server) changeBlockedByRestore(w http.ResponseWriter, r *http.Request, jsonAPI bool) bool {
+	pending, ok := s.pendingExistsReply(w, jsonAPI)
+	if !ok {
+		return true
+	}
+	if !pending {
+		return false
+	}
+	if jsonAPI {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "message": flashRestoreBlocksChange})
+	} else {
+		s.flash(w, r, flashRestoreBlocksChange)
+	}
+	return true
 }
 
 func restoreBodyExempt(path string) bool {

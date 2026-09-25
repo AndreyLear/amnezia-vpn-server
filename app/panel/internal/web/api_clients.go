@@ -237,6 +237,9 @@ func (s *Server) apiClientsCreate(w http.ResponseWriter, r *http.Request) {
 
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	if s.changeBlockedByRestore(w, r, true) {
+		return
+	}
 	server, err := db.ServerRow(s.db())
 	if err != nil {
 		if msg, ok := classifyExpected(err); ok {
@@ -290,6 +293,9 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	if s.changeBlockedByRestore(w, r, true) {
+		return
+	}
 	before, err := db.ClientByID(s.db(), id)
 	if errors.Is(err, db.ErrClientNotFound) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "message": flashNotFound})
@@ -425,6 +431,9 @@ func (s *Server) apiClientsDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	if s.changeBlockedByRestore(w, r, true) {
+		return
+	}
 	// Имя читается до удаления: после него в журнал попал бы номер, по
 	// которому уже некого искать.
 	name := ""
