@@ -137,13 +137,20 @@ request() { # request <version>
 }
 
 CALLS="$TMP/calls.log"
-run_agent() { # run_agent [env assignments...]
+run_agent() { # run_agent [env assignments...] [agent arguments...]
     : > "$CALLS"
+    local vars=()
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            *=*) vars+=("$1"); shift ;;
+            *) break ;;
+        esac
+    done
     env PATH="$FAKE_DIR:$PATH" AGENT_CALLS="$CALLS" \
         AMNEZIA_UPDATE_ROOT="$ROOT" \
         AMNEZIA_UPDATE_API="https://api.example.invalid" \
         AMNEZIA_UPDATE_DOWNLOADS="https://dl.example.invalid" \
-        "$@" bash "$AGENT"
+        ${vars[@]+"${vars[@]}"} bash "$AGENT" "$@"
 }
 
 state() { cat "$ROOT/status/update-state.json" 2>/dev/null; }
@@ -268,6 +275,75 @@ run_agent RELEASE_BODY="$BODY" ASSET_FILE="$ASSET" \
     NEW_INSTALL_RC=1 ROLLBACK_INSTALL_RC=1 >/dev/null 2>&1; rc=$?
 check "a failed rollback exits non-zero" test "$rc" != "0"
 check "and says the server needs a person" grep -q '"state":"failed"' <<<"$(state)"
+
+# --- an installer that never finishes ----------------------------------
+# Сборка на 1 vCPU без GHCR идёт 10–30 минут. Раньше за агента решал таймаут
+# systemd: он убивал только агента (KillMode=process), установщик продолжал
+# без присмотра, отката не было, а состояние навсегда оставалось running
+# (amnezia-vpn-server-76mp.19). Срок у агента свой: он останавливает
+# установщик вместе с его потомками и откатывает.
+setup_deployment 2.8.2
+build_release 2.9.0
+rel="$TMP/rel-2.9.0/amnezia-vpn-server-2.9.0"
+cat > "$rel/install.sh" <<'INST'
+#!/bin/bash
+echo "new-installer $*" >> "${AGENT_CALLS:?}"
+# Потомок, как docker compose build у настоящего установщика.
+sleep 60 &
+echo "$!" > "${HUNG_CHILD:?}"
+echo "$$" > "${HUNG_INSTALLER:?}"
+wait
+INST
+chmod +x "$rel/install.sh"
+(cd "$TMP/rel-2.9.0" && tar -czf sources.tar.gz amnezia-vpn-server-2.9.0)
+SHA="$(shasum -a 256 "$ASSET" 2>/dev/null || sha256sum "$ASSET")"; SHA="${SHA%% *}"
+BODY="$(release_body "$SHA")"
+request 2.9.0
+started=$(date +%s)
+run_agent RELEASE_BODY="$BODY" ASSET_FILE="$ASSET" \
+    HUNG_CHILD="$TMP/hung-child" HUNG_INSTALLER="$TMP/hung-installer" \
+    AMNEZIA_UPDATE_INSTALL_TIMEOUT_SEC=2 >/dev/null 2>&1; rc=$?
+took=$(( $(date +%s) - started ))
+check "a hung install does not hold the agent forever (${took}s)" test "$took" -lt 30
+check "a hung install is reported as failed" test "$rc" != "0"
+check "the hung install is rolled back" \
+    grep -q "rollback-installer --root $ROOT" "$CALLS"
+check "and the state says so" grep -q '"state":"rolled-back"' <<<"$(state)"
+check_not "the hung installer is not left running" kill -0 "$(cat "$TMP/hung-installer" 2>/dev/null || echo 999999)"
+check_not "nor anything it started" kill -0 "$(cat "$TMP/hung-child" 2>/dev/null || echo 999999)"
+check "the journal says why it was stopped" grep -q 'не уложился' "$ROOT/status/update-log.txt"
+
+setup_deployment 2.8.2
+request 2.9.0
+run_agent RELEASE_BODY="$BODY" ASSET_FILE="$ASSET" \
+    AMNEZIA_UPDATE_INSTALL_TIMEOUT_SEC=soon >/dev/null 2>&1
+check "a deadline that is not a number is refused" grep -q '"state":"refused"' <<<"$(state)"
+check_not "and nothing was installed" grep -q "new-installer" "$CALLS"
+
+# --- an agent that did not live to the end ------------------------------
+# systemd всё-таки может убить агента — по своему сроку, при остановке
+# службы. Тогда в состоянии навсегда оставалось running, а панель отвечала
+# на кнопку «Обновление уже идёт» — и больше не просила. ExecStopPost зовёт
+# агента с --after-stop, и тот называет прерванное прерванным.
+setup_deployment 2.8.2
+printf '{"schema":"v1","state":"running","from":"2.8.2","to":"2.9.0","step":"установка","message":"ставлю выпуск 2.9.0","at_utc":"2026-09-25T00:00:00Z"}\n' \
+    > "$ROOT/status/update-state.json"
+run_agent SERVICE_RESULT=timeout --after-stop >/dev/null 2>&1
+check "an update that was killed is not left running" grep -q '"state":"failed"' <<<"$(state)"
+check "and it keeps the versions it was between" grep -q '"to":"2.9.0"' <<<"$(state)"
+
+printf '{"schema":"v1","state":"ok","from":"2.8.2","to":"2.9.0","step":"готово","message":"обновление до 2.9.0 завершено","at_utc":"2026-09-25T00:00:00Z"}\n' \
+    > "$ROOT/status/update-state.json"
+run_agent SERVICE_RESULT=success --after-stop >/dev/null 2>&1
+check "a finished update is left as it was" grep -q '"state":"ok"' <<<"$(state)"
+
+# И при следующем запуске агента — на случай, когда ExecStopPost не
+# случилось (питание пропало посреди обновления).
+setup_deployment 2.8.2
+printf '{"schema":"v1","state":"running","from":"2.8.2","to":"2.9.0","step":"установка","message":"ставлю выпуск 2.9.0","at_utc":"2026-09-25T00:00:00Z"}\n' \
+    > "$ROOT/status/update-state.json"
+run_agent >/dev/null 2>&1
+check "the next start recognises a stale running" grep -q '"state":"failed"' <<<"$(state)"
 
 # --- the journal survives ----------------------------------------------
 check "the steps are written down for afterwards" test -s "$ROOT/status/update-log.txt"

@@ -56,6 +56,11 @@ REPO="${AMNEZIA_UPDATE_REPO:-AndreyLear/amnezia-vpn-server}"
 API_BASE="${AMNEZIA_UPDATE_API:-https://api.github.com}"
 DOWNLOAD_BASE="${AMNEZIA_UPDATE_DOWNLOADS:-https://github.com}"
 CURL_BIN="${AMNEZIA_UPDATE_CURL:-curl}"
+# Срок одного прогона установщика (amnezia-vpn-server-76mp.19). Худшая
+# сборка на сервере — GHCR недоступен, 1 vCPU — идёт 10–30 минут; час
+# оставляет запас вдвое. Тот же срок у отката. TimeoutStartSec юнита больше
+# суммы обоих, так что остановить установку успевает агент, а не systemd.
+INSTALL_TIMEOUT="${AMNEZIA_UPDATE_INSTALL_TIMEOUT_SEC:-3600}"
 WORK_DIR=""
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -115,6 +120,58 @@ is_newer() { # is_newer CANDIDATE CURRENT
     [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]
 }
 
+# Состояние «running», которое никто не допишет (amnezia-vpn-server-76mp.19).
+# Агента мог убить systemd — по своему сроку или при остановке службы, — а
+# мог пропасть и сам сервер посреди обновления. Тогда в файле навсегда
+# оставалось running, панель отвечала на кнопку «Обновление уже идёт» и
+# больше обновления не просила. Прерванное называется прерванным: что
+# сделано, а что нет, неизвестно, и смотреть должен человек.
+state_field() { # state_field NAME — one string field of the state file
+    sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" "${STATE_FILE}" 2>/dev/null | head -1
+}
+reap_interrupted() { # reap_interrupted WHY
+    [ "$(state_field state)" = "running" ] || return 0
+    INSTALLED_VERSION="$(state_field from)"
+    WANTED_VERSION="$(state_field to)"
+    log "прежнее обновление ${INSTALLED_VERSION} -> ${WANTED_VERSION} не дошло до конца ($1)"
+    write_state failed "$(state_field step)" "обновление прервалось, не дойдя до конца: сервер мог остаться в промежуточном состоянии"
+}
+
+# ExecStopPost юнита: служба кончилась, чем бы ни кончилась. Если агент
+# успел записать итог, делать нечего.
+if [ "${1:-}" = "--after-stop" ]; then
+    reap_interrupted "служба остановлена: ${SERVICE_RESULT:-причина неизвестна}"
+    exit 0
+fi
+
+# Установщик идёт в своей группе процессов, чтобы по сроку остановить его
+# вместе со всем, что он запустил (docker compose build и прочее): одного
+# установщика мало, его потомки продолжили бы менять сервер без присмотра.
+run_installer() { # run_installer PATH — its exit code, 124 past the deadline
+    local pid waited=0
+    set -m
+    "$1" --root "${ROOT_DIR}" >> "${LOG_FILE}" 2>&1 &
+    pid=$!
+    set +m
+    while kill -0 "${pid}" 2>/dev/null; do
+        if [ "${waited}" -ge "${INSTALL_TIMEOUT}" ]; then
+            log "установщик не уложился в ${INSTALL_TIMEOUT} с; останавливаю его"
+            kill -TERM -- "-${pid}" 2>/dev/null
+            waited=0
+            while kill -0 "${pid}" 2>/dev/null && [ "${waited}" -lt 30 ]; do
+                sleep 1
+                waited=$((waited + 1))
+            done
+            kill -KILL -- "-${pid}" 2>/dev/null
+            wait "${pid}" 2>/dev/null
+            return 124
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    wait "${pid}"
+}
+
 # --- 0. один за раз ----------------------------------------------------
 # Два install.sh в одном каталоге подерутся, и разбирать это придётся руками
 # на живом сервере.
@@ -140,6 +197,10 @@ else
     log "предупреждение: не удалось взять замок ${LOCK_FILE}; продолжаю без него"
 fi
 
+# Замок наш, значит, другого агента нет, и running в состоянии — от прогона,
+# который умер, не дописав итог.
+reap_interrupted "агент прежнего прогона не дожил до конца"
+
 INSTALLED_VERSION="$(installed_version)"
 WANTED_VERSION=""
 
@@ -161,6 +222,10 @@ valid_version "${WANTED_VERSION}" \
 
 is_newer "${WANTED_VERSION}" "${INSTALLED_VERSION}" \
     || refuse "запрос" "версия ${WANTED_VERSION} не новее установленной ${INSTALLED_VERSION}"
+
+case "${INSTALL_TIMEOUT}" in
+    "" | *[!0-9]*) refuse "запрос" "срок установки AMNEZIA_UPDATE_INSTALL_TIMEOUT_SEC не число: ${INSTALL_TIMEOUT}" ;;
+esac
 
 log "запрошено обновление ${INSTALLED_VERSION} -> ${WANTED_VERSION}"
 write_state running "запрос" "проверяю выпуск"
@@ -244,7 +309,7 @@ fi
 # их заново значило бы дать запросу из панели право их менять.
 write_state running "установка" "ставлю выпуск ${WANTED_VERSION}"
 log "запускаю ${installer} --root ${ROOT_DIR}"
-if "${installer}" --root "${ROOT_DIR}" >> "${LOG_FILE}" 2>&1; then
+if run_installer "${installer}"; then
     write_state ok "готово" "обновление до ${WANTED_VERSION} завершено"
     log "обновление до ${WANTED_VERSION} завершено"
     rm -rf "${ROLLBACK_DIR}"
@@ -271,7 +336,7 @@ for item in .env ${SNAPSHOT_ITEMS}; do
         || log "предупреждение: при откате не восстановлен ${item}"
 done
 
-if "${ROLLBACK_DIR}/install.sh" --root "${ROOT_DIR}" >> "${LOG_FILE}" 2>&1; then
+if run_installer "${ROLLBACK_DIR}/install.sh"; then
     write_state rolled-back "откат" "обновление до ${WANTED_VERSION} не удалось; сервер работает на ${INSTALLED_VERSION}"
     log "откат на ${INSTALLED_VERSION} прошёл; сервер работает"
     exit 1

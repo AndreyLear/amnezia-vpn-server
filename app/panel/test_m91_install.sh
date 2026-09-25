@@ -2945,6 +2945,27 @@ test_update_agent_installed() {
         && pass "the request path is armed" || fail "the path unit was never enabled"
 }
 
+# Таймаут systemd не должен бросать установщик без присмотра
+# (amnezia-vpn-server-76mp.19): при KillMode=process systemd убивал только
+# агента, установка шла дальше без отката, а состояние оставалось running.
+test_update_agent_unit_does_not_orphan_the_installer() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "update agent unit: exit $rc"
+    local svc="$SYSTEMD_DIR_TEST/amnezia-vpn-update.service" minutes
+    grep -q '^KillMode=process' "$svc" \
+        && fail "the unit still kills only the agent and leaves the installer running" \
+        || pass "a stopped agent takes its installer with it"
+    grep -Fq "ExecStopPost=${ROOT}/update-agent.sh --after-stop" "$svc" \
+        && pass "the unit records an interrupted update when the agent dies" \
+        || fail "no ExecStopPost: a killed agent leaves the state running"
+    minutes="$(sed -n 's/^TimeoutStartSec=\([0-9]*\)min$/\1/p' "$svc")"
+    # Два срока агента — установка и откат по часу — должны уложиться.
+    [ -n "$minutes" ] && [ "$minutes" -gt 120 ] \
+        && pass "systemd waits longer than the agent's own deadlines (${minutes}min)" \
+        || fail "TimeoutStartSec ${minutes:-missing}min would cut the agent short"
+}
+
 # Откат ставит прежний выпуск установщиком той же версии. Качать его по сети
 # на откате нельзя — сеть и есть то, что могло сломаться.
 test_installer_keeps_a_copy_of_itself() {
@@ -3330,6 +3351,7 @@ test_on_demand_check_armed
 test_on_demand_check_follows_the_flag
 test_update_agent_installed
 test_installer_keeps_a_copy_of_itself
+test_update_agent_unit_does_not_orphan_the_installer
 test_deployed_scripts_are_replaced_not_rewritten
 test_rerun_from_inside_the_deployment
 test_panel_loopback_and_no_sock

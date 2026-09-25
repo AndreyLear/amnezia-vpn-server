@@ -1192,10 +1192,18 @@ Description=Amnezia VPN update agent
 Type=oneshot
 Environment=AMNEZIA_UPDATE_ROOT=${ROOT_DIR}
 ExecStart=${ROOT_DIR}/update-agent.sh
-# Обновление перезапускает стек, в том числе панель, которая его и попросила.
-# Агент не должен уехать вместе с ней.
-KillMode=process
-TimeoutStartSec=30min
+# Остановить установку по сроку должен агент: он откатывает. Его собственные
+# сроки — час на установку и час на откат (amnezia-vpn-server-76mp.19), а
+# systemd ждёт дольше их суммы и остаётся последним рубежом.
+#
+# KillMode по умолчанию (control-group): если systemd всё-таки убивает, то
+# вместе с установщиком, а не бросает его работать без присмотра, как было при
+# KillMode=process. Стек это не задевает — контейнеры, в том числе панель,
+# живут в группах Docker, а не этой службы.
+TimeoutStartSec=150min
+# Агент, убитый systemd, итог не запишет, и в состоянии навсегда осталось бы
+# running: панель отвечала бы «Обновление уже идёт». Запись делает этот вызов.
+ExecStopPost=${ROOT_DIR}/update-agent.sh --after-stop
 EOF
 chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-update.service"
 cat > "$SYSTEMD_DIR/amnezia-vpn-update.path" <<EOF
