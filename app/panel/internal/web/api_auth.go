@@ -25,6 +25,10 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api login: read user", err)
 		return
 	}
+	if outcome.retryAfter > 0 {
+		writeLoginLimited(w, outcome.retryAfter)
+		return
+	}
 	if outcome.message != "" {
 		// Имя записывается, введённый пароль — никогда: журнал должен
 		// пережить кражу базы, не добавив вору ничего сверх того, что он в

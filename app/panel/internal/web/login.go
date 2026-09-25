@@ -95,6 +95,10 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "login: read user", err)
 		return
 	}
+	if outcome.retryAfter > 0 {
+		writeLoginLimited(w, outcome.retryAfter)
+		return
+	}
 	if outcome.message != "" {
 		s.renderLogin(w, loginData{Error: outcome.message, Username: username})
 		return
@@ -108,25 +112,42 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 
 type loginOutcome struct {
 	message string
+	// retryAfter > 0: the password was NOT checked — the address is out
+	// of attempts or every Argon2 slot is busy (amnezia-vpn-server-76mp.1).
+	retryAfter int
 }
 
 // evaluateLogin runs the dummy-hash password check. totp_secret and
 // totp_mode are ignored: a correct password always issues a session.
+//
+// The attempt is reserved in the limiter and an Argon2 slot is taken
+// before the check; a busy slot answers at once rather than queueing
+// (amnezia-vpn-server-76mp.1).
 func (s *Server) evaluateLogin(r *http.Request, username, password string) (loginOutcome, error) {
+	key := requestLoginKey(r)
+	if sec, ok := s.loginLimit.reserve(key, time.Now()); !ok {
+		return loginOutcome{retryAfter: sec}, nil
+	}
+	if !s.tryAcquireLoginSlot() {
+		// Nothing was checked: the address keeps its attempt.
+		s.loginLimit.release(key)
+		return loginOutcome{retryAfter: loginBusyRetryAfter}, nil
+	}
+	defer s.releaseLoginSlot()
 	user, err := db.AuthUserByUsername(s.db(), username)
 	switch {
 	case err == nil:
 	case errors.Is(err, db.ErrAuthUserNotFound):
 		user = nil
 	default:
+		s.loginLimit.release(key)
 		return loginOutcome{}, err
 	}
 	hash := dummyPasswordHash
 	if user != nil {
 		hash = user.PasswordHash
 	}
-	if !auth.VerifyPassword(password, hash) {
-		s.loginLimit.fail(clientIP(r), time.Now())
+	if !s.verifyPassword(password, hash) {
 		return loginOutcome{message: loginErrorText}, nil
 	}
 	return loginOutcome{}, nil
@@ -149,7 +170,7 @@ func (s *Server) issueLoginSession(w http.ResponseWriter, r *http.Request, usern
 	}
 	s.cfg.Sessions.DeleteByUsername(username, sess.ID)
 	auth.WriteSessionCookie(w, sess.ID, sess.ExpiresAt)
-	s.loginLimit.clear(clientIP(r))
+	s.loginLimit.clear(requestLoginKey(r))
 	return nil
 }
 
