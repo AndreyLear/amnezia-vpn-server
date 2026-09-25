@@ -135,6 +135,9 @@ func sqliteFileBytes(t *testing.T, schemaVersion string) []byte {
 	if err := db.Migrate(handle); err != nil {
 		t.Fatal(err)
 	}
+	// A restorable image must start the server: Restore probes it with a
+	// trial generation (amnezia-vpn-server-76mp.10).
+	seedImageServer(t, handle)
 	if schemaVersion != "" {
 		if _, err := handle.Exec(
 			`UPDATE schema_meta SET value = ? WHERE key = 'schema_version'`,
@@ -173,7 +176,7 @@ func newRestoreCtx(t *testing.T) *restoreCtx {
 	if _, err := handle.Exec(
 		`INSERT INTO server (id, private_key, public_key, address, listen_port, dns, awg_params, created_at, updated_at)
 		 VALUES (1, ?, ?, '10.66.66.1/24', 51820, '1.1.1.1', '{}', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
-		testServerKey, "x-test-server-public-key-00000000000000000000",
+		testServerKey, "xTestServerPublicKey00000000000000000000000=",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -205,8 +208,8 @@ func (c *restoreCtx) seedClient(name, key string) {
 		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
 		name, key,
-		fmt.Sprintf("x-test-client-public-key-%016d", c.seedCounter),
-		fmt.Sprintf("x-test-preshared-key-%016d", c.seedCounter),
+		fmt.Sprintf("xTestClientPublicKey%023d=", c.seedCounter),
+		fmt.Sprintf("xTestPresharedKey%026d=", c.seedCounter),
 		fmt.Sprintf("10.66.66.%d/32", 2+c.seedCounter),
 	); err != nil {
 		c.t.Fatal(err)
@@ -789,7 +792,7 @@ func TestRestoreErrorsDoNotLeakSecrets(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s must fail", src)
 		}
-		for _, secret := range []string{markedPriv, "$argon2id$", "x-test-preshared-key"} {
+		for _, secret := range []string{markedPriv, "$argon2id$", "xTestPresharedKey"} {
 			if strings.Contains(err.Error(), secret) {
 				t.Fatalf("error leaks %q: %v", secret, err)
 			}

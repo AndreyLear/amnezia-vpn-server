@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/klauspost/compress/zstd"
 )
@@ -115,6 +116,11 @@ func Restore(handle *sql.DB, dbPath, srcPath, backupsDir string, now func() time
 	}
 	if stored != strconv.Itoa(m.SchemaVersion) {
 		return res, fmt.Errorf("backup: schema_version mismatch: manifest %d, stored %s", m.SchemaVersion, stored)
+	}
+	// 4b. the image must start the server: panel-init runs this very
+	// sequence after the swap.
+	if err := probeImage(snapPath, filepath.Dir(dbPath)); err != nil {
+		return res, err
 	}
 
 	// 5. safety backup of the current (untouched) database.
@@ -272,6 +278,69 @@ func validateRestoreImage(snapPath string, want int) (string, error) {
 		return "", fmt.Errorf("backup: restored database schema_version %q, manifest %d", stored, want)
 	}
 	return stored, nil
+}
+
+// probeDirPrefix names the scratch directory of probeImage.
+const probeDirPrefix = ".restore-probe-"
+
+// probeImage runs what panel-init will run on the restored image —
+// migrate, require the server row, generate awg0.conf — on a scratch copy.
+// Integrity and schema version alone accepted archives after which init
+// failed and awg never started: one taken on a panel before `server init`
+// (the sentinel guard reads the empty server table as a lost database),
+// or one whose awg_params this binary's ParseParams rejects. Recovering
+// took the .pre-restore copy or the safety backup by hand
+// (amnezia-vpn-server-76mp.10).
+//
+// The copy sits next to the live database (same 0700 directory, never
+// /tmp: it holds keys) and is removed whatever the outcome; the pending
+// image itself is not touched, so apply still migrates the original.
+func probeImage(snapPath, dbDir string) error {
+	dir, err := os.MkdirTemp(dbDir, probeDirPrefix)
+	if err != nil {
+		return fmt.Errorf("backup: probe restored database: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	probePath := filepath.Join(dir, pendingDBName)
+	if err := copyFile(snapPath, probePath); err != nil {
+		return fmt.Errorf("backup: probe restored database: %w", err)
+	}
+	handle, err := db.Open(probePath)
+	if err != nil {
+		return fmt.Errorf("backup: probe restored database: %w", err)
+	}
+	defer handle.Close()
+	if err := db.Migrate(handle); err != nil {
+		return fmt.Errorf("backup: restored database does not migrate: %w", err)
+	}
+	if _, err := db.ServerRow(handle); err != nil {
+		if errors.Is(err, db.ErrServerNotFound) {
+			return errors.New("backup: archive has no server row (id=1): it was taken before `server init` and cannot start the server")
+		}
+		return fmt.Errorf("backup: probe restored database: %w", err)
+	}
+	if err := awgconf.Generate(handle, filepath.Join(dir, "awg0.conf")); err != nil {
+		return fmt.Errorf("backup: archive would not produce awg0.conf: %w", err)
+	}
+	return nil
+}
+
+// copyFile copies src to a new 0600 file dst.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // PendingPath returns the pending marker path for the database at
