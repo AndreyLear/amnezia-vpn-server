@@ -98,41 +98,80 @@ func capitalize(s string) string {
 	return strings.ToUpper(s)
 }
 
-func (e *eval) tunnelDown(since time.Time) mailer.Message {
+func (e *eval) tunnelDown(since time.Time, extra string) mailer.Message {
 	return mailer.Message{
 		Subject: "Туннель не работает " + span(DownThreshold),
 		Body: e.body(
 			"Туннель не работает с "+e.clock(since)+". Клиенты без связи.",
+			extra,
 			checkServices,
 		),
 	}
 }
 
-func (e *eval) tunnelUp(since time.Time) mailer.Message {
+func (e *eval) tunnelUp(since, until time.Time, extra string) mailer.Message {
 	return mailer.Message{
 		Subject: "Туннель снова работает",
 		Body: e.body(
-			"Туннель снова работает с " + e.clock(e.now) + ". Не работал " + span(e.now.Sub(since)) + ", с " + e.clock(since) + ".",
+			"Туннель снова работает с "+e.clock(until)+". Не работал "+span(until.Sub(since))+", с "+e.clock(since)+".",
+			extra,
 		),
 	}
 }
 
-func (e *eval) clientsDown(since time.Time) mailer.Message {
+func (e *eval) tunnelMissed(m Missed) mailer.Message {
+	return mailer.Message{
+		Subject: "Туннель не работал, пока писем не было",
+		Body:    e.body(e.tunnelMissedNote(m)),
+	}
+}
+
+func (e *eval) tunnelMissedNote(m Missed) string {
+	if m.Count == 1 {
+		return "Пока писем не было, туннель не работал " + e.missedSpan(m) + "."
+	}
+	return fmt.Sprintf("Пока писем не было, туннель %d %s не работал дольше %s. Дольше всего — %s.",
+		m.Count, plural(m.Count, "раз", "раза", "раз"), span(DownThreshold), e.missedSpan(m))
+}
+
+// missedSpan: «15 минут, с 03:41 до 03:56».
+func (e *eval) missedSpan(m Missed) string {
+	return span(m.Until.Sub(m.Since)) + ", с " + e.clock(m.Since) + " до " + e.clock(m.Until)
+}
+
+func (e *eval) clientsDown(since time.Time, extra string) mailer.Message {
 	return mailer.Message{
 		Subject: "Все клиенты разом пропали со связи",
 		Body: e.body(
-			"В " + e.clock(since) + " все клиенты одновременно пропали со связи. За " + span(DownThreshold) + " никто не вернулся. Сам туннель при этом работает.",
+			"В "+e.clock(since)+" все клиенты одновременно пропали со связи. За "+span(DownThreshold)+" никто не вернулся. Сам туннель при этом работает.",
+			extra,
 		),
 	}
 }
 
-func (e *eval) clientsUp(since time.Time) mailer.Message {
+func (e *eval) clientsUp(since, until time.Time, extra string) mailer.Message {
 	return mailer.Message{
 		Subject: "Клиенты снова на связи",
 		Body: e.body(
-			"Трафик от клиентов снова идёт с " + e.clock(e.now) + ". Его не было " + span(e.now.Sub(since)) + ", с " + e.clock(since) + ".",
+			"Трафик от клиентов снова идёт с "+e.clock(until)+". Его не было "+span(until.Sub(since))+", с "+e.clock(since)+".",
+			extra,
 		),
 	}
+}
+
+func (e *eval) clientsMissed(m Missed) mailer.Message {
+	return mailer.Message{
+		Subject: "Клиенты пропадали со связи, пока писем не было",
+		Body:    e.body(e.clientsMissedNote(m)),
+	}
+}
+
+func (e *eval) clientsMissedNote(m Missed) string {
+	if m.Count == 1 {
+		return "Пока писем не было, все клиенты разом пропадали со связи на " + e.missedSpan(m) + "."
+	}
+	return fmt.Sprintf("Пока писем не было, все клиенты %d %s разом пропадали со связи дольше %s. Дольше всего — %s.",
+		m.Count, plural(m.Count, "раз", "раза", "раз"), span(DownThreshold), e.missedSpan(m))
 }
 
 func (e *eval) restarted(service string, at time.Time, reason string) mailer.Message {

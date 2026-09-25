@@ -66,8 +66,8 @@ func Evaluate(in Inputs, st *State) []Letter {
 	e.observeRestarts(first)
 	e.checkFlaps()
 
-	e.tellTrouble(&st.Tunnel, groupTunnel, keyTunnel, e.tunnelDown, e.tunnelUp)
-	e.tellTrouble(&st.Clients, groupTunnel, keyClients, e.clientsDown, e.clientsUp)
+	e.tellTrouble(&st.Tunnel, groupTunnel, keyTunnel, troubleTexts{e.tunnelDown, e.tunnelUp, e.tunnelMissed, e.tunnelMissedNote})
+	e.tellTrouble(&st.Clients, groupTunnel, keyClients, troubleTexts{e.clientsDown, e.clientsUp, e.clientsMissed, e.clientsMissedNote})
 	e.tellRestarts()
 	e.tellUpdate(first)
 	e.tellUpdateRecovered()
@@ -100,11 +100,36 @@ func (e *eval) observeTunnel() {
 		t.Since = &at
 		e.change(groupTunnel)
 	case e.in.TunnelUp && t.Since != nil:
-		t.Since = nil
+		e.end(t, groupTunnel)
 		at := e.now
 		e.st.TunnelBackAt = &at
-		e.change(groupTunnel)
 	}
+}
+
+// end closes the current occurrence of a trouble. The moment is kept for
+// the «it is over» letter, which a muted group sends only later; an
+// occurrence worth a letter that the silence kept untold is kept too, so
+// the silence hides the flapping, not a long outage inside it
+// (amnezia-vpn-server-76mp.14).
+func (e *eval) end(t *Trouble, group string) {
+	since := *t.Since
+	t.Since = nil
+	at := e.now
+	switch {
+	case t.Told == toldDown && t.EndedAt == nil:
+		t.EndedAt = &at
+	case e.muted(group) && at.Sub(since) >= DownThreshold:
+		m := t.Missed
+		if m == nil {
+			m = &Missed{}
+		}
+		m.Count++
+		if at.Sub(since) > m.Until.Sub(m.Since) {
+			m.Since, m.Until = since, at
+		}
+		t.Missed = m
+	}
+	e.change(group)
 }
 
 // observeClients applies the one narrow client rule: two or more clients
@@ -128,8 +153,7 @@ func (e *eval) observeClients() {
 	for _, at := range a.LastMove {
 		if e.now.Sub(at) <= OnlineSilence {
 			if c.Since != nil {
-				c.Since = nil
-				e.change(groupTunnel)
+				e.end(c, groupTunnel)
 			}
 			return
 		}
@@ -210,32 +234,55 @@ func (e *eval) checkFlaps() {
 	}
 }
 
+// troubleTexts are the letters of one trouble. extra is a paragraph about
+// occurrences the silence swallowed, "" when there were none.
+type troubleTexts struct {
+	down func(since time.Time, extra string) mailer.Message
+	up   func(since, until time.Time, extra string) mailer.Message
+	// missed is the letter about swallowed occurrences alone, when nothing
+	// else is to be written.
+	missed func(m Missed) mailer.Message
+	// missedNote is the paragraph about them.
+	missedNote func(m Missed) string
+}
+
 // tellTrouble writes when a trouble has lasted DownThreshold, and again
 // when it ends — but only about an occurrence it has written about. While
 // the group is muted nothing is written and Told stays as it was, so the
 // letter that is still true goes out once the mute ends.
-func (e *eval) tellTrouble(t *Trouble, group, key string,
-	down func(since time.Time) mailer.Message, up func(since time.Time) mailer.Message) {
+//
+// At most one letter per run: the outbox keeps one pending letter per key,
+// so a second one would replace the first. What the silence swallowed rides
+// along with whichever letter goes out (amnezia-vpn-server-76mp.14).
+func (e *eval) tellTrouble(t *Trouble, group, key string, texts troubleTexts) {
 	if e.muted(group) {
 		return
 	}
+	extra := ""
+	if t.Missed != nil {
+		extra = texts.missedNote(*t.Missed)
+	}
 	switch {
-	case t.Since != nil && t.Told != toldDown && e.now.Sub(*t.Since) >= DownThreshold:
-		since := *t.Since
-		e.emit(key, down(since))
-		t.Told = toldDown
-		t.ToldSince = &since
-	case t.Since == nil && t.Told == toldDown:
-		since := e.now
+	case t.Told == toldDown && t.EndedAt != nil:
+		since := *t.EndedAt
 		if t.ToldSince != nil {
 			since = *t.ToldSince
 		}
-		e.emit(key, up(since))
+		e.emit(key, texts.up(since, *t.EndedAt, extra))
 		t.Told = toldNothing
-		t.ToldSince = nil
+		t.ToldSince, t.EndedAt, t.Missed = nil, nil, nil
 		if key == keyTunnel {
 			e.tunnelBackNow = true
 		}
+	case t.Since != nil && t.Told != toldDown && e.now.Sub(*t.Since) >= DownThreshold:
+		since := *t.Since
+		e.emit(key, texts.down(since, extra))
+		t.Told = toldDown
+		t.ToldSince = &since
+		t.Missed = nil
+	case t.Missed != nil:
+		e.emit(key, texts.missed(*t.Missed))
+		t.Missed = nil
 	}
 }
 

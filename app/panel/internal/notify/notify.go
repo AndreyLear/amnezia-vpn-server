@@ -23,7 +23,10 @@
 //
 // Flapping is its own diagnosis. More than three changes within an hour in
 // one group give one letter «… мигает» and an hour of silence for that
-// group: the flapping matters more than each separate drop.
+// group: the flapping matters more than each separate drop. The silence
+// hides the flapping, not a long outage inside it: a drop long enough for
+// a letter that began and ended while muted is mentioned in the first
+// letter of that trouble after the silence (amnezia-vpn-server-76mp.14).
 //
 // On the first run (State.Initialized false) the rules only take a
 // baseline: a restart, an update outcome or a release that happened before

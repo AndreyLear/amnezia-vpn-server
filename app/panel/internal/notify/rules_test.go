@@ -487,3 +487,134 @@ func TestLettersNameServerWithoutLinks(t *testing.T) {
 		}
 	}
 }
+
+// flapThenTold проводит туннель через серию обрывов по сценарию
+// amnezia-vpn-server-76mp.14: падение 03:02, возврат 03:03, падение 03:04,
+// письмо «не работает» в 03:09; возврат в 03:30 — четвёртая смена за час,
+// письмо «мигает» и тишина до 04:30.
+func flapThenTold(t *testing.T) *world {
+	t.Helper()
+	w := newWorld(t)
+	active := func() { w.clientsActive("a", "b") }
+	w.step(time.Minute)
+	w.in.TunnelUp = false
+	w.step(time.Minute)
+	w.in.TunnelUp = true
+	w.minutes(1, active)
+	w.in.TunnelUp = false
+	wantKeys(t, w.minutes(6, nil), keyTunnel)
+	wantKeys(t, w.minutes(20, nil))
+	w.in.TunnelUp = true
+	wantKeys(t, w.step(time.Minute), keyFlap(groupTunnel))
+	if w.clock != start.Add(30*time.Minute) {
+		t.Fatalf("сценарий сбился: %s", w.clock)
+	}
+	return w
+}
+
+// Письмо о возврате, отложенное тишиной, называет настоящий момент возврата
+// и настоящую длительность, а не момент конца тишины
+// (amnezia-vpn-server-76mp.14).
+func TestTunnelBackAfterMuteNamesRealReturn(t *testing.T) {
+	w := flapThenTold(t)
+	active := func() { w.clientsActive("a", "b") }
+	wantKeys(t, w.minutes(59, active))
+	active()
+	got := w.step(time.Minute)
+	wantKeys(t, got, keyTunnel)
+	body := got[0].Message.Body
+	for _, want := range []string{"снова работает с 03:30 UTC", "Не работал 26 минут, с 03:04 UTC"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в письме нет %q:\n%s", want, body)
+		}
+	}
+	wantKeys(t, w.minutes(30, active))
+}
+
+// Долгий обрыв, начавшийся и кончившийся внутри тишины, не пропадает:
+// о нём говорит письмо, которое уходит по её окончании
+// (amnezia-vpn-server-76mp.14).
+func TestTunnelDropInsideMuteIsToldAfterIt(t *testing.T) {
+	w := flapThenTold(t)
+	active := func() { w.clientsActive("a", "b") }
+	w.minutes(10, active) // 03:40
+	w.in.TunnelUp = false
+	w.minutes(15, nil) // 03:55
+	w.in.TunnelUp = true
+	wantKeys(t, w.minutes(34, active)) // до 04:29 — тишина
+	active()
+	got := w.step(time.Minute)
+	wantKeys(t, got, keyTunnel)
+	body := got[0].Message.Body
+	for _, want := range []string{"снова работает с 03:30 UTC", "15 минут", "с 03:41 UTC до 03:56 UTC"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в письме нет %q:\n%s", want, body)
+		}
+	}
+	wantKeys(t, w.minutes(30, active))
+}
+
+// Тишина от коротких провалов, внутри неё — долгий обрыв, о котором ещё не
+// писали: по окончании тишины — одно письмо о нём (amnezia-vpn-server-76mp.14).
+func TestMissedDropWithoutToldEpisode(t *testing.T) {
+	w := newWorld(t)
+	active := func() { w.clientsActive("a", "b") }
+	w.step(time.Minute)
+	for i := 0; i < 2; i++ {
+		w.in.TunnelUp = false
+		w.minutes(2, nil)
+		w.in.TunnelUp = true
+		w.minutes(2, active)
+	}
+	wantKeys(t, w.sent, keyFlap(groupTunnel)) // тишина до 04:08
+	w.minutes(5, active)
+	w.in.TunnelUp = false
+	w.minutes(10, nil) // 03:15–03:25
+	w.in.TunnelUp = true
+	wantKeys(t, w.minutes(43, active)) // до 04:07 — тишина
+	active()
+	got := w.step(time.Minute)
+	wantKeys(t, got, keyTunnel)
+	if !strings.Contains(got[0].Message.Body, "10 минут") || !strings.Contains(got[0].Message.Body, "с 03:15 UTC до 03:25 UTC") {
+		t.Errorf("в письме нет обрыва:\n%s", got[0].Message.Body)
+	}
+	if strings.Contains(got[0].Message.Subject, "снова работает") {
+		t.Errorf("тема %q: о возврате писать нечего, о беде не писали", got[0].Message.Subject)
+	}
+	wantKeys(t, w.minutes(60, active))
+}
+
+// Абзац о нескольких обрывах внутри тишины называет их число и самый долгий.
+func TestMissedNoteSeveral(t *testing.T) {
+	e := &eval{in: Inputs{Zone: time.UTC}, now: start.Add(2 * time.Hour)}
+	m := Missed{Count: 3, Since: start.Add(41 * time.Minute), Until: start.Add(56 * time.Minute)}
+	want := "Пока писем не было, туннель 3 раза не работал дольше 5 минут. Дольше всего — 15 минут, с 03:41 UTC до 03:56 UTC."
+	if got := e.tunnelMissedNote(m); got != want {
+		t.Errorf("туннель:\n%s\nждали\n%s", got, want)
+	}
+	want = "Пока писем не было, все клиенты 3 раза разом пропадали со связи дольше 5 минут. Дольше всего — 15 минут, с 03:41 UTC до 03:56 UTC."
+	if got := e.clientsMissedNote(m); got != want {
+		t.Errorf("клиенты:\n%s\nждали\n%s", got, want)
+	}
+}
+
+// Туннель вернулся внутри тишины и снова лёг: по её окончании — письмо о
+// возврате того обрыва, о котором писали, затем — о новом
+// (amnezia-vpn-server-76mp.14).
+func TestTunnelDownAgainWhenMuteEnds(t *testing.T) {
+	w := flapThenTold(t)
+	active := func() { w.clientsActive("a", "b") }
+	w.minutes(50, active) // 04:20
+	w.in.TunnelUp = false
+	wantKeys(t, w.minutes(9, nil)) // 04:21–04:29
+	got := w.step(time.Minute)
+	wantKeys(t, got, keyTunnel)
+	if !strings.Contains(got[0].Message.Body, "снова работает с 03:30 UTC") {
+		t.Errorf("письмо о возврате:\n%s", got[0].Message.Body)
+	}
+	got = w.step(time.Minute)
+	wantKeys(t, got, keyTunnel)
+	if !strings.Contains(got[0].Message.Body, "не работает с 04:21 UTC") {
+		t.Errorf("письмо о новом обрыве:\n%s", got[0].Message.Body)
+	}
+}
