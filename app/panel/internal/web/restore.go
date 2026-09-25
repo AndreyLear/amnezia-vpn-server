@@ -23,6 +23,7 @@
 package web
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -246,12 +247,24 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 		return
 	}
 
+	// The MTU belongs to this host's uplink, not to the backup: install.sh
+	// measured it here, and an archive either carries another server's value
+	// or (if it predates the setting) none at all. Restore it whichever
+	// address was chosen — it is not part of the question.
+	//
+	// The endpoint is the part the operator decides: "server" means clients
+	// should reach the machine they were just migrated to.
+	host := hostSettings{mtu: liveMTU}
+	if endpointChoice == endpointChoiceServer {
+		host.endpoint = liveEndpoint
+	}
+
 	s.mutex.Lock()
 	_, err = backup.Restore(s.db(), s.cfg.DBPath, uploadPath, backupsDir(), nil)
 	var appliedN int
 	var applyErr error
 	if err == nil {
-		appliedN, applyErr = s.applyRestoreNow(sess.Username)
+		appliedN, applyErr = s.applyRestoreNow(sess.Username, host)
 	}
 	s.mutex.Unlock()
 	if errors.Is(err, backup.ErrRestorePending) {
@@ -271,20 +284,6 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request, jsonAPI b
 		s.cfg.Logger.Printf("restore apply: %v", applyErr)
 		s.restoreAnswer(w, r, jsonAPI, http.StatusBadRequest, false, flashRestoreApplyFailed)
 		return
-	}
-	// The MTU belongs to this host's uplink, not to the backup: install.sh
-	// measured it here, and an archive either carries another server's value
-	// or (if it predates the setting) none at all. Restore it whichever
-	// address was chosen — it is not part of the question.
-	//
-	// The endpoint is the part the operator decides: "server" means clients
-	// should reach the machine they were just migrated to.
-	restoreEndpoint := ""
-	if endpointChoice == endpointChoiceServer {
-		restoreEndpoint = liveEndpoint
-	}
-	if err := s.restoreHostSettings(restoreEndpoint, liveMTU); err != nil {
-		s.cfg.Logger.Printf("restore host settings: %v", err)
 	}
 	// Запись делается ПОСЛЕ подмены базы и потому попадает в новую, а не в
 	// ту, которой больше нет. Восстановление заменяет и сам журнал — он
@@ -324,7 +323,13 @@ func fault(step string) error {
 // still-live handle and a restart can retry. Sessions are wiped after
 // a successful apply (T-138) unless keepUsername still exists in the
 // preserved live auth (T-155).
-func (s *Server) applyRestoreNow(keepUsername string) (int, error) {
+//
+// host is written into the restored database BEFORE Generate, still
+// under the caller's s.mutex: written afterwards, awg0.conf kept the
+// archive's MTU until the next client edit, and a mutation slipping in
+// between could regenerate from the archive's values too
+// (amnezia-vpn-server-76mp.3).
+func (s *Server) applyRestoreNow(keepUsername string, host hostSettings) (int, error) {
 	applied, err := backup.ApplyPending(s.cfg.DBPath)
 	if err != nil {
 		return 0, err
@@ -357,6 +362,10 @@ func (s *Server) applyRestoreNow(keepUsername string) (int, error) {
 	if err := backup.KeepLiveAuth(s.cfg.DBPath); err != nil {
 		next.Close()
 		return fail(fmt.Errorf("keep live auth: %w", err))
+	}
+	if err := restoreHostSettings(next, host); err != nil {
+		next.Close()
+		return fail(fmt.Errorf("restore host settings: %w", err))
 	}
 	if err := fault("restore.apply.generate"); err != nil {
 		next.Close()
@@ -436,20 +445,26 @@ func (s *Server) settingOrEmpty(key string) string {
 	return v
 }
 
+// hostSettings are this machine's values that must win over the archive.
+type hostSettings struct {
+	endpoint string
+	mtu      string
+}
+
 // restoreHostSettings writes this machine's endpoint and MTU back over the
 // values the archive brought with it. An empty value is skipped rather than
 // stored: an empty endpoint would leave `client config` unable to render
 // one, and callers pass "" for the endpoint precisely when the operator
 // chose to keep the archive's address.
-func (s *Server) restoreHostSettings(endpoint, mtu string) error {
+func restoreHostSettings(handle *sql.DB, host hostSettings) error {
 	for key, value := range map[string]string{
-		settingsEndpointKey: endpoint,
-		settingsMTUKey:      mtu,
+		settingsEndpointKey: host.endpoint,
+		settingsMTUKey:      host.mtu,
 	} {
 		if value == "" {
 			continue
 		}
-		if err := db.SetSetting(s.db(), key, value); err != nil {
+		if err := db.SetSetting(handle, key, value); err != nil {
 			return fmt.Errorf("set %s: %w", key, err)
 		}
 	}
