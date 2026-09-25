@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -107,6 +109,10 @@ func TestLoginConcurrentVerifyCapped(t *testing.T) {
 		case http.StatusUnauthorized:
 		case http.StatusTooManyRequests:
 			busy++
+			got := decodeAPI(t, recs[i])
+			if got["ok"] != false || got["message"] != loginLimitMessage {
+				t.Fatalf("busy answer = %v", got)
+			}
 			if recs[i].Header().Get("Retry-After") == "" {
 				t.Fatal("busy answer must set Retry-After")
 			}
@@ -196,5 +202,37 @@ func TestLoginLimiterSweepsStaleEntries(t *testing.T) {
 	l.mu.Unlock()
 	if n != 1 {
 		t.Fatalf("byIP holds %d entries after window, want 1 (stale ones swept)", n)
+	}
+}
+
+// Ответ лимитера на /api/login — JSON, как у остальных ответов входа:
+// иначе SPA не может показать, что вход ограничен
+// (amnezia-vpn-server-76mp.8).
+func TestAPILoginRateLimitAnswersJSON(t *testing.T) {
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+	f.server.verifyPassword = func(string, string) bool { return false }
+	ip := "203.0.113.77:1"
+	for i := 1; i <= loginFailLimit; i++ {
+		rec := httptest.NewRecorder()
+		f.server.ServeHTTP(rec, apiLoginFrom(t, ip, "alice", "wrong-password"))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("fail %d: code = %d, want 401", i, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, apiLoginFrom(t, ip, "alice", "wrong-password"))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("code = %d, want 429", rec.Code)
+	}
+	if _, err := strconv.Atoi(rec.Header().Get("Retry-After")); err != nil {
+		t.Fatalf("Retry-After = %q, want seconds", rec.Header().Get("Retry-After"))
+	}
+	got := decodeAPI(t, rec)
+	if got["ok"] != false || got["message"] != loginLimitMessage {
+		t.Fatalf("body = %v, want ok=false message=%q", got, loginLimitMessage)
+	}
+	if strings.Contains(rec.Body.String(), "wrong-password") {
+		t.Fatal("429 must not echo the password")
 	}
 }

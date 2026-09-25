@@ -114,16 +114,6 @@ func (l *loginLimiter) retryAfterLocked(key string, now time.Time) (int, bool) {
 	return sec, true
 }
 
-// retryAfter is the cheap pre-check before the request body is read.
-func (l *loginLimiter) retryAfter(key string, now time.Time) (int, bool) {
-	if l == nil {
-		return 0, false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.retryAfterLocked(key, now)
-}
-
 // reserve atomically checks the limit and takes one attempt. It returns
 // (seconds, false) when key is out of attempts; the attempt is then not
 // taken.
@@ -201,16 +191,10 @@ func (s *Server) tryAcquireLoginSlot() bool {
 
 func (s *Server) releaseLoginSlot() { <-s.loginVerify }
 
-func (s *Server) rejectLimitedLogin(w http.ResponseWriter, r *http.Request) bool {
-	sec, limited := s.loginLimit.retryAfter(requestLoginKey(r), time.Now())
-	if !limited {
-		return false
-	}
-	writeLoginLimited(w, sec)
-	return true
-}
-
-func writeLoginLimited(w http.ResponseWriter, sec int) {
+// setRetryAfter marks a limited login answer. The body is written by the
+// caller in its own format: JSON for /api/login, the login page for the
+// form — a text/plain 429 broke the SPA's JSON parsing and the form went
+// silent (amnezia-vpn-server-76mp.8).
+func setRetryAfter(w http.ResponseWriter, sec int) {
 	w.Header().Set("Retry-After", strconv.Itoa(sec))
-	http.Error(w, loginLimitMessage, http.StatusTooManyRequests)
 }

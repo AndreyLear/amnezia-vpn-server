@@ -56,6 +56,14 @@ func TestLoginRateLimitSixthWrongPassword429(t *testing.T) {
 	if !strings.Contains(body, loginLimitMessage) {
 		t.Fatalf("429 body missing limit text: %q", body)
 	}
+	// Форма показывает сообщение на странице входа, а не голый текст
+	// (amnezia-vpn-server-76mp.8).
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("429 content-type = %q, want the login page", ct)
+	}
+	if !strings.Contains(body, `name="password"`) || !strings.Contains(body, `value="alice"`) {
+		t.Fatalf("429 must render the login form: %q", body)
+	}
 	if strings.Contains(body, "wrong-password") {
 		t.Fatal("429 body must not echo the password")
 	}

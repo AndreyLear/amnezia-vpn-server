@@ -60,10 +60,11 @@ type loginData struct {
 }
 
 // renderLogin answers HTML POST /login failures with the generic error
-// text (existing form tests). GET /login is the SPA shell.
-func (s *Server) renderLogin(w http.ResponseWriter, data loginData) {
+// text (existing form tests) — 200 for a wrong password, 429 when the
+// login is limited. GET /login is the SPA shell.
+func (s *Server) renderLogin(w http.ResponseWriter, status int, data loginData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(status)
 	fmt.Fprintf(w, "<!doctype html><html lang=\"ru\"><body>")
 	if data.Error != "" {
 		fmt.Fprintf(w, "<p>%s</p>", html.EscapeString(data.Error))
@@ -80,9 +81,6 @@ func (s *Server) renderLogin(w http.ResponseWriter, data loginData) {
 // amnezia_session cookie with the new id and answers 303 /. The new SID
 // never travels in a URL or query string.
 func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
-	if s.rejectLimitedLogin(w, r) {
-		return
-	}
 	if err := r.ParseForm(); err != nil {
 		requestBodyError(err, w, r)
 		return
@@ -96,11 +94,12 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if outcome.retryAfter > 0 {
-		writeLoginLimited(w, outcome.retryAfter)
+		setRetryAfter(w, outcome.retryAfter)
+		s.renderLogin(w, http.StatusTooManyRequests, loginData{Error: loginLimitMessage, Username: username})
 		return
 	}
 	if outcome.message != "" {
-		s.renderLogin(w, loginData{Error: outcome.message, Username: username})
+		s.renderLogin(w, http.StatusOK, loginData{Error: outcome.message, Username: username})
 		return
 	}
 	if err := s.issueLoginSession(w, r, username); err != nil {
