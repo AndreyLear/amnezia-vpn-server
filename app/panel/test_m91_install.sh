@@ -3138,6 +3138,87 @@ test_fail2ban_can_be_declined() {
         && pass "--no-fail2ban says it skipped" || fail "--no-fail2ban was silent"
 }
 
+# Отказ — решение развёртывания, а не одного запуска
+# (amnezia-vpn-server-76mp.5). Агент обновления запускает установщик без
+# флагов, и мастер повторно — тоже: раньше первый же такой запуск снова
+# включал сторожа, fail2ban, ежедневный поход в GitHub и резолвер на :53.
+test_declined_services_stay_declined_on_rerun() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    local jail="$TMP_TEST/f2b-keep/amnezia-vpn-sshd.conf"
+    rm -rf "$TMP_TEST/f2b-keep"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail \
+        run_install --no-watchdog --no-fail2ban --no-update-check --no-tunnel-dns)"
+    [ "$rc" = "0" ] || fail "declined services: first run exit $rc"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "declined services: plain rerun exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer" ] \
+        && fail "a plain rerun brought the watchdog back" \
+        || pass "a plain rerun keeps the watchdog off"
+    [ -f "$jail" ] \
+        && fail "a plain rerun brought fail2ban back" \
+        || pass "a plain rerun keeps fail2ban off"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-update-check.timer" ] \
+        && fail "a plain rerun brought the daily update check back" \
+        || pass "a plain rerun keeps the update check off"
+    grep -q "api.github.com" "$FAKE_CALLS" \
+        && fail "a plain rerun went out to GitHub" \
+        || pass "a plain rerun does not go out to GitHub"
+    [ "$(env_value TUNNEL_DNS_DISABLED)" = "1" ] \
+        && pass "a plain rerun keeps the tunnel resolver off port 53" \
+        || fail "a plain rerun brought the tunnel resolver back"
+    grep -q '"watchdog":false' "$ROOT/status/deployment.json" \
+        && pass "the facts still say the watchdog is off" \
+        || fail "the facts claim a watchdog after a plain rerun"
+}
+
+# И обратно — явно, парным флагом, как у --ipv6/--no-ipv6.
+test_declined_services_can_be_turned_back_on() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    local jail="$TMP_TEST/f2b-back/amnezia-vpn-sshd.conf"
+    rm -rf "$TMP_TEST/f2b-back"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail \
+        run_install --no-watchdog --no-fail2ban --no-update-check --no-tunnel-dns)"
+    [ "$rc" = "0" ] || fail "turn back on: first run exit $rc"
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail \
+        run_install --watchdog --fail2ban --update-check --tunnel-dns)"
+    [ "$rc" = "0" ] || fail "turn back on: exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer" ] \
+        && pass "--watchdog brings the watchdog back" \
+        || fail "--watchdog did not bring the watchdog back"
+    [ -f "$jail" ] \
+        && pass "--fail2ban brings fail2ban back" \
+        || fail "--fail2ban did not bring fail2ban back"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-update-check.timer" ] \
+        && pass "--update-check brings the update check back" \
+        || fail "--update-check did not bring the update check back"
+    [ -z "$(env_value TUNNEL_DNS_DISABLED)" ] \
+        && pass "--tunnel-dns brings the tunnel resolver back" \
+        || fail "--tunnel-dns left the tunnel resolver off"
+    local key
+    for key in WATCHDOG_DISABLED FAIL2BAN_DISABLED UPDATE_CHECK_DISABLED; do
+        [ -z "$(env_value "$key")" ] \
+            && pass "$key is gone from .env" \
+            || fail "$key stayed in .env after turning it back on"
+    done
+    # И это тоже запоминается: следующий запуск без флагов ничего не выключит.
+    rc="$(AMNEZIA_INSTALL_FAIL2BAN_JAIL="$jail" AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "turn back on: plain rerun exit $rc"
+    [ -f "$SYSTEMD_DIR_TEST/amnezia-vpn-watchdog.timer" ] \
+        && pass "a plain rerun after turning back on keeps the watchdog" \
+        || fail "a plain rerun after turning back on lost the watchdog"
+}
+
+test_service_switches_in_help() {
+    fakes_reset
+    rc="$(run_install --help)"
+    local flag
+    for flag in --watchdog --fail2ban --update-check --tunnel-dns; do
+        grep -q -- "^  $flag" "$TMP_TEST/out" \
+            && pass "--help documents $flag" \
+            || fail "--help does not document $flag"
+    done
+}
 
 # Switching IPv6 on writes a new interface address, and an interface
 # address is applied only when the interface is created — `awg syncconf`
@@ -3214,6 +3295,9 @@ test_ipv6_change_restarts_the_tunnel
 test_fail2ban_configured_by_default
 test_fail2ban_installs_the_package_when_missing
 test_fail2ban_can_be_declined
+test_declined_services_stay_declined_on_rerun
+test_declined_services_can_be_turned_back_on
+test_service_switches_in_help
 test_client_dns_has_no_fallback_without_ipv6
 test_client_dns_keeps_the_fallback_with_ipv6
 test_client_dns_follows_the_ipv6_switch

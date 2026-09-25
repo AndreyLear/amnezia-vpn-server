@@ -1406,6 +1406,21 @@ test_real_adduser_failure_still_aborts() {
         || fail "a real add-user failure must abort"
 }
 
+# Выключатели служб решает install.sh и помнит их в .env; мастер только
+# передаёт флаги. Без парных флагов включить службу обратно из мастера было
+# бы нечем (amnezia-vpn-server-76mp.5).
+test_service_switches_pass_through() {
+    local flag
+    for flag in --no-tunnel-dns --fail2ban --watchdog --update-check --tunnel-dns; do
+        fakes_reset
+        rc="$(run_bootstrap --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" "$flag")"
+        [ "$rc" = "0" ] || { fail "$flag: exit $rc"; continue; }
+        grep -q -- "install.sh .*$flag\( \|$\)" "$FAKE_CALLS" \
+            && pass "$flag reaches install.sh" \
+            || fail "$flag did not reach install.sh"
+    done
+}
+
 # --- main ---------------------------------------------------------------
 
 m123_run_all() {
@@ -1459,6 +1474,7 @@ test_rerun_without_the_flag_keeps_the_deployed_domain
 test_explicit_empty_domain_returns_to_the_ip
 test_fresh_install_without_a_domain_uses_the_ip
 test_apply_failure_aborts_instead_of_reporting_success
+test_service_switches_pass_through
 }
 
 # Named tests, like the install harness: a suite that only runs whole is a
