@@ -10,10 +10,33 @@ import (
 
 // Login brute-force limits (T-105). In-memory; a panel restart clears
 // the map, same as sessions.
+//
+// An attempt is RESERVED in the limiter before the Argon2 check, not
+// counted after it (amnezia-vpn-server-76mp.1): with check-then-count,
+// a hundred parallel requests all passed the check before the first
+// failure landed, each ran Argon2 with 64 MiB, and the container died
+// of OOM — restart wiped the limiter and the flood went on. A reserved
+// attempt stays counted when the password is wrong and is dropped only
+// when nothing was checked (busy slots, database error) or on success
+// (clear).
 const (
 	loginFailLimit    = 5
 	loginFailWindow   = 15 * time.Minute
 	loginLimitMessage = "Слишком много попыток входа. Подождите и попробуйте снова."
+	// loginVerifySlots caps concurrent Argon2 checks across all addresses:
+	// the reservation stops one address, a botnet has many
+	// (amnezia-vpn-server-76mp.1). Two slots keep peak memory at 128 MiB
+	// and still let two people log in at the same moment.
+	loginVerifySlots = 2
+	// loginBusyRetryAfter is the Retry-After for a login turned away
+	// because every slot was busy. A check takes ~100 ms, so a second is
+	// plenty; the request is answered at once instead of queueing, so a
+	// flood cannot pile up waiting goroutines behind the slots.
+	loginBusyRetryAfter = 1
+	// loginSweepEvery bounds how often reserve walks byIP for expired
+	// buckets: often enough that the map tracks only the last window's
+	// addresses, rarely enough that a flood does not pay O(n) per request.
+	loginSweepEvery = time.Minute
 )
 
 type loginBucket struct {
@@ -22,8 +45,9 @@ type loginBucket struct {
 }
 
 type loginLimiter struct {
-	mu   sync.Mutex
-	byIP map[string]loginBucket
+	mu        sync.Mutex
+	byIP      map[string]loginBucket
+	lastSweep time.Time
 }
 
 func newLoginLimiter() *loginLimiter {
@@ -44,18 +68,36 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func (l *loginLimiter) retryAfter(ip string, now time.Time) (int, bool) {
-	if l == nil {
-		return 0, false
+// loginLimitKey groups IPv6 addresses by /64: one subscriber usually
+// gets a whole /64, and counting per address gave them 2^64 fresh
+// budgets of five attempts (amnezia-vpn-server-76mp.1). IPv4 (including
+// IPv4-mapped IPv6) stays per address; anything unparsable is its own
+// key.
+func loginLimitKey(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ip
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	b, ok := l.byIP[ip]
+	if v4 := parsed.To4(); v4 != nil {
+		return v4.String()
+	}
+	prefix := &net.IPNet{IP: parsed.Mask(net.CIDRMask(64, 128)), Mask: net.CIDRMask(64, 128)}
+	return prefix.String()
+}
+
+func requestLoginKey(r *http.Request) string {
+	return loginLimitKey(clientIP(r))
+}
+
+// retryAfterLocked answers whether key is out of attempts and for how
+// many seconds. Callers hold l.mu.
+func (l *loginLimiter) retryAfterLocked(key string, now time.Time) (int, bool) {
+	b, ok := l.byIP[key]
 	if !ok {
 		return 0, false
 	}
 	if now.Sub(b.windowStart) >= loginFailWindow {
-		delete(l.byIP, ip)
+		delete(l.byIP, key)
 		return 0, false
 	}
 	if b.count < loginFailLimit {
@@ -72,36 +114,87 @@ func (l *loginLimiter) retryAfter(ip string, now time.Time) (int, bool) {
 	return sec, true
 }
 
-func (l *loginLimiter) fail(ip string, now time.Time) {
+// reserve atomically checks the limit and takes one attempt. It returns
+// (seconds, false) when key is out of attempts; the attempt is then not
+// taken.
+func (l *loginLimiter) reserve(key string, now time.Time) (int, bool) {
 	if l == nil {
-		return
+		return 0, true
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	b, ok := l.byIP[ip]
-	if !ok || now.Sub(b.windowStart) >= loginFailWindow {
-		l.byIP[ip] = loginBucket{count: 1, windowStart: now}
-		return
+	l.sweepLocked(now)
+	if sec, limited := l.retryAfterLocked(key, now); limited {
+		return sec, false
+	}
+	b, ok := l.byIP[key]
+	if !ok {
+		b = loginBucket{windowStart: now}
 	}
 	b.count++
-	l.byIP[ip] = b
+	l.byIP[key] = b
+	return 0, true
 }
 
-func (l *loginLimiter) clear(ip string) {
+// release gives back an attempt reserved for a check that never ran.
+func (l *loginLimiter) release(key string) {
 	if l == nil {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.byIP, ip)
+	b, ok := l.byIP[key]
+	if !ok {
+		return
+	}
+	b.count--
+	if b.count <= 0 {
+		delete(l.byIP, key)
+		return
+	}
+	l.byIP[key] = b
 }
 
-func (s *Server) rejectLimitedLogin(w http.ResponseWriter, r *http.Request) bool {
-	sec, limited := s.loginLimit.retryAfter(clientIP(r), time.Now())
-	if !limited {
+// sweepLocked drops buckets whose window has passed. Without it byIP
+// only lost an entry when the same key came back, so every address
+// that ever failed stayed in memory forever (amnezia-vpn-server-76mp.1).
+func (l *loginLimiter) sweepLocked(now time.Time) {
+	if now.Sub(l.lastSweep) < loginSweepEvery {
+		return
+	}
+	l.lastSweep = now
+	for key, b := range l.byIP {
+		if now.Sub(b.windowStart) >= loginFailWindow {
+			delete(l.byIP, key)
+		}
+	}
+}
+
+func (l *loginLimiter) clear(key string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.byIP, key)
+}
+
+// tryAcquireLoginSlot takes an Argon2 slot without waiting.
+func (s *Server) tryAcquireLoginSlot() bool {
+	select {
+	case s.loginVerify <- struct{}{}:
+		return true
+	default:
 		return false
 	}
+}
+
+func (s *Server) releaseLoginSlot() { <-s.loginVerify }
+
+// setRetryAfter marks a limited login answer. The body is written by the
+// caller in its own format: JSON for /api/login, the login page for the
+// form — a text/plain 429 broke the SPA's JSON parsing and the form went
+// silent (amnezia-vpn-server-76mp.8).
+func setRetryAfter(w http.ResponseWriter, sec int) {
 	w.Header().Set("Retry-After", strconv.Itoa(sec))
-	http.Error(w, loginLimitMessage, http.StatusTooManyRequests)
-	return true
 }

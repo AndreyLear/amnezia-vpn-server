@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/backup"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
@@ -197,5 +198,42 @@ func TestRestoreDoesNotAskWhenAddressMatches(t *testing.T) {
 	rec := postAPIRestoreWith(t, f, nil, data)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200 without any question (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// awg0.conf после восстановления должен быть собран с MTU этого хоста, а не
+// с тем, что лежал в архиве: раньше настройки хоста писались в базу уже
+// после генерации, и конфиг оставался с чужим MTU до первой правки клиента
+// (amnezia-vpn-server-76mp.3).
+func TestRestoreRegeneratesConfigWithHostMTU(t *testing.T) {
+	for _, choice := range []string{"archive", "server"} {
+		t.Run(choice, func(t *testing.T) {
+			f := newFixture(t)
+			dir := setBackupsPath(t)
+			data := archiveFromOtherHost(t, f, dir, "old.example.com:443", "1440", "2.26.93.192:443", "1416")
+
+			rec := postAPIRestoreWith(t, f, map[string]string{"endpoint": choice}, data)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("code = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			if got := getSetting(t, f, "mtu"); got != "1416" {
+				t.Fatalf("mtu = %q, want 1416", got)
+			}
+			got, err := os.ReadFile(f.confPath)
+			if err != nil {
+				t.Fatalf("read awg0.conf: %v", err)
+			}
+			want := filepath.Join(t.TempDir(), "want.conf")
+			if err := awgconf.Generate(f.server.db(), want); err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			wantBytes, err := os.ReadFile(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, wantBytes) {
+				t.Fatalf("awg0.conf built from the archive's MTU:\n--- got\n%s\n--- want (from host MTU 1416)\n%s", got, wantBytes)
+			}
+		})
 	}
 }

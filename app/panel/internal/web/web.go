@@ -132,8 +132,15 @@ type Server struct {
 	dbMu       sync.RWMutex
 	dbh        *sql.DB
 	loginLimit *loginLimiter
-	hostMu     sync.Mutex
-	hostCPU    hostmetrics.CPUSample
+	// verifyPassword is auth.VerifyPassword; tests swap it to count and
+	// hold the Argon2 checks without paying 64 MiB each
+	// (amnezia-vpn-server-76mp.1).
+	verifyPassword func(password, encodedHash string) bool
+	// loginVerify holds one token per running Argon2 check
+	// (loginVerifySlots, amnezia-vpn-server-76mp.1).
+	loginVerify chan struct{}
+	hostMu      sync.Mutex
+	hostCPU     hostmetrics.CPUSample
 }
 
 // db returns the live database handle (RLock-protected swap access).
@@ -214,7 +221,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.HostDiskPath == "" {
 		cfg.HostDiskPath = "/data"
 	}
-	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, loginLimit: newLoginLimiter()}
+	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, loginLimit: newLoginLimiter(), verifyPassword: auth.VerifyPassword, loginVerify: make(chan struct{}, loginVerifySlots)}
 	if cfg.PersistSessions {
 		// A failure to read stored sessions is logged, not fatal: the panel
 		// must still start, and the worst outcome is the old behavior —

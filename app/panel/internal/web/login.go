@@ -60,10 +60,11 @@ type loginData struct {
 }
 
 // renderLogin answers HTML POST /login failures with the generic error
-// text (existing form tests). GET /login is the SPA shell.
-func (s *Server) renderLogin(w http.ResponseWriter, data loginData) {
+// text (existing form tests) — 200 for a wrong password, 429 when the
+// login is limited. GET /login is the SPA shell.
+func (s *Server) renderLogin(w http.ResponseWriter, status int, data loginData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(status)
 	fmt.Fprintf(w, "<!doctype html><html lang=\"ru\"><body>")
 	if data.Error != "" {
 		fmt.Fprintf(w, "<p>%s</p>", html.EscapeString(data.Error))
@@ -80,9 +81,6 @@ func (s *Server) renderLogin(w http.ResponseWriter, data loginData) {
 // amnezia_session cookie with the new id and answers 303 /. The new SID
 // never travels in a URL or query string.
 func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
-	if s.rejectLimitedLogin(w, r) {
-		return
-	}
 	if err := r.ParseForm(); err != nil {
 		requestBodyError(err, w, r)
 		return
@@ -95,38 +93,65 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "login: read user", err)
 		return
 	}
+	if outcome.retryAfter > 0 {
+		setRetryAfter(w, outcome.retryAfter)
+		s.renderLogin(w, http.StatusTooManyRequests, loginData{Error: loginLimitMessage, Username: username})
+		return
+	}
+	// The form checks the same password as /api/login and is journaled
+	// the same way: name only, never the typed password
+	// (amnezia-vpn-server-76mp.28).
 	if outcome.message != "" {
-		s.renderLogin(w, loginData{Error: outcome.message, Username: username})
+		s.auditAs(username, auditLoginFailed, "", "")
+		s.renderLogin(w, http.StatusOK, loginData{Error: outcome.message, Username: username})
 		return
 	}
 	if err := s.issueLoginSession(w, r, username); err != nil {
 		internalFailure(w, r, s, "login: create session", err)
 		return
 	}
+	s.auditAs(username, auditLogin, "", "")
 	redirect303(w, r, "/")
 }
 
 type loginOutcome struct {
 	message string
+	// retryAfter > 0: the password was NOT checked — the address is out
+	// of attempts or every Argon2 slot is busy (amnezia-vpn-server-76mp.1).
+	retryAfter int
 }
 
 // evaluateLogin runs the dummy-hash password check. totp_secret and
 // totp_mode are ignored: a correct password always issues a session.
+//
+// The attempt is reserved in the limiter and an Argon2 slot is taken
+// before the check; a busy slot answers at once rather than queueing
+// (amnezia-vpn-server-76mp.1).
 func (s *Server) evaluateLogin(r *http.Request, username, password string) (loginOutcome, error) {
+	key := requestLoginKey(r)
+	if sec, ok := s.loginLimit.reserve(key, time.Now()); !ok {
+		return loginOutcome{retryAfter: sec}, nil
+	}
+	if !s.tryAcquireLoginSlot() {
+		// Nothing was checked: the address keeps its attempt.
+		s.loginLimit.release(key)
+		return loginOutcome{retryAfter: loginBusyRetryAfter}, nil
+	}
+	defer s.releaseLoginSlot()
 	user, err := db.AuthUserByUsername(s.db(), username)
 	switch {
 	case err == nil:
 	case errors.Is(err, db.ErrAuthUserNotFound):
 		user = nil
 	default:
+		s.loginLimit.release(key)
 		return loginOutcome{}, err
 	}
 	hash := dummyPasswordHash
 	if user != nil {
 		hash = user.PasswordHash
 	}
-	if !auth.VerifyPassword(password, hash) {
-		s.loginLimit.fail(clientIP(r), time.Now())
+	if !s.verifyPassword(password, hash) {
 		return loginOutcome{message: loginErrorText}, nil
 	}
 	return loginOutcome{}, nil
@@ -149,7 +174,7 @@ func (s *Server) issueLoginSession(w http.ResponseWriter, r *http.Request, usern
 	}
 	s.cfg.Sessions.DeleteByUsername(username, sess.ID)
 	auth.WriteSessionCookie(w, sess.ID, sess.ExpiresAt)
-	s.loginLimit.clear(clientIP(r))
+	s.loginLimit.clear(requestLoginKey(r))
 	return nil
 }
 

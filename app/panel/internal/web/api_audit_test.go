@@ -1,12 +1,16 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
@@ -121,5 +125,132 @@ func TestRestoreIsRecordedInTheRestoredDatabase(t *testing.T) {
 	}
 	if !strings.Contains(entries[0].Detail, "клиентов применено") {
 		t.Fatalf("не сказано, сколько применено: %+v", entries[0])
+	}
+}
+
+// lastAudit — последняя запись журнала с этим действием.
+func lastAudit(t *testing.T, f *fixture, action string) (actor string, ok bool) {
+	t.Helper()
+	err := f.h.QueryRow(
+		`SELECT actor FROM audit WHERE action = ? ORDER BY id DESC LIMIT 1`, action,
+	).Scan(&actor)
+	return actor, err == nil
+}
+
+// Неудачный вход пишет в журнал введённое имя. Без предела длины его можно
+// было раздуть до десятков килобайт на запись и вытеснить настоящие записи,
+// заодно сделав бэкап больше, чем панель согласна восстановить
+// (amnezia-vpn-server-76mp.11).
+func TestAuditFailedLoginNameIsBounded(t *testing.T) {
+	f := newFixture(t)
+	long := strings.Repeat("я", 30000)
+	rec := httptest.NewRecorder()
+	f.server.ServeHTTP(rec, apiLoginFrom(t, "203.0.113.90:1", long, "wrong-password"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", rec.Code)
+	}
+	actor, ok := lastAudit(t, f, auditLoginFailed)
+	if !ok {
+		t.Fatal("login.failed not recorded")
+	}
+	if n := utf8.RuneCountInString(actor); n > auditActorMaxRunes+1 {
+		t.Fatalf("actor length = %d runes, want <= %d", n, auditActorMaxRunes+1)
+	}
+	if !utf8.ValidString(actor) {
+		t.Fatal("truncated actor must stay valid UTF-8")
+	}
+	if !strings.HasPrefix(actor, strings.Repeat("я", auditActorMaxRunes)) {
+		t.Fatalf("actor must keep the beginning of the name: %q", actor)
+	}
+}
+
+// SPA при каждом сохранении MTU или предела шлёт и имя с описанием. Правкой
+// имени это не является, и client.edit в журнале появляется, только когда
+// значение действительно изменилось (amnezia-vpn-server-76mp.31).
+func TestAuditClientEditOnlyOnRealChange(t *testing.T) {
+	f := newFixture(t)
+	c, _, _ := f.addClient("alice")
+	path := fmt.Sprintf("/api/clients/%d", c.ID)
+	countEdits := func() int {
+		t.Helper()
+		var n int
+		if err := f.h.QueryRow(`SELECT COUNT(*) FROM audit WHERE action = ?`, auditClientEdit).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	for _, body := range []map[string]any{
+		{"name": "alice", "description": "", "mtu": 1400},
+		{"name": "alice", "description": "", "rate_limit": 50},
+	} {
+		rec := f.apiCSRF(http.MethodPatch, path, body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %v: code %d; body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+	if n := countEdits(); n != 0 {
+		t.Fatalf("client.edit written %d times for unchanged name and description", n)
+	}
+	if _, ok := lastAudit(t, f, auditClientMTU); !ok {
+		t.Fatal("client.mtu must still be recorded")
+	}
+
+	rec := f.apiCSRF(http.MethodPatch, path, map[string]any{"name": "bob", "description": ""})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename: code %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var detail string
+	if err := f.h.QueryRow(
+		`SELECT detail FROM audit WHERE action = ? ORDER BY id DESC LIMIT 1`, auditClientEdit,
+	).Scan(&detail); err != nil {
+		t.Fatalf("rename not recorded: %v", err)
+	}
+	if detail != "имя" {
+		t.Fatalf("rename detail = %q, want только «имя»", detail)
+	}
+
+	rec = f.apiCSRF(http.MethodPatch, path, map[string]any{"name": "bob", "description": "ноутбук"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("describe: code %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if err := f.h.QueryRow(
+		`SELECT detail FROM audit WHERE action = ? ORDER BY id DESC LIMIT 1`, auditClientEdit,
+	).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail != "описание" {
+		t.Fatalf("description detail = %q, want только «описание»", detail)
+	}
+}
+
+// Вход через HTML-форму POST /login пишется в журнал так же, как через
+// /api/login (amnezia-vpn-server-76mp.28).
+func TestAuditFormLoginIsRecorded(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+
+	bad := postLogin(t, f, loginRequest(t, "203.0.113.91:1",
+		url.Values{"username": {"alice"}, "password": {"wrong-password"}}))
+	if bad.Code != http.StatusOK {
+		t.Fatalf("wrong password: code = %d, want 200", bad.Code)
+	}
+	if actor, ok := lastAudit(t, f, auditLoginFailed); !ok || actor != "alice" {
+		t.Fatalf("login.failed = %q (recorded %v), want alice", actor, ok)
+	}
+
+	good := postLogin(t, f, loginRequest(t, "203.0.113.91:1",
+		url.Values{"username": {"alice"}, "password": {testPassword}}))
+	if good.Code != http.StatusSeeOther {
+		t.Fatalf("correct password: code = %d, want 303", good.Code)
+	}
+	if actor, ok := lastAudit(t, f, auditLogin); !ok || actor != "alice" {
+		t.Fatalf("login = %q (recorded %v), want alice", actor, ok)
+	}
+	var detail string
+	if err := f.h.QueryRow(`SELECT group_concat(detail, '') FROM audit`).Scan(&detail); err == nil &&
+		strings.Contains(detail, "wrong-password") {
+		t.Fatal("the typed password must never reach the journal")
 	}
 }

@@ -53,9 +53,29 @@ func (s *Server) audit(r *http.Request, action, subject, detail string) {
 }
 
 func (s *Server) auditAs(actor, action, subject, detail string) {
-	if err := db.AuditAppend(s.db(), actor, action, subject, detail); err != nil {
+	if err := db.AuditAppend(s.db(), boundAuditActor(actor), action, subject, detail); err != nil {
 		s.cfg.Logger.Printf("audit %s: %v", action, err)
 	}
+}
+
+// auditActorMaxRunes — сколько символов имени попадает в журнал. Неудачный
+// вход пишет имя, которое ввёл кто угодно, и без предела запись весила до
+// ~64 КиБ (предел тела запроса): две тысячи таких вытесняли настоящие
+// записи, а база и бэкап вырастали сверх того, что панель согласна
+// восстановить (amnezia-vpn-server-76mp.11). Настоящие имена много короче.
+const auditActorMaxRunes = 64
+
+// boundAuditActor обрезает имя до auditActorMaxRunes символов, не разрывая
+// UTF-8, и ставит «…», чтобы обрезка была видна в журнале.
+func boundAuditActor(actor string) string {
+	n := 0
+	for i := range actor {
+		if n == auditActorMaxRunes {
+			return actor[:i] + "…"
+		}
+		n++
+	}
+	return actor
 }
 
 // clientNameForAudit — имя клиента для записи в журнал, или пусто, если его

@@ -13,9 +13,6 @@ type loginReq struct {
 }
 
 func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
-	if s.rejectLimitedLogin(w, r) {
-		return
-	}
 	var req loginReq
 	if !decodeJSON(w, r, &req) {
 		return
@@ -23,6 +20,11 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 	outcome, err := s.evaluateLogin(r, req.Username, req.Password)
 	if err != nil {
 		internalFailure(w, r, s, "api login: read user", err)
+		return
+	}
+	if outcome.retryAfter > 0 {
+		setRetryAfter(w, outcome.retryAfter)
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"ok": false, "message": loginLimitMessage})
 		return
 	}
 	if outcome.message != "" {
