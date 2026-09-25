@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
@@ -75,5 +76,43 @@ func TestClientMutationsRefuseWhileRestorePending(t *testing.T) {
 	}
 	if rec := f.get("/api/clients"); rec.Code != http.StatusOK {
 		t.Fatalf("чтение списка: код %d", rec.Code)
+	}
+}
+
+// Настройки почты лежат в той же базе и так же сменятся образом из архива:
+// сохранение и удаление отказывают тем же текстом (amnezia-vpn-server-cb48).
+func TestMailChangesRefuseWhileRestorePending(t *testing.T) {
+	f := newFixture(t)
+	saved := db.MailSettings{Host: "smtp.example.com", Port: 587, Username: "me", Password: "secret", Recipient: "me@example.com"}
+	if err := db.SaveMailSettings(f.h, saved, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(filepath.Dir(f.dbPath), ".restore-pending"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		method string
+		body   any
+	}{
+		{http.MethodPut, map[string]any{"host": "smtp.other.com", "port": 465, "username": "you", "password": "x", "recipient": "you@example.com"}},
+		{http.MethodDelete, nil},
+	} {
+		rec := f.apiCSRF(tc.method, "/api/mail", tc.body)
+		if rec.Code != http.StatusConflict {
+			t.Errorf("%s /api/mail: код %d, ожидался 409: %s", tc.method, rec.Code, rec.Body.String())
+			continue
+		}
+		if got := decodeAPI(t, rec); got["ok"] != false || got["message"] != flashRestoreBlocksChange {
+			t.Errorf("%s /api/mail: ответ %v", tc.method, got)
+		}
+	}
+
+	got, err := db.LoadMailSettings(f.h)
+	if err != nil {
+		t.Fatalf("настройки почты пропали: %v", err)
+	}
+	if got.Host != saved.Host || got.Recipient != saved.Recipient {
+		t.Fatalf("настройки почты изменены при ожидающем восстановлении: %+v", got)
 	}
 }

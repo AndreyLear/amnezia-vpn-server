@@ -76,7 +76,7 @@ const (
 	flashRestoreApplied     = "Восстановление применено. Активных клиентов: %d."
 	flashRestoreApplyFailed = "Бэкап подготовлен, но применить его не удалось. Требуется перезапуск."
 	flashRestoreNeedsChoice = "Бэкап снят на другом сервере: выберите, какой адрес использовать"
-	// flashRestoreBlocksChange отвечает на изменение клиента, пока
+	// flashRestoreBlocksChange отвечает на изменение клиентов или почты, пока
 	// восстановление ждёт перезапуска (amnezia-vpn-server-cb48).
 	flashRestoreBlocksChange = "Изменить сейчас нельзя: восстановление уже подготовлено — перезапустите стек, чтобы снова вносить изменения"
 )
@@ -102,12 +102,13 @@ func (s *Server) pendingExistsReply(w http.ResponseWriter, jsonAPI bool) (bool, 
 	return ok, true
 }
 
-// changeBlockedByRestore refuses a change to clients while a prepared
-// restore waits for the restart, and reports whether it answered. The
-// restart swaps the database for the archive's image: a client added now
-// got its config issued and then silently vanished
-// (amnezia-vpn-server-cb48; the CLI refuses the same since 76mp.9). Auth
-// changes are not refused: the restore keeps the live auth table
+// changeBlockedByRestore refuses a change to clients or mail settings
+// while a prepared restore waits for the restart, and reports whether it
+// answered. The restart swaps the database for the archive's image: a
+// client added now got its config issued and then silently vanished, and
+// saved mail settings reverted to the archive's (amnezia-vpn-server-cb48;
+// the CLI refuses client changes since 76mp.9 and has no mail commands).
+// Auth changes are not refused: the restore keeps the live auth table
 // (backup.KeepLiveAuth).
 //
 // Callers must hold s.mutex: the web restore leaves the marker behind a
