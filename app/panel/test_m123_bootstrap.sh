@@ -71,6 +71,8 @@ INSTALL_PANEL_URL=
 INSTALL_NO_PANEL_LINE=0
 PUBLIC_IP=2.26.93.192
 SOURCE_BODY=fake-tarball
+RELEASE_TAG=v2.10.40
+RELEASE_SHA=
 EOF
 }
 
@@ -297,6 +299,20 @@ for a in "$@"; do
 done
 if printf '%s' "$*" | grep -q "api.ipify.org"; then
     printf '%s\n' "${PUBLIC_IP}"
+    exit 0
+fi
+# Последний выпуск и его архив (amnezia-vpn-server-76mp.22). Сумма в теле
+# выпуска по умолчанию настоящая — от того самого содержимого, которое отдаст
+# загрузка; RELEASE_SHA подменяет её.
+if printf '%s' "$*" | grep -q "releases/latest"; then
+    [ "${CURL_SOURCE_RC:-0}" = "0" ] || exit "${CURL_SOURCE_RC}"
+    sha="${RELEASE_SHA:-}"
+    if [ -z "$sha" ]; then
+        sha="$(printf '%s\n' "${SOURCE_BODY}" | { shasum -a 256 2>/dev/null || sha256sum; })"
+        sha="${sha%% *}"
+    fi
+    json="$(printf '{"tag_name":"%s","body":"Что нового\\n\\namnezia-sha256: %s\\n"}' "${RELEASE_TAG}" "$sha")"
+    if [ -n "$oarg" ]; then printf '%s\n' "$json" > "$oarg"; else printf '%s\n' "$json"; fi
     exit 0
 fi
 if [ -n "$oarg" ] && [ "$oarg" != "/dev/null" ]; then
@@ -1338,6 +1354,59 @@ test_standalone_downloads_the_project() {
     grep -q "unrelated" "$FAKE_CALLS" \
         && fail "the neighbouring directory was packed" \
         || pass "nothing from the surrounding directory was packed"
+    # Выпуск, а не ветка main (amnezia-vpn-server-76mp.22): в main может уже
+    # стоять версия, образы которой ещё не опубликованы, и тогда сервер молча
+    # собирал бы их сам полчаса.
+    grep -q "codeload\|refs/heads/main" "$FAKE_CALLS" \
+        && fail "the wizard still installs whatever main happens to be" \
+        || pass "the wizard does not install the main branch"
+    grep -q "releases/latest" "$FAKE_CALLS" \
+        && pass "the wizard asks which release is the latest" \
+        || fail "the wizard never asked for the latest release"
+    grep -q "releases/download/v2.10.40/amnezia-vpn-server-2.10.40.tar.gz" "$FAKE_CALLS" \
+        && pass "and downloads that release's own archive" \
+        || fail "the release archive was not downloaded"
+    grep -q "fake-tarball" "$FAKE_DIR/last-bundle" 2>/dev/null \
+        && pass "the verified archive is what reaches the server" \
+        || fail "the server got something other than the release archive"
+}
+
+# Сумма берётся из тела выпуска, как у агента обновления: архив, который с ней
+# не сходится, на сервер не едет.
+test_standalone_refuses_a_bad_checksum() {
+    fakes_reset
+    setstate RELEASE_SHA "0000000000000000000000000000000000000000000000000000000000000000" "$FAKE_STATE"
+    lonely="$TMP_TEST/lonely-sha"
+    rm -rf "$lonely"; mkdir -p "$lonely"
+    cp "$BOOTSTRAP_SH" "$lonely/bootstrap.sh"
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
+        bash "$lonely/bootstrap.sh" --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+        echo $?
+    )"
+    [ "$rc" != "0" ] \
+        && pass "a release archive with the wrong checksum stops the wizard" \
+        || fail "a release archive with the wrong checksum was installed"
+    grep -q "^scp " "$FAKE_CALLS" \
+        && fail "the unverified archive was copied to the server" \
+        || pass "nothing unverified reaches the server"
+    stderr | grep -qi "checksum" \
+        && pass "the refusal names the checksum" \
+        || fail "the refusal does not say what went wrong"
+
+    # Выпуск без строки суммы — тоже отказ, а не установка вслепую.
+    fakes_reset
+    setstate RELEASE_SHA "none" "$FAKE_STATE"
+    rc="$(
+        HOME="$FAKE_HOME" PATH="$FAKE_DIR:$PATH" \
+        bash "$lonely/bootstrap.sh" --ip 2.26.93.192 --key "$FAKE_HOME/.ssh/id_ed25519" \
+            > "$TMP_TEST/out" 2> "$TMP_TEST/err"
+        echo $?
+    )"
+    [ "$rc" != "0" ] && ! grep -q "^scp " "$FAKE_CALLS" \
+        && pass "a release without a checksum is refused" \
+        || fail "a release without a checksum was installed"
 }
 
 # When packing does fail, the operator has to see why.
@@ -1567,6 +1636,7 @@ test_default_panel_port_without_domain
 test_install_progress_is_visible
 test_install_log_survives_the_run
 test_standalone_downloads_the_project
+test_standalone_refuses_a_bad_checksum
 test_failed_pack_explains_itself
 test_summary_points_at_the_server_for_passwords
 test_ssh_keepalive_tolerates_a_busy_host

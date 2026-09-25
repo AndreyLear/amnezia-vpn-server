@@ -718,8 +718,42 @@ validate_safe "$REMOTE_TMP" || die_op "SSH failed: unexpected mktemp path from t
 
 # --- pack or download the project --------------------------------------
 
-PROJECT_TARBALL_URL="${AMNEZIA_PROJECT_TARBALL_URL:-https://codeload.github.com/AndreyLear/amnezia-vpn-server/tar.gz/refs/heads/main}"
+# Без репозитория рядом ставится последний выпуск, а не ветка main
+# (amnezia-vpn-server-76mp.22). В main может уже стоять версия, образы которой
+# ещё не опубликованы: pull падал, и сервер молча начинал собирать их сам на
+# 10–30 минут. Выпуск — это ровно то дерево, из которого собраны образы, и
+# проверяется он так же, как у агента обновления: сумма из тела выпуска,
+# архив из вложений. Подменивший файл должен ещё и отредактировать текст,
+# который люди читают на странице выпуска.
+PROJECT_REPO="AndreyLear/amnezia-vpn-server"
+PROJECT_API="${AMNEZIA_BOOTSTRAP_API:-https://api.github.com}"
+PROJECT_DOWNLOADS="${AMNEZIA_BOOTSTRAP_DOWNLOADS:-https://github.com}"
 BUNDLE="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-src.XXXXXX")"
+
+sha256_of() { # sha256_of FILE — hex digest; macOS has shasum, Linux sha256sum
+    local out
+    out="$(shasum -a 256 "$1" 2>/dev/null || sha256sum "$1" 2>/dev/null)" || return 1
+    printf '%s' "${out%% *}"
+}
+
+download_latest_release() { # download_latest_release OUT — verified archive
+    local json version sha got
+    json="$(curl -fsSL --max-time 30 -H 'Accept: application/vnd.github+json' \
+        "${PROJECT_API}/repos/${PROJECT_REPO}/releases/latest")" \
+        || die_op "cannot ask GitHub for the latest release of ${PROJECT_REPO} — check the network, or clone the repository and run ./bootstrap.sh from it"
+    version="$(printf '%s' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' | head -1)"
+    [ -n "$version" ] || die_op "the latest release of ${PROJECT_REPO} has no version tag like v1.2.3"
+    sha="$(printf '%s' "$json" | grep -Eo 'amnezia-sha256: [0-9a-f]{64}' | head -1 | awk '{print $2}')"
+    [ -n "$sha" ] || die_op "release v${version} carries no checksum (amnezia-sha256); refusing to install it unverified"
+    log "downloading the project from GitHub: release v${version} (no checkout beside this script)"
+    curl -fsSL --max-time 300 -o "$1" \
+        "${PROJECT_DOWNLOADS}/${PROJECT_REPO}/releases/download/v${version}/amnezia-vpn-server-${version}.tar.gz" \
+        || die_op "cannot download release v${version} from GitHub — check the network, or clone the repository and run ./bootstrap.sh from it"
+    got="$(sha256_of "$1")" || die_op "cannot compute the checksum of the downloaded release (need shasum or sha256sum)"
+    [ "$got" = "$sha" ] \
+        || die_op "checksum of release v${version} does not match the one published with it; refusing to install it"
+    log "release v${version}: checksum matches"
+}
 
 if [ -n "$SOURCE_URL" ]; then
     log "downloading source from --source"
@@ -740,12 +774,8 @@ else
     # tar up whatever the file was saved into — Downloads, or the home
     # directory — and fail on its size or on unreadable files.
     if [ "$packed" -eq 0 ] && [ ! -f "$SCRIPT_DIR/install.sh" ]; then
-        log "downloading the project from GitHub (no checkout beside this script)"
-        if curl -fsSL --max-time 120 -o "$BUNDLE" "$PROJECT_TARBALL_URL"; then
-            packed=1
-        else
-            die_op "cannot download the project from $PROJECT_TARBALL_URL — check the network, or clone the repository and run ./bootstrap.sh from it"
-        fi
+        download_latest_release "$BUNDLE"
+        packed=1
     fi
     if [ "$packed" -eq 0 ]; then
         log "packing the local repository (excluding .git/.beads/.worktrees and other bulk)"
