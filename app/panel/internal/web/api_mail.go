@@ -220,6 +220,9 @@ func (s *Server) apiMailSave(w http.ResponseWriter, r *http.Request) {
 
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	if s.changeBlockedByRestore(w, r, true) {
+		return
+	}
 
 	if next.Password == "" {
 		if prev, err := db.LoadMailSettings(s.db()); err == nil {
@@ -290,6 +293,9 @@ func (s *Server) apiMailTest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiMailDelete(w http.ResponseWriter, r *http.Request) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	if s.changeBlockedByRestore(w, r, true) {
+		return
+	}
 	recipient := ""
 	if prev, err := db.LoadMailSettings(s.db()); err == nil {
 		recipient = prev.Recipient

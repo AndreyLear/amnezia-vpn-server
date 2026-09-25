@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"testing"
@@ -303,5 +304,53 @@ func TestUpdateRequestIsWrittenWholeAndPrivate(t *testing.T) {
 		if strings.Contains(e.Name(), ".tmp") {
 			t.Fatalf("рядом остался временный файл %s", e.Name())
 		}
+	}
+}
+
+// Сервер пропал посреди обновления — ExecStopPost не выполнился, и
+// состояние навсегда осталось running. Панель считает такое running
+// прерванным, говорит об этом честно и принимает новый запрос
+// (amnezia-vpn-server-4x8y).
+func TestAPIUpdateStartAcceptsAfterAnAbandonedRun(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("AMNEZIA_VERSION", "2.8.2")
+	writeStatusFile(t, f, "update-latest.json", `{"tag_name":"v2.9.0","body":"x"}`)
+	at := time.Now().UTC().Add(-updateRunningStale - time.Minute).Format(time.RFC3339)
+	writeStatusFile(t, f, "update-state.json",
+		`{"schema":"v1","state":"running","from":"2.8.2","to":"2.9.0","step":"установка","message":"ставлю выпуск 2.9.0","at_utc":"`+at+`"}`)
+
+	got := decodeAPI(t, f.get("/api/update"))
+	if got["state"] != "failed" || got["state_step"] != "установка" || got["state_at_utc"] != at {
+		t.Fatalf("брошенное running показано как %v", got)
+	}
+	if got["state_message"] != updateInterruptedMessage {
+		t.Fatalf("state_message = %v", got["state_message"])
+	}
+
+	rec := f.postJSON("/api/update/start", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d, ожидался 200: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(f.dbPath), "update-request.json")); err != nil {
+		t.Fatalf("запрос не появился: %v", err)
+	}
+}
+
+// Свежее running — настоящее: второй установщик не просим. Установка и
+// откат у агента идут до часа каждый, юнит systemd — до 150 минут.
+func TestAPIUpdateStartRefusesWhileARecentRunIsGoing(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("AMNEZIA_VERSION", "2.8.2")
+	writeStatusFile(t, f, "update-latest.json", `{"tag_name":"v2.9.0","body":"x"}`)
+	at := time.Now().UTC().Add(-150 * time.Minute).Format(time.RFC3339)
+	writeStatusFile(t, f, "update-state.json",
+		`{"schema":"v1","state":"running","to":"2.9.0","step":"откат","at_utc":"`+at+`"}`)
+
+	if got := decodeAPI(t, f.get("/api/update")); got["state"] != "running" {
+		t.Fatalf("state = %v", got["state"])
+	}
+	rec := f.postJSON("/api/update/start", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("код %d, ожидался 409: %s", rec.Code, rec.Body.String())
 	}
 }

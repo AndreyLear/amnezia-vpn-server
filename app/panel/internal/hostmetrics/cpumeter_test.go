@@ -2,6 +2,8 @@ package hostmetrics
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -67,4 +69,26 @@ func TestReadCPUIowaitGoingBackIsNotAReset(t *testing.T) {
 	writeProc(t, dir, "cpu  1100 0 0 4010 400 0 0 0\n", meminfoOK)
 	snap, _ := Read(dir, disk, prev)
 	assertPct(t, "CPU", snap.CPU, 100.0*100.0/110.0, 0.01)
+}
+
+// Неудачное чтение /proc/stat (пустой файл, сбой открытия) гасит число, но
+// не выбрасывает прежний отсчёт: иначе следующий удачный замер снова стал
+// бы «первым», а при неподвижных счётчиках не вернулось бы и число
+// (amnezia-vpn-server-76mp.23).
+func TestCPUMeterFailedReadKeepsTheReference(t *testing.T) {
+	dir := t.TempDir()
+	writeProc(t, dir, statSample1, meminfoOK)
+	m := NewCPUMeter(dir, time.Hour)
+	m.sample()
+	// Пустой файл — то, что читатель видит посреди неатомарной перезаписи.
+	if err := os.WriteFile(filepath.Join(dir, "stat"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.sample()
+	assertNil(t, "CPU при нечитаемом /proc/stat", m.Percent())
+	writeProc(t, dir, statSample2, meminfoOK)
+	m.sample()
+	assertPct(t, "CPU после восстановления чтения", m.Percent(), wantCPU, 0.01)
+	m.sample()
+	assertPct(t, "CPU при неподвижных счётчиках", m.Percent(), wantCPU, 0.01)
 }

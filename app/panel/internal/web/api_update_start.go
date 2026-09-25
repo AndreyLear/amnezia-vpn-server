@@ -33,8 +33,9 @@ func (s *Server) apiUpdateStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Два установщика в одном каталоге подерутся. Агент откажет и сам, но
-	// человеку лучше услышать это сразу, а не через минуту молчания.
-	if st, err := status.ReadUpdateState(filepath.Join(dir, "update-state.json")); err == nil && st != nil && st.State == "running" {
+	// человеку лучше услышать это сразу, а не через минуту молчания. Брошенное
+	// running не в счёт: его никто не допишет (amnezia-vpn-server-4x8y).
+	if st, err := readUpdateState(filepath.Join(dir, "update-state.json"), time.Now()); err == nil && st != nil && st.State == "running" {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"ok": false, "message": "Обновление уже идёт",
 		})

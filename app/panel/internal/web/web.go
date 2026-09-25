@@ -30,7 +30,6 @@ import (
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
-	"github.com/amnezia-vpn/amnezia-vpn-server/internal/hostmetrics"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
@@ -139,8 +138,6 @@ type Server struct {
 	// loginVerify holds one token per running Argon2 check
 	// (loginVerifySlots, amnezia-vpn-server-76mp.1).
 	loginVerify chan struct{}
-	hostMu      sync.Mutex
-	hostCPU     hostmetrics.CPUSample
 }
 
 // db returns the live database handle (RLock-protected swap access).

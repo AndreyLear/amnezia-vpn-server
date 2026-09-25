@@ -53,7 +53,10 @@ func (m *CPUMeter) sample() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !ok {
-		m.prev, m.pct = CPUSample{}, nil
+		// The figure goes, the reference stays. Dropping it made the next
+		// good read a "first" sample again, and with counters that did not
+		// move after it the figure never came back (amnezia-vpn-server-76mp.23).
+		m.pct = nil
 		return
 	}
 	if next == m.prev {

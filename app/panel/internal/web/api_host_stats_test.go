@@ -25,11 +25,16 @@ func writeHostStatsProc(t *testing.T, dir, stat, meminfo string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "meminfo"), []byte(meminfo), 0o644); err != nil {
-		t.Fatal(err)
+	// Через rename: фоновый замер читает stat в любой момент, и посреди
+	// WriteFile он видел пустой или обрезанный файл (amnezia-vpn-server-76mp.23).
+	for name, body := range map[string]string{"stat": stat, "meminfo": meminfo} {
+		tmp := filepath.Join(dir, name+".tmp")
+		if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
