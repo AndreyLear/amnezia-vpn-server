@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,5 +160,36 @@ func TestAuditFailedLoginNameIsBounded(t *testing.T) {
 	}
 	if !strings.HasPrefix(actor, strings.Repeat("я", auditActorMaxRunes)) {
 		t.Fatalf("actor must keep the beginning of the name: %q", actor)
+	}
+}
+
+// Вход через HTML-форму POST /login пишется в журнал так же, как через
+// /api/login (amnezia-vpn-server-76mp.28).
+func TestAuditFormLoginIsRecorded(t *testing.T) {
+	t.Setenv("AMNEZIA_SECURE_COOKIES", "")
+	f := newFixture(t)
+	addUser(t, f, "alice", testPassword)
+
+	bad := postLogin(t, f, loginRequest(t, "203.0.113.91:1",
+		url.Values{"username": {"alice"}, "password": {"wrong-password"}}))
+	if bad.Code != http.StatusOK {
+		t.Fatalf("wrong password: code = %d, want 200", bad.Code)
+	}
+	if actor, ok := lastAudit(t, f, auditLoginFailed); !ok || actor != "alice" {
+		t.Fatalf("login.failed = %q (recorded %v), want alice", actor, ok)
+	}
+
+	good := postLogin(t, f, loginRequest(t, "203.0.113.91:1",
+		url.Values{"username": {"alice"}, "password": {testPassword}}))
+	if good.Code != http.StatusSeeOther {
+		t.Fatalf("correct password: code = %d, want 303", good.Code)
+	}
+	if actor, ok := lastAudit(t, f, auditLogin); !ok || actor != "alice" {
+		t.Fatalf("login = %q (recorded %v), want alice", actor, ok)
+	}
+	var detail string
+	if err := f.h.QueryRow(`SELECT group_concat(detail, '') FROM audit`).Scan(&detail); err == nil &&
+		strings.Contains(detail, "wrong-password") {
+		t.Fatal("the typed password must never reach the journal")
 	}
 }

@@ -98,7 +98,11 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		s.renderLogin(w, http.StatusTooManyRequests, loginData{Error: loginLimitMessage, Username: username})
 		return
 	}
+	// The form checks the same password as /api/login and is journaled
+	// the same way: name only, never the typed password
+	// (amnezia-vpn-server-76mp.28).
 	if outcome.message != "" {
+		s.auditAs(username, auditLoginFailed, "", "")
 		s.renderLogin(w, http.StatusOK, loginData{Error: outcome.message, Username: username})
 		return
 	}
@@ -106,6 +110,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "login: create session", err)
 		return
 	}
+	s.auditAs(username, auditLogin, "", "")
 	redirect303(w, r, "/")
 }
 
