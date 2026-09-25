@@ -90,6 +90,7 @@ setstate() { # portable in-place update: sed(1) -i differs on BSD/GNU
 fakes_reset() {
     unset AMNEZIA_INSTALL_SKIP_PRUNE
     : > "$FAKE_CALLS"
+    rm -f "$FAKE_DIR/ping.count"
     # A host that already has fail2ban, which is the ordinary case on a
     # rerun. Without this every run would install the package and the
     # assertions about apt-get not being invoked would be measuring this
@@ -148,10 +149,16 @@ ADD_APT_REPO_RC=0
 ADD_APT_REPO_FAILS=0
 APT_FUSER_BUSY_REMAINING=0
 FAKE_PMTU=1500
+FAKE_PING_LOSS=
+FAKE_PING_DROP_FIRST=0
 DEFAULT_IFACE=ens3
 TC_RC=0
 GITHUB_RELEASE_RC=0
 GITHUB_RELEASE_HTTP=200
+V6_DU_IN_ACCEPT=0
+V6_DU_OUT_ACCEPT=0
+UFW_ACTIVE=no
+UFW_RC=0
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -500,6 +507,14 @@ echo "ping $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 limit="${FAKE_PMTU:-1500}"
 [ "$limit" = "0" ] && exit 1
+# Потери (amnezia-vpn-server-76mp.33): FAKE_PING_LOSS=alternate теряет каждый
+# нечётный пакет, FAKE_PING_DROP_FIRST=N — первые N пакетов подряд. Счётчик
+# общий на прогон и сбрасывается fakes_reset.
+n="$(cat "${FAKE_DIR:?}/ping.count" 2>/dev/null || echo 0)"
+n=$((n + 1))
+printf '%s\n' "$n" > "$FAKE_DIR/ping.count"
+[ "${FAKE_PING_LOSS:-}" = "alternate" ] && [ $((n % 2)) = 1 ] && exit 1
+[ "$n" -le "${FAKE_PING_DROP_FIRST:-0}" ] && exit 1
 size=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -742,7 +757,13 @@ FAKE_EOF
 
 cat > "$FAKE_DIR/iptables" <<'FAKE_EOF'
 #!/bin/bash
-echo "iptables $*" >> "${FAKE_CALLS:?}"
+# One shim for both families: as ip6tables it keeps its own state under the
+# V6_ prefix, so the IPv6 exception is checked apart from the IPv4 one
+# (amnezia-vpn-server-76mp.20).
+tool="$(basename "$0")"
+pre=""
+[ "$tool" = "ip6tables" ] && pre="V6_"
+echo "$tool $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 act=""; chain=""; inf=""
 for a in "$@"; do
@@ -759,14 +780,15 @@ for a in "$@"; do
     esac
 done
 if [ "$act" = "L" ]; then
-    [ "$chain" = "DU" ] && [ "${DU_CHAIN:-yes}" = "no" ] && exit 1
+    eval "du=\${${pre}DU_CHAIN:-yes}"
+    [ "$chain" = "DU" ] && [ "$du" = "no" ] && exit 1
     exit 0
 fi
 if [ "$act" = "C" ]; then
-    eval "v=\${${chain}_${inf}_ACCEPT:-0}"
+    eval "v=\${${pre}${chain}_${inf}_ACCEPT:-0}"
     [ "$v" = "1" ] && exit 0 || exit 1
 fi
-setstate_val="${chain}_${inf}_ACCEPT"
+setstate_val="${pre}${chain}_${inf}_ACCEPT"
 sed "s/^${setstate_val}=.*/${setstate_val}=1/" "$FAKE_STATE" > "$FAKE_STATE.new" \
     && mv "$FAKE_STATE.new" "$FAKE_STATE"
 exit 0
@@ -797,6 +819,26 @@ chmod +x "$FAKE_DIR/dpkg-query" "$FAKE_DIR/apt-mark"
 
 chmod +x "$FAKE_DIR/modprobe" "$FAKE_DIR/awg" "$FAKE_DIR/uname" \
     "$FAKE_DIR/add-apt-repository" "$FAKE_DIR/iptables"
+
+# ufw is shadowed in every run: a CI host may have the real one, and it must
+# never be asked. UFW_ACTIVE=yes stands for a host whose firewall is on
+# (amnezia-vpn-server-76mp.20).
+cat > "$FAKE_DIR/ufw" <<'FAKE_EOF'
+#!/bin/bash
+echo "ufw $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "status" ]; then
+    if [ "${UFW_ACTIVE:-no}" = "yes" ]; then
+        echo "Status: active"
+    else
+        echo "Status: inactive"
+    fi
+    exit 0
+fi
+exit "${UFW_RC:-0}"
+FAKE_EOF
+cp "$FAKE_DIR/iptables" "$FAKE_DIR/ip6tables"
+chmod +x "$FAKE_DIR/ufw" "$FAKE_DIR/ip6tables"
 
 # --- harness plumbing ---------------------------------------------------
 
@@ -1781,6 +1823,62 @@ EOF
         || fail "prune soft-fail: WARNING missing from stdout"
 }
 
+# Каждое обновление оставляло полный комплект образов прошлой версии, а
+# docker-prune удалял только бесхозные слои: на маленьком диске VPS место
+# уходило с каждым выпуском (amnezia-vpn-server-76mp.34). Удаляются образы
+# проекта, которых нет ни в текущем versions.lock, ни в снимке для отката
+# агента обновления (.rollback/versions.lock) — откат не должен идти в сеть
+# за образом, который только что стёрли.
+test_prune_removes_stale_project_images() {
+    local root="$TMP_TEST/prune-root" bin="$TMP_TEST/prune-bin" calls="$TMP_TEST/prune-calls"
+    rm -rf "$root" "$bin"
+    mkdir -p "$root/.rollback" "$bin"
+    : > "$calls"
+    cp "$M91_HOME/docker-prune.sh" "$root/docker-prune.sh"
+    printf 'IMAGE_REGISTRY=ghcr.io/example/amnezia\nIMAGE_VERSION=2.10.40\n' > "$root/versions.lock"
+    printf 'IMAGE_REGISTRY=ghcr.io/example/amnezia\nIMAGE_VERSION=2.10.39\n' > "$root/.rollback/versions.lock"
+    cat > "$bin/docker" <<'EOF'
+#!/bin/bash
+echo "docker $*" >> "$PRUNE_CALLS"
+if [ "${1:-}" = "images" ] && printf '%s' "$*" | grep -q -- '--format'; then
+    printf '%s\n' \
+        ghcr.io/example/amnezia/panel:2.10.40 \
+        ghcr.io/example/amnezia/awg:2.10.40 \
+        ghcr.io/example/amnezia/panel:2.10.39 \
+        ghcr.io/example/amnezia/dns:2.10.38 \
+        ghcr.io/example/amnezia/awg:2.10.37 \
+        ghcr.io/example/amnezia/panel:"<none>" \
+        ghcr.io/other/panel:2.10.30 \
+        alpine:3.22.5
+fi
+exit 0
+EOF
+    chmod +x "$bin/docker"
+    PRUNE_CALLS="$calls" PATH="$bin:$PATH" bash "$root/docker-prune.sh" >/dev/null 2>&1 \
+        || fail "prune stale images: exit non-zero"
+    for gone in dns:2.10.38 awg:2.10.37; do
+        grep -qx "docker rmi ghcr.io/example/amnezia/$gone" "$calls" \
+            && pass "prune: stale project image $gone removed" \
+            || fail "prune: stale project image $gone kept"
+    done
+    for kept in panel:2.10.40 awg:2.10.40 panel:2.10.39; do
+        grep -q "rmi ghcr.io/example/amnezia/$kept" "$calls" \
+            && fail "prune: $kept removed (current or rollback version)" \
+            || pass "prune: $kept kept (current or rollback version)"
+    done
+    grep -Eq "rmi (ghcr.io/other|alpine|.*<none>)" "$calls" \
+        && fail "prune: touched an image that is not the project's" \
+        || pass "prune: foreign and untagged images left to docker"
+
+    # Без versions.lock неизвестно, что текущее: не удаляется ничего.
+    rm -f "$root/versions.lock"
+    : > "$calls"
+    PRUNE_CALLS="$calls" PATH="$bin:$PATH" bash "$root/docker-prune.sh" >/dev/null 2>&1
+    grep -q "rmi ghcr.io/example" "$calls" \
+        && fail "prune without versions.lock: project images removed" \
+        || pass "prune without versions.lock: project images left alone"
+}
+
 test_skip_prune() {
     fakes_reset
     os_release debian 12 bookworm
@@ -1854,6 +1952,51 @@ test_domain_default_no_domain() {
     if grep -q "dig .*@1\.1\.1\.1" "$FAKE_CALLS"; then fail "no-domain: dig was invoked"; else pass "no-domain: dig not invoked"; fi
     if grep -qE "tcp dport (80|443)" "$ROOT/nftables/amnezia-vpn.nft"; then fail "no-domain: 80/443 opened"; else pass "no-domain: 80/443 stay closed"; fi
     if grep -q "ssh -L 8787" "$TMP_TEST/out"; then pass "no-domain: SSH tunnel hint kept"; else fail "no-domain: SSH hint missing"; fi
+}
+
+# nginx по умолчанию режет тело на 1 МБ, а панель принимает бэкап до
+# MaxRestoreBodyBytes: восстановление бэкапа побольше упиралось в HTML 413 от
+# nginx, и панель показывала «Восстановление не удалось» без причины
+# (amnezia-vpn-server-76mp.30). Предел берётся из исходника панели, чтобы
+# расхождение ловилось здесь, а не на сервере.
+assert_restore_body_limit() { # assert_restore_body_limit LABEL
+    local label="$1" conf="$ROOT/nginx/panel.conf" mib want loc
+    mib="$(sed -n 's/^[[:space:]]*MaxRestoreBodyBytes = \([0-9][0-9]*\) << 20.*/\1/p' \
+        "$M91_REPO/app/panel/internal/web/restore.go")"
+    [ -n "$mib" ] || { fail "$label: MaxRestoreBodyBytes not found in restore.go"; return 0; }
+    want="client_max_body_size ${mib}m;"
+    for loc in "/api/backups/restore" "/backups/restore"; do
+        if awk -v l="location = ${loc} {" -v w="$want" '
+            index($0, l) { on = 1; next }
+            on && /^    }/ { on = 0 }
+            on && index($0, w) { found = 1 }
+            END { exit !found }' "$conf"; then
+            pass "$label: ${loc} accepts ${mib} MiB like the panel"
+        else
+            fail "$label: ${loc} lacks ${want}"
+        fi
+    done
+    grep -q "error_page 413 @restore_too_large;" "$conf" \
+        && grep -q '"message":"Файл больше ' "$conf" \
+        && pass "$label: nginx's own 413 answers in the panel's JSON" \
+        || fail "$label: nginx's 413 is not JSON the panel UI can show"
+    # Остальные запросы остаются с пределом nginx по умолчанию.
+    [ "$(grep -c "client_max_body_size" "$conf")" = "2" ] \
+        && pass "$label: the raised limit covers only the restore routes" \
+        || fail "$label: client_max_body_size appears $(grep -c "client_max_body_size" "$conf") times, want 2"
+}
+
+test_nginx_restore_body_limit() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "restore limit domain flow: exit $rc"
+    assert_restore_body_limit "domain"
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "restore limit panel-port flow: exit $rc"
+    assert_restore_body_limit "panel-port"
 }
 
 test_domain_mode_flow() {
@@ -3358,6 +3501,7 @@ test_panel_loopback_and_no_sock
 test_installed_compose_contract
 test_prune_soft_fail
 test_skip_prune
+test_prune_removes_stale_project_images
 test_layout_and_permissions
 test_versions_lock_used
 test_ip_forward_disabled
@@ -3397,6 +3541,7 @@ test_panel_init_failure_not_masked
 test_sentinel_guard_not_masked
 test_domain_default_no_domain
 test_domain_mode_flow
+test_nginx_restore_body_limit
 test_domain_dns_mismatch
 test_domain_dns_missing
 test_domain_certbot_failure
@@ -3427,6 +3572,9 @@ test_pmtu_preflight_caps_a_clean_uplink_too
 test_pmtu_preflight_lets_a_worse_uplink_win
 test_pmtu_preflight_survives_filtered_icmp
 test_pmtu_preflight_clamps_a_tiny_path
+test_pmtu_probe_survives_packet_loss
+test_pmtu_rerun_does_not_lower_on_one_bad_measurement
+test_pmtu_rerun_lowers_when_confirmed
 test_rerun_applies_the_deployment_values_to_the_database
     test_changed_tunnel_parameters_restart_awg
     test_unreadable_tunnel_parameters_restart_awg
@@ -3534,6 +3682,57 @@ test_pmtu_preflight_clamps_a_tiny_path() {
     grep -q "^TUNNEL_MTU=1280$" "$ROOT/.env" \
         && pass "1300-byte uplink -> TUNNEL_MTU clamped to 1280" \
         || fail "1300-byte uplink -> TUNNEL_MTU: $(grep TUNNEL_MTU "$ROOT/.env" || echo missing)"
+}
+
+# Один потерянный ping на шаге поиска выдавал заниженный PMTU: каждое «нет»
+# считалось ответом пути, а не потерей (amnezia-vpn-server-76mp.33).
+test_pmtu_probe_survives_packet_loss() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1500
+    state_set FAKE_PING_LOSS alternate
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "lossy pmtu flow: exit $rc"
+    grep -q "^TUNNEL_MTU=1360$" "$ROOT/.env" && grep -q "^TUNNEL_MTU_MAX=1440$" "$ROOT/.env" \
+        && pass "every other probe lost -> still the true 1500-byte path (1360/1440)" \
+        || fail "lossy path measured wrong: $(grep TUNNEL_MTU "$ROOT/.env" | tr '\n' ' ')"
+}
+
+# Обновление перемеряло путь и молча понижало MTU по одному неудачному
+# замеру, перезапуская туннель для всех клиентов (amnezia-vpn-server-76mp.33).
+# Понижение принимается только тогда, когда его подтверждает второй замер.
+test_pmtu_rerun_does_not_lower_on_one_bad_measurement() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1500
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "pmtu rerun first pass: exit $rc"
+    grep -q "^TUNNEL_MTU_MAX=1440$" "$ROOT/.env" || fail "pmtu rerun: first pass did not store 1440"
+    # Всплеск потерь дольше всех попыток одного шага: первый замер занижен.
+    rm -f "$FAKE_DIR/ping.count"
+    state_set FAKE_PING_DROP_FIRST 3
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "pmtu rerun second pass: exit $rc"
+    grep -q "^TUNNEL_MTU=1360$" "$ROOT/.env" && grep -q "^TUNNEL_MTU_MAX=1440$" "$ROOT/.env" \
+        && pass "rerun: one bad measurement does not lower the MTU" \
+        || fail "rerun: MTU lowered by one bad measurement: $(grep TUNNEL_MTU "$ROOT/.env" | tr '\n' ' ')"
+    stdout | grep -q "measuring again" \
+        && pass "rerun: the lower reading was re-measured before anything changed" \
+        || fail "rerun: no confirmation measurement"
+}
+
+test_pmtu_rerun_lowers_when_confirmed() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    state_set FAKE_PMTU 1500
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "pmtu confirmed first pass: exit $rc"
+    state_set FAKE_PMTU 1380
+    rc="$(AMNEZIA_INSTALL_PMTU_TARGETS="1.1.1.1" run_install)"
+    [ "$rc" = "0" ] || fail "pmtu confirmed second pass: exit $rc"
+    grep -q "^TUNNEL_MTU=1320$" "$ROOT/.env" \
+        && pass "rerun: a path that really shrank lowers the MTU after confirmation" \
+        || fail "rerun: confirmed lower path not applied: $(grep TUNNEL_MTU "$ROOT/.env" | tr '\n' ' ')"
 }
 
 # --- panel exposure survives a bare rerun (amnezia-vpn-server-35g3) -----

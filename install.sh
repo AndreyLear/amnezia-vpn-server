@@ -1622,20 +1622,37 @@ TUNNEL_MTU_FLOOR=1280     # IPv6 minimum link MTU: every path must carry it
 # not about MTU), while an unset variable takes the real targets.
 UPLINK_PMTU_TARGETS="${AMNEZIA_INSTALL_PMTU_TARGETS-1.1.1.1 8.8.8.8}"
 
+# ping_df TARGET SIZE: one unfragmented probe of SIZE payload bytes, tried
+# up to PMTU_PROBE_ATTEMPTS times. A single lost reply used to count as
+# "too big": the binary search then settled lower, and on a rerun the
+# lower MTU restarted the tunnel for every client
+# (amnezia-vpn-server-76mp.33). A loss is told from a limit by asking
+# again; a real limit fails every attempt. The retries wait 1 s instead
+# of 2, so a probe above the limit costs 4 s, not 6.
+PMTU_PROBE_ATTEMPTS=3
+ping_df() {
+    local target="$1" size="$2" i wait=2
+    for i in $(seq 1 "$PMTU_PROBE_ATTEMPTS"); do
+        cmd ping -c1 -W"$wait" -M do -s "$size" "$target" >/dev/null 2>&1 && return 0
+        wait=1
+    done
+    return 1
+}
+
 # probe_pmtu TARGET: largest ICMP payload that reaches TARGET unfragmented,
 # as a full IP packet size; empty when the target does not answer at all.
 probe_pmtu() {
     local target="$1" lo=1200 hi=1472 mid
     # Most uplinks are clean 1500: check that first so the common case
     # costs one probe instead of a full binary search.
-    if cmd ping -c1 -W2 -M do -s "$hi" "$target" >/dev/null 2>&1; then
+    if ping_df "$target" "$hi"; then
         printf '%s\n' "$(( hi + 28 ))"
         return 0
     fi
-    cmd ping -c1 -W2 -M do -s "$lo" "$target" >/dev/null 2>&1 || return 1
+    ping_df "$target" "$lo" || return 1
     while [ $((hi - lo)) -gt 1 ]; do
         mid=$(( (lo + hi) / 2 ))
-        if cmd ping -c1 -W2 -M do -s "$mid" "$target" >/dev/null 2>&1; then
+        if ping_df "$target" "$mid"; then
             lo="$mid"
         else
             hi="$mid"
@@ -1658,12 +1675,50 @@ measure_uplink_pmtu() {
     [ "$best" -gt 0 ] && printf '%s\n' "$best"
 }
 
+# pmtu_lowers_stored PMTU: true when this path would give the tunnel a
+# smaller MTU (clients' or the device's) than the deployment already has.
+pmtu_lowers_stored() {
+    local pmtu="$1" mtu device prev_mtu prev_max
+    mtu=$(( pmtu - TUNNEL_ENCAP_OVERHEAD ))
+    [ "$mtu" -gt "$TUNNEL_MTU_CEILING" ] && mtu="$TUNNEL_MTU_CEILING"
+    [ "$mtu" -lt "$TUNNEL_MTU_FLOOR" ] && mtu="$TUNNEL_MTU_FLOOR"
+    device=$(( pmtu - TUNNEL_ENCAP_OVERHEAD ))
+    [ "$device" -lt "$mtu" ] && device="$mtu"
+    [ "$device" -gt 1500 ] && device=1500
+    prev_mtu="$(env_read TUNNEL_MTU)"
+    prev_max="$(env_read TUNNEL_MTU_MAX)"
+    { [ -n "$prev_mtu" ] && [ "$mtu" -lt "$prev_mtu" ] 2>/dev/null; } && return 0
+    { [ -n "$prev_max" ] && [ "$device" -lt "$prev_max" ] 2>/dev/null; } && return 0
+    return 1
+}
+
 tunnel_mtu_preflight() {
-    local pmtu mtu
+    local pmtu mtu again
     pmtu="$(measure_uplink_pmtu)"
     if [ -z "$pmtu" ]; then
         log "WARNING: could not measure the uplink path MTU (ICMP filtered?); the built-in default applies"
         return 0
+    fi
+    # A rerun (every upgrade is one) measures the path again, and a lower
+    # reading restarts the tunnel for every client. So a reading below
+    # what the deployment already runs must be seen twice: the better of
+    # the two measurements wins, and a path that really shrank still
+    # shrinks the tunnel (amnezia-vpn-server-76mp.33). Raising needs no
+    # confirmation — that is how a higher ceiling reaches existing
+    # servers (amnezia-vpn-server-rplm).
+    if pmtu_lowers_stored "$pmtu"; then
+        log "uplink path MTU $pmtu would lower the tunnel below its stored $(env_read TUNNEL_MTU)/$(env_read TUNNEL_MTU_MAX); measuring again to confirm"
+        again="$(measure_uplink_pmtu)"
+        if [ -z "$again" ]; then
+            log "WARNING: the confirming measurement got no answer; the tunnel keeps its MTU"
+            return 0
+        fi
+        [ "$again" -gt "$pmtu" ] && pmtu="$again"
+        if pmtu_lowers_stored "$pmtu"; then
+            log "WARNING: the uplink path MTU is confirmed at $pmtu; lowering the tunnel MTU"
+        else
+            log "the second measurement gave $again: the lower reading was a loss, the tunnel keeps its MTU"
+        fi
     fi
     mtu=$(( pmtu - TUNNEL_ENCAP_OVERHEAD ))
     if [ "$mtu" -gt "$TUNNEL_MTU_CEILING" ]; then
@@ -1945,10 +2000,22 @@ NFT_END='# --- amnezia-vpn end ---'
 # over .env/parameter; a missing config falls back to the deployment
 # value. The comments explain the precedence contract (M9.2 audit).
 vpn_subnet_effective() {
-    local addr
+    local line addr="" part
     if [ -f "$ROOT_DIR/config/awg0.conf" ]; then
-        addr="$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$ROOT_DIR/config/awg0.conf" | head -1)"
-        if [ -n "$addr" ] && validate_cidr "$addr"; then
+        line="$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$ROOT_DIR/config/awg0.conf" | head -1)"
+        # With IPv6 on, the panel writes both families on one line
+        # ("10.8.0.1/24, fd..::1/64"). The line as a whole is no CIDR, and
+        # reading it as "no Address" built NAT and forward for the subnet
+        # from .env or --vpn-subnet instead — someone else's, when the
+        # flag is passed again (amnezia-vpn-server-76mp.32). The IPv4 part
+        # is looked for among all of them: the order is not a promise.
+        for part in $(printf '%s' "$line" | tr ',' ' '); do
+            if validate_cidr "$part"; then
+                addr="$part"
+                break
+            fi
+        done
+        if [ -n "$addr" ]; then
             log "VPN subnet derived from config/awg0.conf (server.address): $addr" >&2
             network_of_host_cidr "$addr"
             return 0
@@ -1963,10 +2030,12 @@ vpn_subnet_effective() {
 # render_nftables: the managed ruleset fragment. The table owns only
 # what the ТЗ §9 contract needs: NAT for vpn subnet -> WAN (never to
 # the tunnel itself), forwarding in both directions for the subnet,
-# UDP AWG_PORT acceptance. No policies, no drops: SSH and all foreign
-# traffic are untouched by construction. $3 carries pre-rendered extra
-# input-chain accepts, additively and only for a panel TLS mode: with
-# a panel domain (T-121) tcp 80 for ACME plus tcp 443 (or --panel-port);
+# UDP AWG_PORT acceptance. No policies, and no drops except the tunnel
+# guards in forward, each of which names awg0 (amnezia-vpn-server-76mp.13):
+# SSH and all foreign traffic are untouched by construction. $3 carries
+# pre-rendered extra input-chain accepts, additively and only for a
+# panel TLS mode: with a panel domain (T-121) tcp 80 for ACME plus tcp
+# 443 (or --panel-port);
 # with --panel-port and no domain (T-124) only that tcp port. Loopback-only
 # installs never open any of them.
 #
@@ -2051,6 +2120,23 @@ table ip amnezia {
         # large transfers stall. The clamp must precede the accepts —
         # accept terminates the chain.
         tcp flags syn tcp option maxseg size set rt mtu
+        # The tunnel guards (amnezia-vpn-server-76mp.13) — the only drops
+        # in this ruleset, and each names awg0, so SSH, containers and
+        # everything else on the host stay untouched. They precede the
+        # subnet accepts: accept ends the chain, a drop after it would
+        # never be met. A drop here is final for the packet; an accept is
+        # not (a later chain at the same hook still sees it).
+        #
+        # Link-local is the hoster's, not the internet: 169.254.169.254
+        # hands out the instance metadata and user-data at DO, Hetzner,
+        # Vultr and others, and a client reached it through masquerade.
+        iifname "awg0" ip daddr 169.254.0.0/16 drop
+        # Nothing opens a new connection INTO the tunnel from outside it:
+        # a neighbour of the hoster with a route to the tunnel subnet could
+        # otherwise reach the clients' devices. Replies pass; traffic that
+        # enters and leaves through awg0 (client to client) is not matched.
+        oifname "awg0" iifname != "awg0" ct state established,related accept
+        oifname "awg0" iifname != "awg0" drop
         ip saddr $1 accept
         ip daddr $1 accept
     }
@@ -2098,6 +2184,11 @@ table ip6 amnezia {
         # IPv6 would have no segment-size protection at all, which is
         # worse than the IPv4 case rather than equal to it — see below.
         tcp flags syn tcp option maxseg size set rt mtu
+        # Same guard as in the ip table (amnezia-vpn-server-76mp.13). The
+        # addresses are ULA behind NAT66, so the internet cannot name them,
+        # but the hoster's link can.
+        oifname "awg0" iifname != "awg0" ct state established,related accept
+        oifname "awg0" iifname != "awg0" drop
         ip6 saddr $subnet6 accept
         ip6 daddr $subnet6 accept
     }
@@ -2167,6 +2258,15 @@ render_nftables_deploy() {
     }
 }
 
+# ipv6_ra_uplinks: interfaces whose IPv6 default route was learned from
+# router advertisements ("proto ra"), one per line (amnezia-vpn-server-76mp.21).
+ipv6_ra_uplinks() {
+    cmd ip -6 route show default 2>/dev/null | awk '
+        / proto ra( |$)/ {
+            for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1)
+        }' | sort -u
+}
+
 # nftables_persist: hook the fragment into the distro nftables.conf
 # inside a managed marker block and pin the boot order in front of
 # Docker. Foreign content of nftables.conf is left untouched.
@@ -2227,17 +2327,38 @@ nftables_persist() {
     if [ -n "$TUNNEL_SUBNET6" ]; then
         cmd nft list table ip6 amnezia >/dev/null 2>&1 \
             || die_op "the tunnel asks for IPv6 but the ip6 amnezia table is not present after reload"
-        printf '# amnezia-vpn managed (amnezia-vpn-server-nxp2): the tunnel carries IPv6.\nnet.ipv6.conf.all.forwarding = 1\n' \
+        # forwarding=1 turns the kernel's RA processing off unless the
+        # interface says accept_ra=2. On a host that got its IPv6 default
+        # route by SLAAC the check below passed and the route then
+        # expired with its RA lifetime, ~30 minutes later
+        # (amnezia-vpn-server-76mp.21). So every interface whose default
+        # route came by RA gets 2 — first, before forwarding is on, and
+        # first in the drop-in, which sysctl applies top to bottom. A
+        # statically configured uplink is left as it is.
+        local ra_ifaces iface key lines=""
+        ra_ifaces="$(ipv6_ra_uplinks)"
+        for iface in $ra_ifaces; do
+            # sysctl's dotted names spell a VLAN's dot as a slash.
+            key="net.ipv6.conf.$(printf '%s' "$iface" | tr '.' '/').accept_ra"
+            lines="${lines}${key} = 2
+"
+            apply_sysctl_warn "${key}=2" || true
+            log "IPv6 uplink $iface takes its route from router advertisements: accept_ra=2 so forwarding does not drop it"
+        done
+        printf '# amnezia-vpn managed (amnezia-vpn-server-nxp2): the tunnel carries IPv6.\n%snet.ipv6.conf.all.forwarding = 1\n' "$lines" \
             > "$SYSCTL_DIR/amnezia-vpn-ipv6.conf"
         chmod 0644 "$SYSCTL_DIR/amnezia-vpn-ipv6.conf"
         apply_sysctl_warn net.ipv6.conf.all.forwarding=1 || true
         log "IPv6 forwarding enabled for tunnel subnet $TUNNEL_SUBNET6 (rules were already in place)"
-    else
-        # Unconditional on every run, not only at the moment of switching
-        # off: otherwise the state would depend on the order in which the
-        # operator happened to toggle things.
+    elif [ -f "$SYSCTL_DIR/amnezia-vpn-ipv6.conf" ]; then
+        # Switched off: undo what an earlier run switched on, and only
+        # that. Forcing 0 on every run broke IPv6 for whatever else on
+        # the host forwards it — Docker's IPv6 networks, another VPN
+        # (amnezia-vpn-server-76mp.21). The drop-in is the record that
+        # the value is ours.
         rm -f "$SYSCTL_DIR/amnezia-vpn-ipv6.conf"
         apply_sysctl_warn net.ipv6.conf.all.forwarding=0 || true
+        log "IPv6 forwarding switched off: this installer had switched it on"
     fi
 
     mkdir -p "$SYSTEMD_DIR/docker.service.d" || die_op "cannot create systemd drop-in dir"
@@ -2249,6 +2370,34 @@ After=nftables.service
 EOF
     chmod 0644 "$SYSTEMD_DIR/docker.service.d/amnezia-vpn-nftables.conf"
     cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed"
+}
+
+# ufw_open_ports AWG_PORT INPUT_RULES — mirror the managed input accepts in
+# an active ufw (amnezia-vpn-server-76mp.20). The tcp ports come from the
+# rendered input rules, so nft and ufw can never disagree about what the
+# panel mode opens. Never fatal: the nft rules are in place already, and a
+# ufw that refuses is the operator's to look at.
+ufw_active() {
+    command -v ufw >/dev/null 2>&1 || return 1
+    cmd ufw status 2>/dev/null | head -1 | grep -q '^Status: active'
+}
+
+ufw_open_ports() {
+    local awg_port="$1" rules="${2:-}" tcp failed=0
+    ufw_active || return 0
+    log "ufw is active: opening the tunnel and panel ports in it"
+    cmd ufw allow "${awg_port}/udp" comment 'amnezia-vpn tunnel' >/dev/null 2>&1 || failed=1
+    # The resolver answers on the tunnel address only; opening 53 on
+    # every interface would make an open resolver of the host.
+    cmd ufw allow in on awg0 to any port 53 comment 'amnezia-vpn dns' >/dev/null 2>&1 || failed=1
+    for tcp in $(printf '%s\n' "$rules" | sed -n 's/^[[:space:]]*tcp dport \([0-9][0-9]*\) accept$/\1/p'); do
+        cmd ufw allow "${tcp}/tcp" comment 'amnezia-vpn panel' >/dev/null 2>&1 || failed=1
+    done
+    if [ "$failed" = "1" ]; then
+        log "WARNING: ufw refused some of the rules; check 'ufw status' — the tunnel or the panel may be unreachable"
+    else
+        log "ufw: tunnel port ${awg_port}/udp, resolver on awg0 and the panel ports allowed"
+    fi
 }
 
 net_setup() {
@@ -2321,21 +2470,24 @@ RULES
     # never rewrites) — or of FORWARD when DOCKER-USER is absent.
     # Additive only: nothing is flushed, nothing is dropped, and a
     # re-run never duplicates the rules (iptables -C guard).
+    #
+    # Both families: Docker sets the IPv6 FORWARD policy to DROP as well,
+    # and with the exception made in iptables alone the tunnel's IPv6
+    # went nowhere (amnezia-vpn-server-76mp.20). The IPv6 accept is
+    # harmless while the tunnel carries IPv4 only — forwarding is off
+    # then, and the rule names awg0.
     ensure_forward_accept() {
-        command -v iptables >/dev/null 2>&1 || {
-            log "forward accept: iptables not present; relying on the nft ruleset"
-            return 0
-        }
+        local t chain d any=0
         # Boot persistence: docker/ufw rebuild their chains on every
         # boot, so the insertion runs again from a one-shot unit
         # (idempotent; no-op when the rules are already present).
         # Quoted delimiter: the unit file must receive the literal
-        # "$chain"/"$d" (expanded at boot by /bin/sh), NOT the
+        # "$chain"/"$d"/"$t" (expanded at boot by /bin/sh), NOT the
         # installer's PID ("$$" would be expanded by this shell).
         cat > "$SYSTEMD_DIR/amnezia-vpn-forward.service" <<'EOF'
 # amnezia-vpn managed (M9.2): tunnel egress forward accept for
-# docker/ufw coexistence. Runs after docker and nftables, never
-# flushes or drops anything, idempotent on every boot.
+# docker/ufw coexistence, IPv4 and IPv6. Runs after docker and nftables,
+# never flushes or drops anything, idempotent on every boot.
 [Unit]
 Description=Amnezia VPN forward accept for the tunnel interface
 After=docker.service nftables.service
@@ -2344,23 +2496,33 @@ Wants=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'command -v iptables >/dev/null 2>&1 || exit 0; chain=FORWARD; iptables -t filter -L DOCKER-USER >/dev/null 2>&1 && chain=DOCKER-USER; for d in "-i awg0" "-o awg0"; do iptables -t filter -C "$chain" $d -j ACCEPT 2>/dev/null || iptables -t filter -I "$chain" 1 $d -j ACCEPT; done'
+ExecStart=/bin/sh -c 'for t in iptables ip6tables; do command -v "$t" >/dev/null 2>&1 || continue; chain=FORWARD; "$t" -t filter -L DOCKER-USER >/dev/null 2>&1 && chain=DOCKER-USER; for d in "-i awg0" "-o awg0"; do "$t" -t filter -C "$chain" $d -j ACCEPT 2>/dev/null || "$t" -t filter -I "$chain" 1 $d -j ACCEPT; done; done'
 
 [Install]
 WantedBy=multi-user.target
 EOF
         chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-forward.service"
-        local chain="FORWARD" d=""
-        if cmd iptables -t filter -L DOCKER-USER >/dev/null 2>&1; then
-            chain="DOCKER-USER"
-        fi
-        for d in "-i awg0" "-o awg0"; do
-            if ! cmd iptables -t filter -C "$chain" $d -j ACCEPT >/dev/null 2>&1; then
-                cmd iptables -t filter -I "$chain" 1 $d -j ACCEPT \
-                    || die_op "iptables forward accept failed ($chain $d)"
-                log "forward accept: inserted $d -j ACCEPT into $chain"
+        for t in iptables ip6tables; do
+            if ! command -v "$t" >/dev/null 2>&1; then
+                log "forward accept: $t not present; relying on the nft ruleset"
+                continue
             fi
+            any=1
+            chain="FORWARD"
+            if cmd "$t" -t filter -L DOCKER-USER >/dev/null 2>&1; then
+                chain="DOCKER-USER"
+            fi
+            for d in "-i awg0" "-o awg0"; do
+                # shellcheck disable=SC2086 # $d is two words on purpose
+                if ! cmd "$t" -t filter -C "$chain" $d -j ACCEPT >/dev/null 2>&1; then
+                    # shellcheck disable=SC2086
+                    cmd "$t" -t filter -I "$chain" 1 $d -j ACCEPT \
+                        || die_op "$t forward accept failed ($chain $d)"
+                    log "forward accept: inserted $d -j ACCEPT into $t $chain"
+                fi
+            done
         done
+        [ "$any" = "1" ] || return 0
         cmd systemctl daemon-reload >/dev/null 2>&1 \
             || die_op "systemctl daemon-reload failed (forward accept unit)"
         cmd systemctl enable amnezia-vpn-forward.service >/dev/null 2>&1 \
@@ -2371,6 +2533,14 @@ EOF
     }
 
     ensure_forward_accept
+
+    # An active ufw drops incoming packets in its own chain, after ours,
+    # and an accept in table amnezia does not overrule a later drop: the
+    # tunnel port, the panel and the resolver inside the tunnel went
+    # silent while the self-check passed (amnezia-vpn-server-76mp.20).
+    # The same openings as the input chain above are made in ufw's own
+    # terms. An inactive or absent ufw is left exactly as it is.
+    ufw_open_ports "$port" "$input_rules"
 }
 
 net_setup
@@ -2828,6 +2998,36 @@ nginx_present() {
 }
 ACME_ROOT="${AMNEZIA_INSTALL_ACME_ROOT:-/var/www/certbot}"
 
+# The restore upload is the one request that legitimately carries
+# megabytes: the panel accepts a backup up to MaxRestoreBodyBytes
+# (app/panel/internal/web/restore.go), while nginx stops every body at 1 MB
+# by default. A larger backup got nginx's HTML 413, which the panel UI
+# cannot read, and restoring said only that it failed
+# (amnezia-vpn-server-76mp.30). The limit is raised on the restore routes
+# alone, to exactly the panel's; everything else keeps nginx's default.
+# An oversized upload is answered by nginx itself in the panel's JSON
+# shape, so the UI shows the reason. Keep NGINX_RESTORE_BODY_MIB equal to
+# MaxRestoreBodyBytes — test_m91_install.sh compares the two.
+NGINX_RESTORE_BODY_MIB=64
+
+render_nginx_panel_locations() {
+    local proxy loc
+    proxy='        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;'
+    printf '    location / {\n%s\n    }\n' "$proxy"
+    # The JSON answer belongs to the API route the panel UI calls; the
+    # old HTML form route gets nginx's own page, as it always did.
+    printf '    location = /api/backups/restore {\n        client_max_body_size %sm;\n        error_page 413 @restore_too_large;\n%s\n    }\n' \
+        "$NGINX_RESTORE_BODY_MIB" "$proxy"
+    printf '    location = /backups/restore {\n        client_max_body_size %sm;\n%s\n    }\n' \
+        "$NGINX_RESTORE_BODY_MIB" "$proxy"
+    printf '    location @restore_too_large {\n        default_type "application/json; charset=utf-8";\n        return 413 %s;\n    }' \
+        "'{\"ok\":false,\"message\":\"Файл больше ${NGINX_RESTORE_BODY_MIB} МиБ — панель столько не примет\"}'"
+}
+
 render_nginx_conf() { # render_nginx_conf DOMAIN PHASE [TLS_PORT]
     local domain="$1" phase="$2" tls_port="${3:-443}"
     local cert="/etc/letsencrypt/live/${domain}/fullchain.pem"
@@ -2861,13 +3061,7 @@ server {
     ssl_certificate ${cert};
     ssl_certificate_key ${key};
     ssl_protocols TLSv1.2 TLSv1.3;
-    location / {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
+$(render_nginx_panel_locations)
 }
 EOF
     fi
@@ -2950,13 +3144,7 @@ server {
     ssl_certificate $2;
     ssl_certificate_key $3;
     ssl_protocols TLSv1.2 TLSv1.3;
-    location / {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
+$(render_nginx_panel_locations)
 }
 EOF
 }

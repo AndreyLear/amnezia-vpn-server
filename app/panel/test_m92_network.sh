@@ -107,6 +107,14 @@ DU_IN_ACCEPT=0
 DU_OUT_ACCEPT=0
 FW_IN_ACCEPT=0
 FW_OUT_ACCEPT=0
+V6_DU_CHAIN=yes
+V6_DU_IN_ACCEPT=0
+V6_DU_OUT_ACCEPT=0
+V6_FW_IN_ACCEPT=0
+V6_FW_OUT_ACCEPT=0
+UFW_ACTIVE=no
+UFW_RC=0
+IP6_DEFAULT_ROUTE="default via fe80::1 dev ens3 proto ra metric 100 expires 1790sec pref medium"
 EOF
     # nft fake is hidden between runs (fakes_reset removes it) so the
     # "nft absent -> apt-get install nftables" path can be exercised;
@@ -321,6 +329,12 @@ if { [ "${1:-}" = "-4" ] || [ "${1:-}" = "-6" ]; } && [ "${2:-}" = "addr" ] \
     esac
     exit 0
 fi
+# Маршрут IPv6 по умолчанию: IP6_DEFAULT_ROUTE — строка, как её печатает ip
+# (amnezia-vpn-server-76mp.21). Пусто — маршрута нет.
+if [ "${1:-}" = "-6" ] && [ "${2:-}" = "route" ] && [ "${3:-}" = "show" ] && [ "${4:-}" = "default" ]; then
+    [ -n "${IP6_DEFAULT_ROUTE:-}" ] && printf '%s\n' "$IP6_DEFAULT_ROUTE"
+    exit 0
+fi
 if [ "${1:-}" = "-brief" ] && [ "${2:-}" = "addr" ]; then
     case "${AWG0_ADDRS:-auto}" in
         auto)
@@ -424,7 +438,13 @@ FAKE_EOF
 
 cat > "$FAKE_DIR/iptables" <<'FAKE_EOF'
 #!/bin/bash
-echo "iptables $*" >> "${FAKE_CALLS:?}"
+# One shim for both families: as ip6tables it keeps its own state under the
+# V6_ prefix, so the IPv6 exception is checked apart from the IPv4 one
+# (amnezia-vpn-server-76mp.20).
+tool="$(basename "$0")"
+pre=""
+[ "$tool" = "ip6tables" ] && pre="V6_"
+echo "$tool $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 act=""; chain=""; dir=""; inf=""
 for a in "$@"; do
@@ -442,20 +462,40 @@ for a in "$@"; do
     esac
 done
 if [ "$act" = "L" ]; then
-    [ "$chain" = "DU" ] && [ "${DU_CHAIN:-yes}" = "no" ] && exit 1
+    eval "du=\${${pre}DU_CHAIN:-yes}"
+    [ "$chain" = "DU" ] && [ "$du" = "no" ] && exit 1
     exit 0
 fi
 if [ "$act" = "C" ]; then
-    eval "v=\${${chain}_${inf}_ACCEPT:-0}"
+    eval "v=\${${pre}${chain}_${inf}_ACCEPT:-0}"
     [ "$v" = "1" ] && exit 0 || exit 1
 fi
-setstate_val="${chain}_${inf}_ACCEPT"
+setstate_val="${pre}${chain}_${inf}_ACCEPT"
 sed "s/^${setstate_val}=.*/${setstate_val}=1/" "$FAKE_STATE" > "$FAKE_STATE.new" \
     && mv "$FAKE_STATE.new" "$FAKE_STATE"
 exit 0
 FAKE_EOF
 
 chmod +x "$FAKE_DIR/modprobe" "$FAKE_DIR/awg" "$FAKE_DIR/add-apt-repository" "$FAKE_DIR/iptables"
+# ufw is shadowed in every run: a CI host may have the real one, and it must
+# never be asked. UFW_ACTIVE=yes stands for a host whose firewall is on
+# (amnezia-vpn-server-76mp.20).
+cat > "$FAKE_DIR/ufw" <<'FAKE_EOF'
+#!/bin/bash
+echo "ufw $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+if [ "${1:-}" = "status" ]; then
+    if [ "${UFW_ACTIVE:-no}" = "yes" ]; then
+        echo "Status: active"
+    else
+        echo "Status: inactive"
+    fi
+    exit 0
+fi
+exit "${UFW_RC:-0}"
+FAKE_EOF
+cp "$FAKE_DIR/iptables" "$FAKE_DIR/ip6tables"
+chmod +x "$FAKE_DIR/ufw" "$FAKE_DIR/ip6tables"
 cp "$FAKE_DIR/nft" "$FAKE_DIR/nft.hidden"
 
 # --- harness plumbing ---------------------------------------------------
@@ -716,8 +756,84 @@ test_no_flush_no_drop() {
     rc="$(run_install)"
     [ "$rc" = "0" ] || fail "no-flush flow: exit $rc"
     assert_not_in "flush ruleset" "$NFT_SYS_FILE" "never flushes the host ruleset"
-    assert_not_in_rules " drop" "$NFT_SYS_FILE" "no drop rules anywhere"
+    assert_only_tunnel_drops "$NFT_SYS_FILE" "drops touch nothing but traffic through the tunnel"
     assert_not_in "policy drop" "$NFT_SYS_FILE" "no drop policies"
+}
+
+# assert_only_tunnel_drops FILE LABEL — правило drop допустимо только про
+# трафик, идущий через туннель (amnezia-vpn-server-76mp.13): каждое называет
+# awg0. Всё чужое — SSH, контейнеры, сам хост — по-прежнему не трогается.
+assert_only_tunnel_drops() {
+    local stray
+    stray="$(grep -v '^[[:space:]]*#' "$1" | grep -E '\bdrop\b' | grep -v '"awg0"' || true)"
+    if [ -z "$stray" ]; then
+        pass "$2"
+    else
+        fail "$2 (drop without awg0: $(printf '%s' "$stray" | head -1))"
+    fi
+}
+
+# rule_line PATTERN [TABLE] — номер первой строки правила (комментарии не в
+# счёт) внутри таблицы ip amnezia или ip6 amnezia.
+rule_line() {
+    local table="${2:-ip}"
+    awk -v t="table ${table} amnezia {" -v p="$1" '
+        $0 == t { on = 1 }
+        on && /^}/ { on = 0 }
+        on && !/^[[:space:]]*#/ && index($0, p) { print NR; exit }
+    ' "$NFT_SYS_FILE"
+}
+
+# Клиент VPN доставал адрес метаданных хостера 169.254.169.254 (DO, Hetzner,
+# Vultr отдают там user-data), а сосед хостера с маршрутом на подсеть туннеля
+# открывал новые соединения к устройствам клиентов
+# (amnezia-vpn-server-76mp.13). drop стоит раньше accept подсети: accept
+# завершает цепочку, и после него drop не встретился бы.
+test_forward_guards_the_tunnel() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward guard flow: exit $rc"
+    local ll est new acc
+    ll="$(rule_line 'iifname "awg0" ip daddr 169.254.0.0/16 drop')"
+    est="$(rule_line 'oifname "awg0" iifname != "awg0" ct state established,related accept')"
+    new="$(rule_line 'oifname "awg0" iifname != "awg0" drop')"
+    acc="$(rule_line 'ip saddr 10.8.0.0/24 accept')"
+    [ -n "$ll" ] && [ -n "$acc" ] && [ "$ll" -lt "$acc" ] \
+        && pass "forward: link-local 169.254.0.0/16 from the tunnel dropped before the subnet accept" \
+        || fail "forward: link-local drop missing or after the accept (drop=${ll:-none} accept=${acc:-none})"
+    [ -n "$est" ] && [ -n "$new" ] && [ "$est" -lt "$new" ] && [ "$new" -lt "$acc" ] \
+        && pass "forward: into the tunnel from outside only established,related" \
+        || fail "forward: established/new guard into the tunnel (est=${est:-none} new=${new:-none} accept=${acc:-none})"
+    # Клиент ↔ клиент: пакет входит и выходит через awg0, и ни одно правило
+    # drop его не касается.
+    if grep -v '^[[:space:]]*#' "$NFT_SYS_FILE" | grep -E '\bdrop\b' \
+        | grep -Ev 'iifname != "awg0"|ip daddr 169\.254\.0\.0/16' | grep -q .; then
+        fail "forward: a drop could catch client-to-client traffic"
+    else
+        pass "forward: client-to-client traffic inside the tunnel is never dropped"
+    fi
+    # Частные сети хостера — решение владельца, установщик их не закрывает.
+    assert_not_in_rules "10.0.0.0/8\|172.16.0.0/12\|192.168.0.0/16" "$NFT_SYS_FILE" \
+        "forward: the hoster's private networks are left alone"
+    # DNS на адресе сервера — вход, а не forward: перенаправление и учёт на
+    # месте.
+    assert_dns_rule udp "forward guard: tunnel DNS still accepted"
+    assert_in 'iifname "awg0" udp dport 53 redirect to :53' "$NFT_SYS_FILE" "forward guard: DNS redirect kept"
+}
+
+test_forward_guards_the_tunnel_ipv6() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "forward guard v6 flow: exit $rc"
+    local est new acc
+    est="$(rule_line 'oifname "awg0" iifname != "awg0" ct state established,related accept' ip6)"
+    new="$(rule_line 'oifname "awg0" iifname != "awg0" drop' ip6)"
+    acc="$(rule_line 'ip6 saddr ' ip6)"
+    [ -n "$est" ] && [ -n "$new" ] && [ -n "$acc" ] && [ "$est" -lt "$new" ] && [ "$new" -lt "$acc" ] \
+        && pass "ipv6 forward: into the tunnel from outside only established,related" \
+        || fail "ipv6 forward: established/new guard (est=${est:-none} new=${new:-none} accept=${acc:-none})"
 }
 
 test_fragments_identical() {
@@ -886,6 +1002,26 @@ test_subnet_from_awg0_conf() {
     [ "$rc" = "0" ] || fail "awg0.conf precedence flow: exit $rc"
     assert_in "ip saddr 10.9.0.0/16 accept" "$NFT_SYS_FILE" "server.address from awg0.conf wins over the flag"
     assert_not_in "10.8.0.0/24" "$NFT_SYS_FILE" "flag subnet ignored when awg0.conf is authoritative"
+}
+
+# На развёртывании с IPv6 панель пишет обе части в одну строку, и вся строка
+# целиком не CIDR. Раньше это читалось как «Address нет», и правила строились
+# для подсети из .env или флага — чужой, если --vpn-subnet передан заново
+# (amnezia-vpn-server-76mp.32).
+test_subnet_from_awg0_conf_with_ipv6() {
+    fakes_reset
+    os_release debian 12 bookworm
+    mkdir -p "$ROOT/config"
+    printf '[Interface]\nAddress = 10.9.0.5/16, fd12:3456:789a::1/64\nListenPort = 51820\n' > "$ROOT/config/awg0.conf"
+    rc="$(run_install --vpn-subnet 10.8.0.0/24)"
+    [ "$rc" = "0" ] || fail "awg0.conf dual-stack flow: exit $rc"
+    assert_in "ip saddr 10.9.0.0/16 accept" "$NFT_SYS_FILE" "dual-stack Address: the IPv4 part of awg0.conf wins over the flag"
+    assert_not_in "10.8.0.0/24" "$NFT_SYS_FILE" "dual-stack Address: flag subnet ignored"
+    # Порядок частей панели не обещан: IPv4 ищется среди всех.
+    printf '[Interface]\nAddress = fd12:3456:789a::1/64,10.9.0.5/16\n' > "$ROOT/config/awg0.conf"
+    rc="$(run_install --vpn-subnet 10.8.0.0/24)"
+    [ "$rc" = "0" ] || fail "awg0.conf v6-first flow: exit $rc"
+    assert_in "ip saddr 10.9.0.0/16 accept" "$NFT_SYS_FILE" "dual-stack Address: IPv4 found after the IPv6 part too"
 }
 
 test_subnet_awg0_conf_invalid_fallback() {
@@ -1077,9 +1213,9 @@ test_forward_accept_docker_user() {
     [ -f "$unit" ] || fail "forward-accept unit missing"
     grep -q "After=docker.service nftables.service" "$unit" && pass "unit ordered after docker+nftables" \
         || fail "unit ordering missing"
-    grep -q 'iptables -t filter -C "\$chain" \$d -j ACCEPT' "$unit" && pass "unit ExecStart keeps literal \$chain (no \$\$ PID expansion)" \
+    grep -q '"\$t" -t filter -C "\$chain" \$d -j ACCEPT' "$unit" && pass "unit ExecStart keeps literal \$chain (no \$\$ PID expansion)" \
         || fail "unit ExecStart expanded \$\$ (installer PID leaked into the unit)"
-    grep -q 'iptables -t filter -I "\$chain" 1 \$d -j ACCEPT' "$unit" && pass "unit ExecStart insert path intact" \
+    grep -q '"\$t" -t filter -I "\$chain" 1 \$d -j ACCEPT' "$unit" && pass "unit ExecStart insert path intact" \
         || fail "unit ExecStart insert path missing"
     grep -q "systemctl enable amnezia-vpn-forward.service" "$FAKE_CALLS" && pass "unit enabled" \
         || fail "unit not enabled"
@@ -1104,6 +1240,91 @@ test_forward_accept_no_docker_user() {
     grep -q "iptables -t filter -I FORWARD 1 -o awg0 -j ACCEPT" "$FAKE_CALLS" \
         && pass "-o awg0 insert into FORWARD" \
         || fail "-o awg0 FORWARD insert missing"
+}
+
+# Docker ставит политику DROP и для IPv6 FORWARD, и исключение только в
+# iptables оставляло IPv6 клиентов без выхода (amnezia-vpn-server-76mp.20).
+test_forward_accept_ipv6() {
+    fakes_reset
+    os_release ubuntu 24.04 noble
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward-accept v6 flow: exit $rc"
+    grep -q "ip6tables -t filter -I DOCKER-USER 1 -i awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "ip6tables: -i awg0 inserted into DOCKER-USER" \
+        || fail "ip6tables: -i awg0 missing from DOCKER-USER"
+    grep -q "ip6tables -t filter -I DOCKER-USER 1 -o awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "ip6tables: -o awg0 inserted into DOCKER-USER" \
+        || fail "ip6tables: -o awg0 missing from DOCKER-USER"
+    unit="$SYSTEMD_DIR_TEST/amnezia-vpn-forward.service"
+    grep -q 'for t in iptables ip6tables' "$unit" \
+        && pass "ip6tables: the boot unit repeats the IPv6 exception" \
+        || fail "ip6tables: the boot unit covers IPv4 only"
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward-accept v6 rerun: exit $rc"
+    [ "$(grep -c "ip6tables -t filter -I DOCKER-USER" "$FAKE_CALLS")" = "2" ] \
+        && pass "ip6tables: rerun adds no duplicates" \
+        || fail "ip6tables: inserts duplicated: $(grep -c "ip6tables -t filter -I DOCKER-USER" "$FAKE_CALLS")"
+    fakes_reset
+    setstate V6_DU_CHAIN no "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "forward-accept v6 no-DOCKER-USER flow: exit $rc"
+    grep -q "ip6tables -t filter -I FORWARD 1 -o awg0 -j ACCEPT" "$FAKE_CALLS" \
+        && pass "ip6tables: falls back to FORWARD when DOCKER-USER is absent" \
+        || fail "ip6tables: FORWARD fallback missing"
+}
+
+# Включённый ufw отбрасывает входящее в своей цепочке позже нашей, и accept в
+# таблице amnezia его не отменяет: туннель молчал (amnezia-vpn-server-76mp.20).
+test_ufw_active_opens_the_ports() {
+    fakes_reset
+    setstate UFW_ACTIVE yes "$FAKE_STATE"
+    os_release ubuntu 24.04 noble
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "ufw flow: exit $rc"
+    grep -q "^ufw allow 4500/udp" "$FAKE_CALLS" && pass "ufw: the AWG port opened" \
+        || fail "ufw: the AWG port was not opened"
+    grep -q "^ufw allow 8443/tcp" "$FAKE_CALLS" && pass "ufw: the panel port opened" \
+        || fail "ufw: the panel port was not opened"
+    grep -q "^ufw allow in on awg0 to any port 53" "$FAKE_CALLS" \
+        && pass "ufw: the in-tunnel resolver reachable from the tunnel" \
+        || fail "ufw: DNS from the tunnel stays blocked"
+    grep -Eq "^ufw allow (80|443)/tcp" "$FAKE_CALLS" \
+        && fail "ufw: 80/443 opened without a panel domain" \
+        || pass "ufw: nothing beyond what the mode needs"
+    grep -q "^ufw allow .*53.*" "$FAKE_CALLS" && ! grep -q "^ufw allow 53" "$FAKE_CALLS" \
+        && pass "ufw: DNS never opened off the tunnel" \
+        || fail "ufw: DNS opened off the tunnel"
+
+    fakes_reset
+    setstate UFW_ACTIVE yes "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "ufw domain flow: exit $rc"
+    grep -q "^ufw allow 80/tcp" "$FAKE_CALLS" && pass "ufw domain: tcp 80 for ACME" \
+        || fail "ufw domain: tcp 80 missing"
+    grep -q "^ufw allow 443/tcp" "$FAKE_CALLS" && pass "ufw domain: tcp 443" \
+        || fail "ufw domain: tcp 443 missing"
+
+    # Отказ ufw не роняет установку: туннель уже поднят правилами nft, а
+    # оператор получает предупреждение.
+    fakes_reset
+    setstate UFW_ACTIVE yes "$FAKE_STATE"
+    setstate UFW_RC 1 "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(run_install)"
+    [ "$rc" = "0" ] || fail "ufw failure flow: exit $rc"
+    grep -q "WARNING: ufw" "$TMP_TEST/out" && pass "ufw failure: warned, install continued" \
+        || fail "ufw failure: no warning"
+}
+
+test_ufw_inactive_is_left_alone() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "ufw inactive flow: exit $rc"
+    grep -q "^ufw allow" "$FAKE_CALLS" && fail "ufw inactive: rules were added" \
+        || pass "ufw inactive: no rules added"
 }
 
 test_nft_panel_domain_with_panel_port() {
@@ -1199,18 +1420,16 @@ test_ipv6_mss_clamp_in_its_own_table() {
     fi
 }
 
-# The project invariant: not one drop rule in anything we manage. It
-# carries into IPv6 without exception.
+# The project invariant: nothing we manage drops foreign traffic — the only
+# drops are the tunnel guards (amnezia-vpn-server-76mp.13), and each names
+# awg0. It carries into IPv6 without exception.
 test_ipv6_no_drop_rules() {
     fakes_reset
     os_release debian 12 bookworm
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
     [ "$rc" = "0" ] || fail "ipv6 no-drop flow: exit $rc"
-    if grep -v "^[[:space:]]*#" "$NFT_SYS_FILE" | grep -qE "\\bdrop\\b|policy drop"; then
-        fail "ipv6: a drop rule reached the managed ruleset"
-    else
-        pass "ipv6: no drop rules anywhere in the managed ruleset"
-    fi
+    assert_only_tunnel_drops "$NFT_SYS_FILE" "ipv6: drops touch nothing but traffic through the tunnel"
+    assert_not_in "policy drop" "$NFT_SYS_FILE" "ipv6: no drop policies"
 }
 
 # The rollback the owner actually cares about: a deployment that had IPv6
@@ -1226,6 +1445,66 @@ test_ipv6_switch_off_after_on() {
     assert_not_in "^table ip6 amnezia {" "$NFT_SYS_FILE" "switch-off: the ip6 table definition is gone"
     assert_in "^delete table ip6 amnezia$" "$NFT_SYS_FILE" "switch-off: the ip6 table is explicitly deleted"
     assert_in "^table ip amnezia {" "$NFT_SYS_FILE" "switch-off: the IPv4 table survived untouched"
+}
+
+# forwarding=1 выключает приём RA ядром, если accept_ra не 2: на хосте со
+# SLAAC маршрут IPv6 по умолчанию истекал через ~30 минут после установки
+# (amnezia-vpn-server-76mp.21). accept_ra=2 ставится раньше forwarding и
+# только интерфейсу, чей маршрут пришёл по RA.
+test_ipv6_forwarding_keeps_ra() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "accept_ra flow: exit $rc"
+    local dropin="$SYSCTL_TEST/amnezia-vpn-ipv6.conf" ra fw
+    assert_in "^net.ipv6.conf.ens3.accept_ra = 2$" "$dropin" "accept_ra=2 persisted for the RA uplink"
+    ra="$(grep -n "accept_ra" "$dropin" | head -1 | cut -d: -f1)"
+    fw="$(grep -n "all.forwarding" "$dropin" | head -1 | cut -d: -f1)"
+    [ -n "$ra" ] && [ -n "$fw" ] && [ "$ra" -lt "$fw" ] \
+        && pass "accept_ra precedes forwarding in the drop-in" \
+        || fail "accept_ra must precede forwarding (ra=${ra:-none} fw=${fw:-none})"
+    ra="$(grep -n "sysctl -w net.ipv6.conf.ens3.accept_ra=2" "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    fw="$(grep -n "sysctl -w net.ipv6.conf.all.forwarding=1" "$FAKE_CALLS" | head -1 | cut -d: -f1)"
+    [ -n "$ra" ] && [ -n "$fw" ] && [ "$ra" -lt "$fw" ] \
+        && pass "accept_ra=2 applied before forwarding=1" \
+        || fail "accept_ra=2 must be applied before forwarding=1 (ra=${ra:-none} fw=${fw:-none})"
+
+    # Статический маршрут: RA не нужен, и настройка интерфейса не трогается.
+    fakes_reset
+    setstate IP6_DEFAULT_ROUTE '"default via 2001:db8::1 dev ens3 proto static metric 1024"' "$FAKE_STATE"
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "static v6 route flow: exit $rc"
+    grep -q "accept_ra" "$SYSCTL_TEST/amnezia-vpn-ipv6.conf" "$FAKE_CALLS" \
+        && fail "static route: accept_ra touched" \
+        || pass "static route: accept_ra left alone"
+}
+
+# С выключенным IPv6 установщик не выключал чужой forwarding принудительно на
+# каждом запуске: это ломало IPv6-сети Docker и другие VPN
+# (amnezia-vpn-server-76mp.21). Выключает только то, что включил сам.
+test_ipv6_off_leaves_forwarding_alone() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "ipv6-off forwarding flow: exit $rc"
+    grep -q "net.ipv6.conf.all.forwarding" "$FAKE_CALLS" \
+        && fail "ipv6 off: forwarding touched on a host where we never enabled it" \
+        || pass "ipv6 off: foreign IPv6 forwarding left alone"
+
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 on-then-off first run: exit $rc"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=ok run_install --no-ipv6)"
+    [ "$rc" = "0" ] || fail "ipv6 on-then-off second run: exit $rc"
+    grep -q "sysctl -w net.ipv6.conf.all.forwarding=0" "$FAKE_CALLS" \
+        && pass "ipv6 switched off: the forwarding we enabled is switched off" \
+        || fail "ipv6 switched off: forwarding we enabled stays on"
+    [ -f "$SYSCTL_TEST/amnezia-vpn-ipv6.conf" ] \
+        && fail "ipv6 switched off: drop-in left behind" \
+        || pass "ipv6 switched off: drop-in removed"
 }
 
 # Настоящий nft вместо фальшивки (amnezia-vpn-server-ofq9).
@@ -1307,11 +1586,15 @@ m92_run_all() {
     test_ipv6_mss_clamp_in_its_own_table
     test_ipv6_no_drop_rules
     test_ipv6_switch_off_after_on
+    test_ipv6_forwarding_keeps_ra
+    test_ipv6_off_leaves_forwarding_alone
     test_dns_interception
     test_dns_interception_absent_when_resolver_stands_down
     test_atomic_replace_on_rerun
     test_custom_values
     test_no_flush_no_drop
+    test_forward_guards_the_tunnel
+    test_forward_guards_the_tunnel_ipv6
     test_fragments_identical
     test_check_before_apply
     test_syntax_failure_rollback
@@ -1322,6 +1605,7 @@ m92_run_all() {
     test_persistence_foreign_content
     test_persistence_dropin
     test_subnet_from_awg0_conf
+    test_subnet_from_awg0_conf_with_ipv6
     test_subnet_awg0_conf_invalid_fallback
     test_nft_absent_installs_package
     test_generated_ruleset_survives_a_real_kernel
@@ -1336,6 +1620,9 @@ m92_run_all() {
     test_awg_stack_forced_install
     test_forward_accept_docker_user
     test_forward_accept_no_docker_user
+    test_forward_accept_ipv6
+    test_ufw_active_opens_the_ports
+    test_ufw_inactive_is_left_alone
     test_nft_panel_domain_with_panel_port
     test_nft_panel_domain_default_443
 }
