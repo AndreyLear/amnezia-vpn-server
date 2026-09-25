@@ -277,6 +277,13 @@ func (e *eval) tellTrouble(t *Trouble, group, key string, texts troubleTexts) {
 	if e.muted(group) {
 		return
 	}
+	if t.Told == toldDown && t.Since == nil && t.EndedAt == nil {
+		// State written before EndedAt existed: the occurrence ended during
+		// a silence, and when is unknown. Now is the best that is left, as
+		// before; without it the letter would never go out.
+		at := e.now
+		t.EndedAt = &at
+	}
 	extra := ""
 	if t.Missed != nil {
 		extra = texts.missedNote(*t.Missed)

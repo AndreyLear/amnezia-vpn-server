@@ -625,6 +625,24 @@ func TestMissedDropWithoutToldEpisode(t *testing.T) {
 	wantKeys(t, w.minutes(60, active))
 }
 
+// Состояние старой версии: о беде написали, туннель вернулся во время
+// тишины, момента возврата в нём нет. Письмо о возврате всё равно уходит,
+// и Told не зависает (amnezia-vpn-server-76mp.14).
+func TestOldStateToldDownWithoutEndedAt(t *testing.T) {
+	w := newWorld(t)
+	w.step(time.Minute)
+	told := start.Add(-30 * time.Minute)
+	w.st.Tunnel = Trouble{Told: toldDown, ToldSince: &told}
+	active := func() { w.clientsActive("a", "b") }
+	active()
+	got := w.step(time.Minute)
+	wantKeys(t, got, keyTunnel)
+	if w.st.Tunnel.Told != toldNothing {
+		t.Fatalf("Told = %q после письма о возврате", w.st.Tunnel.Told)
+	}
+	wantKeys(t, w.minutes(30, active))
+}
+
 // Абзац о нескольких обрывах внутри тишины называет их число и самый долгий.
 func TestMissedNoteSeveral(t *testing.T) {
 	e := &eval{in: Inputs{Zone: time.UTC}, now: start.Add(2 * time.Hour)}
