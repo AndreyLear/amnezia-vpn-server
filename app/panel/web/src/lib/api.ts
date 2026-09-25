@@ -7,6 +7,12 @@ export type SessionLossReason = "idle" | "replaced" | "gone";
 
 let sessionExpiredWaiters: Array<() => void> = [];
 let sessionExpiredListeners: Array<(open: boolean, reason?: SessionLossReason) => void> = [];
+// Сессия потеряна, вход ещё не повторён (amnezia-vpn-server-76mp.7). Пока
+// так, запросы не ходят на сервер за заведомым 401, а ждут входа; чтения
+// одного пути ждут вместе — ответ один на всех.
+let sessionLost = false;
+let sessionLossReason: SessionLossReason | undefined;
+const readsAwaitingRelogin = new Map<string, Promise<Response>>();
 
 export function setCsrf(token: string) {
   csrf = token;
@@ -34,6 +40,8 @@ export function subscribeSessionExpired(
 }
 
 export function completeSessionRelogin() {
+  sessionLost = false;
+  sessionLossReason = undefined;
   const waiters = sessionExpiredWaiters;
   sessionExpiredWaiters = [];
   for (const wait of waiters) wait();
@@ -55,14 +63,41 @@ function waitForCsrf(): Promise<void> {
   });
 }
 
-function waitForSessionRelogin(reason?: SessionLossReason): Promise<void> {
+function waitForSessionRelogin(): Promise<void> {
   return new Promise((resolve) => {
     sessionExpiredWaiters.push(resolve);
-    for (const listener of sessionExpiredListeners) listener(true, reason);
+    for (const listener of sessionExpiredListeners) listener(true, sessionLossReason);
   });
 }
 
-function sessionLossReason(body: unknown): SessionLossReason | undefined {
+function isRead(init: RequestInit): boolean {
+  const method = (init.method ?? "GET").toUpperCase();
+  return method === "GET" || method === "HEAD";
+}
+
+/**
+ * Повтор запроса после повторного входа. Опрос на фоновой вкладке за ночь
+ * ставил в очередь тысячи одинаковых чтений, и после ввода пароля они
+ * уходили залпом (amnezia-vpn-server-76mp.7). Теперь чтение одного пути
+ * ждёт одно: остальные получают копию того же ответа. Мутации — действия
+ * человека, каждая повторяется своя.
+ */
+function retryAfterRelogin(path: string, init: RequestInit): Promise<Response> {
+  if (!isRead(init)) return waitForSessionRelogin().then(() => apiRequest(path, init));
+  const key = `${(init.method ?? "GET").toUpperCase()} ${path}`;
+  let shared = readsAwaitingRelogin.get(key);
+  if (!shared) {
+    shared = waitForSessionRelogin().then(() => apiRequest(path, init));
+    readsAwaitingRelogin.set(key, shared);
+    const forget = () => void readsAwaitingRelogin.delete(key);
+    shared.then(forget, forget);
+  }
+  // Тело ответа читается один раз, поэтому каждому ждавшему — своя копия.
+  // Копии снимаются в реакциях на shared, раньше, чем кто-то прочтёт тело.
+  return shared.then((res) => res.clone());
+}
+
+function parseLossReason(body: unknown): SessionLossReason | undefined {
   if (!body || typeof body !== "object" || !("reason" in body)) return undefined;
   const reason = (body as { reason?: unknown }).reason;
   if (reason === "idle" || reason === "replaced" || reason === "gone") return reason;
@@ -93,6 +128,7 @@ export async function apiRequest(
   init: RequestInit = {},
   csrfRetried = false,
 ): Promise<Response> {
+  if (sessionLost && path !== "/api/login") return retryAfterRelogin(path, init);
   const needsCsrf = mutationNeedsCsrf(path, init);
   if (needsCsrf) {
     await waitForCsrf();
@@ -121,12 +157,13 @@ export async function apiRequest(
     }
     let reason: SessionLossReason | undefined;
     try {
-      reason = sessionLossReason(await res.json());
+      reason = parseLossReason(await res.json());
     } catch {
       reason = undefined;
     }
-    await waitForSessionRelogin(reason);
-    return apiRequest(path, init);
+    sessionLost = true;
+    if (reason) sessionLossReason = reason;
+    return retryAfterRelogin(path, init);
   }
   return res;
 }

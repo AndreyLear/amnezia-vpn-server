@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SessionExpiredHost } from "@/components/SessionExpiredHost";
-import { apiRequest, setCsrf, setLastUsername } from "@/lib/api";
+import { apiRequest, completeSessionRelogin, setCsrf, setLastUsername } from "@/lib/api";
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -30,6 +30,8 @@ async function openWithReason(reason: "idle" | "replaced" | "gone") {
 
 describe("session expired re-login", () => {
   afterEach(() => {
+    // Потеря сессии — состояние модуля api; тесты не должны её наследовать.
+    completeSessionRelogin();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     setCsrf("");

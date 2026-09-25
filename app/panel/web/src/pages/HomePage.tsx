@@ -87,13 +87,21 @@ export default function HomePage() {
     }
 
     void boot();
+    // Скрытая вкладка не опрашивает: GET сессию не продлевает, и за ночь в
+    // фоне опрос копил тысячи запросов, ждущих повторного входа
+    // (amnezia-vpn-server-76mp.7). Вернулся на вкладку — спросить сразу.
     const timer = window.setInterval(() => {
-      if (!stopped) void load();
+      if (!stopped && document.visibilityState === "visible") void load();
     }, 5000);
+    const onVisible = () => {
+      if (!stopped && document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       stopped = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [load]);
 

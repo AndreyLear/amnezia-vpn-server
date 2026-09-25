@@ -77,7 +77,10 @@ export function SpeedChart({ clientId }: { clientId: number }) {
     // 17 280 не меняет ни пикселя, и запрос раз в пять секунд был бы
     // работой впустую на каждой открытой вкладке.
     if (range !== "10min") return () => void (alive.current = false);
-    const timer = setInterval(() => void load(range), REFRESH_MS);
+    // На скрытой вкладке не опрашиваем (amnezia-vpn-server-76mp.7).
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load(range);
+    }, REFRESH_MS);
     return () => {
       alive.current = false;
       clearInterval(timer);
