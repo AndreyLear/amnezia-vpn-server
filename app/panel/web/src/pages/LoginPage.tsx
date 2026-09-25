@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { BrandMark } from "@/components/BrandMark";
@@ -12,6 +12,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const passwordRef = useRef<HTMLInputElement>(null);
+
+  // На время запроса поля отключены, и фокус с них слетает. После отказа
+  // он возвращается в поле пароля — туда, где человек продолжит
+  // (amnezia-vpn-server-76mp.38).
+  useEffect(() => {
+    if (error && !pending) passwordRef.current?.focus();
+  }, [error, pending]);
 
   useEffect(() => {
     let cancelled = false;
@@ -27,6 +35,9 @@ export default function LoginPage() {
   }, []);
 
   async function submit() {
+    // Сброс перед попыткой: тот же текст отказа, вставленный заново,
+    // диктор объявит ещё раз.
+    setError("");
     setPending(true);
     try {
       const res = await login(username, password);
@@ -68,6 +79,7 @@ export default function LoginPage() {
           <div className="grid gap-2">
             <Label htmlFor="password">Пароль</Label>
             <Input
+              ref={passwordRef}
               id="password"
               name="password"
               type="password"
@@ -76,9 +88,15 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={pending}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? "login-error" : undefined}
             />
           </div>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? (
+            <p id="login-error" role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
         </div>
         <Button type="submit" size="lg" className="h-12 w-full" disabled={pending}>
           Войти

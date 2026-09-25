@@ -104,5 +104,23 @@ describe("LoginPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Войти" })).toBeEnabled();
   });
+
+  // Ошибка входа объявляется диктору и связана с полем пароля, фокус
+  // возвращается в поле (amnezia-vpn-server-76mp.38).
+  it("announces the login error and returns focus to the password", async () => {
+    await submitWith(
+      () =>
+        new Response(JSON.stringify({ ok: false, message: "Неверное имя пользователя или пароль" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Неверное имя пользователя или пароль");
+    const password = screen.getByLabelText("Пароль");
+    expect(password).toHaveAttribute("aria-invalid", "true");
+    expect(password).toHaveAccessibleDescription("Неверное имя пользователя или пароль");
+    expect(password).toHaveFocus();
+  });
 });
 

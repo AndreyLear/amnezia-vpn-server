@@ -262,5 +262,41 @@ describe("session expired re-login", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Повторить вход" })).toBeEnabled();
   });
+
+  // Ошибка повторного входа объявляется диктору и связана с полем, фокус
+  // возвращается в поле пароля (amnezia-vpn-server-76mp.38).
+  it("announces the relogin error and returns focus to the password", async () => {
+    setCsrf("live-csrf");
+    setLastUsername("admin");
+    vi.stubGlobal("location", { assign: vi.fn() });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === "/api/clients") {
+          return jsonResponse({ ok: false, message: "Unauthorized.", reason: "idle" }, 401);
+        }
+        if (path === "/api/login") {
+          return jsonResponse({ ok: false, message: "Неверное имя пользователя или пароль." });
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<SessionExpiredHost />);
+    void apiRequest("/api/clients");
+    expect(await screen.findByText("Сессия истекла")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Пароль"), "wrong");
+    await user.click(screen.getByRole("button", { name: "Повторить вход" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Неверный пароль");
+    const password = screen.getByLabelText("Пароль");
+    expect(password).toHaveAttribute("aria-invalid", "true");
+    expect(password).toHaveAccessibleDescription("Неверный пароль");
+    expect(password).toHaveFocus();
+  });
 });
 
