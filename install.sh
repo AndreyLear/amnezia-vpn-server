@@ -2131,6 +2131,16 @@ table ip amnezia {
         # hands out the instance metadata and user-data at DO, Hetzner,
         # Vultr and others, and a client reached it through masquerade.
         iifname "awg0" ip daddr 169.254.0.0/16 drop
+        # The hoster's private networks too (amnezia-vpn-server-ubjp, the
+        # owner's call in 70lu): RFC 1918 and CGNAT 100.64.0.0/10 carry
+        # its internal services and the neighbours on its private network
+        # (Hetzner vSwitch, DO VPC), and masquerade let a client reach them
+        # as the server. The tunnel subnet is excepted — it lies inside
+        # 10.0.0.0/8 by default and inside any of these with --vpn-subnet,
+        # and client-to-client traffic must pass. DNS on the server's
+        # tunnel address is not forward at all: the resolver runs in the
+        # host netns and the redirect sends port 53 to input.
+        iifname "awg0" ip daddr != $1 ip daddr { 10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16 } drop
         # Nothing opens a new connection INTO the tunnel from outside it:
         # a neighbour of the hoster with a route to the tunnel subnet could
         # otherwise reach the clients' devices. Replies pass; traffic that
@@ -2187,6 +2197,12 @@ table ip6 amnezia {
         # Same guard as in the ip table (amnezia-vpn-server-76mp.13). The
         # addresses are ULA behind NAT66, so the internet cannot name them,
         # but the hoster's link can.
+        #
+        # ULA is IPv6's private range (AWS serves metadata on
+        # fd00:ec2::254) and is closed the same way (amnezia-vpn-server-
+        # ubjp). The tunnel prefix is ULA itself, so it is excepted:
+        # client to client and the resolver on ::1 keep working.
+        iifname "awg0" ip6 daddr != $subnet6 ip6 daddr fc00::/7 drop
         oifname "awg0" iifname != "awg0" ct state established,related accept
         oifname "awg0" iifname != "awg0" drop
         ip6 saddr $subnet6 accept
