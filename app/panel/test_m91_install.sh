@@ -1887,6 +1887,51 @@ test_domain_default_no_domain() {
     if grep -q "ssh -L 8787" "$TMP_TEST/out"; then pass "no-domain: SSH tunnel hint kept"; else fail "no-domain: SSH hint missing"; fi
 }
 
+# nginx по умолчанию режет тело на 1 МБ, а панель принимает бэкап до
+# MaxRestoreBodyBytes: восстановление бэкапа побольше упиралось в HTML 413 от
+# nginx, и панель показывала «Восстановление не удалось» без причины
+# (amnezia-vpn-server-76mp.30). Предел берётся из исходника панели, чтобы
+# расхождение ловилось здесь, а не на сервере.
+assert_restore_body_limit() { # assert_restore_body_limit LABEL
+    local label="$1" conf="$ROOT/nginx/panel.conf" mib want loc
+    mib="$(sed -n 's/^[[:space:]]*MaxRestoreBodyBytes = \([0-9][0-9]*\) << 20.*/\1/p' \
+        "$M91_REPO/app/panel/internal/web/restore.go")"
+    [ -n "$mib" ] || { fail "$label: MaxRestoreBodyBytes not found in restore.go"; return 0; }
+    want="client_max_body_size ${mib}m;"
+    for loc in "/api/backups/restore" "/backups/restore"; do
+        if awk -v l="location = ${loc} {" -v w="$want" '
+            index($0, l) { on = 1; next }
+            on && /^    }/ { on = 0 }
+            on && index($0, w) { found = 1 }
+            END { exit !found }' "$conf"; then
+            pass "$label: ${loc} accepts ${mib} MiB like the panel"
+        else
+            fail "$label: ${loc} lacks ${want}"
+        fi
+    done
+    grep -q "error_page 413 @restore_too_large;" "$conf" \
+        && grep -q '"message":"Файл больше ' "$conf" \
+        && pass "$label: nginx's own 413 answers in the panel's JSON" \
+        || fail "$label: nginx's 413 is not JSON the panel UI can show"
+    # Остальные запросы остаются с пределом nginx по умолчанию.
+    [ "$(grep -c "client_max_body_size" "$conf")" = "2" ] \
+        && pass "$label: the raised limit covers only the restore routes" \
+        || fail "$label: client_max_body_size appears $(grep -c "client_max_body_size" "$conf") times, want 2"
+}
+
+test_nginx_restore_body_limit() {
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --domain panel.example.com)"
+    [ "$rc" = "0" ] || fail "restore limit domain flow: exit $rc"
+    assert_restore_body_limit "domain"
+    fakes_reset
+    os_release debian 12 bookworm
+    rc="$(run_install --panel-port 8443)"
+    [ "$rc" = "0" ] || fail "restore limit panel-port flow: exit $rc"
+    assert_restore_body_limit "panel-port"
+}
+
 test_domain_mode_flow() {
     fakes_reset
     os_release debian 12 bookworm
@@ -3285,6 +3330,7 @@ test_panel_init_failure_not_masked
 test_sentinel_guard_not_masked
 test_domain_default_no_domain
 test_domain_mode_flow
+test_nginx_restore_body_limit
 test_domain_dns_mismatch
 test_domain_dns_missing
 test_domain_certbot_failure

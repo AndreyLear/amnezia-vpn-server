@@ -2858,6 +2858,36 @@ nginx_present() {
 }
 ACME_ROOT="${AMNEZIA_INSTALL_ACME_ROOT:-/var/www/certbot}"
 
+# The restore upload is the one request that legitimately carries
+# megabytes: the panel accepts a backup up to MaxRestoreBodyBytes
+# (app/panel/internal/web/restore.go), while nginx stops every body at 1 MB
+# by default. A larger backup got nginx's HTML 413, which the panel UI
+# cannot read, and restoring said only that it failed
+# (amnezia-vpn-server-76mp.30). The limit is raised on the restore routes
+# alone, to exactly the panel's; everything else keeps nginx's default.
+# An oversized upload is answered by nginx itself in the panel's JSON
+# shape, so the UI shows the reason. Keep NGINX_RESTORE_BODY_MIB equal to
+# MaxRestoreBodyBytes — test_m91_install.sh compares the two.
+NGINX_RESTORE_BODY_MIB=64
+
+render_nginx_panel_locations() {
+    local proxy loc
+    proxy='        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;'
+    printf '    location / {\n%s\n    }\n' "$proxy"
+    # The JSON answer belongs to the API route the panel UI calls; the
+    # old HTML form route gets nginx's own page, as it always did.
+    printf '    location = /api/backups/restore {\n        client_max_body_size %sm;\n        error_page 413 @restore_too_large;\n%s\n    }\n' \
+        "$NGINX_RESTORE_BODY_MIB" "$proxy"
+    printf '    location = /backups/restore {\n        client_max_body_size %sm;\n%s\n    }\n' \
+        "$NGINX_RESTORE_BODY_MIB" "$proxy"
+    printf '    location @restore_too_large {\n        default_type "application/json; charset=utf-8";\n        return 413 %s;\n    }' \
+        "'{\"ok\":false,\"message\":\"Файл больше ${NGINX_RESTORE_BODY_MIB} МиБ — панель столько не примет\"}'"
+}
+
 render_nginx_conf() { # render_nginx_conf DOMAIN PHASE [TLS_PORT]
     local domain="$1" phase="$2" tls_port="${3:-443}"
     local cert="/etc/letsencrypt/live/${domain}/fullchain.pem"
@@ -2891,13 +2921,7 @@ server {
     ssl_certificate ${cert};
     ssl_certificate_key ${key};
     ssl_protocols TLSv1.2 TLSv1.3;
-    location / {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
+$(render_nginx_panel_locations)
 }
 EOF
     fi
@@ -2980,13 +3004,7 @@ server {
     ssl_certificate $2;
     ssl_certificate_key $3;
     ssl_protocols TLSv1.2 TLSv1.3;
-    location / {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
+$(render_nginx_panel_locations)
 }
 EOF
 }
