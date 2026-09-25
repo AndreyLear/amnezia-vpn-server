@@ -23,55 +23,77 @@ type Snapshot struct {
 }
 
 // CPUSample is the previous /proc/stat aggregate used for a CPU percent delta.
+// Idle and IOWait are kept apart because iowait is not monotonic — the kernel
+// may report it lower than before — so it cannot take part in the check for
+// a counter reset (amnezia-vpn-server-76mp.23).
 type CPUSample struct {
-	Idle  uint64
-	Total uint64
+	Idle   uint64
+	IOWait uint64
+	Total  uint64
 }
+
+// busy is every counter that only grows: all but idle and iowait.
+func (c CPUSample) busy() uint64 { return c.Total - c.Idle - c.IOWait }
 
 // Read fills CPU/RAM/Disk. Missing/unreadable sources leave that field nil.
 // procDir is typically "/host/proc" in Docker or a testdir with stat+meminfo.
 // diskPath is typically "/data"; tests pass t.TempDir().
 // prev is the previous CPUSample from the last Read (zero on first call).
 func Read(procDir, diskPath string, prev CPUSample) (Snapshot, CPUSample) {
-	cpu, next := readCPU(filepath.Join(procDir, "stat"), prev)
+	snap := ReadMemDisk(procDir, diskPath)
+	snap.CPU, prev = readCPU(filepath.Join(procDir, "stat"), prev)
+	return snap, prev
+}
+
+// ReadMemDisk fills RAM and Disk only. The panel takes CPU from a CPUMeter:
+// a load is a rate over an interval, and the interval must not depend on
+// how often the page asks (amnezia-vpn-server-76mp.23).
+func ReadMemDisk(procDir, diskPath string) Snapshot {
 	ramPct, ramUsed, ramTotal := readRAM(filepath.Join(procDir, "meminfo"))
 	diskPct, diskUsed, diskTotal := readDisk(diskPath)
 	return Snapshot{
-		CPU:            cpu,
 		RAM:            ramPct,
 		Disk:           diskPct,
 		RAMUsedBytes:   ramUsed,
 		RAMTotalBytes:  ramTotal,
 		DiskUsedBytes:  diskUsed,
 		DiskTotalBytes: diskTotal,
-	}, next
+	}
 }
 
 func readCPU(statPath string, prev CPUSample) (*float64, CPUSample) {
-	total, idle, ok := parseStat(statPath)
+	next, ok := parseStat(statPath)
 	if !ok {
 		return nil, CPUSample{}
 	}
-	next := CPUSample{Idle: idle, Total: total}
-	if prev.Total == 0 {
-		return nil, next
-	}
-	if total < prev.Total || idle < prev.Idle {
-		return nil, next
-	}
-	deltaTotal := total - prev.Total
-	if deltaTotal == 0 {
-		return nil, next
-	}
-	deltaIdle := idle - prev.Idle
-	pct := (1 - float64(deltaIdle)/float64(deltaTotal)) * 100
-	return clamp(pct), next
+	return cpuPercent(prev, next), next
 }
 
-func parseStat(path string) (total, idle uint64, ok bool) {
+// cpuPercent is the load between two samples; nil when there is no earlier
+// sample, the counters were reset, or no time passed between them.
+func cpuPercent(prev, next CPUSample) *float64 {
+	if prev.Total == 0 || next.busy() < prev.busy() {
+		return nil
+	}
+	busy := next.busy() - prev.busy()
+	idle := grown(prev.Idle, next.Idle) + grown(prev.IOWait, next.IOWait)
+	if busy+idle == 0 {
+		return nil
+	}
+	return clamp(float64(busy) / float64(busy+idle) * 100)
+}
+
+func grown(prev, next uint64) uint64 {
+	if next < prev {
+		return 0
+	}
+	return next - prev
+}
+
+func parseStat(path string) (sample CPUSample, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, 0, false
+		return CPUSample{}, false
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -92,18 +114,18 @@ func parseStat(path string) (total, idle uint64, ok bool) {
 			}
 		}
 		if len(vals) < 4 {
-			return 0, 0, false
+			return CPUSample{}, false
 		}
 		for _, v := range vals {
-			total += v
+			sample.Total += v
 		}
-		idle = vals[3]
+		sample.Idle = vals[3]
 		if len(vals) > 4 {
-			idle += vals[4] // iowait
+			sample.IOWait = vals[4]
 		}
-		return total, idle, true
+		return sample, true
 	}
-	return 0, 0, false
+	return CPUSample{}, false
 }
 
 func readRAM(meminfoPath string) (pct *float64, used, totalBytes *int64) {
