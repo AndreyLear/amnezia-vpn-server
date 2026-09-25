@@ -416,9 +416,17 @@ type ServerRecord struct {
 	AWGParams  string
 }
 
+// Querier is what both *sql.DB and *sql.Tx provide for reads. The config
+// generator reads the server row, settings and clients inside one
+// transaction so they form a single snapshot (amnezia-vpn-server-76mp.18).
+type Querier interface {
+	QueryRow(query string, args ...any) *sql.Row
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
 // ServerRow loads the single server record (id = 1). A missing row is
 // reported as ErrServerNotFound.
-func ServerRow(handle *sql.DB) (*ServerRecord, error) {
+func ServerRow(handle Querier) (*ServerRecord, error) {
 	row := handle.QueryRow(
 		`SELECT private_key, public_key, address, address6, listen_port, dns, awg_params
 		   FROM server WHERE id = 1`,
@@ -464,7 +472,7 @@ type ClientRow struct {
 // NULL or in the future). Expiry is evaluated in Go so any RFC3339
 // offset is handled; a malformed stored value is treated as expired
 // (fail-closed).
-func ClientsForConfig(handle *sql.DB) ([]ClientRow, error) {
+func ClientsForConfig(handle Querier) ([]ClientRow, error) {
 	rows, err := handle.Query(
 		`SELECT id, public_key, preshared_key, address, expires_at, mtu, rate_limit
 		   FROM clients WHERE enabled = 1 ORDER BY id`,
@@ -590,7 +598,7 @@ func CreateServer(handle *sql.DB, privateKey, publicKey, address, address6 strin
 
 // GetSetting returns the value of a settings key. ok is false when the
 // key is absent.
-func GetSetting(handle *sql.DB, key string) (value string, ok bool, err error) {
+func GetSetting(handle Querier, key string) (value string, ok bool, err error) {
 	var v string
 	err = handle.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -794,10 +802,14 @@ type NewClient struct {
 	PublicKey    string
 	PresharedKey string // optional
 	Description  string // optional; empty string allowed; never written to awg0.conf
+	// ExpiresAt is the RFC3339 expiry, empty for none. It is written by the
+	// same INSERT: set afterwards, a failed second write left the client
+	// enabled with no expiry at all (amnezia-vpn-server-76mp.24).
+	ExpiresAt string
 }
 
 // CreateClient allocates the first free /32 host address in the server
-// network (server address + 1, skipping used addresses and the network/
+// network (server address + 1 upward, then below it, skipping used addresses and the network/
 // broadcast boundaries) and inserts the client within one transaction.
 // It fails with ErrNoFreeAddress when the network is exhausted and with
 // ErrClientNameExists when the name is already taken (unique client
@@ -852,9 +864,9 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 
 	now := stamp()
 	res, err := tx.Exec(
-		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, description)
-		 VALUES (?, ?, ?, NULLIF(?, ''), ?, 1, ?, ?, ?)`,
-		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now, nc.Description,
+		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, description, expires_at)
+		 VALUES (?, ?, ?, NULLIF(?, ''), ?, 1, ?, ?, ?, NULLIF(?, ''))`,
+		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now, nc.Description, nc.ExpiresAt,
 	)
 	if err != nil {
 		if mapped := mapNameConstraint(err); errors.Is(mapped, ErrClientNameExists) {
@@ -880,11 +892,12 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 		CreatedAt:    now,
 		UpdatedAt:    now,
 		Description:  nc.Description,
+		ExpiresAt:    nc.ExpiresAt,
 	}, nil
 }
 
 // allocClientAddress picks the first free host in the server CIDR network
-// starting at server address + 1. Already assigned client addresses are
+// starting at server address + 1 and wrapping to the hosts below it. Already assigned client addresses are
 // skipped; the network address and the broadcast address are never
 // handed out. The result carries the /32 suffix.
 func allocClientAddress(serverCIDR string, used []string) (string, error) {
@@ -917,11 +930,25 @@ func allocClientAddress(serverCIDR string, used []string) (string, error) {
 		}
 	}
 
-	for cand := start + 1; cand < broadcast; cand++ {
-		if usedSet[cand] {
-			continue
+	// Above the server first — the order every deployment has always
+	// allocated in — then wrap to the hosts below it. Starting at the
+	// server and stopping at the broadcast left those never handed out:
+	// a server on .200/24 ran out after 54 clients with ~199 free
+	// (amnezia-vpn-server-76mp.26).
+	free := func(from, to uint32) (string, bool) {
+		for cand := from; cand < to; cand++ {
+			if usedSet[cand] {
+				continue
+			}
+			return fmt.Sprintf("%d.%d.%d.%d/32", byte(cand>>24), byte(cand>>16), byte(cand>>8), byte(cand)), true
 		}
-		return fmt.Sprintf("%d.%d.%d.%d/32", byte(cand>>24), byte(cand>>16), byte(cand>>8), byte(cand)), nil
+		return "", false
+	}
+	if addr, ok := free(start+1, broadcast); ok {
+		return addr, nil
+	}
+	if addr, ok := free(networkStart+1, start); ok {
+		return addr, nil
 	}
 	return "", ErrNoFreeAddress
 }

@@ -30,7 +30,7 @@ func (a *app) cmdRestore(args []string) int {
 		return a.usageError(opRestore, "expected exactly one backup file name")
 	}
 	name := parsed.positional[0]
-	if !validBackupName(name) {
+	if !validRestoreName(name) {
 		return a.usageError(opRestore, fmt.Sprintf("invalid backup name %q", name))
 	}
 	full := filepath.Join(backupsPath(), name)

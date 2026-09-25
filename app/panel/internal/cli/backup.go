@@ -54,6 +54,27 @@ func validBackupName(name string) bool {
 	return err == nil
 }
 
+// safetyNameRe is the name backup.Safety gives the copy taken before a
+// restore: safety-backup-YYYY-MM-DD-HH-MM-SS.tar.zst.
+var safetyNameRe = regexp.MustCompile(`^safety-backup-(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})\.tar\.zst$`)
+
+// validRestoreName admits what `panel restore` may read: a regular
+// backup, or the safety backup that restore itself prints as the way
+// back — which used to be refused, so rolling back meant renaming the
+// file by hand (amnezia-vpn-server-76mp.25). Neither shape can carry a
+// path separator or "..".
+func validRestoreName(name string) bool {
+	if validBackupName(name) {
+		return true
+	}
+	m := safetyNameRe.FindStringSubmatch(name)
+	if m == nil {
+		return false
+	}
+	_, err := time.Parse("2006-01-02-15-04-05", m[1])
+	return err == nil
+}
+
 // cmdBackup dispatches the backup subcommands.
 func (a *app) cmdBackup(args []string) int {
 	if len(args) == 0 {

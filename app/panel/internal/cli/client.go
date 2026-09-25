@@ -115,8 +115,8 @@ func tsvCell(s string) string {
 
 // cmdClientAdd generates the keys, allocates the first free address and
 // inserts the client (one transaction), then regenerates awg0.conf. The
-// flag --expires-at is stored via db.SetClientExpiry right after the
-// insert; a failed Generate returns exit 1, the previous config stays
+// flag --expires-at is stored by the same insert (one transaction,
+// amnezia-vpn-server-76mp.24); a failed Generate returns exit 1, the previous config stays
 // intact and the database is not rolled back. Success prints exactly
 // "id:" and "public_key:".
 func (a *app) cmdClientAdd(args []string) int {
@@ -148,7 +148,7 @@ func (a *app) cmdClientAdd(args []string) int {
 		return a.fatal(opClientAdd, fmt.Errorf("generate preshared key: %w", err))
 	}
 
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientAdd, err)
 	}
@@ -163,16 +163,12 @@ func (a *app) cmdClientAdd(args []string) int {
 		PrivateKey:   privateKey,
 		PublicKey:    publicKey,
 		PresharedKey: presharedKey,
+		ExpiresAt:    expiresAt,
 	})
 	if err != nil {
 		// ErrClientNameExists (duplicate name) and any other failure
 		// surface the same way; errors.Is still distinguishes them.
 		return a.fatal(opClientAdd, fmt.Errorf("create client: %w", err))
-	}
-	if expiresAt != "" {
-		if err := db.SetClientExpiry(handle, record.ID, expiresAt); err != nil {
-			return a.fatal(opClientAdd, fmt.Errorf("set expiry: %w", err))
-		}
 	}
 	if err := a.regenerate(handle); err != nil {
 		return a.fatal(opClientAdd, fmt.Errorf("generate config: %w", err))
@@ -266,7 +262,7 @@ func (a *app) cmdClientSetEnabled(args []string, enabled bool) int {
 	if err != nil {
 		return a.usageError(op, err.Error())
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(op, err)
 	}
@@ -299,7 +295,7 @@ func (a *app) cmdClientRename(args []string) int {
 	if err != nil {
 		return a.usageError(opClientRename, err.Error())
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientRename, err)
 	}
@@ -347,7 +343,7 @@ func (a *app) cmdClientSetMTU(args []string) int {
 				mtu, db.ClientMTUFloor, db.ClientMTUCeiling))
 		}
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientSetMTU, err)
 	}
@@ -399,7 +395,7 @@ func (a *app) cmdClientSetRate(args []string) int {
 				rate, db.ClientRateFloor, db.ClientRateCeiling))
 		}
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientSetRate, err)
 	}
@@ -439,7 +435,7 @@ func (a *app) cmdClientSetExpiry(args []string) int {
 			return a.usageError(opClientSetExpiry, err.Error())
 		}
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientSetExpiry, err)
 	}
@@ -468,7 +464,7 @@ func (a *app) cmdClientDelete(args []string) int {
 	if err != nil {
 		return a.usageError(opClientDelete, err.Error())
 	}
-	handle, err := a.openDB()
+	handle, err := a.openDBForChange()
 	if err != nil {
 		return a.fatal(opClientDelete, err)
 	}

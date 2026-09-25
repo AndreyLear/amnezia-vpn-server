@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -502,10 +503,38 @@ func TestAllocatorDoesNotUseServerOrBroadcast(t *testing.T) {
 	if err := Migrate(handle); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	// server on .254 in a /24: .255 is the broadcast, so nothing is free
+	// server on .254 in a /24: .255 is the broadcast, and the search wraps
+	// to the addresses below the server instead of giving up — they used
+	// to be never handed out (amnezia-vpn-server-76mp.26).
 	addr, err := allocClientAddress("10.8.0.254/24", nil)
-	if !errors.Is(err, ErrNoFreeAddress) {
-		t.Fatalf("allocClientAddress(.254/24) = %q, %v; want ErrNoFreeAddress", addr, err)
+	if err != nil || addr != "10.8.0.1/32" {
+		t.Fatalf("allocClientAddress(.254/24) = %q, %v; want 10.8.0.1/32", addr, err)
+	}
+	// .200/24 with .201-.254 taken: .1 is next, not ErrNoFreeAddress.
+	var above []string
+	for i := 201; i <= 254; i++ {
+		above = append(above, fmt.Sprintf("10.8.0.%d/32", i))
+	}
+	if addr, err := allocClientAddress("10.8.0.200/24", above); err != nil || addr != "10.8.0.1/32" {
+		t.Fatalf("allocClientAddress(.200/24, .201-.254 used) = %q, %v; want 10.8.0.1/32", addr, err)
+	}
+	// Everything but network, broadcast and the server taken: exhausted,
+	// and the server's own address is never offered.
+	var all []string
+	for i := 1; i <= 254; i++ {
+		if i != 200 {
+			all = append(all, fmt.Sprintf("10.8.0.%d/32", i))
+		}
+	}
+	if addr, err := allocClientAddress("10.8.0.200/24", all); !errors.Is(err, ErrNoFreeAddress) {
+		t.Fatalf("allocClientAddress(full /24) = %q, %v; want ErrNoFreeAddress", addr, err)
+	}
+	// /30 with the server on .2: .1 is the only client address.
+	if addr, err := allocClientAddress("10.8.0.2/30", nil); err != nil || addr != "10.8.0.1/32" {
+		t.Fatalf("allocClientAddress(.2/30) = %q, %v; want 10.8.0.1/32", addr, err)
+	}
+	if addr, err := allocClientAddress("10.8.0.2/30", []string{"10.8.0.1/32"}); !errors.Is(err, ErrNoFreeAddress) {
+		t.Fatalf("allocClientAddress(.2/30, .1 used) = %q, %v; want ErrNoFreeAddress", addr, err)
 	}
 	// /30: .0 network, .1 server, .2 one client, .3 broadcast
 	if err := seedServerM4(t, handle, "10.8.0.1/30"); err != nil {

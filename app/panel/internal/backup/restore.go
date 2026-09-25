@@ -30,8 +30,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/klauspost/compress/zstd"
 )
@@ -40,6 +42,47 @@ import (
 // database snapshots of this appliance are small; the cap protects
 // against hostile archives that declare enormous entries (Q13l/DoS).
 const maxEntrySize = 1 << 30 // 1 GiB
+
+// Archive-bomb limits (amnezia-vpn-server-76mp.29). A few hundred KB of
+// zstd-compressed zeros used to unpack into a manifest of up to 1 GiB —
+// read whole into memory — or a database of the same size on disk, and
+// the web panel did it twice (Inspect, then Restore).
+//
+// The manifest is one JSON line of well under a kilobyte. The database
+// may unpack to at most snapshotRatio times the archive's own size, but
+// never less than minSnapshotLimit (a real panel database is a few MB,
+// and zstd rarely does better than 10:1 on SQLite pages) nor more than
+// maxEntrySize.
+const (
+	maxManifestSize  = 64 << 10 // 64 KiB
+	minSnapshotLimit = 64 << 20 // 64 MiB
+	snapshotRatio    = 64
+	// maxDecoderWindow bounds the zstd window a hostile frame may ask
+	// for; Create's encoder (SpeedDefault) uses 8 MiB.
+	maxDecoderWindow = 64 << 20
+)
+
+// snapshotLimit is the largest database an archive of archiveSize bytes
+// may unpack to.
+func snapshotLimit(archiveSize int64) int64 {
+	if archiveSize <= 0 {
+		return minSnapshotLimit
+	}
+	if archiveSize > maxEntrySize/snapshotRatio {
+		return maxEntrySize
+	}
+	if limit := archiveSize * snapshotRatio; limit > minSnapshotLimit {
+		return limit
+	}
+	return minSnapshotLimit
+}
+
+// unpackMu keeps unpacks from running side by side: the web panel
+// inspects an upload outside its mutex and restores it inside, and
+// parallel uploads would each hold a full unpacked copy at once
+// (amnezia-vpn-server-76mp.29). Inspect holds it throughout (its copy is
+// transient); Restore holds it through unpack, validation and the probe.
+var unpackMu sync.Mutex
 
 const (
 	pendingDirName = ".restore-pending" // marker directory next to the live DB
@@ -93,28 +136,10 @@ func Restore(handle *sql.DB, dbPath, srcPath, backupsDir string, now func() time
 		}
 	}()
 
-	// 1. strict unpack into the pending directory.
-	manifestBytes, err := unpackArchive(srcPath, pendingDir)
-	if err != nil {
-		return res, err
-	}
-
-	// 2. validate the manifest against the M8 contract.
-	m, err := UnmarshalManifest(manifestBytes)
-	if err != nil {
-		return res, fmt.Errorf("backup: manifest: %w", err)
-	}
-
-	// 3. SQLite integrity_check + 4. schema compatibility (Q6: the
-	// archive declares schema_version 3, and its stored version must
-	// match the declaration — exact match only).
+	// 1–4b run under unpackMu: see its comment.
 	snapPath := filepath.Join(pendingDir, pendingDBName)
-	stored, err := validateRestoreImage(snapPath, m.SchemaVersion)
-	if err != nil {
+	if err := prepareImage(srcPath, pendingDir, filepath.Dir(dbPath)); err != nil {
 		return res, err
-	}
-	if stored != strconv.Itoa(m.SchemaVersion) {
-		return res, fmt.Errorf("backup: schema_version mismatch: manifest %d, stored %s", m.SchemaVersion, stored)
 	}
 
 	// 5. safety backup of the current (untouched) database.
@@ -134,6 +159,43 @@ func Restore(handle *sql.DB, dbPath, srcPath, backupsDir string, now func() time
 	return res, nil
 }
 
+// prepareImage unpacks the archive into pendingDir and checks the image:
+// manifest, integrity, schema version, and the startup probe.
+func prepareImage(srcPath, pendingDir, dbDir string) error {
+	unpackMu.Lock()
+	defer unpackMu.Unlock()
+
+	// 1. strict unpack into the pending directory.
+	manifestBytes, err := unpackArchive(srcPath, pendingDir)
+	if err != nil {
+		return err
+	}
+
+	// 2. validate the manifest against the M8 contract.
+	m, err := UnmarshalManifest(manifestBytes)
+	if err != nil {
+		return fmt.Errorf("backup: manifest: %w", err)
+	}
+
+	// 3. SQLite integrity_check + 4. schema compatibility (Q6: the
+	// archive declares schema_version 3, and its stored version must
+	// match the declaration — exact match only).
+	snapPath := filepath.Join(pendingDir, pendingDBName)
+	stored, err := validateRestoreImage(snapPath, m.SchemaVersion)
+	if err != nil {
+		return err
+	}
+	if stored != strconv.Itoa(m.SchemaVersion) {
+		return fmt.Errorf("backup: schema_version mismatch: manifest %d, stored %s", m.SchemaVersion, stored)
+	}
+	// 4b. the image must start the server: panel-init runs this very
+	// sequence after the swap.
+	if err := probeImage(snapPath, dbDir); err != nil {
+		return err
+	}
+	return nil
+}
+
 // unpackArchive unpacks srcPath (tar.zst) into dir with exactly two
 // regular files — manifest.json and amnezia.sqlite — and returns the
 // manifest bytes. Anything else is rejected.
@@ -143,8 +205,18 @@ func unpackArchive(srcPath, dir string) ([]byte, error) {
 		return nil, fmt.Errorf("backup: open archive: %w", err)
 	}
 	defer src.Close()
+	fi, err := src.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("backup: open archive: %w", err)
+	}
+	limits := map[string]int64{
+		manifestFilename: maxManifestSize,
+		pendingDBName:    snapshotLimit(fi.Size()),
+	}
 
-	zr, err := zstd.NewReader(src)
+	zr, err := zstd.NewReader(src,
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxWindow(maxDecoderWindow))
 	if err != nil {
 		return nil, fmt.Errorf("backup: decompress: %w", err)
 	}
@@ -167,7 +239,9 @@ func unpackArchive(srcPath, dir string) ([]byte, error) {
 		if hdr.Typeflag != tar.TypeReg {
 			return nil, fmt.Errorf("backup: unpack: entry %q is %s, not a regular file", hdr.Name, tarTypeName(hdr.Typeflag))
 		}
-		if hdr.Size < 0 || hdr.Size > maxEntrySize {
+		// The header-declared size is exact (archive/tar enforces it), so
+		// checking it here refuses a bomb before a byte is unpacked.
+		if hdr.Size < 0 || hdr.Size > limits[hdr.Name] {
 			return nil, fmt.Errorf("backup: unpack: entry %q too large", hdr.Name)
 		}
 		if seen[hdr.Name] {
@@ -175,12 +249,11 @@ func unpackArchive(srcPath, dir string) ([]byte, error) {
 		}
 		seen[hdr.Name] = true
 		if hdr.Name == manifestFilename {
-			manifest, err = io.ReadAll(io.LimitReader(tr, maxEntrySize+1))
+			manifest, err = io.ReadAll(io.LimitReader(tr, maxManifestSize+1))
 			if err != nil {
 				return nil, fmt.Errorf("backup: unpack: %s: %w", hdr.Name, err)
 			}
-			// limitReader caps at Size == maxEntrySize already enforced
-			if len(manifest) > maxEntrySize {
+			if len(manifest) > maxManifestSize {
 				return nil, fmt.Errorf("backup: unpack: manifest too large")
 			}
 			continue
@@ -272,6 +345,69 @@ func validateRestoreImage(snapPath string, want int) (string, error) {
 		return "", fmt.Errorf("backup: restored database schema_version %q, manifest %d", stored, want)
 	}
 	return stored, nil
+}
+
+// probeDirPrefix names the scratch directory of probeImage.
+const probeDirPrefix = ".restore-probe-"
+
+// probeImage runs what panel-init will run on the restored image —
+// migrate, require the server row, generate awg0.conf — on a scratch copy.
+// Integrity and schema version alone accepted archives after which init
+// failed and awg never started: one taken on a panel before `server init`
+// (the sentinel guard reads the empty server table as a lost database),
+// or one whose awg_params this binary's ParseParams rejects. Recovering
+// took the .pre-restore copy or the safety backup by hand
+// (amnezia-vpn-server-76mp.10).
+//
+// The copy sits next to the live database (same 0700 directory, never
+// /tmp: it holds keys) and is removed whatever the outcome; the pending
+// image itself is not touched, so apply still migrates the original.
+func probeImage(snapPath, dbDir string) error {
+	dir, err := os.MkdirTemp(dbDir, probeDirPrefix)
+	if err != nil {
+		return fmt.Errorf("backup: probe restored database: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	probePath := filepath.Join(dir, pendingDBName)
+	if err := copyFile(snapPath, probePath); err != nil {
+		return fmt.Errorf("backup: probe restored database: %w", err)
+	}
+	handle, err := db.Open(probePath)
+	if err != nil {
+		return fmt.Errorf("backup: probe restored database: %w", err)
+	}
+	defer handle.Close()
+	if err := db.Migrate(handle); err != nil {
+		return fmt.Errorf("backup: restored database does not migrate: %w", err)
+	}
+	if _, err := db.ServerRow(handle); err != nil {
+		if errors.Is(err, db.ErrServerNotFound) {
+			return errors.New("backup: archive has no server row (id=1): it was taken before `server init` and cannot start the server")
+		}
+		return fmt.Errorf("backup: probe restored database: %w", err)
+	}
+	if err := awgconf.Generate(handle, filepath.Join(dir, "awg0.conf")); err != nil {
+		return fmt.Errorf("backup: archive would not produce awg0.conf: %w", err)
+	}
+	return nil
+}
+
+// copyFile copies src to a new 0600 file dst.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // PendingPath returns the pending marker path for the database at

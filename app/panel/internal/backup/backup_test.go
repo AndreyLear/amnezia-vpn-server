@@ -25,9 +25,9 @@ import (
 var fakeNow = time.Date(2026, 8, 12, 10, 30, 0, 0, time.UTC)
 
 const (
-	testServerKey = "x-test-server-private-key-00000000000000000000"
-	testClientKey = "x-test-client-private-key-000000000000000000000"
-	testPreshared = "x-test-preshared-key-0000000000000000000000000"
+	testServerKey = "xTestServerPrivateKey0000000000000000000000="
+	testClientKey = "xTestClientPrivateKey0000000000000000000000="
+	testPreshared = "xTestPresharedKey00000000000000000000000000="
 	testHash      = "$argon2id$v=19$m=65536,t=1,p=4$c2FsdHNhbHRzYWx0c2FsdA$c2FsdHNhbHRzYWx0c2FsdHNhbHRz"
 )
 
@@ -48,7 +48,7 @@ func newTestDB(t *testing.T) (*sql.DB, string) {
 	_, err = handle.Exec(
 		`INSERT INTO server (id, private_key, public_key, address, listen_port, dns, awg_params, created_at, updated_at)
 		 VALUES (1, ?, ?, '10.66.66.1/24', 51820, '1.1.1.1', '{}', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
-		testServerKey, "x-test-server-public-key-00000000000000000000",
+		testServerKey, "xTestServerPublicKey00000000000000000000000=",
 	)
 	if err != nil {
 		t.Fatalf("seed server: %v", err)
@@ -56,7 +56,7 @@ func newTestDB(t *testing.T) (*sql.DB, string) {
 	_, err = handle.Exec(
 		`INSERT INTO clients (id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at)
 		 VALUES (1, 'alice', ?, ?, ?, '10.66.66.2/32', 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
-		testClientKey, "x-test-client-public-key-00000000000000000000", testPreshared,
+		testClientKey, "xTestClientPublicKey00000000000000000000000=", testPreshared,
 	)
 	if err != nil {
 		t.Fatalf("seed client: %v", err)

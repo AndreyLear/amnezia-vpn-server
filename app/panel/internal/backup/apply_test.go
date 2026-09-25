@@ -29,10 +29,11 @@ func sqliteFileWithClient(t *testing.T, name, key string) []byte {
 	if err := db.Migrate(handle); err != nil {
 		t.Fatal(err)
 	}
+	seedImageServer(t, handle)
 	if _, err := handle.Exec(
 		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at)
-		 VALUES (?, ?, 'x-archive-client-public-key-0000000000000001',
-		         'x-archive-preshared-key-0000000000000001', '10.66.66.10/32',
+		 VALUES (?, ?, 'xArchiveClientPublicKey00000000000000000001=',
+		         'xArchivePresharedKey00000000000000000000001=', '10.66.66.10/32',
 		         1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
 		name, key,
 	); err != nil {
@@ -57,10 +58,11 @@ func sqliteFileWithClientAndAuth(t *testing.T, clientName, clientKey, username, 
 	if err := db.Migrate(handle); err != nil {
 		t.Fatal(err)
 	}
+	seedImageServer(t, handle)
 	if _, err := handle.Exec(
 		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at)
-		 VALUES (?, ?, 'x-archive-client-public-key-0000000000000001',
-		         'x-archive-preshared-key-0000000000000001', '10.66.66.10/32',
+		 VALUES (?, ?, 'xArchiveClientPublicKey00000000000000000001=',
+		         'xArchivePresharedKey00000000000000000000001=', '10.66.66.10/32',
 		         1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
 		clientName, clientKey,
 	); err != nil {
