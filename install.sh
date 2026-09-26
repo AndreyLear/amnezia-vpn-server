@@ -994,10 +994,36 @@ log "deployment layout created under $ROOT_DIR (data/config/status/backups: 0700
 
 # --- 9. install/copy repository deployment files ----------------------
 
-copy_tree() { # cp -a with per-file error stop
-    if ! cp -a "$@" 2>/dev/null; then
-        die_op "copying deployment files failed: $*"
+# Дерево заменяется целиком, а не копируется поверх (amnezia-vpn-server-0dzh).
+# `cp -a` поверх оставлял файлы, которых в новом выпуске уже нет: переименованный
+# в 2.10.33 internal/mailconf/test.go ломал `go build` панели, а старые сборки
+# SPA попадали в go:embed. Новая копия собирается рядом, в том же каталоге —
+# значит, на том же разделе, и подмена сводится к двум rename(2): неполного
+# дерева на месте app/ не бывает ни при каком обрыве копирования. Старое
+# удаляется уже после подмены.
+#
+# AppleDouble-спутники ._* из архива, собранного на macOS, выбрасываются: в
+# дереве сборки они лишние, а в go:embed — мусор в бинарнике.
+replace_tree() { # replace_tree SRC_DIR DEST_DIR NAME
+    local src="$1" dir="$2" name="$3"
+    local new="$dir/.$name.new.$$" old="$dir/.$name.old.$$"
+    # Остатки от оборвавшегося прошлого запуска: pid у него был другой.
+    rm -rf "$dir/.$name.new."* "$dir/.$name.old."*
+    if ! cp -a "$src" "$new" 2>/dev/null; then
+        rm -rf "$new"
+        die_op "copying deployment files failed: $src $dir/"
     fi
+    find "$new" -name '._*' -exec rm -rf {} + 2>/dev/null
+    if [ -e "$dir/$name" ] && ! mv "$dir/$name" "$old" 2>/dev/null; then
+        rm -rf "$new"
+        die_op "cannot move the old $dir/$name aside"
+    fi
+    if ! mv "$new" "$dir/$name" 2>/dev/null; then
+        [ -e "$old" ] && mv "$old" "$dir/$name" 2>/dev/null
+        rm -rf "$new"
+        die_op "cannot put the new $dir/$name in place"
+    fi
+    rm -rf "$old"
 }
 
 # Скрипты кладутся новым файлом, а не поверх старого (amnezia-vpn-server-76mp.4).
@@ -1041,7 +1067,7 @@ else
     # the app/ tree (panel Dockerfile + Go module incl. embedded templates,
     # awg Dockerfile + entrypoint scripts, dns Dockerfile + entrypoint) must
     # be present under the root.
-    copy_tree "$SCRIPT_DIR/app" "$ROOT_DIR/"
+    replace_tree "$SCRIPT_DIR/app" "$ROOT_DIR" app
 fi
 chmod 0644 "$ROOT_DIR/compose.yaml" "$ROOT_DIR/versions.lock"
 chmod 0755 "$ROOT_DIR/docker-prune.sh" "$ROOT_DIR/watchdog.sh" \

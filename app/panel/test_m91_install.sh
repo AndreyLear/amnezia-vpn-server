@@ -3174,6 +3174,61 @@ test_rerun_from_inside_the_deployment() {
     grep -q "the files are already in place" "$TMP_TEST/out" \
         && pass "and it says why it copied nothing" \
         || fail "the in-place rerun said nothing about skipping the copies"
+    [ -f "$ROOT/app/panel/go.mod" ] \
+        && pass "the in-place rerun keeps app/" \
+        || fail "the in-place rerun lost app/"
+}
+
+# app/ копировался поверх старого дерева, и файлы, которых в новом выпуске
+# уже нет, оставались: internal/mailconf/test.go после переименования в
+# 2.10.33 ломал `go build` панели на каждом сервере, обновлённом с более
+# ранней версии (amnezia-vpn-server-0dzh). Дерево заменяется целиком.
+test_app_tree_is_replaced_whole() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "app replace setup: exit $rc"
+    mkdir -p "$ROOT/app/panel/internal/mailconf"
+    printf 'package mailconf\n' > "$ROOT/app/panel/internal/mailconf/test.go"
+    printf 'old\n' > "$ROOT/app/stale-file"
+    # Архив, собранный на macOS, приносит AppleDouble-спутники ._*; в
+    # дерево развёртывания они не должны попадать (go:embed, сборка).
+    printf 'appledouble\n' > "$M91_HOME/app/panel/._main.go"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    rm -f "$M91_HOME/app/panel/._main.go"
+    [ "$rc" = "0" ] || fail "app replace rerun: exit $rc"
+    [ ! -e "$ROOT/app/panel/internal/mailconf/test.go" ] && [ ! -e "$ROOT/app/stale-file" ] \
+        && pass "files gone from the release are gone from the deployment" \
+        || fail "stale files survived in the deployed app/"
+    [ -f "$ROOT/app/panel/go.mod" ] \
+        && pass "the new app/ is in place" \
+        || fail "app/ is missing after the replace"
+    [ ! -e "$ROOT/app/panel/._main.go" ] \
+        && pass "AppleDouble files are not copied" \
+        || fail "an AppleDouble ._* file reached the deployment"
+    ls -d "$ROOT"/.app.* >/dev/null 2>&1 \
+        && fail "a temporary app/ copy was left in the deployment" \
+        || pass "no temporary app/ copies left behind"
+}
+
+# Копия, оборвавшаяся на середине, не должна подменить рабочее дерево.
+test_failed_app_copy_keeps_the_old_tree() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "app copy failure setup: exit $rc"
+    printf 'marker\n' > "$ROOT/app/old-marker"
+    printf 'secret\n' > "$M91_HOME/app/unreadable"
+    chmod 000 "$M91_HOME/app/unreadable"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    chmod 600 "$M91_HOME/app/unreadable"; rm -f "$M91_HOME/app/unreadable"
+    [ "$rc" != "0" ] \
+        && pass "a failed app/ copy stops the install" \
+        || fail "a failed app/ copy went unnoticed"
+    [ -f "$ROOT/app/old-marker" ] && [ -f "$ROOT/app/panel/go.mod" ] \
+        && pass "the old app/ stays in place when the copy fails" \
+        || fail "a failed copy left app/ missing or half-replaced"
+    ls -d "$ROOT"/.app.* >/dev/null 2>&1 \
+        && fail "a failed copy left its temporary tree behind" \
+        || pass "a failed copy cleans up after itself"
 }
 
 test_update_check_installed_by_default() {
@@ -3497,6 +3552,8 @@ test_installer_keeps_a_copy_of_itself
 test_update_agent_unit_does_not_orphan_the_installer
 test_deployed_scripts_are_replaced_not_rewritten
 test_rerun_from_inside_the_deployment
+test_app_tree_is_replaced_whole
+test_failed_app_copy_keeps_the_old_tree
 test_panel_loopback_and_no_sock
 test_installed_compose_contract
 test_prune_soft_fail
