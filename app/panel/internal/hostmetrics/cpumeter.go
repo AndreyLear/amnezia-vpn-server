@@ -36,6 +36,14 @@ func NewCPUMeter(procDir string, period time.Duration) *CPUMeter {
 // Run samples right away and then every period until ctx is done.
 func (m *CPUMeter) Run(ctx context.Context) {
 	m.sample()
+	m.loop(ctx)
+}
+
+// loop repeats sample every period until ctx is done, without taking an
+// initial sample itself: SharedCPUMeter needs that first sample done
+// synchronously, before the background loop starts, so callers never race a
+// goroutine's first read against theirs (amnezia-vpn-server-azsm).
+func (m *CPUMeter) loop(ctx context.Context) {
 	t := time.NewTicker(m.period)
 	defer t.Stop()
 	for {
@@ -97,6 +105,13 @@ func SharedCPUMeter(procDir string, period time.Duration) *CPUMeter {
 	}
 	m := NewCPUMeter(procDir, period)
 	sharedMeters[procDir] = m
-	go m.Run(context.Background())
+	// The first sample is taken here, synchronously, so the caller that
+	// starts the meter already has a reference reading before anything else
+	// can run: a "go m.Run(ctx)" left this racing the reader, and a test
+	// that overwrote /proc/stat before the goroutine's first sample fired
+	// made that second reading the reference, so the counters never moved
+	// again and cpu_percent stayed nil forever (amnezia-vpn-server-azsm).
+	m.sample()
+	go m.loop(context.Background())
 	return m
 }
