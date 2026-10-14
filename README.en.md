@@ -110,6 +110,21 @@ Turning IPv6 off removes it completely: the rules, the routing and the addresses
 
 Everything is managed in the browser.
 
+<p align="center"><img src="screenshots/main.png" alt="Main panel screen: the client list, server load in the header"><br>Main screen: clients and server load</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/client.png" alt="Client details window with a 10-minute speed chart"></td>
+    <td width="50%"><img src="screenshots/qr.png" alt="Client QR code window"></td>
+  </tr>
+  <tr>
+    <td align="center">Client details with the speed chart</td>
+    <td align="center">QR code for the phone app</td>
+  </tr>
+</table>
+
+<p align="center"><img src="screenshots/mobile.png" width="280" alt="Main panel screen on a phone"><br>The same panel on a phone</p>
+
 - **Header.** CPU, memory and disk load, tunnel state
 - **Clients.** One card each: name, address, whether it is enabled, when it last connected, how much traffic it received and sent
 - **"Бэкап" (Backup) button.** Download or upload the settings file
