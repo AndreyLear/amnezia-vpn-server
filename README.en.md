@@ -1,82 +1,47 @@
 # AmneziaWG VPN Server
 
-Your own VPN on your own server: one command in the terminal and a few minutes
-later you have a working VPN with a web panel. Clients are added in a couple of
-clicks and connect by scanning a QR code.
+A script that sets up a VPN on your server, plus a web panel where you add clients with a button and connect them by QR code. One command from your computer, about five minutes.
 
-Built on AmneziaWG: the traffic looks ordinary, so it gets through where plain
-VPN protocols are blocked.
+The VPN runs on AmneziaWG: WireGuard with packets that do not look like WireGuard, which makes it harder to block.
 
-Русская версия: [README.md](README.md) · Security: [SECURITY.md](SECURITY.md)
-· Development: [DEVELOPMENT.md](DEVELOPMENT.md)
+Русская версия: [README.md](README.md) · Security: [SECURITY.md](SECURITY.md) · Development: [DEVELOPMENT.md](DEVELOPMENT.md)
 
 ## What you need
 
 **A server** with root access over SSH:
 
-| | Minimum | Note |
+| | Minimum | Notes |
 | --- | --- | --- |
-| System | Ubuntu 24.04 | recommended; Ubuntu 22.04 and Debian 12 are accepted too |
-| CPU | 1 core | measured on one core: 3–5 minutes to install, up to 45 MB/s throughput |
-| Memory | 1 GB, 2 GB is better | 2 GB leaves room as the client count grows |
+| System | Ubuntu 24.04 | the installer also accepts Ubuntu 22.04 and Debian 12 |
+| CPU | 1 core | the install takes 3–5 minutes on one core |
+| Memory | 1 GB, 2 GB is better | headroom as the client count grows |
 | Disk | 10 GB | images and the database take under 1 GB |
-| Ports | UDP 4500, TCP 443 or 8443 | plus TCP 80 if you want a Let's Encrypt certificate |
+| Ports | UDP 4500, TCP 443 or 8443 | plus TCP 80 for a Let's Encrypt certificate |
 
-Such a server costs 3–5 dollars a month at most hosting providers. Watch the
-traffic allowance: a VPN uses as much as its users do.
+Such a server costs 3–5 dollars a month. Watch the traffic allowance: a VPN uses as much as its clients do.
 
-**Which system to pick.** Use Ubuntu 24.04 — that is what this is tested on.
-AmneziaWG is installed from `ppa:amnezia/ppa`, an Ubuntu mechanism, and it
-brings a kernel module: the encryption runs in the kernel rather than in a
-separate process, which is where the throughput comes from. Ubuntu 22.04 works
-the same way.
+Everything is tested on Ubuntu 24.04. Debian 12 is not: AmneziaWG comes as a kernel module from `ppa:amnezia/ppa`, an Ubuntu repository, and the module may fail to rebuild after a kernel upgrade. Rocky, Alma, Fedora, Arch and Alpine are refused outright.
 
-Debian 12 is accepted but untested here: the PPA is not native to it, and the
-module may fail to rebuild after a kernel upgrade, which stops the tunnel from
-coming up. Anything else — Rocky, Alma, Fedora, Arch, Alpine — is refused
-outright.
+**A domain** is optional; without one everything works over the IP. There can be two, independent of each other:
 
-There is nothing to gain from another distribution. Throughput comes from the
-host's uplink and core count, not from the OS.
+- the panel domain (`--panel-domain`) gets a Let's Encrypt certificate instead of a self-signed one. Its A record must point at the server, and port 80 must be open
+- the VPN domain (`--vpn-domain`) goes into client configs instead of the IP. If you move servers, repoint the record and everyone's settings keep working. The record must point at the server before the install; the installer checks it
 
-**A domain** is optional. Without one everything works over the server's IP
-address. With one you get a real certificate instead of a self-signed one, and
-you can move to another server without touching anyone's settings.
+**Your computer** is a Mac, a Linux machine or Windows. You need to be able to open a terminal and paste a command.
 
-**Your computer** — a Mac, a Linux machine, or Windows.
+- Logging in with an SSH key needs nothing extra. Password login needs `sshpass` or `expect`. macOS already has `expect`; on Linux and in WSL install `sshpass`:
 
-On a Mac or Linux open the terminal. Install `sshpass` if you will log into the
-server with a password:
+  ```sh
+  sudo apt install sshpass
+  ```
 
-```sh
-brew install sshpass          # macOS
-sudo apt install sshpass      # Ubuntu, Debian
-```
+- On Windows the installer runs in neither PowerShell nor the command prompt: it is written for a Unix shell. Install WSL, which is Ubuntu inside Windows. In PowerShell as administrator:
 
-On Windows the installer runs in neither PowerShell nor the command prompt: it
-is written for a Unix shell. Install WSL — Ubuntu inside Windows, no second
-machine needed. Open PowerShell as administrator:
+  ```powershell
+  wsl --install
+  ```
 
-```powershell
-wsl --install
-```
-
-The command installs Ubuntu and asks you to restart the computer. After the
-restart Ubuntu opens on its own and asks for a username and a password — pick
-any, they exist only inside it. Then install `sshpass`:
-
-```sh
-sudo apt install sshpass
-```
-
-From there open Ubuntu from the Start menu and type every command in this guide
-there. They do not work in PowerShell, which reads line breaks and quotes
-differently.
-
-WSL runs on Windows 11 and on Windows 10 version 2004 and later. You set it up
-once: after that Windows works the same as a Mac or Linux.
-
-**Time** — about five minutes.
+  It installs Ubuntu and asks you to restart. After the restart Ubuntu opens by itself and asks for a username and password; they only exist inside it. Then open Ubuntu from the Start menu, install `sshpass` there and type every command from this guide there. WSL is available on Windows 11 and on Windows 10 version 2004 or later
 
 ## Install
 
@@ -85,364 +50,203 @@ curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/
 bash bootstrap.sh
 ```
 
-The wizard asks for the server address, a password or key, and a domain. Enter
-accepts the value in brackets — when in doubt, press Enter.
-
-You can pass everything up front instead:
+The wizard asks for the server address, the SSH user (`root` by default), a password or key, the panel domain, the panel port and the VPN domain. Enter accepts the value in brackets. You can pass the same answers as flags:
 
 ```sh
-./bootstrap.sh --ip 203.0.113.10 --vpn-domain example.com
+./bootstrap.sh --ip 203.0.113.10 --panel-domain panel.example.com --vpn-domain example.com
 ```
 
-It then walks through nine steps and prints the panel address, the login, a
-temporary password and the certificate fingerprint. **Keep that** — the
-password is stored nowhere else.
+| Flag | What it sets |
+| --- | --- |
+| `--ip` | server address. With it the wizard asks nothing |
+| `--user` | SSH user, `root` by default |
+| `--key` | SSH key file, `~/.ssh/id_ed25519` by default, then `~/.ssh/id_rsa` |
+| `--password-env VAR` | read the SSH password from the environment variable `VAR` |
+| `--panel-domain` | panel domain with a Let's Encrypt certificate (alias `--domain`) |
+| `--panel-port` | panel port: 443 with a domain, 8443 without |
+| `--vpn-domain` | VPN domain for client configs (alias `--client-domain`) |
+| `--awg-port` | tunnel UDP port, 4500 by default. Avoid 443 and 51820 |
+| `--root` | install directory on the server, `/opt/amnezia-vpn` by default |
+| `--source URL` | download a release tarball instead of packing the local repository |
 
-## After the install
+The wizard prints steps `[1/9]` through `[9/9]`. Usually the images are downloaded ready-made. If step 7 says "Собираю образы" (building images), expect 10–30 minutes; the CPU sits at 100% and that is normal.
 
-Open the panel at the address from the summary. Without a domain your browser
-will warn about the self-signed certificate: compare the fingerprint with the
-one printed and continue.
+At the end it prints the panel address, the login, a temporary password, the client endpoint and the certificate fingerprint. Keep that: the password is not stored anywhere else.
 
-Change the password (see below), then add your first client.
+```
+Panel:     https://203.0.113.10:8443
+Login:     admin
+Password:  rZksiVMoEcPXsCQtFowec1+e
+Endpoint:  example.com:4500
+```
+
+### First login
+
+1. Open the panel at the address from the summary. Without a panel domain the browser warns about a self-signed certificate: compare the fingerprint with the one printed and continue
+2. [Change the password](#changing-the-panel-password)
+3. Press "Add client" (the panel itself is in Russian) and connect a device as described in [Clients](#clients)
+
+### What the installer turns on
+
+| What | What it does | How to turn it off |
+| --- | --- | --- |
+| SSH protection | `fail2ban`: five failed attempts in ten minutes, banned for an hour. It never touches the tunnel port: there are no passwords there, and a ban would cut off a real client | `--no-fail2ban` |
+| IPv6 in the tunnel | on when the server has working IPv6. What is checked is that traffic actually leaves, not that an address exists: some hosts hand out an address that routes nowhere | `--no-ipv6` |
+| Watchdog | once a minute it checks that the in-tunnel DNS answers and the tunnel writes its status. After two failures in a row it restarts the service, at most once every ten minutes. A container can be running and useless, and Docker does not notice. It ignores client handshakes: people are legitimately offline | `--no-watchdog` |
+| Update check | once a day the server asks GitHub whether a new release is out, and the panel shows the answer. It downloads and installs nothing | `--no-update-check` |
+| In-tunnel DNS | the server answers the panel's hostname with an address inside the tunnel, so the panel opens with the VPN on and off | `--no-tunnel-dns` |
+
+Any update check tells GitHub the address of your server. With `--no-update-check` it does not, but you have to follow releases yourself. With `--no-tunnel-dns` port 53 stays with the server's own DNS, and the panel no longer opens by name from devices connected to the VPN.
+
+```sh
+./bootstrap.sh --ip 203.0.113.10 --no-ipv6
+```
+
+`install.sh` takes the same flags if you run it on the server yourself. The choice is remembered on the server: a rerun without flags and an update from the panel turn nothing back on. To turn a service on again, pass the flag without `no-`: `--fail2ban`, `--watchdog`, `--update-check`, `--tunnel-dns`, `--ipv6`.
+
+Turning IPv6 off removes it completely: the rules, the routing and the addresses in client configs. Updating never changes your choice: a server running without IPv6 stays without it. Switching IPv6 restarts the tunnel. Every client loses the connection for about 15 seconds and gets it back by itself, no configs to reissue.
 
 ## The panel
 
-**The header** shows how the server is doing: CPU, memory and disk usage, plus
-the state of the tunnel. **The body** is one card per client: name, assigned
-address, whether it is enabled, when it last connected and how much traffic it
-has moved. **The Backup button** downloads or uploads the file with everything
-you have configured.
+Everything is managed in the browser.
 
-The panel opens at the same address whether the VPN is on or off. The server
-runs its own resolver inside the tunnel: for connected devices it answers the
-panel's hostname with the panel's in-tunnel address. The certificate stays
-valid — the name does not change.
-
-### What is switched on for you
-
-Four things the installer decides, because otherwise you would have to
-remember them.
-
-**SSH brute-force protection.** Every server with a public address is guessed
-at around the clock, from its first hour. `fail2ban` is installed: five failed
-attempts in ten minutes, banned for an hour. The tunnel port is never touched
-— there are no passwords to guess there, and a ban would cut off a real
-person.
-
-**IPv6 in the tunnel**, when the server has it and it *works*. What is checked
-is not that an address exists but that traffic actually leaves: plenty of
-hosting providers configure IPv6 halfway, handing out an address that routes
-nowhere.
-
-Why it matters: YouTube, Instagram and most large sites are dual-stack. A
-tunnel carrying IPv4 only squeezes all of their traffic through one pipe and
-leaves the other half of their capacity unreachable.
-
-**A watchdog over the resolver and the tunnel.** Once a minute it checks that
-the resolver still answers and that the tunnel still writes its status, and
-restarts whichever service stopped doing so — after two consecutive failures,
-and no more than once every ten minutes.
-
-Why it matters: a container can be up and useless at the same time. To Docker
-that is success, so the ordinary restart policy never sees it, and a wedged
-resolver stays silent until somebody complains. Client handshakes are
-deliberately not a trigger: people are legitimately offline, and restarting a
-tunnel over that would be harm without a cause.
-
-**A daily update check.** The server asks GitHub whether a newer release is
-out, and the panel shows the answer. Nothing is downloaded or installed on its
-own: updating is your decision.
-
-Why it matters: blocking changes, and what got around it in March may stop
-working by autumn. Releases here include repaired circumvention. A server that
-never learns a release exists never updates, and its owner hears about the
-problem from users instead.
-
-If GitHub is unreachable from your server, the check fails quietly — a daily
-complaint about it would change nothing. The reason is on the update page if
-you go looking.
-
-### Turning any of them off
-
-```bash
-./bootstrap.sh --ip 203.0.113.10 --no-ipv6        # IPv4-only tunnel
-./bootstrap.sh --ip 203.0.113.10 --no-fail2ban    # no SSH protection
-./bootstrap.sh --ip 203.0.113.10 --no-watchdog    # no watchdog
-./bootstrap.sh --ip 203.0.113.10 --no-update-check  # never ask GitHub
-```
-
-`--no-update-check` is worth understanding before you use it: any update check
-tells GitHub the address of your server. A server meant to be unremarkable
-announces itself once a day to a party outside your control. If that matters
-more to you than hearing about releases, the flag is yours — you will have to
-follow releases yourself.
-
-`install.sh` takes the same flags when you run it on the server yourself.
-
-The choice is remembered on the server: an update from the panel or a rerun
-without flags turns nothing back on. To turn a service back on, pass the same
-flag without `no-`: `--fail2ban`, `--watchdog`, `--update-check`,
-`--tunnel-dns`.
-
-To turn IPv6 off later, rerun with the flag: everything that was added is
-removed — the ruleset, the forwarding and the addresses in client configs.
-`--ipv6` turns it back on.
-
-Two promises worth knowing exactly:
-
-- **Upgrading a version never changes your decision.** A server running
-  without IPv6 keeps running without it. Nothing switches itself on for a
-  deployment that already exists — only for a new one.
-- **Turning it off is complete, not partial.** What was added is removed, on
-  every run, not only on the run that flips the switch.
-
-One honest caveat: switching IPv6 on or off **restarts the tunnel**. Every
-client loses the connection for about **fifteen seconds** — measured three
-times on a live server at 12, 13 and 16 — and gets it back by itself, with no
-action from you and no config reissued. An interface address cannot be changed
-any other way.
+- **Header.** CPU, memory and disk load, tunnel state
+- **Clients.** One card each: name, address, whether it is enabled, when it last connected, how much traffic it received and sent
+- **"Бэкап" (Backup) button.** Download or upload the settings file
+- **"Ещё" (More) menu.** Versions, service status, log, update check and "Уведомления" (Notifications), which sends failure alerts by email
 
 ## Clients
 
-A client is one device: a phone, a laptop, a router. Each has its own keys, so
-disabling one leaves the others alone.
+A client is one device: a phone, a laptop, a router. Each has its own keys, so disabling one leaves the others alone.
 
-Add one by pressing the add button and typing a name you will recognise. The
-panel assigns an address and creates the keys.
+Press "Добавить клиента" (Add client) and type any name you will recognise. The panel assigns an address and creates keys. Then:
 
-- **QR code** — for phones. Client menu → QR code, scan it in the app
-- **Config file** — for computers and routers. Client menu → download, then
-  import the file. It is generated on download and stored nowhere
+- **Phone.** Client menu → "QR-код", scan it in the app
+- **Computer or router.** Client menu → "Скачать конфиг" (download config) and import the file into the app. The file is generated on download and stored nowhere
 
-You can also disable a client (its settings stay valid but stop working),
-enable it again, delete it for good, or leave yourself a note in its
-description. Addresses come from `10.8.0.0/24`, so 253 devices — you will run
-out of bandwidth long before that.
+The same menu has "Сведения" (details: name, description, MTU, speed limit), "Отключить" (disable: the keys stay, the client cannot connect; the same item turns it back on) and "Удалить" (delete: keys are erased and the old config stops working for good).
+
+Addresses come from `10.8.0.0/24`, so up to 253 clients.
 
 ## Apps
 
-The server speaks AmneziaWG, so any client that understands the protocol works.
+Any AmneziaWG client works.
 
-**AmneziaWG** — the app for the protocol itself:
+**AmneziaWG** is the app for this protocol only:
 
 - iOS — [App Store](https://apps.apple.com/app/amneziawg/id6478942365)
 - Android — [Google Play](https://play.google.com/store/apps/details?id=org.amnezia.awg)
-- Windows — [GitHub releases](https://github.com/amnezia-vpn/amneziawg-windows-client/releases).
-  Take `amneziawg-amd64-<version>.msi`. The `arm64` build is for laptops on ARM
-  processors, the `windows7` one for Windows 7 and 8
+- Windows — [GitHub releases](https://github.com/amnezia-vpn/amneziawg-windows-client/releases). Take `amneziawg-amd64-<version>.msi`. There is `arm64` for ARM and `x86` for 32-bit Windows. Windows 7 and 8 need release 2.0.2 or older, which has files with `windows7` in the name
 
-**AmneziaVPN** — Amnezia's general client, several protocols at once, for
-Windows, macOS, Linux, Android and iOS: [amnezia.org/downloads](https://amnezia.org/downloads)
+**AmneziaVPN** is Amnezia's general client with several protocols, for Windows, macOS, Linux, Android and iOS: [amnezia.org/downloads](https://amnezia.org/downloads). With a single server, AmneziaWG is enough
 
-**Routers.** OpenWrt with the `amneziawg` package works, so does a Keenetic
-with AmneziaWG support: set the router up as an ordinary client and the whole
-household goes through the VPN. Three things are worth doing when you do.
+**Routers.** OpenWrt with the `amneziawg` package and Keenetic with AmneziaWG support are set up as an ordinary client, and then the whole home network goes through the VPN.
 
 ### When the tunnel runs on a router
 
-Devices at home ask the router for names, not our server: the client config
-never reaches them. The three points below are not fine tuning — without them
-the household works, but not the way you think it does.
+Devices at home ask the router for names, not your server, and the client config never reaches them. So you need three steps:
 
-**1. Names should be resolved by our server.** Set `10.8.0.1` as the only name
-server on the router and remove the rest, including the ones the provider hands
-out over DHCP.
+1. **Make `10.8.0.1` the only DNS on the router.** Remove the rest, including the ones the provider hands out over DHCP
+2. **Turn off DNS-over-HTTPS and DNS-over-TLS on the router.** Otherwise it keeps asking Cloudflare or Google over port 443, around the tunnel
+3. **Turn off the provider's IPv6 on the internet connection.** If a device has an address from the provider, it picks that one and the traffic leaves around the VPN with your real address. On a Keenetic: IPv6 settings → IPv6 configuration → disabled
 
-**2. Turn off DNS-over-HTTPS and DNS-over-TLS on the router.** Otherwise the
-first point changes nothing: the router keeps asking Cloudflare or Google over
-port 443, around the tunnel. A measurement on a live Keenetic shows it plainly
-— over two minutes, zero queries to `10.8.0.1` and 240 packets to `1.1.1.1`
-and `8.8.8.8`.
-
-**3. Turn off the provider's IPv6 on the internet connection.** The tunnel
-carries IPv6 of its own and it works. But if a device also holds an address
-from the provider it will pick that one, and the traffic leaves around the VPN
-with your real address. On a Keenetic this is IPv6 settings → IPv6
-configuration → disabled.
-
-**How to check.** From any device at home — not from the router itself:
+To check, run this on any device at home, not on the router itself:
 
 ```sh
 curl -6 https://ifconfig.co
 ```
 
-The answer should be your server's address. The provider's address means part
-of the traffic goes around the tunnel.
+Your server's address or an error means all is well. The provider's address means part of the traffic goes around the tunnel.
 
-**The panel says it about DNS itself.** When a client moves data through the
-tunnel but does not ask us for names, an amber mark appears in its row: "no
-queries to our resolver in the last 10 minutes". Nothing has to be configured
-for that: the server sees who talks to it, and silence is as visible as a
-query.
+**MTU.** A router on a wire carries larger packets than a phone on a mobile network, and the server default is sized for the phone. You can raise it for one client: "Сведения" → MTU → "Изменить", 1280–1440 allowed. That speeds up what the household sends out. The other direction is set by the server and shared by everyone
 
-No mark means either all is well or there is nothing to say yet: the client is
-offline or has only just connected.
+## Changing the panel password
 
-On a router client the mark speaks about the router alone. The devices at home
-are hidden behind it — all their queries leave from one address — so a router
-that occasionally asks us about its own business shows no mark even while a
-laptop behind it uses somebody else's DNS. For the household, the `curl` check
-above is the reliable one.
-
-**MTU.** A router on a wire usually carries larger packets than a phone on a
-mobile network, and the server default is sized for the phone. Raising it for
-one client is done in the panel: client card → MTU → Change. That speeds up
-what the household sends; the other direction is set by the server and shared
-by everyone.
-
-## Common tasks
-
-### Changing the panel password
-
-There is deliberately no form for this in the panel, so the password cannot be
-guessed through a browser:
+The panel has no password form on purpose, so the password cannot be guessed through a browser. It is changed with a command on the server:
 
 ```sh
 ssh root@203.0.113.10 "cd /opt/amnezia-vpn && docker compose --env-file versions.lock \
   run --rm -T panel-init /app/panel auth set-password admin --password-stdin"
 ```
 
-The command asks for the new password and does not echo it. Forgetting the old
-one does not matter — it is not asked for.
+The command prompts for nothing and just waits for input: type the new password and press Enter. It will be visible on screen. The old password is not needed.
 
-### Backups
+## Backups
 
-A backup is a single file holding everything you configured: the clients, their
-keys and the server's own keys. Restoring it brings all of that back, and the
-settings you handed out keep working, because the server keys are inside too.
+A backup is one file with everything you configured: the clients, their keys and the server's keys. You can restore it on the same server or a new one, and the configs you handed out keep working.
 
-Download it in the panel: **Backup** → **Download**. Do that after adding or
-removing clients, and before reinstalling or changing hosts. Keep the file
-anywhere except the server itself.
+- **Download.** "Бэкап" → "Скачать". The file is named like `backup-2026-08-23.tar.zst` and is a few kilobytes
+- **When.** After every change to the client list, and before reinstalling or changing hosts
+- **Where to keep it.** With you, like a password: it contains the server's keys and is not encrypted. Do not send it by email or messenger. Do not keep the only copy on the server itself: if the server goes, so does the copy
+- **Restore.** "Бэкап" → "Загрузить". Clients come back immediately, no restart. The panel password stays the current one. The mailbox password for notifications has to be entered again
 
-To restore: **Backup** → **Upload**. Clients come back immediately, no restart.
-The panel password stays the one currently in effect.
-
-### Moving to another server
+## Moving to another server
 
 1. While the old panel is up, download a backup
 2. Install on the new server with the same wizard
-3. Upload the backup in the new panel
-4. The panel notices the backup came from another server and asks which address
-   to use:
-   - **keep the backup's address** — for users connecting by domain. Repoint
-     the domain's A record and everyone reconnects on their own
-   - **use this server's address** — for users who connected by IP. Hand them
-     new settings from the panel
+3. In the new panel: "Бэкап" → "Загрузить"
+4. The panel sees the backup came from another server and asks which address to give clients:
+   - **The backup's address**, for people who connect by domain. Repoint the domain's A record at the new server and everyone reconnects by themselves
+   - **This server's address**, for people who connected by IP. Hand them new configs from the panel
 
-### Updating
+## Updating
 
-From 2.9.0 the server updates itself: the panel shows that a newer release is
-out, and a button starts the update. No ssh needed.
+From version 2.9.0 the panel shows that a new release is out and updates the server with a button. No SSH needed.
 
-**Once, the old way.** The service that performs the update ships *with* a
-release, so a server installed before it has to be given it first. The update
-to 2.9.0 is done with the wizard below; every one after that is a button in
-the panel.
+The first time is the old way: the update service ships with a release, so a server installed earlier has to be given it first. The same goes for anyone who turned the update check off (`--no-update-check`): without it the server does not know about new releases.
 
-The wizard also stays the way for anyone who turned the update check off
-(`--no-update-check`): without it the server does not know what came out.
-
-An update is the same wizard as the install, run again. It remembers the
-deployment settings and asks nothing.
+An update is the same wizard run again. It remembers the server's settings, so no flags are needed:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh --ip 203.0.113.10
 ```
 
-There is no need to repeat the flags: the wizard remembers what the server was
-set up with. The client domain stays as it was even when the update runs
-without `--vpn-domain`. Going back to the server address is explicit:
-`--vpn-domain ""`.
+The VPN domain stays as it was even without `--vpn-domain`. To go back to the server address, say so: `--vpn-domain ""`. Client configs do not need reissuing. Connectivity drops for a few seconds and recovers by itself.
 
-Nothing has to be reissued to clients: their configs keep working. The restart
-costs a few seconds of connectivity, and clients recover on their own. A rerun
-against an already-installed server took 4 minutes 14 seconds when measured
-with the images built on the spot; the usual path, which downloads them ready
-made, is shorter.
+The wizard also updates what lives on the server itself: firewall rules, kernel settings, services. Anything new, like IPv6 in the tunnel, arrives only this way.
 
-An update changes more than the containers — it also updates what lives on the
-server itself: firewall rules, kernel settings, services. A release that adds
-something new (IPv6 inside the tunnel, say) arrives only this way.
+`docker compose pull` does not help: the image version comes from a file left by the previous install, so the same version that is running is downloaded again.
 
-**What not to do.** This section used to hold a pair of `docker compose pull`
-commands. They do not update: the image tag comes from a file left on the
-server by the previous install, so the same version that is already running is
-downloaded again. The host side is not touched at all.
-
-### Uninstalling
+## Uninstalling
 
 ```sh
 ssh root@203.0.113.10 "bash /opt/amnezia-vpn/cleanup.sh"
 ```
 
-It first prints what it would remove and changes nothing. Add `--yes` to go
-ahead. Only what the installer created is removed.
+It prints what it would remove and changes nothing. Add `--yes` to go ahead. Only what the installer created is removed. The `fail2ban` package stays.
 
-### When something is wrong
+## If something is wrong
 
-**The panel stopped opening after a reinstall.** That was the behaviour
-before 2.3.0: running the installer without the domain flag returned the
-panel to loopback. Settings are remembered now, so a plain rerun changes
-nothing. On an older version, pass the domain again.
+**Pages load but video does not.** Almost always MTU: small packets get through, large ones are dropped. The installer sets 1360, or less if the server's path is narrower (never below 1280). A reinstall usually fixes it. If not, lower the MTU in the client app, for example from 1360 to 1280.
 
-**Pages load but video does not.** Two causes look identical from the outside,
-so check both.
+**A client stopped connecting after a move.** Check where the domain points: `dig +short example.com`. It should be the new server's address.
 
-The MTU: small packets get through while the large ones carrying video are
-dropped on the way. The installer picks a size that survives mobile networks
-too, so a reinstall usually settles it. If it does not, lower the MTU in the
-client app itself — 1280 instead of 1340.
+**The panel does not open.** Check that the services are running:
 
-A tunnel carrying IPv4 only. YouTube, Instagram and most large sites live in
-both versions of the protocol at once; with IPv4 alone their whole load is
-squeezed through one pipe and half their capacity is unreachable. If the
-server has working IPv6, `--ipv6` gives the tunnel its second half back. See
-"IPv6 in the tunnel" above.
+```sh
+ssh root@203.0.113.10 "docker ps"
+```
 
-**A client stopped connecting after a move.** Check where the domain points:
-`dig +short example.com`.
+`amnezia-vpn-panel-1` and `amnezia-vpn-awg-1` should be in the list.
 
-**The panel does not open.** Check the services: `ssh root@203.0.113.10 "docker ps"`.
-`amnezia-vpn-panel-1` and `amnezia-vpn-awg-1` should both be up.
+## Security
+
+This is built for one server and one administrator. Panel login is username and password only, no second factor. Five failed attempts in 15 minutes from one address lock that address out. A backup and SSH access are equivalent to access to the VPN, so protect them. More in [SECURITY.md](SECURITY.md).
 
 ## How it works
 
-Four containers: the panel (which owns the SQLite database), AmneziaWG, a
-resolver for connected clients, and a one-shot init job. The panel listens on
-the server's loopback only; nginx serves it to the outside with a
-certificate.
+Four containers run on the server: the panel (which keeps its data in SQLite), AmneziaWG, DNS for connected clients and a one-shot init job. The panel listens on the server itself only; nginx serves it to the outside with a certificate. Everything else is rebuilt from the database, which is why a database backup restores both clients and server keys.
 
-SQLite is the single source of truth — everything else is rebuilt from it,
-which is why a backup of the database restores both clients and server keys.
+Client configs route IPv6 into the tunnel too, so it does not go around the VPN with your real address. If the tunnel carries no IPv6, those connections fail and apps fall back to IPv4.
 
-IPv6 is disabled on the client: otherwise YouTube, Instagram and other
-dual-stack sites would go around the tunnel instead of through it.
+The tunnel runs on UDP 4500. Port 443 is open almost everywhere, but it is the QUIC port, and mobile carriers throttle it to slow video down. A tunnel on it inherited the limit: 20 Mbit/s against 45 on port 4500 and 40 with no tunnel at all. Port 4500 belongs to IPsec, which corporate VPNs use, so carriers let it through.
 
-The tunnel runs on UDP 4500. Port 443 would look like the convenient
-choice — it is open almost everywhere — but it is the QUIC port, and
-mobile carriers throttle it to slow video down. A tunnel sitting there
-inherits the whole limit: measured on a live deployment, the same tunnel
-ran at 20 Mbit/s on UDP 443 and 45 Mbit/s on 4500, against 40 with no
-tunnel at all. Port 4500 belongs to IPsec, which corporate VPNs use, so
-carriers let it through.
+The in-tunnel DNS exists because of the panel. It sits at the address where the tunnel ends. A packet sent to that address never enters the tunnel, and iOS creates no bypass route for it, so without answering the hostname differently the panel would be unreachable from exactly the devices connected to it. Clients get our DNS. If the tunnel carries IPv6, a public fallback is added after it: if ours stops, names keep resolving.
 
-The in-tunnel resolver exists because the panel lives at the same address the
-tunnel ends at. A packet sent to that address never enters the tunnel, and iOS
-creates no bypass route for it — so without answering the hostname differently,
-the panel would be unreachable from exactly the devices connected to it.
-Clients get our resolver. On a tunnel that carries IPv6 a public fallback is
-added after it: if ours stops for any reason, names keep resolving and nobody
-notices.
+Without IPv6 there is no fallback: a public DNS would return IPv6 addresses the tunnel cannot carry, and you would get "pages open, video does not" with no visible cause. Here a failure is visible at once, and the watchdog brings DNS back within a minute.
 
-On a tunnel without IPv6 there is no fallback. With one, the nastiest kind of
-breakage appears: pages open, video does not, and there is no way to tell why.
-Without it a failure is visible at once, and the watchdog brings the resolver
-back on its own within a minute.
-
-More in [DEVELOPMENT.md](DEVELOPMENT.md).
+Build and tests are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## License
 
