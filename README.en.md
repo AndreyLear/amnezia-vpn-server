@@ -18,7 +18,7 @@ The VPN runs on AmneziaWG: WireGuard with packets that do not look like WireGuar
 | Disk | 10 GB | images and the database take under 1 GB |
 | Ports | UDP 4500, TCP 443 or 8443 | plus TCP 80 for a Let's Encrypt certificate |
 
-Such a server costs 3–5 dollars a month. Watch the traffic allowance: a VPN uses as much as its clients do.
+Such a server costs $3–5 a month. Watch the traffic allowance: a VPN uses as much as its clients do.
 
 Everything is tested on Ubuntu 24.04. Debian 12 is not: AmneziaWG comes as a kernel module from `ppa:amnezia/ppa`, an Ubuntu repository, and the module may fail to rebuild after a kernel upgrade. Rocky, Alma, Fedora, Arch and Alpine are refused outright.
 
