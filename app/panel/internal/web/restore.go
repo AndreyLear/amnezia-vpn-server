@@ -408,6 +408,9 @@ func (s *Server) applyRestoreNow(keepUsername string, host hostSettings) (int, e
 	}
 	old := s.swapDB(next)
 	retireDB(old)
+	// Xray — после подмены базы, когда откатывать уже нечего: иначе он
+	// получил бы пользователей архива, а база вернулась бы к прежней.
+	s.regenerateXray(next)
 	// The restored database carries no mail password (internal/backup
 	// strips it), so this removes a mail.conf left from before the restore
 	// instead of letting an old password outlive its row. Mail is not worth

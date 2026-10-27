@@ -221,3 +221,66 @@ func TestComposeAwgPrivilegesUnchanged(t *testing.T) {
 	equal(t, "awg cap_drop", awg.capDrop, []string{"NET_RAW"})
 	equal(t, "awg devices", awg.devices, []string{"/dev/net/tun:/dev/net/tun"})
 }
+
+// TestComposeXrayService: Xray (VLESS+XHTTP+Reality, amnezia-vpn-server-14y0.2)
+// видит только свой каталог конфига (там приватный ключ Reality, но нет ни
+// ключей AWG, ни базы) и пишет журналы в status/, откуда их сможет читать
+// панель; без прав, без опубликованных портов, в профиле xray — стек
+// поднимается и без него.
+func TestComposeXrayService(t *testing.T) {
+	services := parseCompose(t, composePath(t))
+	x := mustService(t, services, "xray")
+	equal(t, "xray volumes", x.volumes, []string{
+		"./config/xray:/etc/xray:ro",
+		"./status/xray:/var/log/xray",
+	})
+	equal(t, "xray cap_drop", x.capDrop, []string{"ALL"})
+	equal(t, "xray cap_add", x.capAdd, nil)
+	equal(t, "xray devices", x.devices, nil)
+
+	data, err := os.ReadFile(composePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := serviceBlock(string(data), "xray")
+	for _, want := range []string{
+		"image: ghcr.io/xtls/xray-core:${XRAY_VERSION:?XRAY_VERSION must be set via versions.lock}",
+		`command: ["run", "-c", "/etc/xray/config.json"]`,
+		"network_mode: host",
+		`profiles: ["xray"]`,
+		"condition: service_completed_successfully",
+		"restart: unless-stopped",
+		"no-new-privileges:true",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("xray: нет %q", want)
+		}
+	}
+
+	lock, err := os.ReadFile(filepath.Join(filepath.Dir(composePath(t)), "versions.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(lock), "\nXRAY_VERSION=26.10.21\n") {
+		t.Fatal("versions.lock: XRAY_VERSION не закреплён на 26.10.21")
+	}
+}
+
+// serviceBlock — строки одного сервиса compose.yaml, до следующего
+// сервиса (ключа на отступе 2).
+func serviceBlock(compose, name string) string {
+	var b strings.Builder
+	in := false
+	for _, line := range strings.Split(compose, "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") && strings.HasSuffix(trim, ":") {
+			in = trim == name+":"
+			continue
+		}
+		if in {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}

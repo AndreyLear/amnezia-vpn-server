@@ -1732,14 +1732,15 @@ test_installed_compose_contract() {
     os_release debian 12 bookworm
     rc="$(run_install --build)"
     [ "$rc" = "0" ] || fail "installed compose flow: exit $rc"
-    # awg and dns both need the host netns; panel, awg and dns all
-    # survive a reboot, panel-init stays a one-shot job.
-    [ "$(grep -c '^    network_mode: host$' "$ROOT/compose.yaml")" = "2" ] \
-        && pass "installed compose: network_mode: host on awg+dns" \
-        || fail "installed compose: network_mode: host on awg+dns"
-    [ "$(grep -c '^    restart: unless-stopped$' "$ROOT/compose.yaml")" = "3" ] \
-        && pass "installed compose: restart: unless-stopped on panel+awg+dns" \
-        || fail "installed compose: restart: unless-stopped on panel+awg+dns"
+    # awg, dns and xray (amnezia-vpn-server-14y0.2) need the host netns;
+    # panel, awg, dns and xray all survive a reboot, panel-init stays a
+    # one-shot job.
+    [ "$(grep -c '^    network_mode: host$' "$ROOT/compose.yaml")" = "3" ] \
+        && pass "installed compose: network_mode: host on awg+dns+xray" \
+        || fail "installed compose: network_mode: host on awg+dns+xray"
+    [ "$(grep -c '^    restart: unless-stopped$' "$ROOT/compose.yaml")" = "4" ] \
+        && pass "installed compose: restart: unless-stopped on panel+awg+dns+xray" \
+        || fail "installed compose: restart: unless-stopped on panel+awg+dns+xray"
     [ "$(grep -c '^    sysctls:$' "$ROOT/compose.yaml")" = "0" ] \
         && pass "installed compose: no awg sysctls" \
         || fail "installed compose: no awg sysctls"

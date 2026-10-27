@@ -25,6 +25,7 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/web"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/xray"
 )
 
 const usageText = `usage: /app/panel <command> [args]
@@ -297,7 +298,17 @@ func (a *app) regenerate(handle *sql.DB) error {
 	if err := db.RenderMailConf(handle, mailconf.PathFor(db.DefaultPath())); err != nil {
 		fmt.Fprintf(a.stderr, "warning: mail settings: %v\n", err)
 	}
+	a.regenerateXray(handle)
 	return nil
+}
+
+// regenerateXray пересобирает конфиг Xray вслед за awg0.conf и доносит
+// разницу до запущенного Xray (amnezia-vpn-server-14y0.2). Как и почта, это
+// не повод проваливать команду: изменение уже в базе и в туннеле AWG.
+func (a *app) regenerateXray(handle *sql.DB) {
+	xray.Regenerate(handle, configPath(), func(format string, args ...any) {
+		fmt.Fprintf(a.stderr, "warning: "+format+"\n", args...)
+	})
 }
 
 // testFault, when set by tests, injects the named failure into
@@ -426,6 +437,11 @@ func (a *app) cmdInit(args []string) int {
 		return a.fatal("init", err)
 	}
 	fmt.Fprintln(a.stdout, "panel init: awg0.conf generated")
+	// Конфиг Xray — после awg0.conf и так же из базы; без настроек Xray
+	// ничего не пишется (amnezia-vpn-server-14y0.2). Если Xray уже запущен
+	// (восстановление с перезапуском одной панели), разница в пользователях
+	// уходит ему через API.
+	a.regenerateXray(handle)
 	// mail.conf is derived from the database too (amnezia-vpn-server-2kr4).
 	// A failure here must not keep the tunnel from starting: the error is
 	// reported and init still succeeds.

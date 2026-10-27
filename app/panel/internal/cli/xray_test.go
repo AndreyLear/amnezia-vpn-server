@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,5 +106,66 @@ func TestXrayInitNeedsDomain(t *testing.T) {
 	}
 	if s.ServerName != "vpn.example.com" || s.Target != "127.0.0.1:4433" {
 		t.Fatalf("настройки: %+v", s)
+	}
+}
+
+// Команды клиентов и panel init перегенерируют конфиг Xray вслед за
+// awg0.conf; недоступный API Xray — предупреждение, а не отказ команды
+// (amnezia-vpn-server-14y0.2).
+func TestClientCommandsRegenerateXrayConfig(t *testing.T) {
+	c := newCtx(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AMNEZIA_XRAY_API_ADDR", ln.Addr().String())
+	t.Setenv("AMNEZIA_XRAY_CONFIG_PATH", "")
+	ln.Close()
+	c.seedServer("", "")
+	c.mustRun("xray", "init")
+	xrayPath := filepath.Join(c.dir, "xray", "config.json")
+
+	c.run("client", "add", "andrey")
+	code, _, errb := c.run("client", "add", "mama")
+	if code != 0 {
+		t.Fatalf("client add при недоступном API Xray: exit %d, %s", code, errb)
+	}
+	if !strings.Contains(errb, "xray") {
+		t.Fatalf("недоступный API Xray не отмечен: %q", errb)
+	}
+	cfg, err := os.ReadFile(xrayPath)
+	if err != nil {
+		t.Fatalf("конфиг Xray не записан: %v", err)
+	}
+	if !strings.Contains(string(cfg), `"email": "c2"`) {
+		t.Fatalf("новый клиент не попал в конфиг Xray:\n%s", cfg)
+	}
+
+	if code, _, errb := c.run("client", "disable", "2"); code != 0 {
+		t.Fatalf("client disable: %d %s", code, errb)
+	}
+	cfg, _ = os.ReadFile(xrayPath)
+	if strings.Contains(string(cfg), `"email": "c2"`) {
+		t.Fatal("отключённый клиент остался в конфиге Xray")
+	}
+
+	os.Remove(xrayPath)
+	if code, _, errb := c.run("init"); code != 0 {
+		t.Fatalf("panel init: %d %s", code, errb)
+	}
+	if cfg, err := os.ReadFile(xrayPath); err != nil || !strings.Contains(string(cfg), `"email": "c1"`) {
+		t.Fatalf("panel init не записал конфиг Xray: %v", err)
+	}
+}
+
+// Без настроек Xray panel init ведёт себя как прежде: ни файла, ни
+// предупреждений.
+func TestInitWithoutXray(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	c.seedClient("andrey")
+	c.mustRun("init")
+	if _, err := os.Stat(filepath.Join(c.dir, "xray")); !os.IsNotExist(err) {
+		t.Fatalf("каталог Xray без настроек: %v", err)
 	}
 }

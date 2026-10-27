@@ -146,3 +146,44 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # xray — VLESS+XHTTP+Reality рядом с AWG (amnezia-vpn-server-14y0.2)
+  xray:
+    # На мобильных сетях РФ работает только он, и только на TCP 443: nginx
+    # на хосте делит 443 по SNI и отдаёт чужие имена сюда, на
+    # 127.0.0.1:4432, с PROXY protocol. Конфиг собирают из базы panel-init
+    # и панель (config/xray/config.json), пользователей панель меняет через
+    # API на 127.0.0.1:10085 без перезапуска.
+    image: ghcr.io/xtls/xray-core:${XRAY_VERSION:?XRAY_VERSION must be set via versions.lock}
+    command: ["run", "-c", "/etc/xray/config.json"]
+    # Профиль: без настроек Xray в базе конфига нет, и контейнер только
+    # падал бы по кругу. Стек поднимается и без него; включение —
+    # COMPOSE_PROFILES=xray (amnezia-vpn-server-14y0.3).
+    profiles: ["xray"]
+    # host netns, как на боевом (amnezia-vpn-server-adaw): вход и API
+    # слушают петлю хоста, наружу ничего не публикуется.
+    network_mode: host
+    restart: unless-stopped
+    # root без единой возможности: конфиг с ключом Reality и каталог
+    # журналов принадлежат root (их создают panel-init и Docker), а
+    # пользователь образа по умолчанию (65532) не прочёл бы ни того, ни
+    # другого. Порты выше 1024, привилегии не нужны.
+    user: "0:0"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      panel-init:
+        condition: service_completed_successfully
+    volumes:
+      # только свой каталог: ни awg0.conf, ни база сюда не видны
+      - ./config/xray:/etc/xray:ro
+      # журналы доступа — для журнала и графиков панели (status/ панель
+      # уже читает)
+      - ./status/xray:/var/log/xray
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
