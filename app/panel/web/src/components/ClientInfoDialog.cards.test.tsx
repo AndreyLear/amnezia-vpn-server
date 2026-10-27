@@ -60,6 +60,10 @@ function blocks(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>('[data-slot="info-block"]'));
 }
 
+function sections(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-slot="info-section"]'));
+}
+
 // Кнопки содержимого окна — без крестика закрытия, который стоит вне тела.
 function bodyButtons(): HTMLElement[] {
   const close = screen.getByRole("button", { name: "Close" });
@@ -95,11 +99,34 @@ describe("ClientInfoDialog: блоки", () => {
     }
   });
 
-  it("AWG разбит на блоки: график; IP с конфигом; MTU с ограничением; рукопожатие с трафиком", () => {
+  // Владелец: «Табы и контент табов внутри блока. Это всё один блок» —
+  // ровно две карточки: общее и вкладки целиком (amnezia-vpn-server-14y0.9).
+  it("две карточки: общее и вкладки вместе с их содержимым", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    const dialog = screen.getByRole("dialog");
+    const cards = blocks(dialog);
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toBe(screen.getByTestId("client-common"));
+    const tabsCard = cards[1];
+    for (const cls of ["p-4", "rounded-[1rem]", "border", "border-border"]) {
+      expect(tabsCard).toHaveClass(cls);
+    }
+    expect(tabsCard).toContainElement(screen.getByRole("tablist", { name: "Протокол" }));
+    expect(tabsCard).toContainElement(screen.getByRole("tabpanel"));
+
+    await user.click(screen.getByRole("tab", { name: "VLESS" }));
+    await screen.findByText("Напрямую");
+    expect(blocks(screen.getByRole("dialog"))).toHaveLength(2);
+    expect(tabsCard).toContainElement(screen.getByRole("tabpanel"));
+  });
+
+  it("AWG — разделы через разделители, не карточки: график; IP с конфигом; MTU с ограничением; рукопожатие с трафиком", () => {
     renderDialog();
     const panel = screen.getByRole("tabpanel");
-    expect(panel).toHaveClass("gap-4");
-    const parts = blocks(panel);
+    expect(blocks(panel)).toHaveLength(0);
+    expect(panel).toHaveClass("divide-y", "divide-border");
+    const parts = sections(panel);
     expect(parts).toHaveLength(4);
     expect(within(parts[0]).getByText(/^Скорость/)).toBeInTheDocument();
     expect(within(parts[1]).getByText("IP")).toBeInTheDocument();
@@ -114,7 +141,9 @@ describe("ClientInfoDialog: блоки", () => {
     const user = userEvent.setup();
     renderDialog();
     const del = screen.getByRole("button", { name: "Удалить" });
-    expect(within(screen.getByTestId("client-common")).queryByRole("button", { name: "Удалить" })).toBeNull();
+    for (const card of blocks(screen.getByRole("dialog"))) {
+      expect(card).not.toContainElement(del);
+    }
     const panel = screen.getByRole("tabpanel");
     expect(panel.compareDocumentPosition(del) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const all = bodyButtons();
@@ -132,7 +161,7 @@ describe("ClientInfoDialog: блоки", () => {
     expect(content).toHaveClass("sm:max-w-2xl");
   });
 
-  it("VLESS: свой график по счётчикам Xray, блоки и понятная оговорка про вход рядом с трафиком", async () => {
+  it("VLESS: свой график по счётчикам Xray, разделы и понятная оговорка про вход рядом с трафиком", async () => {
     const user = userEvent.setup();
     renderDialog();
     await user.click(screen.getByRole("tab", { name: "VLESS" }));
@@ -140,7 +169,8 @@ describe("ClientInfoDialog: блоки", () => {
     await within(panel).findByText("Напрямую");
     await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "10min", 120, "vless"));
 
-    const parts = blocks(panel);
+    expect(blocks(panel)).toHaveLength(0);
+    const parts = sections(panel);
     expect(parts).toHaveLength(3);
     expect(within(parts[0]).getByText(/^Скорость/)).toBeInTheDocument();
     expect(within(parts[1]).getByText("Трафик")).toBeInTheDocument();

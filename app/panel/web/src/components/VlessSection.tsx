@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Copy, QrCode } from "lucide-react";
 import { toast } from "sonner";
 
-import { InfoBlock, infoRowClass, infoRowsClass } from "@/components/InfoBlock";
+import { InfoSection, infoRowClass, infoRowsClass } from "@/components/InfoBlock";
 import { SpeedChart } from "@/components/SpeedChart";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,9 +26,9 @@ import { cn } from "@/lib/utils";
 // приходит одной служебной учёткой, и по клиентам его не разложить —
 // об этом оговорка под полями, когда входы есть.
 //
-// С amnezia-vpn-server-14y0.9 раздел — несколько блоков-карточек: график
-// скорости VLESS (свой журнал панели по тем же счётчикам), трафик с
-// активностью и ссылки.
+// С amnezia-vpn-server-14y0.9 раздел — несколько разделов карточки
+// вкладок (не своих карточек): график скорости VLESS (свой журнал панели по
+// тем же счётчикам), трафик с активностью и ссылки.
 
 export function vlessRouteLabel(route: VlessRoute): string {
   if (!route.entry) return "Напрямую";
@@ -102,34 +102,34 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
   if (state.kind === "loading") return null;
   if (state.kind === "error") {
     return (
-      <InfoBlock data-testid="vless-section">
+      <InfoSection data-testid="vless-section">
         <p className="text-destructive">
           Не удалось загрузить ссылки VLESS, откройте окно клиента заново
         </p>
-      </InfoBlock>
+      </InfoSection>
     );
   }
   const { info } = state;
   // Xray на сервере не настроен и узлов нет — ни ссылок, ни трафика.
   if (info.enabled && info.routes.length === 0) {
     return (
-      <InfoBlock data-testid="vless-section">
+      <InfoSection data-testid="vless-section">
         <p className="text-muted-foreground">VLESS на сервере не настроен</p>
-      </InfoBlock>
+      </InfoSection>
     );
   }
   const hasEntry = info.routes.some((route) => route.entry);
-  // Блоки — как у вкладки AWG (amnezia-vpn-server-14y0.9): график первым,
+  // Разделы — как у вкладки AWG (amnezia-vpn-server-14y0.9): график первым,
   // рядом с ним то, что он показывает в цифрах, ссылки — отдельно.
   const chart = (
-    <InfoBlock>
+    <InfoSection>
       <dl>
         <SpeedChart clientId={clientId} protocol="vless" />
       </dl>
-    </InfoBlock>
+    </InfoSection>
   );
   const usage = (
-    <InfoBlock className="gap-2">
+    <InfoSection className="grid gap-2">
       <dl className={infoRowsClass}>
         <Field label="Трафик">
           ↓ {formatBytes(traffic.down)} · ↑ {formatBytes(traffic.up)}
@@ -146,18 +146,18 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
           активность — если клиент подключается только так, здесь будет пусто
         </p>
       ) : null}
-    </InfoBlock>
+    </InfoSection>
   );
   if (!info.enabled) {
     return (
       <>
         {chart}
         {usage}
-        <InfoBlock data-testid="vless-section">
+        <InfoSection data-testid="vless-section">
           <p className="text-muted-foreground">
             Клиент на паузе — ссылки VLESS появятся после включения
           </p>
-        </InfoBlock>
+        </InfoSection>
       </>
     );
   }
@@ -166,7 +166,7 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
     <>
       {chart}
       {usage}
-      <InfoBlock data-testid="vless-section">
+      <InfoSection data-testid="vless-section">
         <ul aria-label="Маршруты" className={infoRowsClass}>
           {info.routes.map((route) => {
             const label = vlessRouteLabel(route);
@@ -205,7 +205,7 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
             );
           })}
         </ul>
-      </InfoBlock>
+      </InfoSection>
       <Dialog
         open={qrRoute !== null}
         onOpenChange={(open) => {

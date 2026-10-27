@@ -26,3 +26,14 @@ export function InfoBlock({ className, ...props }: ComponentProps<"div">) {
 /** Строки блока: разделитель между ними, без лишнего отступа по краям. */
 export const infoRowsClass = "grid divide-y divide-border gap-0";
 export const infoRowClass = "py-2 first:pt-0 last:pb-0";
+
+/**
+ * Раздел внутри карточки — не своя карточка (amnezia-vpn-server-14y0.9).
+ * Владелец: «Табы и контент табов внутри блока. Это всё один блок», поэтому
+ * вкладки со всем содержимым — одна карточка, а её разделы (график, адрес,
+ * настройки…) отделяются разделителем, как строки «общего». Родитель
+ * раздела — infoRowsClass.
+ */
+export function InfoSection({ className, ...props }: ComponentProps<"div">) {
+  return <div data-slot="info-section" className={cn(infoRowClass, className)} {...props} />;
+}
