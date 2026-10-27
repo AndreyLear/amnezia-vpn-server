@@ -24,7 +24,7 @@ import (
 
 var update = flag.Bool("update", false, "rewrite testdata/config.golden.json")
 
-var testOpts = Options{APIAddr: DefaultAPIAddr, LogDir: DefaultLogDir}
+var testOpts = Options{APIAddr: DefaultAPIAddr}
 
 // Конфиг Xray закреплён целиком: вход VLESS+XHTTP+Reality на петле за
 // nginx stream (PROXY protocol), пользователи c<id>, API на петле, журналы
@@ -487,5 +487,22 @@ func TestSyncKeepsServiceUsers(t *testing.T) {
 	}
 	if fileUsers(t, path)["ruentry"] != ruentry {
 		t.Fatal("служебная учётка пропала вместе с клиентом")
+	}
+}
+
+// Журнала доступа нет, ошибки — в stderr (в json-file Docker с его
+// ротацией): иначе на диске копилась бы история сайтов каждого клиента без
+// предела (amnezia-vpn-server-14y0.3).
+func TestRenderKeepsNoAccessLog(t *testing.T) {
+	data, err := Render(fixtureSettings(), nil, nil, testOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c config
+	if err := json.Unmarshal(data, &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Log.Access != "none" || c.Log.Error != "" {
+		t.Fatalf("журналы: %+v", c.Log)
 	}
 }

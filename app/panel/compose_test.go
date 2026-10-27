@@ -226,15 +226,14 @@ func TestComposeAwgPrivilegesUnchanged(t *testing.T) {
 
 // TestComposeXrayService: Xray (VLESS+XHTTP+Reality, amnezia-vpn-server-14y0.2)
 // видит только свой каталог конфига (там приватный ключ Reality, но нет ни
-// ключей AWG, ни базы) и пишет журналы в status/, откуда их сможет читать
-// панель; без прав, без опубликованных портов, в профиле xray — стек
-// поднимается и без него.
+// ключей AWG, ни базы) и каталог сокета API; журналов на диске не ведёт;
+// без прав, без опубликованных портов, в профиле xray — стек поднимается и
+// без него.
 func TestComposeXrayService(t *testing.T) {
 	services := parseCompose(t, composePath(t))
 	x := mustService(t, services, "xray")
 	equal(t, "xray volumes", x.volumes, []string{
 		"./config/xray:/etc/xray:ro",
-		"./status/xray:/var/log/xray",
 		"./run/xray:/run/xray",
 	})
 	equal(t, "xray cap_drop", x.capDrop, []string{"ALL"})

@@ -164,17 +164,18 @@ services:
     image: ghcr.io/xtls/xray-core:${XRAY_VERSION:?XRAY_VERSION must be set via versions.lock}
     command: ["run", "-c", "/etc/xray/config.json"]
     # Профиль: без настроек Xray в базе конфига нет, и контейнер только
-    # падал бы по кругу. Стек поднимается и без него; включение —
-    # COMPOSE_PROFILES=xray (amnezia-vpn-server-14y0.3).
+    # падал бы по кругу. Стек поднимается и без него; install.sh --xray
+    # запоминает включение в .env и сам передаёт профиль compose
+    # (amnezia-vpn-server-14y0.3), так что и агент обновления его поднимает.
     profiles: ["xray"]
     # host netns, как на боевом (amnezia-vpn-server-adaw): вход и API
     # слушают петлю хоста, наружу ничего не публикуется.
     network_mode: host
     restart: unless-stopped
-    # root без единой возможности: конфиг с ключом Reality и каталог
-    # журналов принадлежат root (их создают panel-init и Docker), а
-    # пользователь образа по умолчанию (65532) не прочёл бы ни того, ни
-    # другого. Порты выше 1024, привилегии не нужны.
+    # root без единой возможности: конфиг с ключом Reality и каталог сокета
+    # принадлежат root (их создают install.sh и panel-init), а пользователь
+    # образа по умолчанию (65532) не прочёл бы конфиг и не создал бы сокет.
+    # Порты выше 1024, привилегии не нужны.
     user: "0:0"
     cap_drop:
       - ALL
@@ -186,11 +187,10 @@ services:
     volumes:
       # только свой каталог: ни awg0.conf, ни база сюда не видны
       - ./config/xray:/etc/xray:ro
-      # журналы доступа — для журнала и графиков панели (status/ панель
-      # уже читает)
-      - ./status/xray:/var/log/xray
       # сокет API, общий с панелью
       - ./run/xray:/run/xray
+    # Журнала доступа Xray не ведёт, ошибки пишет в stderr — сюда, под ту
+    # же ротацию 10m×3, что у остальных (amnezia-vpn-server-14y0.3).
     logging:
       driver: json-file
       options:

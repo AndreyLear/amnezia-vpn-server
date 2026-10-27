@@ -47,9 +47,6 @@ const (
 	apiDokodemoPrt = 10085
 )
 
-// DefaultLogDir — каталог журналов Xray внутри его контейнера.
-const DefaultLogDir = "/var/log/xray"
-
 // ConfigPath — где лежит конфиг Xray. AMNEZIA_XRAY_CONFIG_PATH задаёт его
 // явно; без него — config/xray/config.json рядом с awg0.conf. Отдельный
 // каталог, а не файл рядом: контейнер Xray монтирует каталог целиком (файл,
@@ -70,19 +67,9 @@ func APIAddr() string {
 	return DefaultAPIAddr
 }
 
-// LogDir — каталог журналов, как его видит Xray (AMNEZIA_XRAY_LOG_DIR или
-// DefaultLogDir). Журнал доступа понадобится панели для журнала и графиков.
-func LogDir() string {
-	if d := os.Getenv("AMNEZIA_XRAY_LOG_DIR"); d != "" {
-		return d
-	}
-	return DefaultLogDir
-}
-
 // Options — то, что в конфиге зависит не от базы, а от развёртывания.
 type Options struct {
 	APIAddr string
-	LogDir  string
 }
 
 // Порядок полей структур — порядок ключей в файле: одинаковые данные дают
@@ -95,6 +82,13 @@ type config struct {
 	Routing   routingSettings `json:"routing"`
 }
 
+// logConfig — журналы Xray (amnezia-vpn-server-14y0.3). Журнала доступа
+// нет: в нём адрес каждого клиента рядом с каждым сайтом, куда он ходил, —
+// у сервера, который забрали, это история всех клиентов; и такой файл
+// растёт без предела, а ротировать его пришлось бы на хосте отдельной
+// службой. Ошибки — в stderr, то есть в json-file Docker, где они уже
+// ограничены 10m×3, как у остальных сервисов. Журнал доступа понадобится
+// для графиков — включать его тогда вместе с ротацией.
 type logConfig struct {
 	Access   string `json:"access"`
 	Error    string `json:"error"`
@@ -199,8 +193,8 @@ func build(s *db.XraySettings, clients []db.VLESSClient, service []db.VLESSServi
 	}
 	c := config{
 		Log: logConfig{
-			Access:   filepath.Join(opt.LogDir, "access.log"),
-			Error:    filepath.Join(opt.LogDir, "error.log"),
+			Access:   "none",
+			Error:    "",
 			LogLevel: "warning",
 		},
 		API: apiConfig{Tag: apiTag, Services: []string{"HandlerService"}},

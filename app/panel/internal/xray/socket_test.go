@@ -86,7 +86,7 @@ func TestAPIOverUnixSocket(t *testing.T) {
 // API-вход в конфиге — dokodemo-door на сокете с правами только для root
 // и маршрутом в outbound api раньше остальных правил.
 func TestRenderAPIInboundOnSocket(t *testing.T) {
-	data, err := Render(fixtureSettings(), nil, nil, Options{APIAddr: "unix:/run/xray/api.sock", LogDir: DefaultLogDir})
+	data, err := Render(fixtureSettings(), nil, nil, Options{APIAddr: "unix:/run/xray/api.sock"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestLiveXrayAPI(t *testing.T) {
 	}
 	dir := shortDir(t)
 	sock := filepath.Join(dir, "api.sock")
-	opt := Options{APIAddr: "unix:" + sock, LogDir: dir}
+	opt := Options{APIAddr: "unix:" + sock}
 	clients := []db.VLESSClient{{ID: 1, UUID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301"}}
 	c := build(fixtureSettings(), clients, nil, opt)
 	c.Inbounds[0].Port = 14432

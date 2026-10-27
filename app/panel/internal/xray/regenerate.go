@@ -26,7 +26,7 @@ func Regenerate(handle *sql.DB, awgConfPath string, logf func(format string, arg
 	if err := ClearStaleSocket(addr); err != nil {
 		logf("%v", err)
 	}
-	res, err := Sync(ctx, handle, ConfigPath(awgConfPath), Options{APIAddr: addr, LogDir: LogDir()}, NewAPI(addr))
+	res, err := Sync(ctx, handle, ConfigPath(awgConfPath), Options{APIAddr: addr}, NewAPI(addr))
 	switch {
 	case err != nil:
 		logf("xray: config not written: %v", err)
