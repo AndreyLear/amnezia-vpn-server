@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ActivityIcon,
   ArrowDownIcon,
   ArrowUpDownIcon,
   ArrowUpIcon,
@@ -17,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -30,6 +32,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UserText, noTranslate } from "@/components/UserText";
 import type { Client } from "@/lib/api";
 import { formatBytes, formatHandshakeAge } from "@/lib/format";
+import { lastProtocol, protocolActivity, protocolLabel } from "@/lib/protocol";
 import { cn } from "@/lib/utils";
 
 export type ClientActions = {
@@ -187,6 +190,13 @@ export function ClientCard({
 }: { client: Client } & ClientActions) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const isSmUp = useMinWidthSm();
+  // Показываем протокол, по которому клиент был на связи последним, и
+  // называем его: оба сразу владелец счёл лишним — часть клиентов ходит
+  // только через Xray (amnezia-vpn-server-14y0.8).
+  const protocol = lastProtocol(client);
+  const label = protocolLabel[protocol];
+  const activity = protocolActivity(client, protocol);
+  const ActivityGlyph = protocol === "vless" ? ActivityIcon : HandshakeIcon;
 
   return (
     <Card
@@ -208,28 +218,39 @@ export function ClientCard({
           <div className="flex flex-nowrap shrink-0 items-center gap-3 text-muted-foreground sm:contents">
             <Tooltip>
               <TooltipTrigger asChild>
+                <Badge
+                  variant="outline"
+                  className="font-mono text-muted-foreground"
+                  aria-label={`Протокол: ${label}`}
+                >
+                  {label}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent>Последний раз на связи по {label}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-[0.4rem]">
-                  <HandshakeIcon
-                    className={cn("size-4", client.online && "text-emerald-500")}
+                  <ActivityGlyph
+                    className={cn("size-4", activity.online && "text-emerald-500")}
                     aria-hidden
                   />
-                  <span className="tabular-nums">{formatHandshakeAge(client.last_handshake_utc)}</span>
+                  <span className="tabular-nums">{formatHandshakeAge(activity.lastSeen)}</span>
                 </span>
               </TooltipTrigger>
-              <TooltipContent>Последний handshake</TooltipContent>
+              <TooltipContent>
+                {protocol === "vless" ? "Последняя активность по VLESS" : "Последний handshake"}
+              </TooltipContent>
             </Tooltip>
-            {/* rx_bytes и tx_bytes приходят из дампа wg с точки зрения
-                СЕРВЕРА: rx — принято сервером, то есть отдача клиента;
-                tx — отправлено сервером, то есть его скачивание. Подписи
-                здесь про клиента, поэтому стрелки смотрят наоборот
-                (amnezia-vpn-server-9l30). */}
+            {/* Направления — с точки зрения клиента: protocolActivity уже
+                перевернул rx/tx сервера для AWG (amnezia-vpn-server-9l30). */}
             {!isSmUp ? (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="inline-flex items-center gap-[0.25rem] whitespace-nowrap">
                     <ArrowUpDownIcon className="size-4" aria-hidden />
                     <span className="tabular-nums">
-                      {formatBytes(client.rx_bytes)} / {formatBytes(client.tx_bytes)}
+                      {formatBytes(activity.up)} / {formatBytes(activity.down)}
                     </span>
                   </span>
                 </TooltipTrigger>
@@ -241,7 +262,7 @@ export function ClientCard({
                   <TooltipTrigger asChild>
                     <span className="inline-flex items-center gap-[0.25rem]">
                       <ArrowDownIcon className="size-4" aria-hidden />
-                      <span className="tabular-nums">{formatBytes(client.tx_bytes)}</span>
+                      <span className="tabular-nums">{formatBytes(activity.down)}</span>
                     </span>
                   </TooltipTrigger>
                   <TooltipContent>Входящий трафик</TooltipContent>
@@ -250,7 +271,7 @@ export function ClientCard({
                   <TooltipTrigger asChild>
                     <span className="inline-flex items-center gap-[0.25rem]">
                       <ArrowUpIcon className="size-4" aria-hidden />
-                      <span className="tabular-nums">{formatBytes(client.rx_bytes)}</span>
+                      <span className="tabular-nums">{formatBytes(activity.up)}</span>
                     </span>
                   </TooltipTrigger>
                   <TooltipContent>Исходящий трафик</TooltipContent>

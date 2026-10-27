@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Copy, QrCode } from "lucide-react";
 import { toast } from "sonner";
 
@@ -10,11 +10,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { vlessQrUrl, type VlessInfo, type VlessRoute } from "@/lib/api";
+import { formatBytes, formatHandshake } from "@/lib/format";
 
 // Раздел VLESS в окне клиента (amnezia-vpn-server-14y0.5): второй способ
 // подключения рядом с AmneziaWG. На мобильном интернете в РФ AmneziaWG
 // режется, а VLESS+XHTTP+Reality на 443 проходит — напрямую или через
 // российский узел-вход. Тексты согласованы с редактором.
+//
+// С amnezia-vpn-server-14y0.8 раздел — содержимое вкладки «VLESS»: кроме
+// ссылок в нём трафик VLESS и последняя активность. Панель считает их по
+// счётчикам Xray только для подключений напрямую: через вход трафик
+// приходит одной служебной учёткой, и по клиентам его не разложить —
+// об этом оговорка под полями, когда входы есть.
 
 export function vlessRouteLabel(route: VlessRoute): string {
   if (!route.entry) return "Напрямую";
@@ -34,14 +41,26 @@ type VlessSectionProps = {
   // исчезнуть, после «Включить» — появиться, без повторного открытия окна.
   enabled: boolean;
   load: (id: number) => Promise<VlessInfo>;
+  // Трафик VLESS напрямую с точки зрения клиента и время последнего
+  // движения (null — не было).
+  traffic: { up: number; down: number; lastActive: string | null };
 };
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid gap-0.5 py-2">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
 
 type State =
   | { kind: "loading" }
   | { kind: "error" }
   | { kind: "ready"; info: VlessInfo };
 
-export function VlessSection({ clientId, clientName, enabled, load }: VlessSectionProps) {
+export function VlessSection({ clientId, clientName, enabled, load, traffic }: VlessSectionProps) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [qrRoute, setQrRoute] = useState<VlessRoute | null>(null);
 
@@ -73,63 +92,99 @@ export function VlessSection({ clientId, clientName, enabled, load }: VlessSecti
     }
   }
 
+  const dlClass = "grid divide-y divide-border gap-0 text-sm";
   if (state.kind === "loading") return null;
   if (state.kind === "error") {
     return (
-      <div className="grid gap-0.5 py-2" data-testid="vless-section">
-        <dt className="text-muted-foreground">VLESS</dt>
-        <dd className="text-sm text-destructive">
-          Не удалось загрузить ссылки VLESS, откройте окно клиента заново
-        </dd>
-      </div>
+      <dl className={dlClass} data-testid="vless-section">
+        <div className="grid gap-0.5 py-2">
+          <dt className="sr-only">Маршруты</dt>
+          <dd className="text-sm text-destructive">
+            Не удалось загрузить ссылки VLESS, откройте окно клиента заново
+          </dd>
+        </div>
+      </dl>
     );
   }
   const { info } = state;
-  if (!info.enabled) {
+  // Xray на сервере не настроен и узлов нет — ни ссылок, ни трафика.
+  if (info.enabled && info.routes.length === 0) {
     return (
-      <div className="grid gap-0.5 py-2" data-testid="vless-section">
-        <dt className="text-muted-foreground">VLESS</dt>
-        <dd className="text-sm text-muted-foreground">
-          Клиент на паузе — ссылки VLESS появятся после включения
-        </dd>
-      </div>
+      <dl className={dlClass} data-testid="vless-section">
+        <div className="grid gap-0.5 py-2">
+          <dt className="sr-only">Маршруты</dt>
+          <dd className="text-sm text-muted-foreground">VLESS на сервере не настроен</dd>
+        </div>
+      </dl>
     );
   }
-  // Xray на сервере не настроен и узлов нет — раздела нет совсем.
-  if (info.routes.length === 0) return null;
+  const hasEntry = info.routes.some((route) => route.entry);
+  const usage = (
+    <>
+      <Field label="Трафик">
+        ↓ {formatBytes(traffic.down)} · ↑ {formatBytes(traffic.up)}
+      </Field>
+      <Field label="Последняя активность">{formatHandshake(traffic.lastActive)}</Field>
+    </>
+  );
+  if (!info.enabled) {
+    return (
+      <dl className={dlClass} data-testid="vless-section">
+        <div className="grid gap-0.5 py-2">
+          <dt className="sr-only">Маршруты</dt>
+          <dd className="text-sm text-muted-foreground">
+            Клиент на паузе — ссылки VLESS появятся после включения
+          </dd>
+        </div>
+        {usage}
+      </dl>
+    );
+  }
 
   return (
-    <div className="grid gap-1 py-2" data-testid="vless-section">
-      <dt className="text-muted-foreground">VLESS</dt>
-      {info.routes.map((route) => {
-        const label = vlessRouteLabel(route);
-        return (
-          <dd key={route.entry || "direct"} className="flex items-center gap-2 py-1">
-            <div className="min-w-0 flex-1">
-              <div>{label}</div>
-              <div className="text-sm text-muted-foreground">{vlessRouteHint(route)}</div>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              aria-label={`Скопировать ссылку: ${label}`}
-              onClick={() => void copy(route)}
-            >
-              <Copy data-icon="inline-start" aria-hidden />
-              Ссылка
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              aria-label={`QR: ${label}`}
-              onClick={() => setQrRoute(route)}
-            >
-              <QrCode data-icon="inline-start" aria-hidden />
-              QR
-            </Button>
-          </dd>
-        );
-      })}
+    <div className="grid gap-2" data-testid="vless-section">
+      <dl className={dlClass}>
+        <div className="grid gap-1 py-2">
+          <dt className="sr-only">Маршруты</dt>
+          {info.routes.map((route) => {
+            const label = vlessRouteLabel(route);
+            return (
+              <dd key={route.entry || "direct"} className="flex items-center gap-2 py-1">
+                <div className="min-w-0 flex-1">
+                  <div>{label}</div>
+                  <div className="text-sm text-muted-foreground">{vlessRouteHint(route)}</div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label={`Скопировать ссылку: ${label}`}
+                  onClick={() => void copy(route)}
+                >
+                  <Copy data-icon="inline-start" aria-hidden />
+                  Ссылка
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label={`QR: ${label}`}
+                  onClick={() => setQrRoute(route)}
+                >
+                  <QrCode data-icon="inline-start" aria-hidden />
+                  QR
+                </Button>
+              </dd>
+            );
+          })}
+        </div>
+        {usage}
+      </dl>
+      {/* Оговорка касается обоих полей: подключение через вход не
+          отмечается ни трафиком, ни активностью. Без входов её нет. */}
+      {hasEntry ? (
+        <p className="text-sm text-muted-foreground">
+          Показан только трафик напрямую. Трафик через вход пока не учитывается
+        </p>
+      ) : null}
       <Dialog
         open={qrRoute !== null}
         onOpenChange={(open) => {

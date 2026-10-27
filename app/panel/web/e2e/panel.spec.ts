@@ -366,10 +366,22 @@ for (const width of [1280, 375]) test(`окно клиента выдаёт сс
   await login(page);
   // На телефоне окно открывает нажатие на саму карточку, на широком экране —
   // кнопка с именем.
+  // Строка клиента называет протокол последней активности; alice ещё ни
+  // разу не была на связи — AWG (amnezia-vpn-server-14y0.8).
+  await expect(page.getByLabel("Протокол: AWG").first()).toBeVisible();
   if (width < 640) await page.getByText("alice", { exact: true }).click();
   else await page.getByRole("button", { name: "alice", exact: true }).click();
 
+  // Окно открывается на вкладке AWG; ссылки VLESS — на своей вкладке, и
+  // выбранная вкладка видна (amnezia-vpn-server-14y0.8).
+  const awgTab = page.getByRole("tab", { name: "AWG" });
+  const vlessTab = page.getByRole("tab", { name: "VLESS" });
+  await expect(awgTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("Напрямую", { exact: true })).toHaveCount(0);
+  await vlessTab.click();
+  await expect(vlessTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Напрямую", { exact: true })).toBeVisible();
+  await expect(page.getByText("Показан только трафик напрямую. Трафик через вход пока не учитывается")).toBeVisible();
   await expect(page.getByText("Через вход RU", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Скопировать ссылку: Через вход RU" }).click();

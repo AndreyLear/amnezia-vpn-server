@@ -21,6 +21,9 @@ const client: Client = {
   last_handshake_utc: null,
   rx_bytes: 0,
   tx_bytes: 0,
+  // Был на связи по VLESS — окно открывается сразу на вкладке VLESS
+  // (amnezia-vpn-server-14y0.8).
+  vless_last_active_utc: "2026-10-27T10:00:00Z",
 };
 
 const direct = "vless://uuid@vpn.example.com:443?type=xhttp#VPN%20Alice";
@@ -107,12 +110,13 @@ describe("VLESS в окне клиента", () => {
     expect(screen.queryByRole("button", { name: /Скопировать ссылку/ })).toBeNull();
   });
 
-  it("без Xray на сервере раздела нет", async () => {
+  it("без Xray на сервере так и сказано, ссылок нет", async () => {
     const load = vi.fn().mockResolvedValue({ enabled: true, routes: [] });
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} loadVless={load} />);
 
     await waitFor(() => expect(load).toHaveBeenCalled());
-    expect(screen.queryByText("VLESS")).toBeNull();
+    expect(await screen.findByText("VLESS на сервере не настроен")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Скопировать ссылку/ })).toBeNull();
   });
 
   it("ошибка загрузки названа", async () => {
