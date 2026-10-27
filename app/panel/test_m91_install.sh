@@ -101,8 +101,9 @@ fakes_reset() {
     mkdir -p "$FAKE_FS"
     rm -rf "$ROOT" "$SYSCTL_TEST" "$MODULES_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
         "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST" \
-        "$NGINX_SITES_TEST"
+        "$NGINX_SITES_TEST" "$NGINX_ETC_TEST" "$TMP_TEST/letsencrypt" "$TMP_TEST/www"
     mkdir -p "$NGINX_SITES_TEST"
+    seed_nginx_conf
     rm -f "$NFTABLES_CONF_TEST"
     cat > "$FAKE_STATE" <<EOF
 COMPOSE_VERSION=${1:-2.30.1}
@@ -160,6 +161,7 @@ V6_DU_OUT_ACCEPT=0
 UFW_ACTIVE=no
 UFW_RC=0
 XRAY_INIT_RC=0
+NGINX_T_RC=0
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -396,12 +398,19 @@ if [ "${1:-}" = "install" ]; then
     fi
     case " $* " in
         *" nginx "*)
-            cat > "${FAKE_DIR}/nginx" <<'NGINX'
-#!/bin/bash
-echo "nginx $*" >> "${FAKE_CALLS:?}"
-exit 0
-NGINX
+            cp "${FAKE_DIR}/nginx.fake" "${FAKE_DIR}/nginx"
             chmod +x "${FAKE_DIR}/nginx"
+            ;;
+    esac
+    case " $* " in
+        *" libnginx-mod-stream "*)
+            # Пакет модуля перезапускает nginx при установке: блок stream,
+            # записанный раньше модуля, роняет nginx (amnezia-vpn-server-14y0.7).
+            if grep -q 'stream' "${AMNEZIA_INSTALL_NGINX_CONF:-/nonexistent}" 2>/dev/null; then
+                echo "apt-get-trap: stream block written before libnginx-mod-stream" >> "${FAKE_CALLS:?}"
+            fi
+            mkdir -p "${AMNEZIA_INSTALL_NGINX_MODULES_DIR:?}"
+            : > "${AMNEZIA_INSTALL_NGINX_MODULES_DIR}/50-mod-stream.conf"
             ;;
     esac
 fi
@@ -657,18 +666,52 @@ esac
 exit 0
 FAKE_EOF
 
-cat > "$FAKE_DIR/nginx" <<'FAKE_EOF'
+# nginx -t и reload записывают, что видит nginx в эту минуту: держит ли 443
+# сайт http, держит ли его stream, слушает ли панель 127.0.0.1:4431. По этим
+# строкам тесты amnezia-vpn-server-14y0.7 проверяют, что ни одна перезагрузка
+# не застала 443 занятым дважды и что принятие ручной схемы обходится без
+# простоя. NGINX_T_RC=1 — проверка конфигурации отказывает.
+cat > "$FAKE_DIR/nginx.fake" <<'FAKE_EOF'
 #!/bin/bash
 echo "nginx $*" >> "${FAKE_CALLS:?}"
+. "${FAKE_STATE:?}"
+case "$*" in
+    "-t"|"-s reload")
+        sites="$(cat "${AMNEZIA_INSTALL_NGINX_SITES_DIR:-/nonexistent}"/* 2>/dev/null)"
+        http443="$(printf '%s\n' "$sites" | grep -cE '^[[:space:]]*listen (\[::\]:)?443 ssl')"
+        panel4431="$(printf '%s\n' "$sites" | grep -c 'listen 127.0.0.1:4431 ssl proxy_protocol;')"
+        stream443=0
+        if grep -qF "include ${AMNEZIA_INSTALL_NGINX_STREAM_DIR:-/nonexistent}/*.conf;" "${AMNEZIA_INSTALL_NGINX_CONF:-/nonexistent}" 2>/dev/null \
+            && cat "${AMNEZIA_INSTALL_NGINX_STREAM_DIR}"/*.conf 2>/dev/null | grep -q '^[[:space:]]*listen 443;'; then
+            stream443=1
+        fi
+        echo "nginx-state $* http443=$http443 stream443=$stream443 panel4431=$panel4431" >> "${FAKE_CALLS:?}"
+        ;;
+esac
+if [ "$*" = "-t" ]; then
+    exit "${NGINX_T_RC:-0}"
+fi
 exit 0
 FAKE_EOF
+cp "$FAKE_DIR/nginx.fake" "$FAKE_DIR/nginx"
 
+# Выданный сертификат появляется там, где его ищет установщик: повторный
+# запуск видит его и не снимает TLS-сайт на время certbot.
 cat > "$FAKE_DIR/certbot" <<'FAKE_EOF'
 #!/bin/bash
 echo "certbot $*" >> "${FAKE_CALLS:?}"
 . "${FAKE_STATE:?}"
 [ "${CERTBOT_RC:-0}" = "0" ] || exit 1
 touch "${FAKE_FS}/certbot-ok"
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "-d" ] && [ -n "${AMNEZIA_INSTALL_LETSENCRYPT_DIR:-}" ]; then
+        mkdir -p "$AMNEZIA_INSTALL_LETSENCRYPT_DIR/$a"
+        : > "$AMNEZIA_INSTALL_LETSENCRYPT_DIR/$a/fullchain.pem"
+        : > "$AMNEZIA_INSTALL_LETSENCRYPT_DIR/$a/privkey.pem"
+    fi
+    prev="$a"
+done
 exit 0
 FAKE_EOF
 
@@ -867,6 +910,36 @@ NFTABLES_DIR_TEST="$TMP_TEST/nftables.d"
 NFTABLES_CONF_TEST="$TMP_TEST/nftables.conf"
 SYSTEMD_DIR_TEST="$TMP_TEST/systemd"
 NGINX_SITES_TEST="$TMP_TEST/nginx-sites-enabled"
+# Остальной nginx хоста (amnezia-vpn-server-14y0.7): nginx.conf с блоком
+# stream, каталог stream.d, модули, сертификаты Let's Encrypt и корень
+# сайта-заглушки для Reality.
+NGINX_ETC_TEST="$TMP_TEST/etc-nginx"
+NGINX_CONF_TEST="$NGINX_ETC_TEST/nginx.conf"
+NGINX_STREAM_TEST="$NGINX_ETC_TEST/stream.d"
+NGINX_MODULES_TEST="$NGINX_ETC_TEST/modules-enabled"
+LE_LIVE_TEST="$TMP_TEST/letsencrypt/live"
+SELFSTEAL_TEST="$TMP_TEST/www/amnezia-selfsteal"
+
+# Тот nginx.conf, что ставит пакет nginx в Debian/Ubuntu, без лишнего.
+seed_nginx_conf() {
+    mkdir -p "$NGINX_ETC_TEST"
+    cat > "$NGINX_CONF_TEST" <<'EOF'
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
+
+events {
+	worker_connections 768;
+}
+
+http {
+	include /etc/nginx/mime.types;
+	include /etc/nginx/conf.d/*.conf;
+	include /etc/nginx/sites-enabled/*;
+}
+EOF
+}
 
 run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_TEST=1 \
@@ -881,6 +954,11 @@ run_install() { # run_install [--root X] [--awg-port N] ... — stdout captured
     AMNEZIA_INSTALL_NFTABLES_CONF="$NFTABLES_CONF_TEST" \
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
     AMNEZIA_INSTALL_NGINX_SITES_DIR="$NGINX_SITES_TEST" \
+    AMNEZIA_INSTALL_NGINX_CONF="$NGINX_CONF_TEST" \
+    AMNEZIA_INSTALL_NGINX_STREAM_DIR="$NGINX_STREAM_TEST" \
+    AMNEZIA_INSTALL_NGINX_MODULES_DIR="$NGINX_MODULES_TEST" \
+    AMNEZIA_INSTALL_LETSENCRYPT_DIR="$LE_LIVE_TEST" \
+    AMNEZIA_INSTALL_SELFSTEAL_ROOT="$SELFSTEAL_TEST" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
     AMNEZIA_INSTALL_FAIL2BAN_JAIL="${AMNEZIA_INSTALL_FAIL2BAN_JAIL:-$TMP_TEST/fail2ban/jail.d/amnezia-vpn-sshd.conf}" \
     AMNEZIA_INSTALL_STATUS_WAIT_SEC=0 \
@@ -3055,8 +3133,11 @@ test_xray_switch() {
             && pass "$d exists, root only" || fail "$d mode $(mode "$ROOT/$d")"
     done
 
+    [ -e "$NGINX_STREAM_TEST/amnezia-sni.conf" ] \
+        && fail "TCP 443 is split by name without --xray" || pass "no nginx stream without --xray"
+
     : > "$FAKE_CALLS"
-    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --xray)"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --xray --vpn-domain vpn.example.com)"
     [ "$rc" = "0" ] || fail "--xray: exit $rc"
     grep -q '^XRAY_ENABLED=1$' "$ROOT/.env" \
         && pass "--xray is remembered in .env" || fail "--xray not remembered"
@@ -3067,9 +3148,9 @@ test_xray_switch() {
         && pass "--xray: Reality keys are made by the panel" || fail "--xray: no xray init"
     grep -q "versions.lock up -d xray" "$FAKE_CALLS" \
         && pass "--xray: the xray service is started" || fail "--xray: xray not started"
-    grep -q "does not touch\|not routed to it" "$TMP_TEST/out" \
-        && pass "--xray: the log says TCP 443 is left alone" \
-        || fail "--xray: nothing says 443 is not routed"
+    grep -q "TCP 443 split by name" "$TMP_TEST/out" \
+        && pass "--xray: the log says where TCP 443 goes" \
+        || fail "--xray: nothing says where TCP 443 goes"
 
     # Повторные запуски — на том же развёртывании: fakes_reset стёр бы .env.
     : > "$FAKE_CALLS"
@@ -3099,6 +3180,329 @@ test_xray_needs_domain() {
     [ "$rc" != "0" ] && grep -q -- "--vpn-domain" "$TMP_TEST/err" \
         && pass "--xray without a domain names --vpn-domain" \
         || fail "--xray without a domain: exit $rc, $(tail -2 "$TMP_TEST/err")"
+}
+
+# --- amnezia-vpn-server-14y0.7: TCP 443 split by name for Xray ------------
+#
+# Установщик сам строит ту схему, что на боевом была сделана руками: nginx
+# stream на 443 делит подключения по имени из TLS (имя панели — панели на
+# 127.0.0.1:4431, остальное — Xray на 127.0.0.1:4432, оба с PROXY protocol),
+# а Reality показывает настоящий сайт домена клиентов на 127.0.0.1:4433.
+# Раньше каждый запуск, включая обновление из панели, перерисовывал панель
+# на прямой listen 443 и отнимал у неё порт.
+
+STREAM_CONF_TEST() { printf '%s' "$NGINX_STREAM_TEST/amnezia-sni.conf"; }
+
+# nginx_reload_conflicts — перезагрузки nginx, заставшие 443 и у сайта http,
+# и у stream: такая перезагрузка не проходит, и nginx остаётся на старом.
+nginx_reload_conflicts() {
+    grep '^nginx-state ' "$FAKE_CALLS" | grep -v ' http443=0 ' | grep -c ' stream443=1 '
+}
+
+# Порядок: nginx -t стоит перед каждой перезагрузкой.
+nginx_reload_untested() {
+    awk '/^nginx -t$/ {t=1} /^nginx -s reload$/ {if (!t) n++; t=0} END {print n+0}' "$FAKE_CALLS"
+}
+
+assert_panel_behind_stream() { # assert_panel_behind_stream LABEL
+    local label="$1" conf="$ROOT/nginx/panel.conf"
+    grep -qF 'listen 127.0.0.1:4431 ssl proxy_protocol;' "$conf" \
+        && pass "$label: the panel listens on 127.0.0.1:4431 with PROXY protocol" \
+        || fail "$label: the panel is not on 127.0.0.1:4431 ($(grep -F listen "$conf" | tr -s ' ' | tr '\n' ' '))"
+    grep -qF 'set_real_ip_from 127.0.0.1;' "$conf" && grep -qF 'real_ip_header proxy_protocol;' "$conf" \
+        && pass "$label: the visitor's address comes from PROXY protocol" \
+        || fail "$label: real_ip from PROXY protocol missing: the login limit would see 127.0.0.1"
+    grep -qF 'proxy_set_header X-Real-IP $remote_addr;' "$conf" \
+        && pass "$label: the panel still gets X-Real-IP" || fail "$label: X-Real-IP lost"
+    grep -qE '^[[:space:]]*listen (\[::\]:)?443' "$conf" \
+        && fail "$label: the panel site still takes TCP 443 itself" \
+        || pass "$label: the panel site leaves TCP 443 to the stream"
+}
+
+assert_stream_split() { # assert_stream_split LABEL PANEL_DOMAIN|""
+    local label="$1" panel="$2" conf
+    conf="$(STREAM_CONF_TEST)"
+    [ -f "$conf" ] || { fail "$label: $conf missing"; return 0; }
+    [ "$(grep -cF "include $NGINX_STREAM_TEST/*.conf;" "$NGINX_CONF_TEST")" = "1" ] \
+        && grep -qE "^stream \{ include $NGINX_STREAM_TEST/\*\.conf; \}$" "$NGINX_CONF_TEST" \
+        && pass "$label: nginx.conf includes stream.d exactly once" \
+        || fail "$label: stream include in nginx.conf: $(grep -c stream "$NGINX_CONF_TEST") lines"
+    grep -q 'map $ssl_preread_server_name $amnezia_443_backend {' "$conf" \
+        && grep -qE '^[[:space:]]*default 127\.0\.0\.1:4432;' "$conf" \
+        && pass "$label: everything else goes to Xray on 127.0.0.1:4432" \
+        || fail "$label: no default to Xray in the stream map"
+    if [ -n "$panel" ]; then
+        grep -qE "^[[:space:]]*$panel 127\.0\.0\.1:4431;" "$conf" \
+            && pass "$label: $panel goes to the panel on 127.0.0.1:4431" \
+            || fail "$label: no panel branch for $panel"
+    else
+        grep -q '4431' "$conf" \
+            && fail "$label: a panel branch without a panel on 443" \
+            || pass "$label: no panel branch (the panel is not on 443)"
+    fi
+    for line in 'listen 443;' 'listen [::]:443;' 'ssl_preread on;' \
+        'proxy_pass $amnezia_443_backend;' 'proxy_protocol on;'; do
+        grep -qF "$line" "$conf" && pass "$label: stream has '$line'" \
+            || fail "$label: stream lacks '$line'"
+    done
+}
+
+assert_selfsteal() { # assert_selfsteal LABEL DOMAIN
+    local label="$1" domain="$2" conf="$ROOT/nginx/selfsteal.conf"
+    [ -f "$conf" ] && [ -L "$NGINX_SITES_TEST/amnezia-selfsteal" ] \
+        && pass "$label: the Reality site is linked in" \
+        || { fail "$label: the Reality site is missing"; return 0; }
+    grep -qF "server_name $domain;" "$conf" \
+        && pass "$label: the Reality site is $domain" || fail "$label: server_name is not $domain"
+    grep -qF 'listen 127.0.0.1:4433 ssl http2;' "$conf" \
+        && pass "$label: the Reality site listens on 127.0.0.1:4433 with http2 in listen" \
+        || fail "$label: no 'listen 127.0.0.1:4433 ssl http2;'"
+    grep -qF 'http2 on' "$conf" \
+        && fail "$label: 'http2 on' needs nginx 1.25; Ubuntu 24.04 has 1.24" \
+        || pass "$label: no 'http2 on' (nginx 1.24)"
+    grep -qF "ssl_certificate $LE_LIVE_TEST/$domain/fullchain.pem;" "$conf" \
+        && pass "$label: the Reality site serves the Let's Encrypt certificate" \
+        || fail "$label: the Reality site does not use the LE certificate of $domain"
+    grep -qF "root $TMP_TEST/acme;" "$conf" && grep -qF 'return 301 https://$host$request_uri;' "$conf" \
+        && pass "$label: port 80 answers ACME and redirects to https" \
+        || fail "$label: port 80 of $domain lacks ACME or the redirect"
+    grep -qF "root $SELFSTEAL_TEST;" "$conf" && [ -s "$SELFSTEAL_TEST/index.html" ] \
+        && pass "$label: the Reality site has a page to show" \
+        || fail "$label: no static page for the Reality site"
+    grep -q "certbot certonly .*-d $domain " "$FAKE_CALLS" \
+        && pass "$label: a certificate is requested for $domain" \
+        || fail "$label: certbot never asked for $domain"
+}
+
+# Режим домена панели — ровно то, что на боевом.
+test_xray_front_with_panel_domain() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --panel-domain panel.example.com --vpn-domain vpn.example.com --xray)"
+    [ "$rc" = "0" ] || fail "xray front (domain): exit $rc"
+    grep -q "apt-get install -y libnginx-mod-stream" "$FAKE_CALLS" \
+        && pass "xray front: the stream module is installed" || fail "xray front: libnginx-mod-stream not installed"
+    grep -q "^apt-get-trap" "$FAKE_CALLS" \
+        && fail "xray front: the stream block was written before the module (nginx dies on the module's restart)" \
+        || pass "xray front: the module comes before the stream block"
+    assert_stream_split "xray front (domain)" panel.example.com
+    assert_panel_behind_stream "xray front (domain)"
+    assert_selfsteal "xray front (domain)" vpn.example.com
+    grep -q "certbot certonly .*-d panel.example.com " "$FAKE_CALLS" \
+        && pass "xray front: the panel certificate is still requested" || fail "xray front: no panel certificate"
+    for port in 80 443; do
+        [ "$(grep -cE "^[[:space:]]*tcp dport $port accept" "$ROOT/nftables/amnezia-vpn.nft")" = "1" ] \
+            && pass "xray front: tcp $port open once" || fail "xray front: tcp $port not open exactly once"
+    done
+    [ "$(nginx_reload_conflicts)" = "0" ] \
+        && pass "xray front: no reload saw TCP 443 taken twice" \
+        || fail "xray front: a reload had both the panel and the stream on 443"
+    [ "$(nginx_reload_untested)" = "0" ] \
+        && pass "xray front: nginx -t before every reload" || fail "xray front: a reload without nginx -t"
+
+    # Повторный запуск без флагов — так зовёт установщик агент обновления.
+    cp "$NGINX_CONF_TEST" "$TMP_TEST/nginx.conf.1"
+    cp "$(STREAM_CONF_TEST)" "$TMP_TEST/sni.conf.1"
+    cp "$ROOT/nginx/panel.conf" "$TMP_TEST/panel.conf.1"
+    cp "$ROOT/nginx/selfsteal.conf" "$TMP_TEST/selfsteal.conf.1"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "xray front rerun: exit $rc"
+    cmp -s "$NGINX_CONF_TEST" "$TMP_TEST/nginx.conf.1" \
+        && cmp -s "$(STREAM_CONF_TEST)" "$TMP_TEST/sni.conf.1" \
+        && cmp -s "$ROOT/nginx/panel.conf" "$TMP_TEST/panel.conf.1" \
+        && cmp -s "$ROOT/nginx/selfsteal.conf" "$TMP_TEST/selfsteal.conf.1" \
+        && pass "xray front rerun: the same nginx, nothing added" \
+        || fail "xray front rerun: the nginx files changed on a rerun"
+    grep -q "libnginx-mod-stream" "$FAKE_CALLS" \
+        && fail "xray front rerun: apt-get ran again for a module already there" \
+        || pass "xray front rerun: no apt-get for the module"
+    grep '^nginx-state -s reload' "$FAKE_CALLS" | grep -qv ' panel4431=1$' \
+        && fail "xray front rerun: a reload ran without the panel on 4431 (the panel was down)" \
+        || pass "xray front rerun: the panel stayed on 4431 through every reload"
+}
+
+# Ручная схема боевого принимается как своя: блок stream не удваивается,
+# модуль не переставляется, и ни одна перезагрузка не остаётся без панели.
+test_xray_front_adopts_the_manual_setup() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --panel-domain panel.example.com --vpn-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "manual setup base: exit $rc"
+    mkdir -p "$NGINX_STREAM_TEST" "$NGINX_MODULES_TEST"
+    : > "$NGINX_MODULES_TEST/50-mod-stream.conf"
+    printf 'stream { include %s/*.conf; }\n' "$NGINX_STREAM_TEST" >> "$NGINX_CONF_TEST"
+    cat > "$(STREAM_CONF_TEST)" <<'EOF'
+map $ssl_preread_server_name $amnezia_443_backend { panel.example.com 127.0.0.1:4431; default 127.0.0.1:4432; }
+server { listen 443; listen [::]:443; ssl_preread on; proxy_pass $amnezia_443_backend; proxy_protocol on; }
+EOF
+    sed -e 's/^\([[:space:]]*\)listen 443 ssl;/\1listen 127.0.0.1:4431 ssl proxy_protocol; set_real_ip_from 127.0.0.1; real_ip_header proxy_protocol;/' \
+        -e '/listen \[::\]:443 ssl;/d' "$ROOT/nginx/panel.conf" > "$TMP_TEST/panel.manual"
+    cat "$TMP_TEST/panel.manual" > "$ROOT/nginx/panel.conf"
+    mkdir -p "$LE_LIVE_TEST/vpn.example.com"
+    : > "$LE_LIVE_TEST/vpn.example.com/fullchain.pem"; : > "$LE_LIVE_TEST/vpn.example.com/privkey.pem"
+    printf 'XRAY_ENABLED=1\n' >> "$ROOT/.env"
+
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "manual setup adopted: exit $rc"
+    assert_stream_split "manual setup adopted" panel.example.com
+    assert_panel_behind_stream "manual setup adopted"
+    grep -q "libnginx-mod-stream" "$FAKE_CALLS" \
+        && fail "manual setup adopted: apt-get reinstalled the module (it restarts nginx)" \
+        || pass "manual setup adopted: the module is left as it is"
+    grep -q '^nginx-state -s reload' "$FAKE_CALLS" \
+        && pass "manual setup adopted: nginx reloaded (not restarted)" || fail "manual setup adopted: no reload at all"
+    grep '^nginx-state -s reload' "$FAKE_CALLS" | grep -qv ' http443=0 stream443=1 panel4431=1$' \
+        && fail "manual setup adopted: a reload left the panel off 443 ($(grep '^nginx-state -s reload' "$FAKE_CALLS" | tr '\n' ';'))" \
+        || pass "manual setup adopted: every reload kept the split and the panel (no downtime)"
+}
+
+# --no-xray возвращает панели прямой listen 443 и убирает всё деление.
+test_xray_front_switched_off() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --panel-domain panel.example.com --vpn-domain vpn.example.com --xray)"
+    [ "$rc" = "0" ] || fail "xray front off base: exit $rc"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-xray)"
+    [ "$rc" = "0" ] || fail "xray front off: exit $rc"
+    grep -qF 'listen 443 ssl;' "$ROOT/nginx/panel.conf" && grep -qF 'listen [::]:443 ssl;' "$ROOT/nginx/panel.conf" \
+        && pass "--no-xray: the panel listens on 443 itself again" || fail "--no-xray: the panel is not back on 443"
+    grep -q '4431\|proxy_protocol' "$ROOT/nginx/panel.conf" \
+        && fail "--no-xray: the panel still expects the stream" || pass "--no-xray: no PROXY protocol on the panel"
+    [ -e "$(STREAM_CONF_TEST)" ] && fail "--no-xray: the stream split is still there" \
+        || pass "--no-xray: the stream split is removed"
+    grep -q 'stream' "$NGINX_CONF_TEST" && fail "--no-xray: the stream block stayed in nginx.conf" \
+        || pass "--no-xray: the stream block is gone from nginx.conf"
+    [ -e "$NGINX_SITES_TEST/amnezia-selfsteal" ] || [ -e "$ROOT/nginx/selfsteal.conf" ] \
+        && fail "--no-xray: the Reality site is still served" || pass "--no-xray: the Reality site is retired"
+    [ "$(nginx_reload_conflicts)" = "0" ] \
+        && pass "--no-xray: no reload saw TCP 443 taken twice" \
+        || fail "--no-xray: a reload had both the panel and the stream on 443"
+    grep -q '^nginx -s reload$' "$FAKE_CALLS" && pass "--no-xray: nginx reloaded" || fail "--no-xray: nginx not reloaded"
+}
+
+# Без домена панели 443 свободен: панель на своём порту, весь 443 — Xray.
+test_xray_front_with_panel_port() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --panel-port 8443 --vpn-domain vpn.example.com --xray)"
+    [ "$rc" = "0" ] || fail "xray front (panel port): exit $rc"
+    assert_stream_split "xray front (panel port)" ""
+    assert_selfsteal "xray front (panel port)" vpn.example.com
+    grep -qF 'listen 8443 ssl;' "$ROOT/nginx/panel.conf" \
+        && pass "xray front (panel port): the panel stays on 8443" || fail "xray front (panel port): the panel left 8443"
+    for port in 80 443 8443; do
+        [ "$(grep -cE "^[[:space:]]*tcp dport $port accept" "$ROOT/nftables/amnezia-vpn.nft")" = "1" ] \
+            && pass "xray front (panel port): tcp $port open once" \
+            || fail "xray front (panel port): tcp $port not open exactly once"
+    done
+}
+
+# Панель только по SSH-туннелю: nginx нужен одному Xray.
+test_xray_front_with_loopback_panel() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --vpn-domain vpn.example.com --xray)"
+    [ "$rc" = "0" ] || fail "xray front (loopback): exit $rc"
+    assert_stream_split "xray front (loopback)" ""
+    assert_selfsteal "xray front (loopback)" vpn.example.com
+    [ -e "$ROOT/nginx/panel.conf" ] || [ -e "$NGINX_SITES_TEST/amnezia-panel" ] \
+        && fail "xray front (loopback): a panel site appeared" || pass "xray front (loopback): no panel site"
+    grep -q "ssh -L 8787" "$TMP_TEST/out" \
+        && pass "xray front (loopback): the SSH hint stays" || fail "xray front (loopback): SSH hint lost"
+
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-xray)"
+    [ "$rc" = "0" ] || fail "xray front (loopback) off: exit $rc"
+    [ -e "$(STREAM_CONF_TEST)" ] || [ -e "$NGINX_SITES_TEST/amnezia-selfsteal" ] || grep -q stream "$NGINX_CONF_TEST" \
+        && fail "xray front (loopback) off: nginx still splits 443" \
+        || pass "xray front (loopback) off: stream and the Reality site are removed"
+}
+
+# Отказ nginx -t: всё, что установщик успел переписать, возвращается.
+test_xray_front_rolls_back_a_rejected_config() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --panel-domain panel.example.com --vpn-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "rollback base: exit $rc"
+    cp "$ROOT/nginx/panel.conf" "$TMP_TEST/panel.before"
+    cp "$NGINX_CONF_TEST" "$TMP_TEST/nginx.conf.before"
+    setstate NGINX_T_RC 1 "$FAKE_STATE"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --xray)"
+    [ "$rc" = "1" ] || fail "rollback: exit $rc, want 1"
+    grep -q "nginx configuration test failed" "$TMP_TEST/err" \
+        && pass "rollback: the refusal is reported" || fail "rollback: no nginx -t message"
+    cmp -s "$ROOT/nginx/panel.conf" "$TMP_TEST/panel.before" \
+        && pass "rollback: the panel site is the one that worked" \
+        || fail "rollback: the panel site was left rewritten"
+    cmp -s "$NGINX_CONF_TEST" "$TMP_TEST/nginx.conf.before" \
+        && pass "rollback: nginx.conf is the one that worked" || fail "rollback: nginx.conf was left rewritten"
+    [ -L "$NGINX_SITES_TEST/amnezia-panel" ] \
+        && pass "rollback: the panel site is still linked" || fail "rollback: the panel link is gone"
+    [ -e "$(STREAM_CONF_TEST)" ] || [ -e "$NGINX_SITES_TEST/amnezia-selfsteal" ] \
+        && fail "rollback: half of the split was left behind" || pass "rollback: nothing of the split left behind"
+    grep -q '^nginx -s reload$' "$FAKE_CALLS" \
+        && fail "rollback: nginx was reloaded with a rejected config" || pass "rollback: no reload after the refusal"
+}
+
+# Xray требует домен клиентов, отличный от домена панели, и 443, который не
+# занят панелью без домена. Отказ — до того, как что-то изменено.
+test_xray_front_refusals() {
+    local args
+    for args in "--xray" \
+        "--xray --panel-domain panel.example.com --vpn-domain panel.example.com" \
+        "--xray --panel-port 443 --vpn-domain vpn.example.com"; do
+        fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+        # shellcheck disable=SC2086 # the arguments are words on purpose
+        rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install $args)"
+        [ "$rc" = "2" ] || fail "xray refusal ($args): exit $rc, want 2"
+        grep -q -- "--vpn-domain\|--panel-port" "$TMP_TEST/err" \
+            && pass "xray refusal ($args): the error names the flag to fix" \
+            || fail "xray refusal ($args): $(tail -1 "$TMP_TEST/err")"
+        grep -q '^XRAY_ENABLED=1' "$ROOT/.env" 2>/dev/null \
+            && fail "xray refusal ($args): --xray was remembered anyway" \
+            || pass "xray refusal ($args): nothing remembered"
+        [ -e "$(STREAM_CONF_TEST)" ] && fail "xray refusal ($args): nginx was touched" \
+            || pass "xray refusal ($args): nginx untouched"
+    done
+}
+
+# Деление 443 на хосте есть, а развёртывание о Xray не знает (его ставили
+# руками, XRAY_ENABLED в .env нет). Запуск без флагов — так зовёт агент
+# обновления — не угадывает: ни снять деление (отрезав живой Xray), ни
+# вернуть панель на прямой 443 поверх него. Он отказывает и называет флаги.
+test_xray_front_unclaimed_split_is_refused() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --panel-domain panel.example.com --vpn-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "unclaimed split base: exit $rc"
+    mkdir -p "$NGINX_STREAM_TEST"
+    printf 'stream { include %s/*.conf; }\n' "$NGINX_STREAM_TEST" >> "$NGINX_CONF_TEST"
+    printf 'server { listen 443; proxy_pass 127.0.0.1:4432; }\n' > "$(STREAM_CONF_TEST)"
+    cp "$ROOT/nginx/panel.conf" "$TMP_TEST/panel.before"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "2" ] || fail "unclaimed split: exit $rc, want 2"
+    grep -q -- "--xray" "$TMP_TEST/err" && grep -q -- "--no-xray" "$TMP_TEST/err" \
+        && pass "unclaimed split: the error names --xray and --no-xray" \
+        || fail "unclaimed split: $(tail -1 "$TMP_TEST/err")"
+    [ -f "$(STREAM_CONF_TEST)" ] && cmp -s "$ROOT/nginx/panel.conf" "$TMP_TEST/panel.before" \
+        && pass "unclaimed split: nginx left as it was" || fail "unclaimed split: nginx was changed"
+
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-xray)"
+    [ "$rc" = "0" ] || fail "unclaimed split --no-xray: exit $rc"
+    [ -e "$(STREAM_CONF_TEST)" ] && fail "unclaimed split --no-xray: the split is still there" \
+        || pass "unclaimed split --no-xray: an explicit --no-xray removes it"
+}
+
+# Порты деления — те же, что у панели в конфиге Xray: вход Xray и адрес
+# сайта для Reality живут в Go, а nginx рисует установщик.
+test_xray_front_ports_match_the_panel() {
+    grep -qE '^[[:space:]]*inboundPort[[:space:]]*=[[:space:]]*4432$' "$M91_REPO/app/panel/internal/xray/xray.go" \
+        && grep -qF 'SNI_XRAY_BACKEND=127.0.0.1:4432' "$INSTALL_SH" \
+        && pass "Xray inbound 4432 matches the stream backend" \
+        || fail "the stream backend and the Xray inbound port disagree"
+    grep -qE 'XrayDefaultTarget[[:space:]]*=[[:space:]]*"127\.0\.0\.1:4433"' "$M91_REPO/app/panel/internal/db/xray.go" \
+        && grep -qF 'SELFSTEAL_BACKEND=127.0.0.1:4433' "$INSTALL_SH" \
+        && pass "Reality target 4433 matches the self-steal site" \
+        || fail "the Reality target and the self-steal site disagree"
 }
 
 test_deployment_facts_follow_the_flags() {
@@ -3623,6 +4027,15 @@ test_on_demand_check_armed
 test_on_demand_check_follows_the_flag
 test_xray_switch
 test_xray_needs_domain
+test_xray_front_with_panel_domain
+test_xray_front_adopts_the_manual_setup
+test_xray_front_switched_off
+test_xray_front_with_panel_port
+test_xray_front_with_loopback_panel
+test_xray_front_rolls_back_a_rejected_config
+test_xray_front_refusals
+test_xray_front_unclaimed_split_is_refused
+test_xray_front_ports_match_the_panel
 test_update_agent_installed
 test_installer_keeps_a_copy_of_itself
 test_update_agent_unit_does_not_orphan_the_installer

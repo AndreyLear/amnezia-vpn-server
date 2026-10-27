@@ -78,6 +78,7 @@ setstate() { # portable in-place update: sed(1) -i differs on BSD/GNU
 
 fakes_reset() {
     : > "$FAKE_CALLS"
+    nginx_host_reset
     mkdir -p "$FAKE_FS"
     rm -rf "$ROOT" "$SYSCTL_TEST" "$KEYRING_TEST" "$SOURCES_TEST" \
         "$NFTABLES_DIR_TEST" "$SYSTEMD_DIR_TEST" "$JOURNALD_TEST"
@@ -517,6 +518,17 @@ SOURCES_TEST="$TMP_TEST/apt/sources.list.d"
 NFTABLES_DIR_TEST="$TMP_TEST/nftables.d"
 NFTABLES_CONF_TEST="$TMP_TEST/nftables.conf"
 SYSTEMD_DIR_TEST="$TMP_TEST/systemd"
+# nginx хоста тоже уводится в tempdir (amnezia-vpn-server-14y0.7): с --xray
+# установщик дописывает блок stream в nginx.conf, и без хуков харнесс на
+# машине с настоящим nginx правил бы его. Модуль stream «уже стоит».
+NGINX_ETC_TEST="$TMP_TEST/etc-nginx"
+
+nginx_host_reset() {
+    rm -rf "$NGINX_ETC_TEST" "$TMP_TEST/letsencrypt"
+    mkdir -p "$NGINX_ETC_TEST/sites-enabled" "$NGINX_ETC_TEST/modules-enabled"
+    : > "$NGINX_ETC_TEST/modules-enabled/50-mod-stream.conf"
+    printf 'events {}\nhttp {\n    include %s/sites-enabled/*;\n}\n' "$NGINX_ETC_TEST" > "$NGINX_ETC_TEST/nginx.conf"
+}
 
 NFT_SYS_FILE="$NFTABLES_DIR_TEST/amnezia-vpn.nft"
 NFT_DEPLOY_FILE="$ROOT/nftables/amnezia-vpn.nft"
@@ -543,6 +555,12 @@ run_install() { # run_install [--root X] [--awg-port N] [--vpn-subnet CIDR]
     AMNEZIA_INSTALL_SYSTEMD_DIR="$SYSTEMD_DIR_TEST" \
     AMNEZIA_INSTALL_MODULES_DIR="$TMP_TEST/modules-load.d" \
     AMNEZIA_INSTALL_ACME_ROOT="$TMP_TEST/acme" \
+    AMNEZIA_INSTALL_NGINX_SITES_DIR="$NGINX_ETC_TEST/sites-enabled" \
+    AMNEZIA_INSTALL_NGINX_CONF="$NGINX_ETC_TEST/nginx.conf" \
+    AMNEZIA_INSTALL_NGINX_STREAM_DIR="$NGINX_ETC_TEST/stream.d" \
+    AMNEZIA_INSTALL_NGINX_MODULES_DIR="$NGINX_ETC_TEST/modules-enabled" \
+    AMNEZIA_INSTALL_LETSENCRYPT_DIR="$TMP_TEST/letsencrypt/live" \
+    AMNEZIA_INSTALL_SELFSTEAL_ROOT="$TMP_TEST/www/amnezia-selfsteal" \
     AMNEZIA_INSTALL_FAIL2BAN_JAIL="${AMNEZIA_INSTALL_FAIL2BAN_JAIL:-$TMP_TEST/fail2ban/jail.d/amnezia-vpn-sshd.conf}" \
     AMNEZIA_INSTALL_VERIFY_WAIT_SEC="${VERIFY_WAIT_SEC:-0}" \
     AMNEZIA_INSTALL_STATUS_WAIT_SEC="${AMNEZIA_INSTALL_STATUS_WAIT_SEC:-0}" \
@@ -1391,6 +1409,28 @@ test_nft_panel_domain_default_443() {
     assert_in "^[[:space:]]*tcp dport 443 accept" "$NFT_SYS_FILE" "nft domain: tcp 443"
 }
 
+# Xray (amnezia-vpn-server-14y0.7) держит TCP 443 и выпускает сертификат
+# для домена клиентов по HTTP-01: 443 и 80 открыты в любом режиме панели,
+# и каждый порт — одной строкой, даже когда его уже открыл режим панели.
+test_nft_xray_opens_443_and_80() {
+    local args port n
+    for args in "--vpn-domain vpn.example.com --xray" \
+        "--panel-port 8443 --vpn-domain vpn.example.com --xray" \
+        "--panel-domain panel.example.com --vpn-domain vpn.example.com --xray"; do
+        fakes_reset
+        os_release debian 12 bookworm
+        # shellcheck disable=SC2086 # the arguments are words on purpose
+        rc="$(run_install $args)"
+        [ "$rc" = "0" ] || fail "nft xray ($args): exit $rc"
+        for port in 80 443; do
+            n="$(grep -cE "^[[:space:]]*tcp dport $port accept" "$NFT_SYS_FILE")"
+            [ "$n" = "1" ] && pass "nft xray ($args): tcp $port open once" \
+                || fail "nft xray ($args): tcp $port appears $n times"
+        done
+    done
+    assert_not_in "^[[:space:]]*tcp dport 8443 accept" "$NFT_SYS_FILE" "nft xray (domain): no stray panel port"
+}
+
 
 # --- amnezia-vpn-server-nxp2: the IPv6 half of the ruleset ---------------
 
@@ -1667,6 +1707,7 @@ m92_run_all() {
     test_ufw_inactive_is_left_alone
     test_nft_panel_domain_with_panel_port
     test_nft_panel_domain_default_443
+    test_nft_xray_opens_443_and_80
 }
 
 # Выбор теста по имени, как в харнессе установщика. Полный прогон идёт
