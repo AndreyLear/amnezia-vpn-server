@@ -29,7 +29,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
-	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/keys"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
@@ -181,7 +180,7 @@ func (s *Server) mutateWith(w http.ResponseWriter, r *http.Request, okFlash stri
 		}
 		return
 	}
-	if err := awgconf.Generate(s.db(), s.cfg.ConfPath); err != nil {
+	if err := s.regenerate(s.db()); err != nil {
 		s.cfg.Logger.Printf("mutation: regenerate config: %v", err)
 		s.errorPage(w, http.StatusInternalServerError)
 		return

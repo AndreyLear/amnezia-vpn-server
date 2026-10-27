@@ -159,6 +159,7 @@ V6_DU_IN_ACCEPT=0
 V6_DU_OUT_ACCEPT=0
 UFW_ACTIVE=no
 UFW_RC=0
+XRAY_INIT_RC=0
 EOF
     # The panel-init log the installer inspects on `up -d` failure
     # (T-111); a dedicated file so the value with spaces never enters
@@ -290,6 +291,11 @@ if [ "${1:-}" = "compose" ]; then
                     # AMNEZIA_INSTALL_CAPABILITIES.
                     printf 'server-update:address6\nserver-update:listen-port\nserver-update:mtu\nserver-update:dns\nserver-init:address6\nserver-init:mtu\n'
                     exit 0
+                    ;;
+                *"/app/panel xray init"*)
+                    # Без домена в endpoint панель ключей Reality не
+                    # заводит (amnezia-vpn-server-14y0.3).
+                    exit "${XRAY_INIT_RC:-0}"
                     ;;
                 *"server update"*)
                     # CONFIG_REGEN=0 stands for the update that reports
@@ -1732,14 +1738,15 @@ test_installed_compose_contract() {
     os_release debian 12 bookworm
     rc="$(run_install --build)"
     [ "$rc" = "0" ] || fail "installed compose flow: exit $rc"
-    # awg and dns both need the host netns; panel, awg and dns all
-    # survive a reboot, panel-init stays a one-shot job.
-    [ "$(grep -c '^    network_mode: host$' "$ROOT/compose.yaml")" = "2" ] \
-        && pass "installed compose: network_mode: host on awg+dns" \
-        || fail "installed compose: network_mode: host on awg+dns"
-    [ "$(grep -c '^    restart: unless-stopped$' "$ROOT/compose.yaml")" = "3" ] \
-        && pass "installed compose: restart: unless-stopped on panel+awg+dns" \
-        || fail "installed compose: restart: unless-stopped on panel+awg+dns"
+    # awg, dns and xray (amnezia-vpn-server-14y0.2) need the host netns;
+    # panel, awg, dns and xray all survive a reboot, panel-init stays a
+    # one-shot job.
+    [ "$(grep -c '^    network_mode: host$' "$ROOT/compose.yaml")" = "3" ] \
+        && pass "installed compose: network_mode: host on awg+dns+xray" \
+        || fail "installed compose: network_mode: host on awg+dns+xray"
+    [ "$(grep -c '^    restart: unless-stopped$' "$ROOT/compose.yaml")" = "4" ] \
+        && pass "installed compose: restart: unless-stopped on panel+awg+dns+xray" \
+        || fail "installed compose: restart: unless-stopped on panel+awg+dns+xray"
     [ "$(grep -c '^    sysctls:$' "$ROOT/compose.yaml")" = "0" ] \
         && pass "installed compose: no awg sysctls" \
         || fail "installed compose: no awg sysctls"
@@ -3027,6 +3034,73 @@ test_deployment_facts_written() {
         || fail "the watchdog state did not reach the facts"
 }
 
+# Xray (amnezia-vpn-server-14y0.3): по выбору, а не по умолчанию; --xray
+# запоминается в .env, и профиль compose уходит в каждый вызов — так его
+# поднимает и агент обновления, который зовёт установщик без флагов.
+# Каталоги конфига и сокета создаёт установщик, только для root: созданный
+# Docker'ом каталог сокета API был бы открыт всем на хосте.
+test_xray_switch() {
+    mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
+
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "xray default: exit $rc"
+    grep -q -- "--profile xray" "$FAKE_CALLS" \
+        && fail "xray is started without --xray" \
+        || pass "xray stays off by default"
+    grep -q "xray init" "$FAKE_CALLS" \
+        && fail "Reality keys made without --xray" || pass "no Reality keys without --xray"
+    for d in config/xray run run/xray; do
+        [ "$(mode "$ROOT/$d")" = "700" ] \
+            && pass "$d exists, root only" || fail "$d mode $(mode "$ROOT/$d")"
+    done
+
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --xray)"
+    [ "$rc" = "0" ] || fail "--xray: exit $rc"
+    grep -q '^XRAY_ENABLED=1$' "$ROOT/.env" \
+        && pass "--xray is remembered in .env" || fail "--xray not remembered"
+    grep -q "docker compose --profile xray --env-file versions.lock up -d$" "$FAKE_CALLS" \
+        && pass "--xray: the stack comes up with the xray profile" \
+        || fail "--xray: compose up without the xray profile"
+    grep -q "run --rm panel-init /app/panel xray init" "$FAKE_CALLS" \
+        && pass "--xray: Reality keys are made by the panel" || fail "--xray: no xray init"
+    grep -q "versions.lock up -d xray" "$FAKE_CALLS" \
+        && pass "--xray: the xray service is started" || fail "--xray: xray not started"
+    grep -q "does not touch\|not routed to it" "$TMP_TEST/out" \
+        && pass "--xray: the log says TCP 443 is left alone" \
+        || fail "--xray: nothing says 443 is not routed"
+
+    # Повторные запуски — на том же развёртывании: fakes_reset стёр бы .env.
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "xray rerun: exit $rc"
+    grep -q "docker compose --profile xray --env-file versions.lock up -d$" "$FAKE_CALLS" \
+        && pass "a rerun without flags keeps Xray (the update agent passes none)" \
+        || fail "a rerun without flags dropped the xray profile"
+
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-xray)"
+    [ "$rc" = "0" ] || fail "--no-xray: exit $rc"
+    grep -q '^XRAY_ENABLED=' "$ROOT/.env" \
+        && fail "--no-xray left XRAY_ENABLED in .env" || pass "--no-xray forgets Xray"
+    grep -q "docker compose --profile xray --env-file versions.lock rm -s -f xray" "$FAKE_CALLS" \
+        && pass "--no-xray removes the running xray" || fail "--no-xray left xray running"
+    grep -q "docker compose --profile xray --env-file versions.lock up -d$" "$FAKE_CALLS" \
+        && fail "--no-xray still brings xray up" || pass "--no-xray: the stack comes up without it"
+}
+
+# Xray без домена: ключи Reality не заводятся, и установщик говорит, что
+# нужен --vpn-domain, а не падает молча.
+test_xray_needs_domain() {
+    fakes_reset; os_release debian 12 bookworm; rm -rf "$ROOT"
+    setstate XRAY_INIT_RC 1 "$FAKE_STATE"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --xray)"
+    [ "$rc" != "0" ] && grep -q -- "--vpn-domain" "$TMP_TEST/err" \
+        && pass "--xray without a domain names --vpn-domain" \
+        || fail "--xray without a domain: exit $rc, $(tail -2 "$TMP_TEST/err")"
+}
+
 test_deployment_facts_follow_the_flags() {
     fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
     rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-watchdog --no-update-check)"
@@ -3547,6 +3621,8 @@ test_deployment_facts_written
 test_deployment_facts_follow_the_flags
 test_on_demand_check_armed
 test_on_demand_check_follows_the_flag
+test_xray_switch
+test_xray_needs_domain
 test_update_agent_installed
 test_installer_keeps_a_copy_of_itself
 test_update_agent_unit_does_not_orphan_the_installer

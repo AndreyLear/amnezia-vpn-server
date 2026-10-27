@@ -25,7 +25,8 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { UserText } from "@/components/UserText";
-import type { Client } from "@/lib/api";
+import { VlessSection } from "@/components/VlessSection";
+import type { Client, VlessInfo } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +62,8 @@ type ClientInfoDialogProps = {
   onDownload?: () => void;
   onToggle?: () => void;
   onDelete?: () => void;
+  // Ссылки VLESS (amnezia-vpn-server-14y0.5); без загрузчика раздела нет.
+  loadVless?: (id: number) => Promise<VlessInfo>;
 };
 
 function PropertyRow({
@@ -117,6 +120,7 @@ export function ClientInfoDialog({
   onDownload,
   onToggle,
   onDelete,
+  loadVless,
 }: ClientInfoDialogProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [viewName, setViewName] = useState("");
@@ -460,6 +464,16 @@ export function ClientInfoDialog({
                       ) : null}
                     </div>
                   </PropertyRow>
+                  {/* VLESS — рядом с конфигом AWG: это тот же клиент, второй
+                      способ подключения (amnezia-vpn-server-14y0.5). */}
+                  {loadVless ? (
+                    <VlessSection
+                      clientId={client.id}
+                      clientName={viewName}
+                      enabled={client.enabled}
+                      load={loadVless}
+                    />
+                  ) : null}
                   <PropertyRow>
                     <div className="grid gap-0.5">
                       <dt className="text-muted-foreground">Handshake</dt>

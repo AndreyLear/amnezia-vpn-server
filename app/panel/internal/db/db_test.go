@@ -230,9 +230,10 @@ func TestMigrateAddsClientDescription(t *testing.T) {
 	// amnezia-vpn-server-xy6j (server.address6), to 8 by
 	// amnezia-vpn-server-h2pg (clients.mtu), to 9 by
 	// amnezia-vpn-server-gqep (audit), to 10 by
-	// amnezia-vpn-server-jzzu (clients.rate_limit).
-	if SchemaVersion != "10" {
-		t.Fatalf("SchemaVersion = %q, want 10", SchemaVersion)
+	// amnezia-vpn-server-jzzu (clients.rate_limit), to 11 by
+	// amnezia-vpn-server-14y0.1 (clients.vless_uuid).
+	if SchemaVersion != "11" {
+		t.Fatalf("SchemaVersion = %q, want 11", SchemaVersion)
 	}
 	if err := Migrate(handle); err != nil {
 		t.Fatalf("second Migrate legacy v5: %v", err)

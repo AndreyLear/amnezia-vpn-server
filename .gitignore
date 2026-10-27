@@ -14,6 +14,9 @@ config/*
 status/*
 !status/.gitkeep
 
+# Xray API socket shared by xray and the panel (amnezia-vpn-server-14y0.2)
+run/
+
 # Encrypted backups
 backups/*
 !backups/.gitkeep

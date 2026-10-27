@@ -175,7 +175,7 @@ Usage:
                [--vpn-domain FQDN | --client-domain FQDN]
                [--panel-port PORT] [--panel-tls-regen] [--build]
                [--[no-]fail2ban] [--[no-]watchdog] [--[no-]update-check]
-               [--[no-]tunnel-dns] [--[no-]ipv6]
+               [--[no-]tunnel-dns] [--[no-]ipv6] [--[no-]xray]
 
 Options:
   --root DIR        deployment root (default: /opt/amnezia-vpn)
@@ -250,6 +250,15 @@ Options:
                 so the panel is no longer reachable from a device
                 connected to this VPN.
   --tunnel-dns  turn it back on after --no-tunnel-dns
+  --xray        run Xray (VLESS+XHTTP+Reality) next to AmneziaWG: the one
+                protocol that still gets through on Russian mobile
+                networks. Off by default. Needs a VPN domain
+                (--vpn-domain): Reality presents the server's own site.
+                Xray listens on 127.0.0.1:4432 only — this installer
+                does not touch TCP 443; route it to Xray yourself
+                (nginx stream, split by SNI, with proxy_protocol).
+                Remembered in .env like the switches above.
+  --no-xray     stop Xray and forget --xray
 
                 These four are deployment values, like the panel mode:
                 a --no-* flag is remembered in .env, so a rerun without
@@ -369,6 +378,11 @@ WATCHDOG_ENABLED=""
 # обновления здесь — это в том числе починенный обход блокировок. Наружу
 # ходит хост, панель по-прежнему никуда не ходит.
 UPDATE_CHECK_ENABLED=""
+# Xray (amnezia-vpn-server-14y0.3). В отличие от выключателей выше — по
+# выбору, а не по умолчанию: без деления TCP 443 по SNI (его установщик пока
+# не делает) он слушает петлю, до которой снаружи никто не дойдёт, а на
+# боевом рядом уже живёт ручной Xray на том же порту.
+XRAY_ENABLED=""
 
 # Выключатели служб (amnezia-vpn-server-76mp.5). Каждый — решение
 # развёртывания, а не одного запуска: пустое значение значит «флага не было»,
@@ -458,6 +472,10 @@ while [ "$#" -gt 0 ]; do
             TUNNEL_DNS_ENABLED="$(switch_value "$1")"
             shift
             ;;
+        --xray | --no-xray)
+            XRAY_ENABLED="$(switch_value "$1")"
+            shift
+            ;;
         *)
             die_usage "unknown argument: $1"
             ;;
@@ -488,6 +506,12 @@ FAIL2BAN_ENABLED="$(recall_switch "$FAIL2BAN_ENABLED" FAIL2BAN_DISABLED)"
 WATCHDOG_ENABLED="$(recall_switch "$WATCHDOG_ENABLED" WATCHDOG_DISABLED)"
 UPDATE_CHECK_ENABLED="$(recall_switch "$UPDATE_CHECK_ENABLED" UPDATE_CHECK_DISABLED)"
 TUNNEL_DNS_ENABLED="$(recall_switch "$TUNNEL_DNS_ENABLED" TUNNEL_DNS_DISABLED)"
+# Xray запоминается согласием (XRAY_ENABLED=1), а не отказом: по умолчанию
+# он выключен. Агент обновления зовёт установщик без флагов — без записи в
+# .env первое же обновление из панели гасило бы Xray.
+XRAY_WAS_ENABLED="$(sed -n "s/^XRAY_ENABLED=//p" "$ROOT_DIR/$ENV_FILE" 2>/dev/null | tail -1)"
+[ "$XRAY_WAS_ENABLED" = "1" ] || XRAY_WAS_ENABLED=0
+[ -n "$XRAY_ENABLED" ] || XRAY_ENABLED="$XRAY_WAS_ENABLED"
 
 # validate_fqdn: lowercase letters/digits/hyphens per label, dots
 # between labels, total length <= 253, no leading/trailing dot.
@@ -702,6 +726,11 @@ compose_version_min() { # docker compose version -> true when >= 2.24.2
 }
 
 docker_compose() { # runs `docker compose <args>` from the deployment root
+    # Профиль xray передаётся каждому вызову, пока Xray включён: иначе `up`,
+    # `pull` и `config` его просто не видят (amnezia-vpn-server-14y0.3).
+    if [ "${XRAY_ENABLED:-0}" = "1" ]; then
+        set -- --profile xray "$@"
+    fi
     (cd "$ROOT_DIR" && docker compose "$@")
 }
 
@@ -991,6 +1020,16 @@ for sub in data config status backups; do
     chmod 0700 "$ROOT_DIR/$sub"
 done
 log "deployment layout created under $ROOT_DIR (data/config/status/backups: 0700)"
+
+# Каталоги Xray (amnezia-vpn-server-14y0.3): его конфиг с ключом Reality и
+# сокет API, общий с панелью. Создаются всегда и только root: иначе их
+# создал бы Docker при первом монтировании — с правами 0755, то есть сокет,
+# через который меняют пользователей VPN, лежал бы в каталоге, открытом
+# всем на хосте.
+for sub in config/xray run run/xray; do
+    mkdir -p "$ROOT_DIR/$sub"
+    chmod 0700 "$ROOT_DIR/$sub"
+done
 
 # --- 9. install/copy repository deployment files ----------------------
 
@@ -1465,6 +1504,11 @@ remember_switch() { # remember_switch ENABLED KEY
 remember_switch "$FAIL2BAN_ENABLED" FAIL2BAN_DISABLED
 remember_switch "$WATCHDOG_ENABLED" WATCHDOG_DISABLED
 remember_switch "$UPDATE_CHECK_ENABLED" UPDATE_CHECK_DISABLED
+if [ "$XRAY_ENABLED" = "1" ]; then
+    env_remember XRAY_ENABLED 1
+else
+    env_forget XRAY_ENABLED "XRAY_ENABLED removed from $ENV_FILE: Xray switched off"
+fi
 
 # The effective mode is known only now, so this is where the flags are
 # judged against each other. Values are read, not flags: a domain the
@@ -2928,6 +2972,34 @@ awg_tunnel_params() {
 }
 
 apply_deployment_values
+
+# --- 13b. Xray ----------------------------------------------------------
+#
+# Ключи Reality заводит сама панель (`panel xray init`, один раз: они зашиты
+# во все выданные ссылки, и повторный запуск их не трогает); маскировка —
+# под собственный сайт сервера, поэтому нужен домен в endpoint. TCP 443
+# установщик не трогает: деление по SNI (nginx stream с proxy_protocol)
+# пока настраивается руками (amnezia-vpn-server-14y0.3).
+xray_setup() {
+    if [ "$XRAY_ENABLED" != "1" ]; then
+        if [ "$XRAY_WAS_ENABLED" = "1" ]; then
+            docker_compose --profile xray --env-file versions.lock rm -s -f xray >/dev/null 2>&1 \
+                || log "WARNING: could not remove the xray container; stop it with: docker compose --profile xray rm -s -f xray"
+            log "xray: switched off and removed"
+        fi
+        return 0
+    fi
+    if [ "$NO_SERVER_ROW" = "1" ]; then
+        log "xray: fresh install — Reality keys are made after 'server init', on the next run of install.sh"
+        return 0
+    fi
+    docker_compose --env-file versions.lock run --rm panel-init /app/panel xray init \
+        || die_op "xray: making the Reality keys failed. Reality presents the server's own site, so the deployment needs a VPN domain: rerun with --vpn-domain <fqdn>"
+    docker_compose --env-file versions.lock up -d xray \
+        || die_op "xray: docker compose up -d xray failed"
+    log "xray: running on 127.0.0.1:4432 (TCP 443 is not routed to it by this installer: split 443 by SNI in nginx stream)"
+}
+xray_setup
 
 # Enable the weekly prune timer only after compose up (and after this
 # install's own docker-prune.sh). Persistent=true would otherwise fire a

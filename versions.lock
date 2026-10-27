@@ -23,6 +23,11 @@ AMNEZIAWG_GO_COMMIT=b5928efb6ca19f0153958460c3d141f04abc5c2e
 AMNEZIAWG_TOOLS_VERSION=3.1.20260812
 AMNEZIAWG_TOOLS_COMMIT=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 
+# Xray: VLESS+XHTTP+Reality на TCP 443 рядом с AWG (эпик amnezia-vpn-server-14y0).
+# Образ проекта XTLS, та же версия, что поднята вручную на боевом
+# (amnezia-vpn-server-adaw).
+XRAY_VERSION=26.10.21
+
 # SQLite Go driver
 SQLITE_DRIVER=modernc.org/sqlite
 SQLITE_DRIVER_VERSION=1.54.0

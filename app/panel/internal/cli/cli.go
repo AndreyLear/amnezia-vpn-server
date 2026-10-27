@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
@@ -25,6 +26,7 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/mailconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/web"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/xray"
 )
 
 const usageText = `usage: /app/panel <command> [args]
@@ -55,6 +57,22 @@ commands:
   client set-expiry <id> <RFC3339|none>
   client delete <id>
   client config <id>
+  xray init [--address <host>] [--server-name <name>] [--target <host:port>]
+    (generates the Reality keys once; later runs only change the given
+     settings — the keys are part of every link already handed out)
+    (Reality steals its own site: --server-name defaults to the endpoint's
+     domain, --target to the local nginx on 127.0.0.1:4433)
+  xray import <dir>              take over a hand-made Xray setup: settings.json
+                                 and users.json (or keys.txt, shortid.txt, path.txt)
+  xray link <id> [--entry <name>]  print the client's vless:// link, direct or
+                                 through an entry node
+  xray entry set <name> [--host <host>] [--port <port>] [--sni <name>]
+      [--public-key <key>] [--short-id <hex>] [--path </path>] [--prefix <text>]
+    (an entry node: a server without a panel that clients reach first, with
+     the same UUIDs; a new entry needs every flag but --port and --prefix)
+  xray entry list
+  xray entry remove <name>
+  xray users-json                print [{client_id,name,uuid,enabled}] for an entry node
   auth add-user <username> (--password-stdin | --password-env <ENV>)
   auth change-password <username> --old-password-stdin --new-password-stdin
   auth set-password <username> --password-stdin
@@ -91,6 +109,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return a.cmdServer(args[1:])
 	case "client":
 		return a.cmdClient(args[1:])
+	case "xray":
+		return a.cmdXray(args[1:])
 	case "auth":
 		return a.cmdAuth(args[1:])
 	case "status":
@@ -287,7 +307,17 @@ func (a *app) regenerate(handle *sql.DB) error {
 	if err := db.RenderMailConf(handle, mailconf.PathFor(db.DefaultPath())); err != nil {
 		fmt.Fprintf(a.stderr, "warning: mail settings: %v\n", err)
 	}
+	a.regenerateXray(handle)
 	return nil
+}
+
+// regenerateXray пересобирает конфиг Xray вслед за awg0.conf и доносит
+// разницу до запущенного Xray (amnezia-vpn-server-14y0.2). Как и почта, это
+// не повод проваливать команду: изменение уже в базе и в туннеле AWG.
+func (a *app) regenerateXray(handle *sql.DB) {
+	xray.Regenerate(handle, configPath(), func(format string, args ...any) {
+		fmt.Fprintf(a.stderr, "warning: "+format+"\n", args...)
+	})
 }
 
 // testFault, when set by tests, injects the named failure into
@@ -416,6 +446,11 @@ func (a *app) cmdInit(args []string) int {
 		return a.fatal("init", err)
 	}
 	fmt.Fprintln(a.stdout, "panel init: awg0.conf generated")
+	// Конфиг Xray — после awg0.conf и так же из базы; без настроек Xray
+	// ничего не пишется (amnezia-vpn-server-14y0.2). Если Xray уже запущен
+	// (восстановление с перезапуском одной панели), разница в пользователях
+	// уходит ему через API.
+	a.regenerateXray(handle)
 	// mail.conf is derived from the database too (amnezia-vpn-server-2kr4).
 	// A failure here must not keep the tunnel from starting: the error is
 	// reported and init still succeeds.
@@ -470,6 +505,9 @@ func (a *app) serveHTTP(ctx context.Context, cfg web.Config) int {
 	if err != nil {
 		return a.fatal(opServe, err)
 	}
+	// Брошенный сокет API Xray не даёт Xray подняться после аварийной
+	// остановки (amnezia-vpn-server-14y0.2, см. xray.ClearStaleSocket).
+	go xray.WatchSocket(ctx, xray.APIAddr(), 30*time.Second, cfg.Logger.Printf)
 	if err := server.ListenAndServe(ctx); err != nil {
 		return a.fatal(opServe, err)
 	}

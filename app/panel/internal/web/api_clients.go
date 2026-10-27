@@ -264,7 +264,7 @@ func (s *Server) apiClientsCreate(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api clients create", err)
 		return
 	}
-	if err := awgconf.Generate(s.db(), s.cfg.ConfPath); err != nil {
+	if err := s.regenerate(s.db()); err != nil {
 		internalFailure(w, r, s, "api clients create conf", err)
 		return
 	}
@@ -384,7 +384,7 @@ func (s *Server) apiClientsPatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := awgconf.Generate(s.db(), s.cfg.ConfPath); err != nil {
+	if err := s.regenerate(s.db()); err != nil {
 		internalFailure(w, r, s, "api clients patch conf", err)
 		return
 	}
@@ -448,7 +448,7 @@ func (s *Server) apiClientsDelete(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api clients delete", err)
 		return
 	}
-	if err := awgconf.Generate(s.db(), s.cfg.ConfPath); err != nil {
+	if err := s.regenerate(s.db()); err != nil {
 		internalFailure(w, r, s, "api clients delete conf", err)
 		return
 	}

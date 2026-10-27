@@ -1,0 +1,17 @@
+{
+  "listen": "127.0.0.1",
+  "port": 4432,
+  "accept_proxy_protocol": true,
+  "path": "/f3a9c1d27e",
+  "short_id": "6ba85179e30d4fc2",
+  "private_key": "AAoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1Vw",
+  "public_key": "u1D_noKldM-_gg6X9g-5wUPsdBXPUU-M_Zjv9Z4FlhQ",
+  "server_name": "super-space.example",
+  "dest": "127.0.0.1:4433",
+  "link_host": "super-space.example",
+  "link_port": 443,
+  "link_prefix": "VPN ",
+  "extra_clients": [
+    {"id": "5a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "email": "ruentry"}
+  ]
+}

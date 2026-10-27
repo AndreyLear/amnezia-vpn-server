@@ -99,6 +99,33 @@ test_dns_topology() {
     check_in '^dns:.*path: \.env' "dns: deployment .env loaded (panel domain, upstreams)"
 }
 
+# amnezia-vpn-server-14y0.2: Xray (VLESS+XHTTP+Reality) lives in the host
+# netns like on the live server — nginx stream hands it TCP 443 on the
+# loopback, so it publishes nothing. It sees only its own config directory
+# (the Reality key, not awg0.conf or the database), runs with no
+# capabilities, and sits in the "xray" profile so the stack still comes up
+# while no Reality keys exist.
+test_xray_topology() {
+    check_in '^xray:.*network_mode: host' "xray: network_mode: host"
+    check_out '^xray: +ports:' "xray: no ports: mapping (reached through nginx stream on loopback)"
+    check_in '^xray:.*restart: unless-stopped' "xray: restart: unless-stopped"
+    check_in '^xray:.*profiles: \["xray"\]' "xray: optional profile (stack starts without Xray)"
+    check_in '^xray:.*XRAY_VERSION:?' "xray: image pinned via versions.lock"
+    check_in '^xray:.*- ALL' "xray: every capability dropped"
+    check_in '^xray:.*no-new-privileges:true' "xray: no-new-privileges"
+    check_in '^xray:.*- ./config/xray:/etc/xray:ro' "xray: own config directory, read-only"
+    check_out '^xray:.*- ./config:' "xray: no access to awg0.conf"
+    check_out '^xray:.*/data' "xray: no data mount"
+    # The API is a Unix socket in a directory shared with the panel: the
+    # two live in different network namespaces (orchestrator, 14y0.2).
+    check_in '^xray:.*- ./run/xray:/run/xray$' "xray: API socket directory"
+    check_in '^panel:.*- ./run/xray:/run/xray$' "panel: Xray API socket directory"
+    check_in '^panel-init:.*- ./run/xray:/run/xray$' "panel-init: Xray API socket directory"
+    check_in '^xray:.*service_completed_successfully' "xray waits for panel-init to finish"
+    check_in '^xray:[[:space:]].*driver: json-file' "xray: json-file logging driver"
+    check_in '^xray:[[:space:]].*max-size: "10m"' "xray: log max-size 10m"
+}
+
 test_mount_contract() {
     check_in '^awg:.*- ./config:/config:ro' "awg: config mounted read-only"
     check_in '^awg:.*- ./status:/status$' "awg: status mounted read-write"
@@ -139,6 +166,7 @@ test_log_rotation
 test_restart_policy
 test_capabilities_devices
 test_dns_topology
+test_xray_topology
 test_mount_contract
 test_startup_order
 test_depends_on_preserved

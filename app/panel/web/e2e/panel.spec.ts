@@ -355,3 +355,34 @@ test("уведомления можно выключить", async ({ page }) =>
   await page.getByRole("menuitem", { name: "Уведомления" }).click();
   await expect(page.getByRole("dialog", { name: "Уведомления" }).getByLabel("Сервер SMTP")).toHaveValue("");
 });
+
+// amnezia-vpn-server-14y0.5: в окне клиента рядом с AWG — ссылки VLESS по
+// маршрутам. Копирование кладёт в буфер ровно ту ссылку, что зашита в QR, а
+// QR приходит с сервера картинкой. Обе ширины: на телефоне раздел открывают
+// чаще всего.
+for (const width of [1280, 375]) test(`окно клиента выдаёт ссылки и QR VLESS (${width}px)`, async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.setViewportSize({ width, height: 900 });
+  await login(page);
+  // На телефоне окно открывает нажатие на саму карточку, на широком экране —
+  // кнопка с именем.
+  if (width < 640) await page.getByText("alice", { exact: true }).click();
+  else await page.getByRole("button", { name: "alice", exact: true }).click();
+
+  await expect(page.getByText("Напрямую", { exact: true })).toBeVisible();
+  await expect(page.getByText("Через вход RU", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Скопировать ссылку: Через вход RU" }).click();
+  await expect(page.getByText("Ссылка скопирована")).toBeVisible();
+  const link = await page.evaluate(() => navigator.clipboard.readText());
+  expect(link).toMatch(/^vless:\/\/[0-9a-f-]{36}@ru\.example\.com:443\?type=xhttp&path=%2Fentry&/);
+  expect(link.endsWith("#RU%20alice")).toBe(true);
+
+  await page.getByRole("button", { name: "QR: Напрямую" }).click();
+  const img = page.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Напрямую»" });
+  await expect(img).toBeVisible();
+  await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  // Ширина: окно QR не выезжает за экран.
+  const box = await img.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
+});
