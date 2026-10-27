@@ -26,8 +26,10 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { UserText } from "@/components/UserText";
 import { VlessSection } from "@/components/VlessSection";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Client, VlessInfo } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
+import { lastProtocol, protocolLabel, type Protocol } from "@/lib/protocol";
 import { cn } from "@/lib/utils";
 
 // Границы MTU повторяют серверные (db.ClientMTUFloor/Ceiling): ниже нижней
@@ -135,6 +137,7 @@ export function ClientInfoDialog({
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [editingDescription, setEditingDescription] = useState(false);
+  const [tab, setTab] = useState<Protocol>(() => (client ? lastProtocol(client) : "awg"));
 
   useEffect(() => {
     setViewName(client?.name ?? "");
@@ -145,6 +148,10 @@ export function ClientInfoDialog({
     setDescriptionDraft(client?.description ?? "");
     setEditingName(false);
     setEditingDescription(false);
+    // Вкладка выбирается при открытии окна и дальше не прыгает: опрос
+    // списка обновляет активность, и переключать вкладку под рукой
+    // человека нельзя (amnezia-vpn-server-14y0.8).
+    if (client) setTab(lastProtocol(client));
   }, [client?.id, client == null]);
 
   useEffect(() => {
@@ -297,14 +304,13 @@ export function ClientInfoDialog({
                 <DialogTitle>Клиент</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
-                {/* Что было со скоростью. Накопленные байты в списке свойств
-                    не отвечают на «вчера вечером не грузило», а график —
-                    отвечает (amnezia-vpn-server-tmjw). Стоит он первым: за
-                    ним карточку и открывают, когда разбирают жалобу, а из
-                    хвоста списка его приходилось выискивать прокруткой
-                    (amnezia-vpn-server-6kj9). */}
-                <SpeedChart clientId={client.id} />
-                <dl className="grid divide-y divide-border gap-0 text-sm">
+                {/* Общее для обоих протоколов — над вкладками: имя,
+                    описание, статус и удаление действуют на клиента
+                    целиком, а не на AWG или VLESS (amnezia-vpn-server-14y0.8). */}
+                <dl
+                  data-testid="client-common"
+                  className="grid divide-y divide-border gap-0 text-sm"
+                >
                   <ReadOnlyProperty
                     label="Имя"
                     actions={
@@ -344,53 +350,6 @@ export function ClientInfoDialog({
                       <UserText>{viewDescription}</UserText>
                     </dd>
                   </ReadOnlyProperty>
-                  <ReadOnlyProperty
-                    label="MTU"
-                    actions={
-                      <Button
-                        type="button"
-                        variant="outline"
-                        aria-label="Изменить MTU"
-                        disabled={pending}
-                        onClick={startMTUEdit}
-                      >
-                        <Pencil data-icon="inline-start" aria-hidden />
-                        Изменить
-                      </Button>
-                    }
-                  >
-                    <dd>
-                      {/* Displayed value, capitalized like any other status
-                          value in this card (amnezia-vpn-server-4cnf). The
-                          input placeholder below stays lowercase — it reads
-                          as an inline hint, not a standalone value. */}
-                      {viewMTU === 0
-                        ? "Как у сервера"
-                        : // Значение выше потолка сервера сервер зажимает до
-                          // потолка — говорим, какое действует на самом деле
-                          // (amnezia-vpn-server-bctr).
-                          client?.mtu_max && viewMTU > client.mtu_max
-                          ? `${viewMTU}, действует ${client.mtu_max}`
-                          : viewMTU}
-                    </dd>
-                  </ReadOnlyProperty>
-                  <ReadOnlyProperty
-                    label="Ограничение скорости"
-                    actions={
-                      <Button
-                        type="button"
-                        variant="outline"
-                        aria-label="Изменить ограничение скорости"
-                        disabled={pending}
-                        onClick={startRateEdit}
-                      >
-                        <Pencil data-icon="inline-start" aria-hidden />
-                        Изменить
-                      </Button>
-                    }
-                  >
-                    <dd>{viewRate === 0 ? "Без ограничений" : `${viewRate} Мбит/с`}</dd>
-                  </ReadOnlyProperty>
                   <PropertyRow
                     actions={
                       <Button
@@ -419,72 +378,13 @@ export function ClientInfoDialog({
                         {/* Status values are standalone captions, not mid-
                             sentence text, so they start with a capital
                             letter — matches the "Пауза" badge on the client
-                            card (amnezia-vpn-server-4cnf). */}
+                            card (amnezia-vpn-server-4cnf). На связи — по
+                            любому из протоколов (amnezia-vpn-server-14y0.8). */}
                         {!client.enabled
                           ? "Пауза"
-                          : client.online
+                          : client.online || client.vless_online
                             ? "Онлайн"
                             : "Офлайн"}
-                      </dd>
-                    </div>
-                  </PropertyRow>
-                  <PropertyRow
-                    actions={
-                      <>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={pending}
-                          onClick={onDownload}
-                        >
-                          <Download data-icon="inline-start" aria-hidden />
-                          Конфиг
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={pending}
-                          onClick={onQr}
-                        >
-                          <QrCode data-icon="inline-start" aria-hidden />
-                          QR
-                        </Button>
-                      </>
-                    }
-                  >
-                    <div className="grid gap-0.5">
-                      <dt className="text-muted-foreground">IP</dt>
-                      <dd className="font-mono">{client.address}</dd>
-                      {/* Выданный конфиг несёт оба адреса, значит и панель
-                          должна показывать оба: иначе владелец не видит того,
-                          что роздал (amnezia-vpn-server-lhlv). Пусто, когда
-                          туннель несёт только IPv4. */}
-                      {client.address6 ? (
-                        <dd className="font-mono">{client.address6}</dd>
-                      ) : null}
-                    </div>
-                  </PropertyRow>
-                  {/* VLESS — рядом с конфигом AWG: это тот же клиент, второй
-                      способ подключения (amnezia-vpn-server-14y0.5). */}
-                  {loadVless ? (
-                    <VlessSection
-                      clientId={client.id}
-                      clientName={viewName}
-                      enabled={client.enabled}
-                      load={loadVless}
-                    />
-                  ) : null}
-                  <PropertyRow>
-                    <div className="grid gap-0.5">
-                      <dt className="text-muted-foreground">Handshake</dt>
-                      <dd>{formatHandshake(client.last_handshake_utc)}</dd>
-                    </div>
-                  </PropertyRow>
-                  <PropertyRow>
-                    <div className="grid gap-0.5">
-                      <dt className="text-muted-foreground">Трафик</dt>
-                      <dd>
-                        ↓ {formatBytes(client.tx_bytes)} · ↑ {formatBytes(client.rx_bytes)}
                       </dd>
                     </div>
                   </PropertyRow>
@@ -500,6 +400,136 @@ export function ClientInfoDialog({
                     </Button>
                   </PropertyRow>
                 </dl>
+                {/* Открывается на протоколе, по которому клиент был на связи
+                    последним: его и смотрят, разбирая жалобу. */}
+                <Tabs value={tab} onValueChange={(v) => setTab(v as Protocol)}>
+                  <TabsList aria-label="Протокол" className="h-10 w-full">
+                    <TabsTrigger value="awg">{protocolLabel.awg}</TabsTrigger>
+                    <TabsTrigger value="vless">{protocolLabel.vless}</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="awg" className="grid gap-4">
+                    {/* Что было со скоростью. Накопленные байты в списке
+                        свойств не отвечают на «вчера вечером не грузило», а
+                        график — отвечает (amnezia-vpn-server-tmjw). Стоит он
+                        первым: за ним вкладку и открывают, когда разбирают
+                        жалобу (amnezia-vpn-server-6kj9). */}
+                    <SpeedChart clientId={client.id} />
+                    <dl className="grid divide-y divide-border gap-0 text-sm">
+                      <PropertyRow
+                        actions={
+                          <>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              disabled={pending}
+                              onClick={onDownload}
+                            >
+                              <Download data-icon="inline-start" aria-hidden />
+                              Конфиг
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              disabled={pending}
+                              onClick={onQr}
+                            >
+                              <QrCode data-icon="inline-start" aria-hidden />
+                              QR
+                            </Button>
+                          </>
+                        }
+                      >
+                        <div className="grid gap-0.5">
+                          <dt className="text-muted-foreground">IP</dt>
+                          <dd className="font-mono">{client.address}</dd>
+                          {/* Выданный конфиг несёт оба адреса, значит и панель
+                              должна показывать оба: иначе владелец не видит
+                              того, что роздал (amnezia-vpn-server-lhlv). Пусто,
+                              когда туннель несёт только IPv4. */}
+                          {client.address6 ? (
+                            <dd className="font-mono">{client.address6}</dd>
+                          ) : null}
+                        </div>
+                      </PropertyRow>
+                      <ReadOnlyProperty
+                        label="MTU"
+                        actions={
+                          <Button
+                            type="button"
+                            variant="outline"
+                            aria-label="Изменить MTU"
+                            disabled={pending}
+                            onClick={startMTUEdit}
+                          >
+                            <Pencil data-icon="inline-start" aria-hidden />
+                            Изменить
+                          </Button>
+                        }
+                      >
+                        <dd>
+                          {/* Displayed value, capitalized like any other status
+                              value in this card (amnezia-vpn-server-4cnf). The
+                              input placeholder below stays lowercase — it reads
+                              as an inline hint, not a standalone value. */}
+                          {viewMTU === 0
+                            ? "Как у сервера"
+                            : // Значение выше потолка сервера сервер зажимает до
+                              // потолка — говорим, какое действует на самом деле
+                              // (amnezia-vpn-server-bctr).
+                              client?.mtu_max && viewMTU > client.mtu_max
+                              ? `${viewMTU}, действует ${client.mtu_max}`
+                              : viewMTU}
+                        </dd>
+                      </ReadOnlyProperty>
+                      <ReadOnlyProperty
+                        label="Ограничение скорости"
+                        actions={
+                          <Button
+                            type="button"
+                            variant="outline"
+                            aria-label="Изменить ограничение скорости"
+                            disabled={pending}
+                            onClick={startRateEdit}
+                          >
+                            <Pencil data-icon="inline-start" aria-hidden />
+                            Изменить
+                          </Button>
+                        }
+                      >
+                        <dd>{viewRate === 0 ? "Без ограничений" : `${viewRate} Мбит/с`}</dd>
+                      </ReadOnlyProperty>
+                      <PropertyRow>
+                        <div className="grid gap-0.5">
+                          <dt className="text-muted-foreground">Handshake</dt>
+                          <dd>{formatHandshake(client.last_handshake_utc)}</dd>
+                        </div>
+                      </PropertyRow>
+                      <PropertyRow>
+                        <div className="grid gap-0.5">
+                          <dt className="text-muted-foreground">Трафик</dt>
+                          <dd>
+                            ↓ {formatBytes(client.tx_bytes)} · ↑ {formatBytes(client.rx_bytes)}
+                          </dd>
+                        </div>
+                      </PropertyRow>
+                    </dl>
+                  </TabsContent>
+                  <TabsContent value="vless">
+                    {loadVless ? (
+                      <VlessSection
+                        clientId={client.id}
+                        clientName={viewName}
+                        enabled={client.enabled}
+                        load={loadVless}
+                        traffic={{
+                          up: client.vless_up_bytes ?? 0,
+                          down: client.vless_down_bytes ?? 0,
+                          lastActive: client.vless_last_active_utc ?? null,
+                        }}
+                      />
+                    ) : null}
+                  </TabsContent>
+                </Tabs>
               </div>
             </>
           ) : null}

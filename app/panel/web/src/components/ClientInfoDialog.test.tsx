@@ -150,7 +150,10 @@ describe("ClientInfoDialog", () => {
     ).toBeNull();
   });
 
-  it("puts Удалить inside the properties dl as its last row", () => {
+  // amnezia-vpn-server-14y0.8: «Удалить» действует на клиента целиком и
+  // стоит в общем списке над вкладками — последней строкой, с отступом
+  // больше обычного.
+  it("puts Удалить as the last row of the common dl above the tabs", () => {
     render(
       <ClientInfoDialog
         client={client}
@@ -163,28 +166,26 @@ describe("ClientInfoDialog", () => {
     );
 
     const remove = screen.getByRole("button", { name: "Удалить" });
-    const dl = document.querySelector("dl");
-    expect(dl).toHaveClass("divide-y", "divide-border");
-    expect(dl).toContainElement(remove);
+    const common = screen.getByTestId("client-common");
+    expect(common.tagName).toBe("DL");
+    expect(common).toHaveClass("divide-y", "divide-border");
+    expect(common).toContainElement(remove);
 
-    const trafficRow = screen.getByText("Трафик").closest("div.flex");
+    const statusRow = screen.getByText("Статус").closest("div.flex");
     const deleteRow = remove.closest("div.flex");
-    expect(trafficRow).not.toBeNull();
-    expect(deleteRow).not.toBeNull();
-    expect(trafficRow?.parentElement).toBe(dl);
-    expect(deleteRow?.parentElement).toBe(dl);
-    expect(
-      trafficRow!.compareDocumentPosition(deleteRow!) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    // График уехал наверх карточки (amnezia-vpn-server-6kj9), и «Трафик»
-    // снова стоит вплотную перед «Удалить». Правило прежнее: «Удалить» —
-    // последняя строка списка, и отступ перед ней больше обычного.
-    expect(trafficRow!.nextElementSibling).toBe(deleteRow);
-    expect(dl!.lastElementChild).toBe(deleteRow);
+    expect(statusRow?.parentElement).toBe(common);
+    expect(deleteRow?.parentElement).toBe(common);
+    expect(statusRow!.nextElementSibling).toBe(deleteRow);
+    expect(common.lastElementChild).toBe(deleteRow);
 
     expect(deleteRow).toHaveClass("pt-3");
-    expect(trafficRow).toHaveClass("py-2");
-    expect(trafficRow).not.toHaveClass("pt-3");
+    expect(statusRow).toHaveClass("py-2");
+    expect(statusRow).not.toHaveClass("pt-3");
+
+    const tablist = screen.getByRole("tablist", { name: "Протокол" });
+    expect(common.compareDocumentPosition(tablist) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
 
     expect(remove).not.toHaveClass("max-sm:h-12");
     expect(remove).not.toHaveClass("max-sm:w-full");
@@ -192,23 +193,24 @@ describe("ClientInfoDialog", () => {
 
   // Владелец: за графиком карточку и открывают, когда разбирают жалобу. Из
   // хвоста списка свойств его приходилось выискивать прокруткой
-  // (amnezia-vpn-server-6kj9).
-  it("puts the speed chart at the top of the card, above the properties", () => {
+  // (amnezia-vpn-server-6kj9). С вкладками (amnezia-vpn-server-14y0.8) он —
+  // первое во вкладке AWG.
+  it("puts the speed chart at the top of the AWG tab, above its properties", () => {
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 
-    const dl = document.querySelector("dl");
+    const panel = screen.getByRole("tabpanel");
+    const dl = panel.querySelector("dl");
     const speed = screen.getByText("Скорость");
+    expect(panel).toContainElement(speed);
     expect(dl).not.toContainElement(speed);
 
     const chart = speed.closest("div.grid");
     expect(chart).not.toBeNull();
-    // График идёт раньше списка свойств.
     expect(chart!.compareDocumentPosition(dl!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    // И сразу за заголовком окна, а не где-то посреди карточки.
-    const title = screen.getByRole("heading", { name: "Клиент" });
-    expect(title.compareDocumentPosition(chart!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+    const tablist = screen.getByRole("tablist", { name: "Протокол" });
+    expect(tablist.compareDocumentPosition(chart!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
@@ -273,7 +275,7 @@ describe("ClientInfoDialog", () => {
     expect(screen.getAllByRole("button", { name: "Отключить" })).toHaveLength(1);
   });
 
-  it("puts Конфиг then QR on the IP row and Удалить in the dl, not a footer", () => {
+  it("puts Конфиг then QR on the IP row and Удалить in the common dl, not a footer", () => {
     render(
       <ClientInfoDialog
         client={client}
@@ -304,13 +306,14 @@ describe("ClientInfoDialog", () => {
     }
 
     const remove = screen.getByRole("button", { name: "Удалить" });
-    const dl = document.querySelector("dl");
+    const dl = screen.getByTestId("client-common");
     expect(dl).toContainElement(remove);
     expect(ipRow).not.toContainElement(remove);
     expect(remove.parentElement).not.toHaveClass("flex-wrap", "gap-2");
     expect(remove.closest("div.flex-wrap.gap-2")).toBeNull();
     expect(within(remove.closest("div.flex")!).getAllByRole("button")).toHaveLength(1);
-    expect(within(dl!).queryByRole("button", { name: "QR" })).toBeInTheDocument();
+    expect(within(screen.getByRole("tabpanel")).queryByRole("button", { name: "QR" })).toBeInTheDocument();
+    expect(within(dl).queryByRole("button", { name: "QR" })).toBeNull();
     expect(remove).toHaveAttribute("data-variant", "destructive");
     expect(remove).toHaveAttribute("data-size", "default");
     expect(remove).not.toHaveClass("max-sm:h-12");

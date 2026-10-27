@@ -349,6 +349,19 @@ export type Client = {
    * снят.
    */
   dns_bypass: boolean;
+  /**
+   * Трафик VLESS напрямую, из счётчиков Xray, накопленных панелью
+   * (amnezia-vpn-server-14y0.8). Уже с точки зрения клиента: up — от него,
+   * down — к нему (в отличие от rx/tx AWG). Трафик через вход сюда не
+   * входит: он приходит на сервер одной служебной учёткой. Нет поля —
+   * сервер старше или Xray клиента не видел.
+   */
+  vless_up_bytes?: number;
+  vless_down_bytes?: number;
+  /** Когда счётчики VLESS клиента последний раз сдвинулись; null — ни разу. */
+  vless_last_active_utc?: string | null;
+  /** Движение по VLESS было в пределах тех же трёх минут, что и Online. */
+  vless_online?: boolean;
 };
 
 /** Что стоит на сервере (amnezia-vpn-server-rdcz, -8bt5). */

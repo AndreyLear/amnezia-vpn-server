@@ -508,6 +508,9 @@ func (a *app) serveHTTP(ctx context.Context, cfg web.Config) int {
 	// Брошенный сокет API Xray не даёт Xray подняться после аварийной
 	// остановки (amnezia-vpn-server-14y0.2, см. xray.ClearStaleSocket).
 	go xray.WatchSocket(ctx, xray.APIAddr(), 30*time.Second, cfg.Logger.Printf)
+	// Трафик VLESS по клиентам копится из счётчиков Xray
+	// (amnezia-vpn-server-14y0.8).
+	go server.WatchXrayTraffic(ctx, web.XrayTrafficInterval)
 	if err := server.ListenAndServe(ctx); err != nil {
 		return a.fatal(opServe, err)
 	}

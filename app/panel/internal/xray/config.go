@@ -77,6 +77,8 @@ type Options struct {
 type config struct {
 	Log       logConfig       `json:"log"`
 	API       apiConfig       `json:"api"`
+	Stats     *statsConfig    `json:"stats,omitempty"`
+	Policy    *policyConfig   `json:"policy,omitempty"`
 	Inbounds  []inbound       `json:"inbounds"`
 	Outbounds []outbound      `json:"outbounds"`
 	Routing   routingSettings `json:"routing"`
@@ -93,6 +95,28 @@ type logConfig struct {
 	Access   string `json:"access"`
 	Error    string `json:"error"`
 	LogLevel string `json:"loglevel"`
+}
+
+// statsConfig и policyConfig включают счётчики трафика пользователей
+// (amnezia-vpn-server-14y0.8): без пустого «stats» Xray счётчиков не
+// заводит вовсе, без statsUserUplink/Downlink на уровне 0 — не заводит
+// пользовательских. Уровень 0 — у всех: и в файле, и у добавленных через
+// API (поле level в AddUserOperation не пишется). Панель читает счётчики
+// через StatsService (stats.go) и копит в базе.
+//
+// statsUserOnline не включён: из онлайн-статистики панели нечего взять
+// сверх того, что дают счётчики (последняя активность — время, когда они
+// сдвинулись), а Xray держал бы ради неё адреса клиентов — их и журнал
+// доступа не хранит (см. logConfig).
+type statsConfig struct{}
+
+type policyConfig struct {
+	Levels map[string]policyLevel `json:"levels"`
+}
+
+type policyLevel struct {
+	StatsUserUplink   bool `json:"statsUserUplink"`
+	StatsUserDownlink bool `json:"statsUserDownlink"`
 }
 
 type apiConfig struct {
@@ -197,7 +221,9 @@ func build(s *db.XraySettings, clients []db.VLESSClient, service []db.VLESSServi
 			Error:    "",
 			LogLevel: "warning",
 		},
-		API: apiConfig{Tag: apiTag, Services: []string{"HandlerService"}},
+		API:    apiConfig{Tag: apiTag, Services: []string{"HandlerService", "StatsService"}},
+		Stats:  &statsConfig{},
+		Policy: &policyConfig{Levels: map[string]policyLevel{"0": {StatsUserUplink: true, StatsUserDownlink: true}}},
 		Inbounds: []inbound{{
 			Tag:      InboundTag,
 			Listen:   inboundListen,

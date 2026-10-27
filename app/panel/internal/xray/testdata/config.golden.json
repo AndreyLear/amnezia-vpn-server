@@ -7,8 +7,18 @@
   "api": {
     "tag": "api",
     "services": [
-      "HandlerService"
+      "HandlerService",
+      "StatsService"
     ]
+  },
+  "stats": {},
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    }
   },
   "inbounds": [
     {
