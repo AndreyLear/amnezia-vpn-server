@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -105,17 +106,21 @@ type API struct {
 const apiTimeout = 3 * time.Second
 
 // NewAPI — клиент API Xray. Соединение HTTP/2 без TLS с первого байта
-// (prior knowledge), как говорит gRPC-сервер Xray.
+// (prior knowledge), как говорит gRPC-сервер Xray. addr — «unix:/путь»
+// (так в работе, см. DefaultAPIAddr) или host:port.
 func NewAPI(addr string) *API {
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
-	return &API{
-		addr: addr,
-		client: &http.Client{
-			Transport: &http.Transport{Protocols: &protocols, DisableKeepAlives: true},
-			Timeout:   apiTimeout,
-		},
+	tr := &http.Transport{Protocols: &protocols, DisableKeepAlives: true}
+	if path, ok := strings.CutPrefix(addr, unixPrefix); ok {
+		var d net.Dialer
+		tr.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return d.DialContext(ctx, "unix", path)
+		}
+		// Имя хоста в URL ни на что не влияет: соединение идёт в сокет.
+		addr = "xray"
 	}
+	return &API{addr: addr, client: &http.Client{Transport: tr, Timeout: apiTimeout}}
 }
 
 // GRPCError — ответ сервера с ненулевым grpc-status.

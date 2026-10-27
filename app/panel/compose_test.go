@@ -145,11 +145,13 @@ func TestComposeMountMatrix(t *testing.T) {
 		"./status:/status:ro",
 		"./backups:/data/backups",
 		"/proc:/host/proc:ro",
+		"./run/xray:/run/xray",
 	})
 	equal(t, "panel-init volumes", mustService(t, services, "panel-init").volumes, []string{
 		"./data:/data",
 		"./config:/config",
 		"./backups:/data/backups",
+		"./run/xray:/run/xray",
 	})
 	equal(t, "awg volumes", mustService(t, services, "awg").volumes, []string{
 		"./config:/config:ro",
@@ -233,6 +235,7 @@ func TestComposeXrayService(t *testing.T) {
 	equal(t, "xray volumes", x.volumes, []string{
 		"./config/xray:/etc/xray:ro",
 		"./status/xray:/var/log/xray",
+		"./run/xray:/run/xray",
 	})
 	equal(t, "xray cap_drop", x.capDrop, []string{"ALL"})
 	equal(t, "xray cap_add", x.capAdd, nil)

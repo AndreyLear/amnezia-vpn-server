@@ -180,7 +180,10 @@ func usersOf(c config) map[string]string {
 		if in.Tag != InboundTag {
 			continue
 		}
-		for _, u := range in.Settings.Clients {
+		if in.Settings.Clients == nil {
+			continue
+		}
+		for _, u := range *in.Settings.Clients {
 			out[u.Email] = u.ID
 		}
 	}
@@ -191,7 +194,9 @@ func sameExceptUsers(a, b config) bool {
 	strip := func(c config) []byte {
 		in := append([]inbound(nil), c.Inbounds...)
 		for i := range in {
-			in[i].Settings.Clients = nil
+			if in[i].Settings.Clients != nil {
+				in[i].Settings.Clients = &[]vlessUser{}
+			}
 		}
 		c.Inbounds = in
 		data, _ := marshal(c)

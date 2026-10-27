@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
@@ -496,6 +497,9 @@ func (a *app) serveHTTP(ctx context.Context, cfg web.Config) int {
 	if err != nil {
 		return a.fatal(opServe, err)
 	}
+	// Брошенный сокет API Xray не даёт Xray подняться после аварийной
+	// остановки (amnezia-vpn-server-14y0.2, см. xray.ClearStaleSocket).
+	go xray.WatchSocket(ctx, xray.APIAddr(), 30*time.Second, cfg.Logger.Printf)
 	if err := server.ListenAndServe(ctx); err != nil {
 		return a.fatal(opServe, err)
 	}

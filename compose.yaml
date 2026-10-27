@@ -10,6 +10,9 @@ services:
       # M10.2-FIX: общее с panel хранилище резервных копий (rw) — CLI
       # backup create/restore видит архивы панели и наоборот (DR-флоу)
       - ./backups:/data/backups
+      # сокет API Xray (amnezia-vpn-server-14y0.2): init доносит до
+      # запущенного Xray пользователей восстановленной базы
+      - ./run/xray:/run/xray
     # M10.2-FIX2: deployment .env (AWG_PORT/VPN_SUBNET)
     # прокидывается в panel и panel-init; awg его не получает.
     env_file:
@@ -59,6 +62,9 @@ services:
       - ./backups:/data/backups
       # hostmetrics reads host CPU/RAM from this bind, not container /proc
       - /proc:/host/proc:ro
+      # сокет API Xray (amnezia-vpn-server-14y0.2): Xray в сети хоста,
+      # панель в своей, и общий у них только этот каталог
+      - ./run/xray:/run/xray
     # M10.2-FIX2: deployment .env — AWG_PORT/VPN_SUBNET for panel
     # and panel-init (awg never loads it).
     env_file:
@@ -153,7 +159,8 @@ services:
     # на хосте делит 443 по SNI и отдаёт чужие имена сюда, на
     # 127.0.0.1:4432, с PROXY protocol. Конфиг собирают из базы panel-init
     # и панель (config/xray/config.json), пользователей панель меняет через
-    # API на 127.0.0.1:10085 без перезапуска.
+    # API без перезапуска — по Unix-сокету run/xray/api.sock (0600), без
+    # сети: у Xray и панели разные сетевые пространства.
     image: ghcr.io/xtls/xray-core:${XRAY_VERSION:?XRAY_VERSION must be set via versions.lock}
     command: ["run", "-c", "/etc/xray/config.json"]
     # Профиль: без настроек Xray в базе конфига нет, и контейнер только
@@ -182,6 +189,8 @@ services:
       # журналы доступа — для журнала и графиков панели (status/ панель
       # уже читает)
       - ./status/xray:/var/log/xray
+      # сокет API, общий с панелью
+      - ./run/xray:/run/xray
     logging:
       driver: json-file
       options:

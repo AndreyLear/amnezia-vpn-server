@@ -116,6 +116,11 @@ test_xray_topology() {
     check_in '^xray:.*- ./config/xray:/etc/xray:ro' "xray: own config directory, read-only"
     check_out '^xray:.*- ./config:' "xray: no access to awg0.conf"
     check_out '^xray:.*/data' "xray: no data mount"
+    # The API is a Unix socket in a directory shared with the panel: the
+    # two live in different network namespaces (orchestrator, 14y0.2).
+    check_in '^xray:.*- ./run/xray:/run/xray$' "xray: API socket directory"
+    check_in '^panel:.*- ./run/xray:/run/xray$' "panel: Xray API socket directory"
+    check_in '^panel-init:.*- ./run/xray:/run/xray$' "panel-init: Xray API socket directory"
     check_in '^xray:.*service_completed_successfully' "xray waits for panel-init to finish"
     check_in '^xray:[[:space:]].*driver: json-file' "xray: json-file logging driver"
     check_in '^xray:[[:space:]].*max-size: "10m"' "xray: log max-size 10m"

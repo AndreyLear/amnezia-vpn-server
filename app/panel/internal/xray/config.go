@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
@@ -20,10 +21,31 @@ import (
 // пользователей.
 const InboundTag = "vless-xhttp"
 
-// DefaultAPIAddr — адрес API Xray (HandlerService). Только петля: API
-// меняет список пользователей и не должен быть доступен никому, кроме
-// панели.
-const DefaultAPIAddr = "127.0.0.1:10085"
+// DefaultAPIAddr — адрес API Xray (HandlerService): Unix-сокет в каталоге,
+// который смонтирован и в Xray, и в панель (решение оркестратора по
+// amnezia-vpn-server-14y0.2). Xray живёт в сети хоста, панель — в своей
+// сети Docker, и 127.0.0.1 у них разный: TCP-порт на петле хоста панель не
+// видит, а открывать API в сеть значило бы дать любому соседу менять
+// пользователей. Сокет связывает их через файловую систему, без сети, и
+// доступ к нему решают права файла.
+const DefaultAPIAddr = "unix:/run/xray/api.sock"
+
+// unixPrefix — так в AMNEZIA_XRAY_API_ADDR записывается путь сокета.
+const unixPrefix = "unix:"
+
+// apiSocketMode — сокет API только для root: и Xray, и панель работают от
+// root, больше к нему ходить некому.
+const apiSocketMode = "0600"
+
+// API-вход: dokodemo-door на сокете с тегом api, маршрут inboundTag api →
+// outbound api (его создаёт сам Xray для HandlerService). Адрес и порт в
+// settings нужны только потому, что dokodemo-door без них не знает, куда
+// «ведёт» соединение, — наружу ничего не уходит.
+const (
+	apiTag         = "api"
+	apiDokodemoIP  = "127.0.0.1"
+	apiDokodemoPrt = 10085
+)
 
 // DefaultLogDir — каталог журналов Xray внутри его контейнера.
 const DefaultLogDir = "/var/log/xray"
@@ -81,23 +103,30 @@ type logConfig struct {
 
 type apiConfig struct {
 	Tag      string   `json:"tag"`
-	Listen   string   `json:"listen"`
+	Listen   string   `json:"listen,omitempty"`
 	Services []string `json:"services"`
 }
 
+// inbound — и вход VLESS, и API-вход dokodemo-door: у второго нет ни
+// порта, ни транспорта, поэтому они необязательны.
 type inbound struct {
-	Tag            string         `json:"tag"`
-	Listen         string         `json:"listen"`
-	Port           int            `json:"port"`
-	Protocol       string         `json:"protocol"`
-	Settings       vlessSettings  `json:"settings"`
-	StreamSettings streamSettings `json:"streamSettings"`
-	Sniffing       sniffingConfig `json:"sniffing"`
+	Tag            string          `json:"tag"`
+	Listen         string          `json:"listen"`
+	Port           int             `json:"port,omitempty"`
+	Protocol       string          `json:"protocol"`
+	Settings       inboundSettings `json:"settings"`
+	StreamSettings *streamSettings `json:"streamSettings,omitempty"`
+	Sniffing       *sniffingConfig `json:"sniffing,omitempty"`
 }
 
-type vlessSettings struct {
-	Clients    []vlessUser `json:"clients"`
-	Decryption string      `json:"decryption"`
+// inboundSettings — settings обоих входов. Clients — указатель: у входа
+// VLESS пустой список пишется как [], у API-входа его нет совсем.
+type inboundSettings struct {
+	Clients    *[]vlessUser `json:"clients,omitempty"`
+	Decryption string       `json:"decryption,omitempty"`
+	Address    string       `json:"address,omitempty"`
+	Port       int          `json:"port,omitempty"`
+	Network    string       `json:"network,omitempty"`
 }
 
 type vlessUser struct {
@@ -148,7 +177,8 @@ type routingSettings struct {
 
 type routingRule struct {
 	Type        string   `json:"type"`
-	IP          []string `json:"ip"`
+	InboundTag  []string `json:"inboundTag,omitempty"`
+	IP          []string `json:"ip,omitempty"`
 	OutboundTag string   `json:"outboundTag"`
 }
 
@@ -167,20 +197,20 @@ func build(s *db.XraySettings, clients []db.VLESSClient, service []db.VLESSServi
 	for _, u := range service {
 		users = append(users, vlessUser{ID: u.UUID, Email: u.Email})
 	}
-	return config{
+	c := config{
 		Log: logConfig{
 			Access:   filepath.Join(opt.LogDir, "access.log"),
 			Error:    filepath.Join(opt.LogDir, "error.log"),
 			LogLevel: "warning",
 		},
-		API: apiConfig{Tag: "api", Listen: opt.APIAddr, Services: []string{"HandlerService"}},
+		API: apiConfig{Tag: apiTag, Services: []string{"HandlerService"}},
 		Inbounds: []inbound{{
 			Tag:      InboundTag,
 			Listen:   inboundListen,
 			Port:     inboundPort,
 			Protocol: "vless",
-			Settings: vlessSettings{Clients: users, Decryption: "none"},
-			StreamSettings: streamSettings{
+			Settings: inboundSettings{Clients: &users, Decryption: "none"},
+			StreamSettings: &streamSettings{
 				Network:       "xhttp",
 				XHTTPSettings: xhttpSettings{Path: s.Path, Mode: "auto"},
 				Security:      "reality",
@@ -194,7 +224,7 @@ func build(s *db.XraySettings, clients []db.VLESSClient, service []db.VLESSServi
 				// журнал видел бы у всех клиентов адрес 127.0.0.1.
 				Sockopt: sockopt{AcceptProxyProtocol: true},
 			},
-			Sniffing: sniffingConfig{Enabled: true, DestOverride: []string{"http", "tls", "quic"}, RouteOnly: true},
+			Sniffing: &sniffingConfig{Enabled: true, DestOverride: []string{"http", "tls", "quic"}, RouteOnly: true},
 		}},
 		Outbounds: []outbound{
 			{Tag: "direct", Protocol: "freedom"},
@@ -206,6 +236,22 @@ func build(s *db.XraySettings, clients []db.VLESSClient, service []db.VLESSServi
 			{Type: "field", IP: []string{"geoip:private"}, OutboundTag: "block"},
 		}},
 	}
+	if path, ok := strings.CutPrefix(opt.APIAddr, unixPrefix); ok {
+		c.Inbounds = append(c.Inbounds, inbound{
+			Tag:      apiTag,
+			Listen:   path + "," + apiSocketMode,
+			Protocol: "dokodemo-door",
+			Settings: inboundSettings{Address: apiDokodemoIP, Port: apiDokodemoPrt, Network: "unix"},
+		})
+		// Первым: правило про частные сети не должно перехватить API.
+		c.Routing.Rules = append([]routingRule{
+			{Type: "field", InboundTag: []string{apiTag}, OutboundTag: apiTag},
+		}, c.Routing.Rules...)
+	} else {
+		// TCP-адрес — только для разработки и тестов.
+		c.API.Listen = opt.APIAddr
+	}
+	return c
 }
 
 func marshal(c config) ([]byte, error) {

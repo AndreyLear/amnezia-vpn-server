@@ -23,6 +23,9 @@ func Regenerate(handle *sql.DB, awgConfPath string, logf func(format string, arg
 	ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
 	defer cancel()
 	addr := APIAddr()
+	if err := ClearStaleSocket(addr); err != nil {
+		logf("%v", err)
+	}
 	res, err := Sync(ctx, handle, ConfigPath(awgConfPath), Options{APIAddr: addr, LogDir: LogDir()}, NewAPI(addr))
 	switch {
 	case err != nil:
