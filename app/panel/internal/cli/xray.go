@@ -30,6 +30,10 @@ func (a *app) cmdXray(args []string) int {
 		return a.cmdXrayImport(args[1:])
 	case "link":
 		return a.cmdXrayLink(args[1:])
+	case "entry":
+		return a.cmdXrayEntry(args[1:])
+	case "users-json":
+		return a.cmdXrayUsersJSON(args[1:])
 	default:
 		a.usage()
 		return 2
@@ -148,7 +152,7 @@ func (a *app) cmdXrayImport(args []string) int {
 
 // cmdXrayLink печатает ссылку vless:// клиента.
 func (a *app) cmdXrayLink(args []string) int {
-	parsed, err := parseArgs(args, nil)
+	parsed, err := parseArgs(args, map[string]bool{"entry": true})
 	if err != nil {
 		return a.usageError(opXrayLink, err.Error())
 	}
@@ -164,8 +168,17 @@ func (a *app) cmdXrayLink(args []string) int {
 		return a.fatal(opXrayLink, err)
 	}
 	defer handle.Close()
-	link, err := xray.ClientLink(handle, id)
-	if err != nil {
+	var link string
+	if name, ok := parsed.flags["entry"]; ok {
+		c, err := db.ClientByID(handle, id)
+		if err != nil {
+			return a.fatal(opXrayLink, err)
+		}
+		link, err = entryLink(handle, c, name)
+		if err != nil {
+			return a.fatal(opXrayLink, err)
+		}
+	} else if link, err = xray.ClientLink(handle, id); err != nil {
 		return a.fatal(opXrayLink, err)
 	}
 	fmt.Fprintln(a.stdout, link)

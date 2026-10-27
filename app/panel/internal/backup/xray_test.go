@@ -30,6 +30,12 @@ const xrayClientUUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 
 // Служебная учётка российского входа: без неё после восстановления вход
 // перестал бы пускать всех клиентов разом.
+// Узел-вход: без него после восстановления пропали бы ссылки «через вход».
+var xrayEntry = db.XrayEntry{
+	Name: "ru", LinkHost: "ru.example.com", LinkPort: 443, SNI: "ru.example.com",
+	PublicKey: "u1D_noKldM-_gg6X9g-5wUPsdBXPUU-M_Zjv9Z4FlhQ", ShortID: "a1b2", Path: "/entry", LinkPrefix: "RU ",
+}
+
 var xrayServiceUser = db.VLESSServiceUser{Email: "ruentry", UUID: "5a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d"}
 
 func applyAndOpen(t *testing.T, c *restoreCtx, archive string) *sql.DB {
@@ -77,6 +83,9 @@ func TestBackupRestoreCarriesVLESS(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.SaveXrayEntry(src, xrayEntry); err != nil {
+		t.Fatal(err)
+	}
 	archive, err := Create(src, filepath.Join(dir, "backups"), func() time.Time { return fakeNow })
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -106,6 +115,10 @@ func TestBackupRestoreCarriesVLESS(t *testing.T) {
 	service, err := db.XrayServiceUsers(h)
 	if err != nil || len(service) != 1 || service[0] != xrayServiceUser {
 		t.Fatalf("служебная учётка входа после восстановления: %+v, %v", service, err)
+	}
+	entries, err := db.XrayEntries(h)
+	if err != nil || len(entries) != 1 || entries[0] != xrayEntry {
+		t.Fatalf("узлы-входы после восстановления: %+v, %v", entries, err)
 	}
 }
 

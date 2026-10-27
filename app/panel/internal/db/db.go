@@ -122,6 +122,7 @@ var schemaStatements = []string{
 	// Настройки Xray (amnezia-vpn-server-14y0.1, см. xray.go).
 	xrayTable,
 	xrayServiceUsersTable,
+	xrayEntriesTable,
 }
 
 // Open creates a new SQLite database file (including parent directories)

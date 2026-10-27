@@ -20,6 +20,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
@@ -159,21 +160,43 @@ func escape(s string) string {
 // по строке целиком, и та же ссылка в другом порядке стала бы для него
 // вторым сервером. Имя в ссылке — «VPN <имя клиента>», как раздавалось.
 func Link(s *db.XraySettings, address string, c db.VLESSClient) string {
+	return buildLink(linkParams{
+		Address: address, Port: s.LinkPort, Path: s.Path, SNI: s.ServerName,
+		PublicKey: s.PublicKey, ShortID: s.ShortID, NamePrefix: linkNamePrefix,
+	}, c)
+}
+
+// EntryLink — ссылка того же клиента через узел-вход: UUID тот же, всё
+// остальное — узла, имя — с его приставкой («RU andrey»). Так ссылки
+// выдаются на входе сейчас (amnezia-vpn-server-14y0.6).
+func EntryLink(e *db.XrayEntry, c db.VLESSClient) string {
+	return buildLink(linkParams{
+		Address: e.LinkHost, Port: e.LinkPort, Path: e.Path, SNI: e.SNI,
+		PublicKey: e.PublicKey, ShortID: e.ShortID, NamePrefix: e.LinkPrefix,
+	}, c)
+}
+
+type linkParams struct {
+	Address, Path, SNI, PublicKey, ShortID, NamePrefix string
+	Port                                               int64
+}
+
+func buildLink(p linkParams, c db.VLESSClient) string {
 	var b strings.Builder
 	b.WriteString("vless://")
 	b.WriteString(c.UUID)
 	b.WriteByte('@')
-	b.WriteString(net.JoinHostPort(address, strconv.FormatInt(s.LinkPort, 10)))
+	b.WriteString(net.JoinHostPort(p.Address, strconv.FormatInt(p.Port, 10)))
 	b.WriteString("?type=xhttp&path=")
-	b.WriteString(escape(s.Path))
+	b.WriteString(escape(p.Path))
 	b.WriteString("&mode=auto&security=reality&sni=")
-	b.WriteString(escape(s.ServerName))
+	b.WriteString(escape(p.SNI))
 	b.WriteString("&fp=chrome&pbk=")
-	b.WriteString(escape(s.PublicKey))
+	b.WriteString(escape(p.PublicKey))
 	b.WriteString("&sid=")
-	b.WriteString(escape(s.ShortID))
+	b.WriteString(escape(p.ShortID))
 	b.WriteByte('#')
-	b.WriteString(escape(linkNamePrefix + c.Name))
+	b.WriteString(escape(p.NamePrefix + c.Name))
 	return b.String()
 }
 
@@ -221,4 +244,46 @@ func ClientLink(handle *sql.DB, id int64) (string, error) {
 		return "", err
 	}
 	return Link(s, address, db.VLESSClient{ID: c.ID, Name: c.Name, UUID: c.VLESSUUID}), nil
+}
+
+// Route — один способ подключиться по VLESS: напрямую к этому серверу
+// (Entry пусто) или через узел-вход Entry.
+type Route struct {
+	Entry string
+	Link  string
+}
+
+// ClientRoutes — ссылки клиента по всем маршрутам: сначала прямая (если
+// Xray на этом сервере настроен), затем по узлам-входам в порядке имён.
+// Отключённому или истёкшему клиенту — ни одной: раздавать ссылки, которые
+// не работают, незачем. Ошибка — только когда клиента нет или база не
+// читается.
+func ClientRoutes(handle *sql.DB, id int64) ([]Route, error) {
+	c, err := db.ClientByID(handle, id)
+	if err != nil {
+		return nil, err
+	}
+	routes := []Route{}
+	if !c.Enabled || c.Expired(time.Now().UTC()) || c.VLESSUUID == "" {
+		return routes, nil
+	}
+	vc := db.VLESSClient{ID: c.ID, Name: c.Name, UUID: c.VLESSUUID}
+	switch s, err := db.XraySettingsRow(handle); {
+	case err == nil:
+		if address, err := LinkAddress(handle, s); err == nil {
+			routes = append(routes, Route{Link: Link(s, address, vc)})
+		} else if !errors.Is(err, ErrNoLinkAddress) {
+			return nil, err
+		}
+	case !errors.Is(err, db.ErrXrayNotConfigured):
+		return nil, err
+	}
+	entries, err := db.XrayEntries(handle)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		routes = append(routes, Route{Entry: entries[i].Name, Link: EntryLink(&entries[i], vc)})
+	}
+	return routes, nil
 }

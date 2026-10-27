@@ -64,7 +64,15 @@ commands:
      domain, --target to the local nginx on 127.0.0.1:4433)
   xray import <dir>              take over a hand-made Xray setup: settings.json
                                  and users.json (or keys.txt, shortid.txt, path.txt)
-  xray link <id>                 print the client's vless:// link
+  xray link <id> [--entry <name>]  print the client's vless:// link, direct or
+                                 through an entry node
+  xray entry set <name> [--host <host>] [--port <port>] [--sni <name>]
+      [--public-key <key>] [--short-id <hex>] [--path </path>] [--prefix <text>]
+    (an entry node: a server without a panel that clients reach first, with
+     the same UUIDs; a new entry needs every flag but --port and --prefix)
+  xray entry list
+  xray entry remove <name>
+  xray users-json                print [{client_id,name,uuid,enabled}] for an entry node
   auth add-user <username> (--password-stdin | --password-env <ENV>)
   auth change-password <username> --old-password-stdin --new-password-stdin
   auth set-password <username> --password-stdin
