@@ -113,6 +113,20 @@
 #   AMNEZIA_INSTALL_NGINX_SITES_DIR=DIR  nginx sites-enabled dir where the
 #                                      panel site is linked in and out
 #                                      (default /etc/nginx/sites-enabled)
+#   AMNEZIA_INSTALL_NGINX_CONF=FILE    nginx.conf that carries the stream
+#                                      block for --xray
+#                                      (default /etc/nginx/nginx.conf)
+#   AMNEZIA_INSTALL_NGINX_STREAM_DIR=DIR  stream include dir with the TCP
+#                                      443 split (default /etc/nginx/stream.d)
+#   AMNEZIA_INSTALL_NGINX_MODULES_DIR=DIR  enabled nginx modules, where the
+#                                      stream module shows up
+#                                      (default /etc/nginx/modules-enabled)
+#   AMNEZIA_INSTALL_LETSENCRYPT_DIR=DIR  certbot's live dir
+#                                      (default /etc/letsencrypt/live)
+#   AMNEZIA_INSTALL_ACME_ROOT=DIR      HTTP-01 webroot (default /var/www/certbot)
+#   AMNEZIA_INSTALL_SELFSTEAL_ROOT=DIR static site Reality presents for the
+#                                      VPN domain
+#                                      (default /var/www/amnezia-selfsteal)
 #   AMNEZIA_INSTALL_FORCE_AWG_INSTALL=1  run the AmneziaWG client-stack
 #                                      install even when already present
 #                                      (testability)
@@ -159,6 +173,12 @@ APT_SOURCES_DIR="${AMNEZIA_INSTALL_APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
 NFTABLES_DIR="${AMNEZIA_INSTALL_NFTABLES_DIR:-/etc/nftables.d}"
 NFTABLES_CONF="${AMNEZIA_INSTALL_NFTABLES_CONF:-/etc/nftables.conf}"
 SYSTEMD_DIR="${AMNEZIA_INSTALL_SYSTEMD_DIR:-/etc/systemd/system}"
+# The TCP 443 split for Xray (amnezia-vpn-server-14y0.7). The file name is
+# the one the hand-made split on the first deployment used, so the
+# installer takes that setup over in place instead of adding a second one.
+NGINX_MAIN_CONF="${AMNEZIA_INSTALL_NGINX_CONF:-/etc/nginx/nginx.conf}"
+NGINX_STREAM_DIR="${AMNEZIA_INSTALL_NGINX_STREAM_DIR:-/etc/nginx/stream.d}"
+NGINX_STREAM_CONF="$NGINX_STREAM_DIR/amnezia-sni.conf"
 ENV_FILE=".env"
 
 FAIL_STYLE_NONE=0
@@ -254,11 +274,15 @@ Options:
                 protocol that still gets through on Russian mobile
                 networks. Off by default. Needs a VPN domain
                 (--vpn-domain): Reality presents the server's own site.
-                Xray listens on 127.0.0.1:4432 only — this installer
-                does not touch TCP 443; route it to Xray yourself
-                (nginx stream, split by SNI, with proxy_protocol).
-                Remembered in .env like the switches above.
-  --no-xray     stop Xray and forget --xray
+                TCP 443 is then split by name in nginx stream: the
+                panel domain goes to the panel, everything else to
+                Xray, and Reality shows a static site under the VPN
+                domain (its own Let's Encrypt certificate, so TCP 80
+                opens too). A panel without a domain must move off 443
+                (--panel-port 8443). Remembered in .env like the
+                switches above.
+  --no-xray     stop Xray and forget --xray; the panel takes TCP 443
+                back and the nginx stream split is removed
 
                 These four are deployment values, like the panel mode:
                 a --no-* flag is remembered in .env, so a rerun without
@@ -379,10 +403,12 @@ WATCHDOG_ENABLED=""
 # ходит хост, панель по-прежнему никуда не ходит.
 UPDATE_CHECK_ENABLED=""
 # Xray (amnezia-vpn-server-14y0.3). В отличие от выключателей выше — по
-# выбору, а не по умолчанию: без деления TCP 443 по SNI (его установщик пока
-# не делает) он слушает петлю, до которой снаружи никто не дойдёт, а на
-# боевом рядом уже живёт ручной Xray на том же порту.
+# выбору, а не по умолчанию: он забирает у nginx TCP 443 (деление по имени
+# в nginx stream, amnezia-vpn-server-14y0.7) и требует домена клиентов.
+# XRAY_FLAG_SET — флаг дан в этой командной строке: только явный --no-xray
+# снимает деление 443, которое развёртывание не заводило само.
 XRAY_ENABLED=""
+XRAY_FLAG_SET=0
 
 # Выключатели служб (amnezia-vpn-server-76mp.5). Каждый — решение
 # развёртывания, а не одного запуска: пустое значение значит «флага не было»,
@@ -474,6 +500,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         --xray | --no-xray)
             XRAY_ENABLED="$(switch_value "$1")"
+            XRAY_FLAG_SET=1
             shift
             ;;
         *)
@@ -1504,6 +1531,35 @@ remember_switch() { # remember_switch ENABLED KEY
 remember_switch "$FAIL2BAN_ENABLED" FAIL2BAN_DISABLED
 remember_switch "$WATCHDOG_ENABLED" WATCHDOG_DISABLED
 remember_switch "$UPDATE_CHECK_ENABLED" UPDATE_CHECK_DISABLED
+
+# Xray и TCP 443 (amnezia-vpn-server-14y0.7) — до того, как --xray
+# запомнится и что-либо на хосте изменится: отказ здесь ничего не оставляет.
+# 443 делится по имени из TLS, поэтому:
+#   - нужен домен клиентов: под ним Reality показывает настоящий сайт;
+#   - он не может совпадать с доменом панели: одно имя не уйдёт в два места;
+#   - панель без домена на 443 делить не по чему — у неё нет имени.
+# И обратное: деление 443 есть на хосте, а развёртывание о Xray не знает
+# (его ставили руками). Запуск без флагов — так зовёт установщик агент
+# обновления — не угадывает: снять деление значит отрезать живой Xray,
+# оставить и вернуть панель на прямой 443 — сломать панель (как случилось
+# 27.10.2026 на боевом). Решает оператор, флагом.
+check_xray_front() {
+    if [ "$XRAY_ENABLED" != "1" ]; then
+        if [ "$XRAY_WAS_ENABLED" != "1" ] && [ "$XRAY_FLAG_SET" = "0" ] && [ -e "$NGINX_STREAM_CONF" ]; then
+            die_usage "TCP 443 is split by name in nginx stream ($NGINX_STREAM_CONF), but this deployment does not run Xray. Rerun with --xray to keep the split (the installer takes it over) or with --no-xray to remove it"
+        fi
+        return 0
+    fi
+    [ -n "$CLIENT_DOMAIN" ] \
+        || die_usage "--xray needs a VPN domain: Reality presents the server's own site under it. Rerun with --vpn-domain <fqdn>"
+    [ "$CLIENT_DOMAIN" != "$DOMAIN" ] \
+        || die_usage "--xray needs a VPN domain other than the panel domain ($DOMAIN): TCP 443 is split between the two by name. Pass a different --vpn-domain"
+    if [ -z "$DOMAIN" ] && [ "$PANEL_PORT" = "443" ]; then
+        die_usage "--xray needs TCP 443, and a panel without a domain cannot share it. Move the panel with --panel-port 8443"
+    fi
+}
+check_xray_front
+
 if [ "$XRAY_ENABLED" = "1" ]; then
     env_remember XRAY_ENABLED 1
 else
@@ -2503,18 +2559,24 @@ net_setup() {
     # Panel TLS modes open their tcp ports additively and ONLY in that
     # mode (T-121/T-156: 80 + 443 or --panel-port; T-124: the chosen
     # port for the self-signed IP mode). Loopback-only installs add nothing.
-    input_rules=""
+    # Xray (amnezia-vpn-server-14y0.7) adds tcp 443 (the split) and tcp 80
+    # (ACME for the VPN domain's certificate) in any panel mode; a port
+    # the panel mode opens already is not listed twice.
+    local tcp_ports="" tcp seen=" " nl=$'\n'
     if [ -n "$DOMAIN" ]; then
-        local tls_tcp="${PANEL_PORT:-443}"
-        input_rules=$(
-            cat <<RULES
-        tcp dport 80 accept
-        tcp dport ${tls_tcp} accept
-RULES
-        )
+        tcp_ports="80 ${PANEL_PORT:-443}"
     elif [ -n "$PANEL_PORT" ]; then
-        input_rules="        tcp dport ${PANEL_PORT} accept"
+        tcp_ports="$PANEL_PORT"
     fi
+    if [ "$XRAY_ENABLED" = "1" ]; then
+        tcp_ports="$tcp_ports 80 443"
+    fi
+    input_rules=""
+    for tcp in $tcp_ports; do
+        case "$seen" in *" $tcp "*) continue ;; esac
+        seen="$seen$tcp "
+        input_rules="${input_rules:+$input_rules$nl}        tcp dport ${tcp} accept"
+    done
 
     mkdir -p "$NFT_DEPLOY_DIR" || die_op "cannot create $NFT_DEPLOY_DIR"
     chmod 0750 "$NFT_DEPLOY_DIR"
@@ -2978,8 +3040,7 @@ apply_deployment_values
 # Ключи Reality заводит сама панель (`panel xray init`, один раз: они зашиты
 # во все выданные ссылки, и повторный запуск их не трогает); маскировка —
 # под собственный сайт сервера, поэтому нужен домен в endpoint. TCP 443
-# установщик не трогает: деление по SNI (nginx stream с proxy_protocol)
-# пока настраивается руками (amnezia-vpn-server-14y0.3).
+# до Xray доводит nginx stream ниже, в nginx_setup (amnezia-vpn-server-14y0.7).
 xray_setup() {
     if [ "$XRAY_ENABLED" != "1" ]; then
         if [ "$XRAY_WAS_ENABLED" = "1" ]; then
@@ -2997,7 +3058,7 @@ xray_setup() {
         || die_op "xray: making the Reality keys failed. Reality presents the server's own site, so the deployment needs a VPN domain: rerun with --vpn-domain <fqdn>"
     docker_compose --env-file versions.lock up -d xray \
         || die_op "xray: docker compose up -d xray failed"
-    log "xray: running on 127.0.0.1:4432 (TCP 443 is not routed to it by this installer: split 443 by SNI in nginx stream)"
+    log "xray: running on 127.0.0.1:4432"
 }
 xray_setup
 
@@ -3083,21 +3144,44 @@ else
     rm -f "$SYSTEMD_DIR/amnezia-vpn-update-check-request.path"
 fi
 
-# --- 13b. panel domain: reverse proxy + Let's Encrypt (T-121) ---------
-# Optional --domain mode: nginx terminates TLS in front of the
+# --- 13b. nginx in front: panel TLS and Xray's TCP 443 -----------------
+# Optional --domain mode (T-121): nginx terminates TLS in front of the
 # loopback-only panel and certbot provisions a Let's Encrypt
 # certificate (HTTP-01). The DNS pre-flight runs BEFORE any certbot
 # call so a missing/mismatched record never burns the rate limit.
-# Without --domain this whole section is a no-op and ports 80/443 stay
-# closed.
+# Without --domain, --panel-port and --xray this whole section only
+# retires what an earlier mode left behind, and ports 80/443 stay closed.
+#
+# --xray (amnezia-vpn-server-14y0.7) puts nginx stream on TCP 443 and
+# splits it by the name in the TLS ClientHello: the panel domain goes to
+# the panel's TLS site on 127.0.0.1:4431, everything else to Xray on
+# 127.0.0.1:4432, both with PROXY protocol so each sees the visitor's
+# address. Reality hands every connection it does not recognise to a real
+# site under the VPN domain on 127.0.0.1:4433 with its own Let's Encrypt
+# certificate (self-steal). This is the setup the first deployment had
+# been given by hand; the installer used to rewrite the panel back onto a
+# plain `listen 443` on every run — the update from the panel included —
+# and the panel went dark.
 
 NGINX_CONF_DIR="$ROOT_DIR/nginx"
 NGINX_SITE="amnezia-panel"
+NGINX_SELFSTEAL_SITE="amnezia-selfsteal"
 # Linking the site in and out is a host write like any other, so it goes
 # through a hook: without one the harness cannot see whether leaving a
 # panel mode actually retires the site, which is the half of that job that
 # stops nginx serving a hostname whose ports have just been closed.
 NGINX_SITES_DIR="${AMNEZIA_INSTALL_NGINX_SITES_DIR:-/etc/nginx/sites-enabled}"
+NGINX_MODULES_ENABLED_DIR="${AMNEZIA_INSTALL_NGINX_MODULES_DIR:-/etc/nginx/modules-enabled}"
+LE_LIVE_DIR="${AMNEZIA_INSTALL_LETSENCRYPT_DIR:-/etc/letsencrypt/live}"
+# Outside the deployment root on purpose: $ROOT_DIR/nginx is root-only,
+# and the nginx workers that serve these files are not root.
+SELFSTEAL_ROOT="${AMNEZIA_INSTALL_SELFSTEAL_ROOT:-/var/www/amnezia-selfsteal}"
+# The three loopback ends of the split. Xray's are fixed by the panel
+# (internal/xray: inboundPort; internal/db: XrayDefaultTarget), and
+# test_m91_install.sh compares them.
+SNI_PANEL_BACKEND=127.0.0.1:4431
+SNI_XRAY_BACKEND=127.0.0.1:4432
+SELFSTEAL_BACKEND=127.0.0.1:4433
 
 # nginx_present: whether the host already carries nginx, so the install can
 # be skipped. Hookable for the same reason the AmneziaWG check is, and for a
@@ -3142,35 +3226,67 @@ render_nginx_panel_locations() {
         "'{\"ok\":false,\"message\":\"Файл больше ${NGINX_RESTORE_BODY_MIB} МиБ — панель столько не примет\"}'"
 }
 
-render_nginx_conf() { # render_nginx_conf DOMAIN PHASE [TLS_PORT]
-    local domain="$1" phase="$2" tls_port="${3:-443}"
-    local cert="/etc/letsencrypt/live/${domain}/fullchain.pem"
-    local key="/etc/letsencrypt/live/${domain}/privkey.pem"
-    local https_redirect="https://\$host\$request_uri"
-    if [ "$tls_port" != "443" ]; then
-        https_redirect="https://\$host:${tls_port}\$request_uri"
-    fi
+# le_cert_present DOMAIN: certbot has issued for DOMAIN before. Such a site
+# is rendered with its TLS server from the first step on: a rerun used to
+# drop the TLS server for the whole certbot run, and with the update from
+# the panel that meant the panel went away under the person updating it.
+le_cert_present() {
+    [ -f "$LE_LIVE_DIR/$1/fullchain.pem" ] && [ -f "$LE_LIVE_DIR/$1/privkey.pem" ]
+}
+
+# panel_behind_stream: the panel's TLS site sits behind the TCP 443 split
+# rather than on 443 itself — Xray is on and the panel serves its domain
+# on the default port. On another --panel-port 443 stays the split's alone.
+panel_behind_stream() {
+    [ "$XRAY_ENABLED" = "1" ] && [ -n "$DOMAIN" ] && [ "${PANEL_PORT:-443}" = "443" ]
+}
+
+# render_nginx_acme_server DOMAIN REDIRECT: port 80 of a Let's Encrypt
+# site — the HTTP-01 webroot, everything else to https.
+render_nginx_acme_server() {
     cat <<EOF
-# Amnezia VPN panel reverse proxy (T-121) — managed by install.sh.
-# The panel stays loopback-only (127.0.0.1:8787); TLS terminates here.
 server {
     listen 80;
     listen [::]:80;
-    server_name ${domain};
+    server_name $1;
     location /.well-known/acme-challenge/ {
         root ${ACME_ROOT};
     }
     location / {
-        return 301 ${https_redirect};
+        return 301 $2;
     }
 }
 EOF
+}
+
+render_nginx_conf() { # render_nginx_conf DOMAIN PHASE [TLS_PORT]
+    local domain="$1" phase="$2" tls_port="${3:-443}" listen
+    local cert="${LE_LIVE_DIR}/${domain}/fullchain.pem"
+    local key="${LE_LIVE_DIR}/${domain}/privkey.pem"
+    local https_redirect="https://\$host\$request_uri"
+    if [ "$tls_port" != "443" ]; then
+        https_redirect="https://\$host:${tls_port}\$request_uri"
+    fi
+    listen="    listen ${tls_port} ssl;
+    listen [::]:${tls_port} ssl;"
+    if panel_behind_stream; then
+        # The split hands the connection over with a PROXY protocol header;
+        # real_ip makes $remote_addr the visitor again, which is what the
+        # panel's login limit keys on (X-Real-IP below).
+        listen="    listen ${SNI_PANEL_BACKEND} ssl proxy_protocol;
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;"
+    fi
+    cat <<EOF
+# Amnezia VPN panel reverse proxy (T-121) — managed by install.sh.
+# The panel stays loopback-only (127.0.0.1:8787); TLS terminates here.
+EOF
+    render_nginx_acme_server "$domain" "$https_redirect"
     if [ "$phase" = "phase2" ]; then
         cat <<EOF
 
 server {
-    listen ${tls_port} ssl;
-    listen [::]:${tls_port} ssl;
+${listen}
     server_name ${domain};
     ssl_certificate ${cert};
     ssl_certificate_key ${key};
@@ -3180,72 +3296,6 @@ $(render_nginx_panel_locations)
 EOF
     fi
 }
-
-domain_setup() {
-    [ -n "$DOMAIN" ] || return 0
-
-    local tls_port="${PANEL_PORT:-443}"
-    local panel_url="https://${DOMAIN}"
-    if [ "$tls_port" != "443" ]; then
-        panel_url="https://${DOMAIN}:${tls_port}"
-    fi
-
-    log "panel domain $DOMAIN: DNS pre-flight before any certificate attempt"
-    dns_preflight "$DOMAIN"
-
-    if ! nginx_present; then
-        run_apt_get install -y nginx || die_op "apt-get install nginx failed"
-    fi
-    mkdir -p "$NGINX_CONF_DIR" "$ACME_ROOT" || die_op "cannot create nginx/acme dirs"
-    chmod 0750 "$NGINX_CONF_DIR"
-    render_nginx_conf "$DOMAIN" "phase1" "$tls_port" > "$NGINX_CONF_DIR/panel.conf"
-    chmod 0644 "$NGINX_CONF_DIR/panel.conf"
-    ln -sf "$NGINX_CONF_DIR/panel.conf" "$NGINX_SITES_DIR/$NGINX_SITE"
-    rm -f "$NGINX_SITES_DIR/default"
-    cmd nginx -t >/dev/null 2>&1 || die_op "nginx configuration test failed"
-    cmd systemctl enable nginx >/dev/null 2>&1 || die_op "systemctl enable nginx failed"
-    if ! cmd systemctl is-active --quiet nginx; then
-        cmd systemctl start nginx || die_op "systemctl start nginx failed"
-    else
-        cmd nginx -s reload >/dev/null 2>&1 || true
-    fi
-
-    if ! command -v certbot >/dev/null 2>&1; then
-        run_apt_get install -y certbot || die_op "apt-get install certbot failed"
-    fi
-    if ! certbot certonly --webroot -w "$ACME_ROOT" -d "$DOMAIN" \
-        --non-interactive --agree-tos --register-unsafely-without-email \
-        --keep-until-expiring >/dev/null 2>&1; then
-        die_op "Let's Encrypt issuance failed for $DOMAIN (see /var/log/letsencrypt); nothing was published"
-    fi
-    cmd systemctl enable certbot.timer >/dev/null 2>&1 || true
-    cmd systemctl start certbot.timer >/dev/null 2>&1 || true
-
-    render_nginx_conf "$DOMAIN" "phase2" "$tls_port" > "$NGINX_CONF_DIR/panel.conf"
-    chmod 0644 "$NGINX_CONF_DIR/panel.conf"
-    cmd nginx -t >/dev/null 2>&1 || die_op "nginx TLS configuration test failed"
-    cmd nginx -s reload >/dev/null 2>&1 || true
-    log "panel domain: $panel_url ready (certbot.timer renews automatically)"
-}
-
-domain_setup
-
-# --- 13c. panel IP:port mode: self-signed TLS (T-124) ------------------
-# No domain, but --panel-port given: the panel stays loopback-only in
-# compose; nginx terminates TLS in front of it with a self-signed
-# certificate (Let's Encrypt does not issue for bare IPs) and proxies
-# to 127.0.0.1:8787. With a panel domain, TLS is Let's Encrypt
-# (domain_setup) even when --panel-port is set — this section is skipped.
-#
-# The summary prints the sha256 fingerprint: browsers reject the
-# untrusted certificate once and the operator verifies the fingerprint
-# before proceeding.
-
-PANEL_TLS_DIR="$ROOT_DIR/tls"
-PANEL_TLS_CERT="$PANEL_TLS_DIR/panel.crt"
-PANEL_TLS_KEY="$PANEL_TLS_DIR/panel.key"
-PANEL_TLS_IP=""
-PANEL_TLS_FINGERPRINT=""
 
 render_nginx_ip_conf() { # render_nginx_ip_conf PORT CERT KEY
     cat <<EOF
@@ -3263,10 +3313,256 @@ $(render_nginx_panel_locations)
 EOF
 }
 
-panel_port_setup() {
-    [ -n "$PANEL_PORT" ] || return 0
-    [ -z "$DOMAIN" ] || return 0
+# The site Reality presents (self-steal). `http2` stays a listen parameter:
+# the `http2 on;` directive needs nginx 1.25, and Ubuntu 24.04 ships 1.24.
+# No PROXY protocol here — Xray passes unrecognised connections on as they
+# came.
+render_nginx_selfsteal_conf() { # render_nginx_selfsteal_conf DOMAIN PHASE
+    local domain="$1" phase="$2"
+    cat <<EOF
+# Amnezia VPN: the site Reality shows for ${domain} (amnezia-vpn-server-14y0.7)
+# — managed by install.sh.
+EOF
+    render_nginx_acme_server "$domain" "https://\$host\$request_uri"
+    if [ "$phase" = "phase2" ]; then
+        cat <<EOF
 
+server {
+    listen ${SELFSTEAL_BACKEND} ssl http2;
+    server_name ${domain};
+    ssl_certificate ${LE_LIVE_DIR}/${domain}/fullchain.pem;
+    ssl_certificate_key ${LE_LIVE_DIR}/${domain}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    root ${SELFSTEAL_ROOT};
+    index index.html;
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+    fi
+}
+
+render_nginx_stream_conf() {
+    cat <<EOF
+# Amnezia VPN: TCP 443 split by the TLS name (amnezia-vpn-server-14y0.7)
+# — managed by install.sh.
+map \$ssl_preread_server_name \$amnezia_443_backend {
+EOF
+    if panel_behind_stream; then
+        printf '    %s %s;\n' "$DOMAIN" "$SNI_PANEL_BACKEND"
+    fi
+    cat <<EOF
+    default ${SNI_XRAY_BACKEND};
+}
+server {
+    listen 443;
+    listen [::]:443;
+    ssl_preread on;
+    proxy_pass \$amnezia_443_backend;
+    proxy_protocol on;
+}
+EOF
+}
+
+# nginx_write FILE — stdin into FILE: beside it, then renamed over, so
+# nginx never reads half a file. It returns instead of dying: it runs at
+# the end of a pipeline, in a subshell, where die_op would end only that
+# subshell and the install would carry on.
+nginx_write() {
+    local tmp="$1.amnezia-new"
+    cat > "$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$1" \
+        || { rm -f "$tmp"; return 1; }
+}
+
+# The stream block in nginx.conf: the one line `stream { include
+# <stream.d>/*.conf; }`, in the form the hand-made setup used. Present in
+# any spacing counts — the installer never adds a second one.
+nginx_stream_include_re() {
+    printf '^[[:space:]]*stream[[:space:]]*\\{[[:space:]]*include[[:space:]]+%s/\\*\\.conf;[[:space:]]*\\}[[:space:]]*$' \
+        "$(printf '%s' "$NGINX_STREAM_DIR" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+}
+NGINX_STREAM_MARK="# amnezia-vpn-server: TCP 443 split for Xray (managed by install.sh)"
+
+nginx_stream_block_add() {
+    grep -qE "$(nginx_stream_include_re)" "$NGINX_MAIN_CONF" 2>/dev/null && return 0
+    [ -f "$NGINX_MAIN_CONF" ] || nginx_abort "$NGINX_MAIN_CONF not found: is nginx installed?"
+    {
+        cat "$NGINX_MAIN_CONF"
+        # A file without a final newline would glue the block to its last line.
+        [ -z "$(tail -c 1 "$NGINX_MAIN_CONF")" ] || printf '\n'
+        printf '%s\nstream { include %s/*.conf; }\n' "$NGINX_STREAM_MARK" "$NGINX_STREAM_DIR"
+    } | nginx_write "$NGINX_MAIN_CONF" || nginx_abort "cannot write $NGINX_MAIN_CONF"
+}
+
+# Only the one-line block and its marker go; a stream.d that still holds
+# someone else's file keeps the include they rely on.
+nginx_stream_block_remove() {
+    [ -f "$NGINX_MAIN_CONF" ] || return 0
+    grep -qE "$(nginx_stream_include_re)" "$NGINX_MAIN_CONF" || return 0
+    if compgen -G "$NGINX_STREAM_DIR/*.conf" >/dev/null; then
+        log "nginx: $NGINX_STREAM_DIR holds other stream configs; its include in $(basename "$NGINX_MAIN_CONF") stays"
+        return 0
+    fi
+    grep -vE "$(nginx_stream_include_re)" "$NGINX_MAIN_CONF" | grep -vxF "$NGINX_STREAM_MARK" \
+        | nginx_write "$NGINX_MAIN_CONF" || nginx_abort "cannot write $NGINX_MAIN_CONF"
+}
+
+# The stream module comes as its own package on Debian/Ubuntu, and
+# installing it restarts nginx: a stream block written before the module
+# would take nginx down right there. So the package goes first, the block
+# after — and on a host that has the module (or nginx built with stream
+# in), apt is not touched at all.
+nginx_stream_module_ensure() {
+    compgen -G "$NGINX_MODULES_ENABLED_DIR/*stream*.conf" >/dev/null && return 0
+    cmd nginx -V 2>&1 | grep -qE -- '--with-stream( |$)' && return 0
+    log "nginx: installing the stream module (libnginx-mod-stream) for the TCP 443 split"
+    run_apt_get install -y libnginx-mod-stream || die_op "apt-get install libnginx-mod-stream failed"
+}
+
+# A page for the self-steal site, written once: whatever the operator
+# puts there instead is kept.
+selfsteal_root_prepare() {
+    mkdir -p "$SELFSTEAL_ROOT" || die_op "cannot create $SELFSTEAL_ROOT"
+    chmod 0755 "$SELFSTEAL_ROOT"
+    [ -f "$SELFSTEAL_ROOT/index.html" ] && return 0
+    cat <<'EOF' | nginx_write "$SELFSTEAL_ROOT/index.html" || die_op "cannot write $SELFSTEAL_ROOT/index.html"
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Welcome</title></head>
+<body><h1>Welcome</h1><p>This site is under construction.</p></body>
+</html>
+EOF
+}
+
+# --- one nginx change at a time, or none --------------------------------
+# Every file the installer may touch is copied aside before a change and
+# put back when nginx -t refuses the result. Without it a refused config
+# stayed on disk: the running nginx kept the old one only until its next
+# restart, and the half-done split (the panel already off 443, the stream
+# not yet on it) is exactly what takes the panel off the air.
+NGINX_TXN_DIR=""
+nginx_managed_paths() {
+    printf '%s\n' "$NGINX_MAIN_CONF" "$NGINX_STREAM_CONF" \
+        "$NGINX_CONF_DIR/panel.conf" "$NGINX_SITES_DIR/$NGINX_SITE" \
+        "$NGINX_CONF_DIR/selfsteal.conf" "$NGINX_SITES_DIR/$NGINX_SELFSTEAL_SITE" \
+        "$NGINX_SITES_DIR/default"
+}
+
+nginx_txn_begin() {
+    local i=0 p
+    NGINX_TXN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/amnezia-nginx.XXXXXX")" \
+        || die_op "cannot create a scratch dir for the nginx rollback copy"
+    while IFS= read -r p; do
+        i=$((i + 1))
+        if [ -L "$p" ]; then
+            readlink "$p" > "$NGINX_TXN_DIR/$i.link"
+        elif [ -f "$p" ]; then
+            cp -p "$p" "$NGINX_TXN_DIR/$i" || die_op "cannot copy $p aside before changing nginx"
+        fi
+    done < <(nginx_managed_paths)
+}
+
+nginx_txn_rollback() {
+    local i=0 p
+    while IFS= read -r p; do
+        i=$((i + 1))
+        rm -f "$p"
+        if [ -f "$NGINX_TXN_DIR/$i.link" ]; then
+            ln -s "$(cat "$NGINX_TXN_DIR/$i.link")" "$p"
+        elif [ -f "$NGINX_TXN_DIR/$i" ]; then
+            cp -p "$NGINX_TXN_DIR/$i" "$p.amnezia-restore" && mv -f "$p.amnezia-restore" "$p"
+        fi
+    done < <(nginx_managed_paths)
+    rm -rf "$NGINX_TXN_DIR"
+    NGINX_TXN_DIR=""
+}
+
+nginx_txn_end() {
+    rm -rf "$NGINX_TXN_DIR"
+    NGINX_TXN_DIR=""
+}
+
+# nginx_abort MESSAGE: stop the install, first putting back whatever the
+# change in progress has already rewritten.
+nginx_abort() {
+    if [ -n "$NGINX_TXN_DIR" ]; then
+        nginx_txn_rollback
+        die_op "$1; the previous nginx configuration was put back"
+    fi
+    die_op "$1"
+}
+
+# nginx_sites_render PHASE: the panel site for the panel mode, and the
+# split plus the Reality site while Xray is on — or their removal. phase1
+# is what certbot needs (port 80) for a site that has no certificate yet;
+# a site that has one gets its TLS server already.
+nginx_sites_render() {
+    local phase="$1" p
+    if [ -n "$DOMAIN" ]; then
+        p="$phase"; le_cert_present "$DOMAIN" && p=phase2
+        render_nginx_conf "$DOMAIN" "$p" "${PANEL_PORT:-443}" | nginx_write "$NGINX_CONF_DIR/panel.conf" \
+            || nginx_abort "cannot write $NGINX_CONF_DIR/panel.conf"
+        ln -sfn "$NGINX_CONF_DIR/panel.conf" "$NGINX_SITES_DIR/$NGINX_SITE"
+    elif [ -n "$PANEL_PORT" ]; then
+        render_nginx_ip_conf "$PANEL_PORT" "$PANEL_TLS_CERT" "$PANEL_TLS_KEY" | nginx_write "$NGINX_CONF_DIR/panel.conf" \
+            || nginx_abort "cannot write $NGINX_CONF_DIR/panel.conf"
+        ln -sfn "$NGINX_CONF_DIR/panel.conf" "$NGINX_SITES_DIR/$NGINX_SITE"
+    else
+        rm -f "$NGINX_SITES_DIR/$NGINX_SITE" "$NGINX_CONF_DIR/panel.conf"
+    fi
+    if [ "$XRAY_ENABLED" = "1" ]; then
+        p="$phase"; le_cert_present "$CLIENT_DOMAIN" && p=phase2
+        render_nginx_selfsteal_conf "$CLIENT_DOMAIN" "$p" | nginx_write "$NGINX_CONF_DIR/selfsteal.conf" \
+            || nginx_abort "cannot write $NGINX_CONF_DIR/selfsteal.conf"
+        ln -sfn "$NGINX_CONF_DIR/selfsteal.conf" "$NGINX_SITES_DIR/$NGINX_SELFSTEAL_SITE"
+        mkdir -p "$NGINX_STREAM_DIR" || nginx_abort "cannot create $NGINX_STREAM_DIR"
+        render_nginx_stream_conf | nginx_write "$NGINX_STREAM_CONF" || nginx_abort "cannot write $NGINX_STREAM_CONF"
+        nginx_stream_block_add
+    else
+        nginx_front_remove
+    fi
+    rm -f "$NGINX_SITES_DIR/default"
+}
+
+nginx_front_remove() {
+    rm -f "$NGINX_SITES_DIR/$NGINX_SELFSTEAL_SITE" "$NGINX_CONF_DIR/selfsteal.conf" "$NGINX_STREAM_CONF"
+    nginx_stream_block_remove
+}
+
+# nginx_apply PHASE MESSAGE: render, test, and only then reload — or put
+# every file back and stop with MESSAGE.
+nginx_apply() {
+    nginx_txn_begin
+    nginx_sites_render "$1"
+    cmd nginx -t >/dev/null 2>&1 || nginx_abort "$2"
+    nginx_txn_end
+    cmd systemctl enable nginx >/dev/null 2>&1 || die_op "systemctl enable nginx failed"
+    if ! cmd systemctl is-active --quiet nginx; then
+        cmd systemctl start nginx || die_op "systemctl start nginx failed"
+    else
+        cmd nginx -s reload >/dev/null 2>&1 || true
+    fi
+}
+
+# --- 13c. panel IP:port mode: self-signed TLS (T-124) ------------------
+# No domain, but --panel-port given: the panel stays loopback-only in
+# compose; nginx terminates TLS in front of it with a self-signed
+# certificate (Let's Encrypt does not issue for bare IPs) and proxies
+# to 127.0.0.1:8787. With a panel domain, TLS is Let's Encrypt
+# even when --panel-port is set — this part is skipped.
+#
+# The summary prints the sha256 fingerprint: browsers reject the
+# untrusted certificate once and the operator verifies the fingerprint
+# before proceeding.
+
+PANEL_TLS_DIR="$ROOT_DIR/tls"
+PANEL_TLS_CERT="$PANEL_TLS_DIR/panel.crt"
+PANEL_TLS_KEY="$PANEL_TLS_DIR/panel.key"
+PANEL_TLS_IP=""
+PANEL_TLS_FINGERPRINT=""
+
+panel_self_signed_prepare() {
     log "panel IP:port mode: nginx TLS on port $PANEL_PORT (self-signed)"
     if ! command -v openssl >/dev/null 2>&1; then
         run_apt_get install -y openssl || die_op "apt-get install openssl failed"
@@ -3300,57 +3596,125 @@ panel_port_setup() {
     else
         log "TLS certificate already present under $PANEL_TLS_DIR: keeping it"
     fi
-
-    if ! nginx_present; then
-        run_apt_get install -y nginx || die_op "apt-get install nginx failed"
-    fi
-    mkdir -p "$NGINX_CONF_DIR" || die_op "cannot create nginx conf dir"
-    chmod 0750 "$NGINX_CONF_DIR"
-    render_nginx_ip_conf "$PANEL_PORT" "$PANEL_TLS_CERT" "$PANEL_TLS_KEY" > "$NGINX_CONF_DIR/panel.conf"
-    chmod 0644 "$NGINX_CONF_DIR/panel.conf"
-    ln -sf "$NGINX_CONF_DIR/panel.conf" "$NGINX_SITES_DIR/$NGINX_SITE"
-    rm -f "$NGINX_SITES_DIR/default"
-    cmd nginx -t >/dev/null 2>&1 || die_op "nginx configuration test failed"
-    cmd systemctl enable nginx >/dev/null 2>&1 || die_op "systemctl enable nginx failed"
-    if ! cmd systemctl is-active --quiet nginx; then
-        cmd systemctl start nginx || die_op "systemctl start nginx failed"
-    else
-        cmd nginx -s reload >/dev/null 2>&1 || true
-    fi
-
-    PANEL_TLS_FINGERPRINT="$(cmd openssl x509 -in "$PANEL_TLS_CERT" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')"
-    [ -n "$PANEL_TLS_FINGERPRINT" ] || die_op "cannot compute the certificate fingerprint (openssl x509 -fingerprint)"
-    log "panel IP:port mode: https://$pub_ip:$PANEL_PORT ready (fingerprint $PANEL_TLS_FINGERPRINT)"
 }
 
-panel_port_setup
+panel_self_signed_report() {
+    PANEL_TLS_FINGERPRINT="$(cmd openssl x509 -in "$PANEL_TLS_CERT" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')"
+    [ -n "$PANEL_TLS_FINGERPRINT" ] || die_op "cannot compute the certificate fingerprint (openssl x509 -fingerprint)"
+    log "panel IP:port mode: https://$PANEL_TLS_IP:$PANEL_PORT ready (fingerprint $PANEL_TLS_FINGERPRINT)"
+}
 
-# panel_loopback_setup: with neither mode selected the panel is reachable
-# over the SSH tunnel only, and the nginx site has to go with it. Leaving
-# it behind used to produce a deployment nothing could reach: nginx kept
-# serving a hostname whose ports the firewall had just closed, with a
-# certificate that went on renewing. The certificate files stay (managed
-# data, and reissuing costs a rate limit), only the site is retired.
-panel_loopback_setup() {
-    [ -z "$DOMAIN" ] || return 0
-    [ -z "$PANEL_PORT" ] || return 0
+# le_issue DOMAIN: HTTP-01 through the webroot nginx serves on port 80.
+# --keep-until-expiring makes a rerun a no-op while the certificate is good.
+le_issue() {
+    if ! certbot certonly --webroot -w "$ACME_ROOT" -d "$1" \
+        --non-interactive --agree-tos --register-unsafely-without-email \
+        --keep-until-expiring >/dev/null 2>&1; then
+        die_op "Let's Encrypt issuance failed for $1 (see /var/log/letsencrypt); nothing was published"
+    fi
+}
+
+# nginx_retire: no panel mode and no Xray. With neither the panel is
+# reachable over the SSH tunnel only, and the nginx site has to go with
+# it. Leaving it behind used to produce a deployment nothing could reach:
+# nginx kept serving a hostname whose ports the firewall had just closed,
+# with a certificate that went on renewing. The certificate files stay
+# (managed data, and reissuing costs a rate limit), only the sites and the
+# split are retired.
+nginx_retire() {
     # -L before -e: once panel.conf is gone the link is dangling, and -e
     # follows the link, so -e alone reports "nothing to do" on exactly the
     # leftover this function exists to clear. nginx refuses to start on a
     # broken symlink in sites-enabled, so leaving one is not harmless.
-    [ -L "$NGINX_SITES_DIR/$NGINX_SITE" ] || [ -e "$NGINX_SITES_DIR/$NGINX_SITE" ] \
-        || [ -f "$NGINX_CONF_DIR/panel.conf" ] || return 0
+    local panel=0 front=0
+    if [ -L "$NGINX_SITES_DIR/$NGINX_SITE" ] || [ -e "$NGINX_SITES_DIR/$NGINX_SITE" ] \
+        || [ -f "$NGINX_CONF_DIR/panel.conf" ]; then
+        panel=1
+    fi
+    if [ -L "$NGINX_SITES_DIR/$NGINX_SELFSTEAL_SITE" ] || [ -e "$NGINX_CONF_DIR/selfsteal.conf" ] \
+        || [ -e "$NGINX_STREAM_CONF" ]; then
+        front=1
+    fi
+    [ "$panel" = "1" ] || [ "$front" = "1" ] || return 0
 
-    log "panel returns to loopback: retiring the nginx site (certificates are kept)"
-    rm -f "$NGINX_SITES_DIR/$NGINX_SITE"
-    rm -f "$NGINX_CONF_DIR/panel.conf"
-    if command -v nginx >/dev/null 2>&1 && cmd nginx -t >/dev/null 2>&1; then
+    [ "$panel" = "0" ] || log "panel returns to loopback: retiring the nginx site (certificates are kept)"
+    [ "$front" = "0" ] || log "xray off: TCP 443 is no longer split, the Reality site is retired"
+    if ! command -v nginx >/dev/null 2>&1; then
+        rm -f "$NGINX_SITES_DIR/$NGINX_SITE" "$NGINX_CONF_DIR/panel.conf"
+        nginx_front_remove
+        return 0
+    fi
+    nginx_txn_begin
+    rm -f "$NGINX_SITES_DIR/$NGINX_SITE" "$NGINX_CONF_DIR/panel.conf"
+    nginx_front_remove
+    if cmd nginx -t >/dev/null 2>&1; then
+        nginx_txn_end
         cmd systemctl reload nginx >/dev/null 2>&1 \
             || log "WARNING: nginx reload failed after retiring the panel site"
+    else
+        nginx_txn_rollback
+        log "WARNING: nginx refused the configuration without the panel site; the previous one was put back"
     fi
 }
 
-panel_loopback_setup
+nginx_setup() {
+    if [ -z "$DOMAIN" ] && [ -z "$PANEL_PORT" ] && [ "$XRAY_ENABLED" != "1" ]; then
+        nginx_retire
+        return 0
+    fi
+
+    local tls_port="${PANEL_PORT:-443}" panel_url="" le_domains="" d
+    if [ -n "$DOMAIN" ]; then
+        panel_url="https://${DOMAIN}"
+        [ "$tls_port" = "443" ] || panel_url="https://${DOMAIN}:${tls_port}"
+        log "panel domain $DOMAIN: DNS pre-flight before any certificate attempt"
+        dns_preflight "$DOMAIN"
+        le_domains="$DOMAIN"
+    elif [ -n "$PANEL_PORT" ]; then
+        panel_self_signed_prepare
+    fi
+    # The VPN domain's DNS was pre-flighted with the client domain (10d).
+    [ "$XRAY_ENABLED" != "1" ] || le_domains="$le_domains $CLIENT_DOMAIN"
+
+    if ! nginx_present; then
+        run_apt_get install -y nginx || die_op "apt-get install nginx failed"
+    fi
+    [ "$XRAY_ENABLED" != "1" ] || nginx_stream_module_ensure
+    mkdir -p "$NGINX_CONF_DIR" || die_op "cannot create nginx conf dir"
+    chmod 0750 "$NGINX_CONF_DIR"
+    [ "$XRAY_ENABLED" != "1" ] || selfsteal_root_prepare
+
+    if [ -n "$le_domains" ]; then
+        mkdir -p "$ACME_ROOT" || die_op "cannot create $ACME_ROOT"
+        nginx_apply phase1 "nginx configuration test failed"
+        if ! command -v certbot >/dev/null 2>&1; then
+            run_apt_get install -y certbot || die_op "apt-get install certbot failed"
+        fi
+        for d in $le_domains; do
+            le_issue "$d"
+        done
+        cmd systemctl enable certbot.timer >/dev/null 2>&1 || true
+        cmd systemctl start certbot.timer >/dev/null 2>&1 || true
+        nginx_apply phase2 "nginx TLS configuration test failed"
+    else
+        nginx_apply phase2 "nginx configuration test failed"
+    fi
+
+    if [ -n "$DOMAIN" ]; then
+        log "panel domain: $panel_url ready (certbot.timer renews automatically)"
+    elif [ -n "$PANEL_PORT" ]; then
+        panel_self_signed_report
+    fi
+    if [ "$XRAY_ENABLED" = "1" ]; then
+        if panel_behind_stream; then
+            log "xray: TCP 443 split by name: $DOMAIN -> the panel, everything else -> Xray; Reality shows https://$CLIENT_DOMAIN"
+        else
+            log "xray: TCP 443 split by name: everything -> Xray; Reality shows https://$CLIENT_DOMAIN"
+        fi
+    fi
+}
+
+nginx_setup
 
 # --- 14. minimal post-install self-check -------------------------------
 # Reads-only: no application state is mutated. Awaiting `panel server
