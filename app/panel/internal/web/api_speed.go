@@ -99,6 +99,10 @@ func (s *Server) apiClientSpeed(w http.ResponseWriter, r *http.Request) {
 
 	to := time.Now().UTC().Truncate(time.Second)
 	from := to.Add(-span)
+	if r.URL.Query().Get("protocol") == speedProtocolVLESS {
+		s.vlessSpeed(w, r, c, window, from, to, columns)
+		return
+	}
 	series, err := status.ReadSpeedSeries(
 		filepath.Join(s.statusDir(), "speed.log"),
 		status.SpeedKey(c.PublicKey), from, to, columns,
@@ -106,6 +110,44 @@ func (s *Server) apiClientSpeed(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		internalFailure(w, r, s, "api client speed", err)
 		return
+	}
+	writeJSON(w, http.StatusOK, speedSeriesJSON(window, series))
+}
+
+// speedProtocolVLESS — ?protocol=vless: график вкладки VLESS
+// (amnezia-vpn-server-14y0.9). Без параметра — AWG, как было.
+const speedProtocolVLESS = "vless"
+
+// vlessSpeedLog — журнал скорости VLESS. Его пишет панель, опрашивая Xray
+// (см. appendVLESSSpeed), поэтому он лежит в её каталоге данных: status/
+// у панели только для чтения, его пишет контейнер awg.
+func (s *Server) vlessSpeedLog() string {
+	return filepath.Join(s.dataDir(), "vless-speed.log")
+}
+
+// vlessSpeed отдаёт ряды VLESS тем же видом, что и AWG, с двумя отличиями.
+//
+// Журнал ключуется номером клиента (c<id>, как email в Xray), а номер
+// удалённого клиента достаётся новому. Поэтому всё, что целиком было до
+// создания клиента, — разрыв: чужая история на графике хуже пустоты.
+//
+// И «на связи» не отдаётся вовсе. У AWG его видно по keepalive, у VLESS
+// (XHTTP) keepalive нет: простаивающий клиент молчит так же, как
+// отвалившийся, и тень «нет связи» легла бы на любой простой.
+func (s *Server) vlessSpeed(w http.ResponseWriter, r *http.Request, c *db.ClientRecord, window string, from, to time.Time, columns int) {
+	series, err := status.ReadSpeedSeries(s.vlessSpeedLog(), vlessSpeedKey(c.ID), from, to, columns)
+	if err != nil {
+		internalFailure(w, r, s, "api client vless speed", err)
+		return
+	}
+	created, cerr := time.Parse(time.RFC3339, c.CreatedAt)
+	width := to.Sub(from) / time.Duration(len(series.Columns))
+	for i := range series.Columns {
+		col := &series.Columns[i]
+		col.HasLiveness, col.Online = false, false
+		if cerr == nil && !col.AtUTC.Add(width).After(created) {
+			col.HasData = false
+		}
 	}
 	writeJSON(w, http.StatusOK, speedSeriesJSON(window, series))
 }
