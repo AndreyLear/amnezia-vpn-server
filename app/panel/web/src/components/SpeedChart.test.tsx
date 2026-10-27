@@ -143,7 +143,7 @@ describe("график скорости", () => {
     fetchSpeed.mockResolvedValue(series({ down_min_bps: [1], down_max_bps: [1], up_min_bps: [0], up_max_bps: [0] }));
     render(<SpeedChart clientId={7} />);
 
-    await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "10min", 120));
+    await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "10min", 120, "awg"));
   });
 
   // Десять минут — «тормозит прямо сейчас», сутки — «найди вчерашний вечер».
@@ -152,9 +152,9 @@ describe("график скорости", () => {
     fetchSpeed.mockResolvedValue(series({ down_min_bps: [1], down_max_bps: [1], up_min_bps: [0], up_max_bps: [0] }));
     render(<SpeedChart clientId={7} />);
 
-    await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "10min", expect.any(Number)));
+    await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "10min", expect.any(Number), "awg"));
     await user.click(screen.getByRole("button", { name: "Сутки" }));
-    await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "day", expect.any(Number)));
+    await waitFor(() => expect(fetchSpeed).toHaveBeenCalledWith(7, "day", expect.any(Number), "awg"));
     await user.click(screen.getByRole("button", { name: "10 минут" }));
     await waitFor(() =>
       expect(fetchSpeed.mock.calls.at(-1)?.[1]).toBe("10min"),

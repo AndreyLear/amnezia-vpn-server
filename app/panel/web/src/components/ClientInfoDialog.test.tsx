@@ -150,10 +150,10 @@ describe("ClientInfoDialog", () => {
     ).toBeNull();
   });
 
-  // amnezia-vpn-server-14y0.8: «Удалить» действует на клиента целиком и
-  // стоит в общем списке над вкладками — последней строкой, с отступом
-  // больше обычного.
-  it("puts Удалить as the last row of the common dl above the tabs", () => {
+  // amnezia-vpn-server-14y0.9: «Удалить» — в самом низу окна, под
+  // вкладками, вне общего блока; на телефоне — во всю ширину, как нижние
+  // кнопки прочих окон.
+  it("puts Удалить at the very bottom, below the tabs and outside the common block", () => {
     render(
       <ClientInfoDialog
         client={client}
@@ -167,28 +167,18 @@ describe("ClientInfoDialog", () => {
 
     const remove = screen.getByRole("button", { name: "Удалить" });
     const common = screen.getByTestId("client-common");
-    expect(common.tagName).toBe("DL");
-    expect(common).toHaveClass("divide-y", "divide-border");
-    expect(common).toContainElement(remove);
-
+    expect(common).not.toContainElement(remove);
+    const commonList = common.querySelector("dl");
+    expect(commonList).toHaveClass("divide-y", "divide-border");
     const statusRow = screen.getByText("Статус").closest("div.flex");
-    const deleteRow = remove.closest("div.flex");
-    expect(statusRow?.parentElement).toBe(common);
-    expect(deleteRow?.parentElement).toBe(common);
-    expect(statusRow!.nextElementSibling).toBe(deleteRow);
-    expect(common.lastElementChild).toBe(deleteRow);
+    expect(statusRow?.parentElement).toBe(commonList);
+    expect(commonList!.lastElementChild).toBe(statusRow);
 
-    expect(deleteRow).toHaveClass("pt-3");
-    expect(statusRow).toHaveClass("py-2");
-    expect(statusRow).not.toHaveClass("pt-3");
-
-    const tablist = screen.getByRole("tablist", { name: "Протокол" });
-    expect(common.compareDocumentPosition(tablist) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+    const panel = screen.getByRole("tabpanel");
+    expect(panel.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-
-    expect(remove).not.toHaveClass("max-sm:h-12");
-    expect(remove).not.toHaveClass("max-sm:w-full");
+    expect(remove).toHaveClass("max-sm:h-12", "max-sm:w-full");
   });
 
   // Владелец: за графиком карточку и открывают, когда разбирают жалобу. Из
@@ -199,14 +189,17 @@ describe("ClientInfoDialog", () => {
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} />);
 
     const panel = screen.getByRole("tabpanel");
-    const dl = panel.querySelector("dl");
     const speed = screen.getByText("Скорость");
     expect(panel).toContainElement(speed);
-    expect(dl).not.toContainElement(speed);
 
-    const chart = speed.closest("div.grid");
+    // С amnezia-vpn-server-14y0.9 график — свой первый блок вкладки, свойства
+    // — в блоках после него.
+    const chart = speed.closest('[data-slot="info-block"]');
     expect(chart).not.toBeNull();
-    expect(chart!.compareDocumentPosition(dl!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+    expect(panel.querySelector('[data-slot="info-block"]')).toBe(chart);
+    const ip = screen.getByText("IP");
+    expect(chart).not.toContainElement(ip);
+    expect(chart!.compareDocumentPosition(ip) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
     const tablist = screen.getByRole("tablist", { name: "Протокол" });
@@ -231,7 +224,7 @@ describe("ClientInfoDialog", () => {
       "max-sm:rounded-b-none",
       "h-auto",
       "max-h-[calc(100dvh-2rem)]",
-      "sm:max-w-md",
+      "sm:max-w-2xl",
     );
     // Overflow and padding now live on the scrolling body wrapper, not the
     // outer content box — that box no longer scrolls itself, so the header
@@ -307,7 +300,6 @@ describe("ClientInfoDialog", () => {
 
     const remove = screen.getByRole("button", { name: "Удалить" });
     const dl = screen.getByTestId("client-common");
-    expect(dl).toContainElement(remove);
     expect(ipRow).not.toContainElement(remove);
     expect(remove.parentElement).not.toHaveClass("flex-wrap", "gap-2");
     expect(remove.closest("div.flex-wrap.gap-2")).toBeNull();
@@ -316,8 +308,6 @@ describe("ClientInfoDialog", () => {
     expect(within(dl).queryByRole("button", { name: "QR" })).toBeNull();
     expect(remove).toHaveAttribute("data-variant", "destructive");
     expect(remove).toHaveAttribute("data-size", "default");
-    expect(remove).not.toHaveClass("max-sm:h-12");
-    expect(remove).not.toHaveClass("max-sm:w-full");
 
     const toggle = screen.getByRole("button", { name: "Отключить" });
     expect(remove.closest("div.flex")).not.toContainElement(toggle);

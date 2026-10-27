@@ -231,8 +231,12 @@ export function fetchSpeed(
   id: number,
   window: "10min" | "day",
   columns: number,
+  // VLESS — свой журнал по счётчикам Xray (amnezia-vpn-server-14y0.9);
+  // признака «на связи» в нём нет, online приходит из одних null.
+  protocol: "awg" | "vless" = "awg",
 ): Promise<SpeedSeries> {
-  return api<SpeedSeries>(`/api/clients/${id}/speed?window=${window}&columns=${columns}`);
+  const vless = protocol === "vless" ? "&protocol=vless" : "";
+  return api<SpeedSeries>(`/api/clients/${id}/speed?window=${window}&columns=${columns}${vless}`);
 }
 
 /**

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { fetchSpeed, type SpeedSeries } from "@/lib/api";
 import { formatDateShort } from "@/lib/format";
+import type { Protocol } from "@/lib/protocol";
 
 /**
  * График скорости клиента (amnezia-vpn-server-tmjw, -0ypv).
@@ -38,7 +39,15 @@ const HEIGHT = 120;
 /** Такт записи истории; в коротком окне он и есть шаг обновления. */
 const REFRESH_MS = 5000;
 
-export function SpeedChart({ clientId }: { clientId: number }) {
+export function SpeedChart({
+  clientId,
+  protocol = "awg",
+}: {
+  clientId: number;
+  // Чей журнал рисовать: у VLESS свой, по счётчикам Xray
+  // (amnezia-vpn-server-14y0.9).
+  protocol?: Protocol;
+}) {
   const [range, setRange] = useState<Range>("10min");
   // Единицы стоят в заголовке, а не у засечек: «15.8 Мбит/с» в колонке оси
   // не помещается и ломается на две строки посреди слова.
@@ -53,7 +62,7 @@ export function SpeedChart({ clientId }: { clientId: number }) {
   const load = useCallback(
     async (r: Range, alive: () => boolean) => {
       try {
-        const data = await fetchSpeed(clientId, r, COLUMNS[r]);
+        const data = await fetchSpeed(clientId, r, COLUMNS[r], protocol);
         if (!alive()) return;
         if (!data || !Array.isArray(data.down_max_bps)) {
           setFailed(true);
@@ -68,7 +77,7 @@ export function SpeedChart({ clientId }: { clientId: number }) {
         if (alive()) setLoading(false);
       }
     },
-    [clientId],
+    [clientId, protocol],
   );
 
   useEffect(() => {
