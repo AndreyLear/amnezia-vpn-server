@@ -192,11 +192,11 @@ describe("ClientInfoDialog", () => {
     const speed = screen.getByText("Скорость");
     expect(panel).toContainElement(speed);
 
-    // С amnezia-vpn-server-14y0.9 график — свой первый блок вкладки, свойства
-    // — в блоках после него.
-    const chart = speed.closest('[data-slot="info-block"]');
+    // С amnezia-vpn-server-14y0.9 график — первый раздел вкладки, свойства
+    // — в разделах после него, всё в одной карточке с вкладками.
+    const chart = speed.closest('[data-slot="info-section"]');
     expect(chart).not.toBeNull();
-    expect(panel.querySelector('[data-slot="info-block"]')).toBe(chart);
+    expect(panel.querySelector('[data-slot="info-section"]')).toBe(chart);
     const ip = screen.getByText("IP");
     expect(chart).not.toContainElement(ip);
     expect(chart!.compareDocumentPosition(ip) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
