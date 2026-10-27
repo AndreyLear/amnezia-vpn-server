@@ -228,7 +228,7 @@ func TestXraySettingsRoundTrip(t *testing.T) {
 	}
 	want := XraySettings{
 		PrivateKey: "priv", PublicKey: "pub", ShortID: "6ba85179e30d4fc2", Path: "/a1b2c3",
-		Target: XrayDefaultTarget, ServerName: XrayDefaultServerName, LinkPort: 443,
+		Target: XrayDefaultTarget, ServerName: "vpn.example.com", LinkPort: 443,
 	}
 	if err := SaveXraySettings(handle, want); err != nil {
 		t.Fatal(err)
@@ -256,5 +256,63 @@ func TestXraySettingsRoundTrip(t *testing.T) {
 		if err := SaveXraySettings(handle, bad); err == nil {
 			t.Errorf("%s: принято", name)
 		}
+	}
+}
+
+// Служебные учётки (вход «ruentry») переносятся импортом, заменяют прежние
+// целиком и не делят UUID с клиентами.
+func TestImportVLESSServiceUsers(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if err := Migrate(handle); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := CreateClient(handle, "10.8.0.1/24", NewClient{Name: "a", PrivateKey: testPriv, PublicKey: testPub})
+	settings := XraySettings{
+		PrivateKey: "priv", PublicKey: "pub", ShortID: "ab", Path: "/x",
+		Target: XrayDefaultTarget, ServerName: "vpn.example.com", LinkPort: 443,
+	}
+	const ruentry = "5a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+	in := VLESSImport{
+		Settings:     settings,
+		Clients:      map[int64]string{a.ID: "0f8b6a3e-7f1c-4b8e-9d4a-2c5e6f7a8b9c"},
+		ServiceUsers: []VLESSServiceUser{{Email: "ruentry", UUID: ruentry}},
+	}
+	if _, _, err := ImportVLESS(handle, in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := XrayServiceUsers(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != (VLESSServiceUser{"ruentry", ruentry}) {
+		t.Fatalf("служебные учётки: %+v", got)
+	}
+	if err := SetClientVLESSUUID(handle, a.ID, ruentry); !errors.Is(err, ErrVLESSUUIDTaken) {
+		t.Fatalf("клиент получил UUID служебной учётки: %v", err)
+	}
+
+	for name, bad := range map[string][]VLESSServiceUser{
+		"email клиента":  {{Email: "c7", UUID: ruentry}},
+		"UUID клиента":   {{Email: "ruentry", UUID: "0f8b6a3e-7f1c-4b8e-9d4a-2c5e6f7a8b9c"}},
+		"битый UUID":     {{Email: "ruentry", UUID: "nope"}},
+		"дважды":         {{Email: "x", UUID: ruentry}, {Email: "x", UUID: "6a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d"}},
+		"пробел в email": {{Email: "ru entry", UUID: ruentry}},
+	} {
+		in.ServiceUsers = bad
+		if _, _, err := ImportVLESS(handle, in); err == nil {
+			t.Errorf("%s: принято", name)
+		}
+	}
+	got, _ = XrayServiceUsers(handle)
+	if len(got) != 1 || got[0].Email != "ruentry" {
+		t.Fatalf("отвергнутый импорт изменил служебные учётки: %+v", got)
+	}
+
+	in.ServiceUsers = nil
+	if _, _, err := ImportVLESS(handle, in); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = XrayServiceUsers(handle); len(got) != 0 {
+		t.Fatalf("импорт без служебных учёток оставил прежние: %+v", got)
 	}
 }

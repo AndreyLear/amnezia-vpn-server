@@ -21,12 +21,16 @@ var xrayFixture = db.XraySettings{
 	ShortID:     "6ba85179e30d4fc2",
 	Path:        "/f3a9c1d27e",
 	Target:      db.XrayDefaultTarget,
-	ServerName:  db.XrayDefaultServerName,
+	ServerName:  "vpn.example.com",
 	LinkAddress: "vpn.example.com",
 	LinkPort:    443,
 }
 
 const xrayClientUUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
+// Служебная учётка российского входа: без неё после восстановления вход
+// перестал бы пускать всех клиентов разом.
+var xrayServiceUser = db.VLESSServiceUser{Email: "ruentry", UUID: "5a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d"}
 
 func applyAndOpen(t *testing.T, c *restoreCtx, archive string) *sql.DB {
 	t.Helper()
@@ -66,10 +70,11 @@ func TestBackupRestoreCarriesVLESS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetClientVLESSUUID(src, client.ID, xrayClientUUID); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SaveXraySettings(src, xrayFixture); err != nil {
+	if _, _, err := db.ImportVLESS(src, db.VLESSImport{
+		Settings:     xrayFixture,
+		Clients:      map[int64]string{client.ID: xrayClientUUID},
+		ServiceUsers: []db.VLESSServiceUser{xrayServiceUser},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	archive, err := Create(src, filepath.Join(dir, "backups"), func() time.Time { return fakeNow })
@@ -97,6 +102,10 @@ func TestBackupRestoreCarriesVLESS(t *testing.T) {
 	}
 	if restored.Name != "andrey" || restored.VLESSUUID != xrayClientUUID {
 		t.Fatalf("клиент после восстановления: %+v", restored)
+	}
+	service, err := db.XrayServiceUsers(h)
+	if err != nil || len(service) != 1 || service[0] != xrayServiceUser {
+		t.Fatalf("служебная учётка входа после восстановления: %+v, %v", service, err)
 	}
 }
 

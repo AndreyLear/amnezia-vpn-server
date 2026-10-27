@@ -69,7 +69,15 @@ func (a *app) cmdXrayInit(args []string) int {
 	created := false
 	switch {
 	case errors.Is(err, db.ErrXrayNotConfigured):
-		if s, err = xray.NewServerSettings(); err != nil {
+		// Reality по умолчанию — self-steal на собственном домене сервера
+		// (тот, что в endpoint): иначе нужен явный --server-name.
+		name, ok := parsed.flags["server-name"]
+		if !ok {
+			if name, err = xray.DefaultServerName(handle); err != nil {
+				return a.fatal(opXrayInit, err)
+			}
+		}
+		if s, err = xray.NewServerSettings(name); err != nil {
 			return a.fatal(opXrayInit, err)
 		}
 		created = true
@@ -118,7 +126,16 @@ func (a *app) cmdXrayImport(args []string) int {
 	if err := a.regenerate(handle); err != nil {
 		return a.fatal(opXrayImport, fmt.Errorf("generate config: %w", err))
 	}
+	for _, w := range res.Warnings {
+		fmt.Fprintf(a.stderr, "panel %s: warning: %s\n", opXrayImport, w)
+	}
 	msg := fmt.Sprintf("imported reality keys and %d clients", res.Imported)
+	if res.ServiceUsers > 0 {
+		msg += fmt.Sprintf(", %d service users", res.ServiceUsers)
+	}
+	if res.Deleted > 0 {
+		msg += fmt.Sprintf("; %d entries marked deleted, skipped", res.Deleted)
+	}
 	if len(res.Missing) > 0 {
 		ids := make([]string, len(res.Missing))
 		for i, id := range res.Missing {

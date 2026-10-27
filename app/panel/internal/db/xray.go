@@ -39,12 +39,27 @@ const xrayTable = `CREATE TABLE IF NOT EXISTS xray (
 		updated_at_utc TEXT NOT NULL
 	);`
 
-// Значения маскировки по умолчанию: так поднят ручной Xray на боевом
-// (amnezia-vpn-server-adaw), и выданные ссылки несут именно это имя в sni.
+// xrayServiceUsersTable — служебные учётки VLESS, не принадлежащие ни
+// одному клиенту панели. Первая такая — «ruentry»: российский вход
+// (62.109.1.44) ходит на этот сервер как обычный VLESS-клиент и пускает
+// через себя всех клиентов панели (решение владельца 27.10.2026). Отключать
+// её вместе с кем-то из клиентов нельзя, поэтому она всегда включена и
+// живёт отдельно от clients. Переносится импортом ручной настройки
+// (extra_clients в settings.json), как и всё остальное — в бэкапе.
+const xrayServiceUsersTable = `CREATE TABLE IF NOT EXISTS xray_service_users (
+		email TEXT PRIMARY KEY,
+		uuid TEXT NOT NULL UNIQUE
+	);`
+
+// Маскировка Reality по умолчанию — self-steal: serverName — собственный
+// домен сервера, а чужие подключения уходят на локальный nginx с настоящим
+// сертификатом этого домена. Так переведён боевой 27.10.2026: проба без
+// ключа видит обычный сайт на том же имени, что и в SNI клиентов, вместо
+// подставного www.microsoft.com, у которого чужой адрес. Имени по
+// умолчанию нет — это домен конкретного сервера.
 const (
-	XrayDefaultServerName = "www.microsoft.com"
-	XrayDefaultTarget     = "www.microsoft.com:443"
-	XrayDefaultLinkPort   = 443
+	XrayDefaultTarget   = "127.0.0.1:4433"
+	XrayDefaultLinkPort = 443
 )
 
 // ErrXrayNotConfigured — строки xray нет: ключей Reality на сервере ещё не
@@ -145,24 +160,83 @@ func saveXraySettings(handle execer, s XraySettings) error {
 	return nil
 }
 
-// ImportVLESS записывает настройки Xray и UUID клиентов одной транзакцией:
-// перенос ручной настройки либо проходит целиком, либо не меняет ничего —
-// половина выданных ссылок, переставшая работать, хуже, чем ни одной
-// перенесённой. uuids — client_id → UUID; клиенты, которых в базе нет,
+// VLESSServiceUser — служебная учётка VLESS (см. xrayServiceUsersTable).
+type VLESSServiceUser struct {
+	Email string
+	UUID  string
+}
+
+// Email служебной учётки — то, по чему API Xray её снимает и добавляет,
+// и то, что видно в журнале доступа. Вид «c<число>» занят клиентами панели.
+var (
+	serviceEmailPattern = regexp.MustCompile(`^[A-Za-z0-9._@-]{1,64}$`)
+	clientEmailPattern  = regexp.MustCompile(`^c[0-9]+$`)
+)
+
+// XrayServiceUsers — служебные учётки, по email.
+func XrayServiceUsers(handle Querier) ([]VLESSServiceUser, error) {
+	rows, err := handle.Query(`SELECT email, uuid FROM xray_service_users ORDER BY email`)
+	if err != nil {
+		return nil, fmt.Errorf("db: query xray service users: %w", err)
+	}
+	defer rows.Close()
+	var out []VLESSServiceUser
+	for rows.Next() {
+		var u VLESSServiceUser
+		if err := rows.Scan(&u.Email, &u.UUID); err != nil {
+			return nil, fmt.Errorf("db: scan xray service user: %w", err)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// VLESSImport — перенос ручной настройки Xray: настройки сервера, UUID
+// клиентов (client_id → UUID) и служебные учётки, которые заменяют
+// прежние целиком.
+type VLESSImport struct {
+	Settings     XraySettings
+	Clients      map[int64]string
+	ServiceUsers []VLESSServiceUser
+}
+
+// ImportVLESS записывает перенос одной транзакцией: он либо проходит
+// целиком, либо не меняет ничего — половина выданных ссылок, переставшая
+// работать, хуже, чем ни одной перенесённой. Клиенты, которых в базе нет,
 // пропускаются и возвращаются в missing (amnezia-vpn-server-14y0.1).
-func ImportVLESS(handle *sql.DB, s XraySettings, uuids map[int64]string) (imported int, missing []int64, err error) {
-	if err := validateXraySettings(s); err != nil {
+func ImportVLESS(handle *sql.DB, in VLESSImport) (imported int, missing []int64, err error) {
+	if err := validateXraySettings(in.Settings); err != nil {
 		return 0, nil, err
 	}
-	seen := make(map[string]int64, len(uuids))
-	for id, u := range uuids {
+	seen := make(map[string]string, len(in.Clients)+len(in.ServiceUsers))
+	for id, u := range in.Clients {
 		if !ValidVLESSUUID(u) {
 			return 0, nil, fmt.Errorf("db: client %d: invalid VLESS UUID", id)
 		}
+		who := fmt.Sprintf("client %d", id)
 		if other, dup := seen[u]; dup {
-			return 0, nil, fmt.Errorf("db: clients %d and %d share one VLESS UUID", other, id)
+			return 0, nil, fmt.Errorf("db: %s and %s share one VLESS UUID", other, who)
 		}
-		seen[u] = id
+		seen[u] = who
+	}
+	emails := map[string]bool{}
+	for _, su := range in.ServiceUsers {
+		switch {
+		case !serviceEmailPattern.MatchString(su.Email):
+			return 0, nil, fmt.Errorf("db: service user email %q: only letters, digits and ._@- allowed", su.Email)
+		case clientEmailPattern.MatchString(su.Email):
+			return 0, nil, fmt.Errorf("db: service user email %q looks like a panel client's", su.Email)
+		case emails[su.Email]:
+			return 0, nil, fmt.Errorf("db: service user %q listed twice", su.Email)
+		case !ValidVLESSUUID(su.UUID):
+			return 0, nil, fmt.Errorf("db: service user %q: invalid VLESS UUID", su.Email)
+		}
+		emails[su.Email] = true
+		who := "service user " + su.Email
+		if other, dup := seen[su.UUID]; dup {
+			return 0, nil, fmt.Errorf("db: %s and %s share one VLESS UUID", other, who)
+		}
+		seen[su.UUID] = who
 	}
 	tx, err := handle.Begin()
 	if err != nil {
@@ -171,7 +245,7 @@ func ImportVLESS(handle *sql.DB, s XraySettings, uuids map[int64]string) (import
 	defer tx.Rollback()
 
 	var present []int64
-	for id := range uuids {
+	for id := range in.Clients {
 		var n int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM clients WHERE id = ?`, id).Scan(&n); err != nil {
 			return 0, nil, fmt.Errorf("db: check client %d: %w", id, err)
@@ -191,7 +265,7 @@ func ImportVLESS(handle *sql.DB, s XraySettings, uuids map[int64]string) (import
 	}
 	now := stamp()
 	for _, id := range present {
-		if _, err := tx.Exec(`UPDATE clients SET vless_uuid = ?, updated_at = ? WHERE id = ?`, uuids[id], now, id); err != nil {
+		if _, err := tx.Exec(`UPDATE clients SET vless_uuid = ?, updated_at = ? WHERE id = ?`, in.Clients[id], now, id); err != nil {
 			var se *sqlite.Error
 			if errors.As(err, &se) && strings.Contains(err.Error(), "vless_uuid") {
 				return 0, nil, fmt.Errorf("client %d: %w", id, ErrVLESSUUIDTaken)
@@ -199,7 +273,22 @@ func ImportVLESS(handle *sql.DB, s XraySettings, uuids map[int64]string) (import
 			return 0, nil, fmt.Errorf("db: assign vless uuid to client %d: %w", id, err)
 		}
 	}
-	if err := saveXraySettings(tx, s); err != nil {
+	if _, err := tx.Exec(`DELETE FROM xray_service_users`); err != nil {
+		return 0, nil, fmt.Errorf("db: clear xray service users: %w", err)
+	}
+	for _, su := range in.ServiceUsers {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM clients WHERE vless_uuid = ?`, su.UUID).Scan(&n); err != nil {
+			return 0, nil, fmt.Errorf("db: check service user uuid: %w", err)
+		}
+		if n > 0 {
+			return 0, nil, fmt.Errorf("service user %s: %w", su.Email, ErrVLESSUUIDTaken)
+		}
+		if _, err := tx.Exec(`INSERT INTO xray_service_users (email, uuid) VALUES (?, ?)`, su.Email, su.UUID); err != nil {
+			return 0, nil, fmt.Errorf("db: insert xray service user: %w", err)
+		}
+	}
+	if err := saveXraySettings(tx, in.Settings); err != nil {
 		return 0, nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -315,6 +404,12 @@ func SetClientVLESSUUID(handle *sql.DB, id int64, uuid string) error {
 	}
 	var other int
 	if err := handle.QueryRow(`SELECT COUNT(*) FROM clients WHERE vless_uuid = ? AND id != ?`, uuid, id).Scan(&other); err != nil {
+		return fmt.Errorf("db: check vless uuid: %w", err)
+	}
+	if other > 0 {
+		return ErrVLESSUUIDTaken
+	}
+	if err := handle.QueryRow(`SELECT COUNT(*) FROM xray_service_users WHERE uuid = ?`, uuid).Scan(&other); err != nil {
 		return fmt.Errorf("db: check vless uuid: %w", err)
 	}
 	if other > 0 {

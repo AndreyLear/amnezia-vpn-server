@@ -24,6 +24,13 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 )
 
+// Адрес входа VLESS: только петля, снаружи на него приходит nginx stream,
+// деля TCP 443 по SNI, — как на боевом (amnezia-vpn-server-adaw).
+const (
+	inboundListen = "127.0.0.1"
+	inboundPort   = 4432
+)
+
 // realityEncoding — как у `xray x25519` по умолчанию. Ключ в другом
 // алфавите Xray не прочтёт, а ссылка разойдётся с выданной.
 var realityEncoding = base64.RawURLEncoding
@@ -71,8 +78,13 @@ func randomHex(n int) (string, error) {
 
 // NewServerSettings — свежие настройки Xray: новые ключи Reality, shortId
 // на 8 байт (наибольший, что принимает Xray), случайный путь XHTTP и
-// маскировка по умолчанию. Адрес для ссылок пуст — берётся из endpoint.
-func NewServerSettings() (*db.XraySettings, error) {
+// маскировка self-steal: serverName — домен этого сервера, чужие
+// подключения — на локальный nginx с его настоящим сертификатом. Адрес для
+// ссылок пуст — берётся из endpoint.
+func NewServerSettings(serverName string) (*db.XraySettings, error) {
+	if serverName == "" {
+		return nil, ErrNoServerName
+	}
 	priv, pub, err := GenerateRealityKeys()
 	if err != nil {
 		return nil, err
@@ -91,9 +103,32 @@ func NewServerSettings() (*db.XraySettings, error) {
 		ShortID:    sid,
 		Path:       "/" + path,
 		Target:     db.XrayDefaultTarget,
-		ServerName: db.XrayDefaultServerName,
+		ServerName: serverName,
 		LinkPort:   db.XrayDefaultLinkPort,
 	}, nil
+}
+
+// ErrNoServerName — не из чего взять имя для Reality: endpoint сервера —
+// IP-адрес (или не задан), а self-steal нужен домен с настоящим
+// сертификатом.
+var ErrNoServerName = errors.New("xray: no domain for reality: the server endpoint is not a domain name; pass the server's domain explicitly")
+
+// DefaultServerName — домен сервера для self-steal: хост endpoint, если
+// это имя, а не IP-адрес. CLIENT_DOMAIN при установке попадает именно в
+// endpoint, и на этом же имени nginx держит сертификат Let's Encrypt.
+func DefaultServerName(handle db.Querier) (string, error) {
+	ep, ok, err := db.GetSetting(handle, "endpoint")
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", ErrNoServerName
+	}
+	host, _, err := net.SplitHostPort(ep)
+	if err != nil || host == "" || net.ParseIP(host) != nil {
+		return "", ErrNoServerName
+	}
+	return host, nil
 }
 
 // escape — процентное кодирование всего, кроме незарезервированных
@@ -138,7 +173,7 @@ func Link(s *db.XraySettings, address string, c db.VLESSClient) string {
 	b.WriteString("&sid=")
 	b.WriteString(escape(s.ShortID))
 	b.WriteByte('#')
-	b.WriteString(escape("VPN " + c.Name))
+	b.WriteString(escape(linkNamePrefix + c.Name))
 	return b.String()
 }
 

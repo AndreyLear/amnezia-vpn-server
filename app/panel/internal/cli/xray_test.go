@@ -26,7 +26,7 @@ func TestXrayImportKeepsIssuedLinks(t *testing.T) {
 	}
 	link := c.mustRun("xray", "link", "1")
 	want := "vless://3f2504e0-4f89-41d3-9a0c-0305e82c3301@vpn.example.com:443" +
-		"?type=xhttp&path=%2Ff3a9c1d27e&mode=auto&security=reality&sni=www.microsoft.com" +
+		"?type=xhttp&path=%2Ff3a9c1d27e&mode=auto&security=reality&sni=vpn.example.com" +
 		"&fp=chrome&pbk=u1D_noKldM-_gg6X9g-5wUPsdBXPUU-M_Zjv9Z4FlhQ&sid=6ba85179e30d4fc2" +
 		"#VPN%20andrey\n"
 	if link != want {
@@ -84,5 +84,25 @@ func TestXrayUsage(t *testing.T) {
 		if code, _, _ := c.run(args...); code != 2 {
 			t.Errorf("panel %v: exit %d, ожидался 2", args, code)
 		}
+	}
+}
+
+// Self-steal требует домена: на сервере с IP в endpoint `xray init` без
+// --server-name отказывается, а не подставляет чужое имя.
+func TestXrayInitNeedsDomain(t *testing.T) {
+	c := newCtx(t)
+	c.mustRun("server", "init", testServerCIDR, "51820", "--endpoint", "203.0.113.7:51820")
+	if code, _, errb := c.run("xray", "init"); code != 1 || !strings.Contains(errb, "domain") {
+		t.Fatalf("xray init без домена: exit %d, %q", code, errb)
+	}
+	c.mustRun("xray", "init", "--server-name", "vpn.example.com")
+	h := c.openDB()
+	defer h.Close()
+	s, err := db.XraySettingsRow(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ServerName != "vpn.example.com" || s.Target != "127.0.0.1:4433" {
+		t.Fatalf("настройки: %+v", s)
 	}
 }
