@@ -144,27 +144,43 @@ func (a *API) RemoveUser(ctx context.Context, tag, email string) error {
 }
 
 func (a *API) call(ctx context.Context, msg []byte) error {
+	_, err := a.invoke(ctx, alterInboundPath, msg)
+	return err
+}
+
+// maxResponse — предел ответа. Самый большой ответ — счётчики всех
+// пользователей: две строки по ~40 байт на клиента, мегабайт — это
+// десятки тысяч клиентов.
+const maxResponse = 1 << 20
+
+// invoke — унарный вызов метода path; возвращает сообщение ответа без
+// рамки gRPC.
+func (a *API) invoke(ctx context.Context, path string, msg []byte) ([]byte, error) {
 	frame := make([]byte, 5, 5+len(msg))
 	binary.BigEndian.PutUint32(frame[1:], uint32(len(msg)))
 	frame = append(frame, msg...)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+a.addr+alterInboundPath, bytes.NewReader(frame))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+a.addr+path, bytes.NewReader(frame))
 	if err != nil {
-		return fmt.Errorf("xray api: %w", err)
+		return nil, fmt.Errorf("xray api: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/grpc")
 	req.Header.Set("TE", "trailers")
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("xray api: %w", err)
+		return nil, fmt.Errorf("xray api: %w", err)
 	}
 	defer resp.Body.Close()
 	// Трейлеры доступны только после того, как тело прочитано до конца.
-	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16)); err != nil {
-		return fmt.Errorf("xray api: read response: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+6))
+	if err != nil {
+		return nil, fmt.Errorf("xray api: read response: %w", err)
+	}
+	if len(body) > maxResponse+5 {
+		return nil, errors.New("xray api: response too large")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("xray api: http status %d", resp.StatusCode)
+		return nil, fmt.Errorf("xray api: http status %d", resp.StatusCode)
 	}
 	// Ошибка без тела приходит одними заголовками (trailers-only).
 	status, msgText := resp.Trailer.Get("Grpc-Status"), resp.Trailer.Get("Grpc-Message")
@@ -172,15 +188,21 @@ func (a *API) call(ctx context.Context, msg []byte) error {
 		status, msgText = resp.Header.Get("Grpc-Status"), resp.Header.Get("Grpc-Message")
 	}
 	if status == "" {
-		return errors.New("xray api: response without grpc-status")
+		return nil, errors.New("xray api: response without grpc-status")
 	}
 	if status != "0" {
 		if m, err := url.PathUnescape(msgText); err == nil {
 			msgText = m
 		}
-		return &GRPCError{Code: status, Message: msgText}
+		return nil, &GRPCError{Code: status, Message: msgText}
 	}
-	return nil
+	if len(body) == 0 {
+		return nil, nil
+	}
+	if len(body) < 5 || body[0] != 0 || int(binary.BigEndian.Uint32(body[1:5])) != len(body)-5 {
+		return nil, errors.New("xray api: malformed grpc frame")
+	}
+	return body[5:], nil
 }
 
 // Тексты Xray (proxy/vless/validator.go): пользователь уже есть / его нет.

@@ -381,8 +381,17 @@ func TestAlterInboundEncodingMatchesProtobuf(t *testing.T) {
 	}
 }
 
-// fakeGRPC — сервер HTTP/2 без TLS, отвечающий как gRPC-сервер Xray.
+// fakeGRPC — сервер HTTP/2 без TLS, отвечающий как HandlerService Xray.
 func fakeGRPC(t *testing.T, handler func(w http.ResponseWriter, body []byte)) string {
+	t.Helper()
+	return fakeGRPCAt(t, alterInboundPath, func(w http.ResponseWriter, _ *http.Request, body []byte) {
+		handler(w, body)
+	})
+}
+
+// fakeGRPCAt — сервер HTTP/2 без TLS, отвечающий как gRPC-сервер Xray на
+// методе path (пусто — на любом).
+func fakeGRPCAt(t *testing.T, path string, handler func(w http.ResponseWriter, r *http.Request, body []byte)) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -393,7 +402,7 @@ func fakeGRPC(t *testing.T, handler func(w http.ResponseWriter, body []byte)) st
 	srv := &http.Server{
 		Protocols: &protocols,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.ProtoMajor != 2 || r.Method != http.MethodPost || r.URL.Path != alterInboundPath ||
+			if r.ProtoMajor != 2 || r.Method != http.MethodPost || (path != "" && r.URL.Path != path) ||
 				r.Header.Get("Content-Type") != "application/grpc" {
 				t.Errorf("запрос %s %s %s %q", r.Proto, r.Method, r.URL.Path, r.Header.Get("Content-Type"))
 			}
@@ -402,7 +411,7 @@ func fakeGRPC(t *testing.T, handler func(w http.ResponseWriter, body []byte)) st
 				t.Errorf("рамка gRPC: % x", frame)
 				return
 			}
-			handler(w, frame[5:])
+			handler(w, r, frame[5:])
 		}),
 	}
 	go srv.Serve(ln)

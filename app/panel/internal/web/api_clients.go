@@ -52,6 +52,39 @@ type clientJSON struct {
 	// сервере: потолок интерфейса с учётом добивки S4
 	// (amnezia-vpn-server-bctr). 0 — неизвестно.
 	MTUMax int64 `json:"mtu_max"`
+	// Трафик VLESS напрямую — отдельно от AWG, из счётчиков Xray,
+	// накопленных панелью (amnezia-vpn-server-14y0.8). Направления — с
+	// точки зрения клиента: Up — от него, Down — к нему. Трафик через
+	// российский вход сюда не входит: он приходит одной служебной учёткой
+	// ruentry, и по клиентам его не разложить.
+	VLESSUpBytes   uint64 `json:"vless_up_bytes"`
+	VLESSDownBytes uint64 `json:"vless_down_bytes"`
+	// VLESSLastActiveUTC — когда счётчики клиента последний раз
+	// сдвинулись; nil — движения не видели.
+	VLESSLastActiveUTC *time.Time `json:"vless_last_active_utc"`
+	// VLESSOnline — движение было в пределах OnlineMaxAge, как и Online
+	// для рукопожатия AWG.
+	VLESSOnline bool `json:"vless_online"`
+}
+
+// withVLESS дописывает в представление клиента его трафик VLESS.
+func (out *clientJSON) withVLESS(tr db.VLESSTraffic, ok bool, now time.Time) {
+	if !ok {
+		return
+	}
+	out.VLESSUpBytes, out.VLESSDownBytes = tr.Up, tr.Down
+	out.VLESSLastActiveUTC = tr.LastActive
+	out.VLESSOnline = tr.LastActive != nil && now.Sub(*tr.LastActive) <= OnlineMaxAge
+}
+
+// loadVLESSTraffic — накопленный трафик VLESS по клиентам; при ошибке —
+// пусто: карточка без VLESS лучше, чем без списка вовсе.
+func (s *Server) loadVLESSTraffic() map[int64]db.VLESSTraffic {
+	all, err := db.VLESSTrafficAll(s.db())
+	if err != nil {
+		return nil
+	}
+	return all
 }
 
 type clientCreateReq struct {
@@ -155,7 +188,10 @@ func (s *Server) clientAddress6(c db.ClientRecord) string {
 }
 
 func (s *Server) writeClientJSON(w http.ResponseWriter, code int, c db.ClientRecord) {
-	out := clientToJSON(c, s.loadStatus(), s.loadDNSSeen(), s.clientAddress6(c), time.Now())
+	now := time.Now()
+	out := clientToJSON(c, s.loadStatus(), s.loadDNSSeen(), s.clientAddress6(c), now)
+	tr, ok := s.loadVLESSTraffic()[c.ID]
+	out.withVLESS(tr, ok, now)
 	out.MTUMax = s.clientMTUMax()
 	writeJSON(w, code, out)
 }
@@ -186,10 +222,13 @@ func (s *Server) apiClientsList(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	mtuMax := s.clientMTUMax()
+	vless := s.loadVLESSTraffic()
 	out := make([]clientJSON, 0, len(clients))
 	for _, c := range clients {
 		addr6, _ := db.ClientAddress6(serverAddress, serverAddress6, c.Address)
 		item := clientToJSON(c, st, dns, addr6, now)
+		tr, ok := vless[c.ID]
+		item.withVLESS(tr, ok, now)
 		item.MTUMax = mtuMax
 		out = append(out, item)
 	}

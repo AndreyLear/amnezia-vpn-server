@@ -212,6 +212,14 @@ func TestLiveXrayAPI(t *testing.T) {
 	if err := api.AddUser(ctx, InboundTag, "c2", "9b2d7c1a-6e3f-4a5b-8c7d-1e2f3a4b5c6d"); !isAlreadyExists(err) {
 		t.Fatalf("повторный AddUser: %v", err)
 	}
+	// Статистика включена конфигом и читается тем же сокетом
+	// (amnezia-vpn-server-14y0.8).
+	if _, err := api.UserTraffic(ctx); err != nil {
+		t.Fatalf("UserTraffic: %v\n%s", err, out)
+	}
+	if _, err := api.Uptime(ctx); err != nil {
+		t.Fatalf("Uptime: %v\n%s", err, out)
+	}
 	if err := api.RemoveUser(ctx, InboundTag, "c1"); err != nil {
 		t.Fatalf("RemoveUser: %v", err)
 	}

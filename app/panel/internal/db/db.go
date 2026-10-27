@@ -123,6 +123,9 @@ var schemaStatements = []string{
 	xrayTable,
 	xrayServiceUsersTable,
 	xrayEntriesTable,
+	// Трафик VLESS по клиентам (amnezia-vpn-server-14y0.8, см.
+	// xray_traffic.go). SchemaVersion не поднимается — таблица аддитивна.
+	vlessTrafficTable,
 }
 
 // Open creates a new SQLite database file (including parent directories)
@@ -1258,9 +1261,32 @@ func SetClientExpiry(handle *sql.DB, id int64, expiresAt string) error {
 // DeleteClient removes a client row. ErrClientNotFound when the id is
 // unknown; delete is never a silent no-op (M4 contract).
 func DeleteClient(handle *sql.DB, id int64) error {
-	return mutateClient(handle, id,
-		`DELETE FROM clients WHERE id = ?`,
-		id)
+	// Вместе с клиентом — его накопленный трафик VLESS: номер может
+	// достаться новому клиенту раньше, чем панель опросит Xray
+	// (amnezia-vpn-server-14y0.8, см. xray_traffic.go).
+	tx, err := handle.Begin()
+	if err != nil {
+		return fmt.Errorf("db: begin delete client %d: %w", id, err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM clients WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("db: mutate client %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("db: rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrClientNotFound
+	}
+	if err := resetVLESSTraffic(tx, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit delete client %d: %w", id, err)
+	}
+	return nil
 }
 
 func mutateClient(handle *sql.DB, id int64, query string, args ...any) error {
