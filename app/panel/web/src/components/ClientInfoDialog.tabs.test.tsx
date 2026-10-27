@@ -60,13 +60,16 @@ describe("ClientInfoDialog: вкладки протоколов", () => {
     expect(common.compareDocumentPosition(tablist) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    for (const name of ["Изменить имя", "Изменить описание", "Отключить", "Удалить"]) {
+    for (const name of ["Изменить имя", "Изменить описание", "Отключить"]) {
       expect(within(common).getByRole("button", { name })).toBeInTheDocument();
     }
     expect(within(common).getByText("Статус")).toBeInTheDocument();
+    // «Удалить» — внизу окна, вне вкладок, на обеих (amnezia-vpn-server-14y0.9).
+    expect(within(screen.getByRole("tabpanel")).queryByRole("button", { name: "Удалить" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Удалить" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "VLESS" }));
-    expect(within(common).getByRole("button", { name: "Удалить" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Удалить" })).toBeInTheDocument();
   });
 
   it("AWG: IP, конфиг, QR, MTU, скорость, рукопожатие, трафик и график", () => {
@@ -101,7 +104,7 @@ describe("ClientInfoDialog: вкладки протоколов", () => {
     expect(within(panel).getByText("Последняя активность")).toBeInTheDocument();
     expect(within(panel).getByText("27 окт, 09:00:00")).toBeInTheDocument();
     expect(
-      within(panel).getByText("Показан только трафик напрямую. Трафик через вход пока не учитывается"),
+      within(panel).getByText("Подключения через вход не попадают в график, трафик и последнюю активность — если клиент подключается только так, здесь будет пусто"),
     ).toBeInTheDocument();
     // Ничего из AWG.
     expect(within(panel).queryByText("IP")).toBeNull();
@@ -115,7 +118,7 @@ describe("ClientInfoDialog: вкладки протоколов", () => {
     await user.click(screen.getByRole("tab", { name: "VLESS" }));
     expect(await screen.findByText("Напрямую")).toBeInTheDocument();
     expect(screen.getByText("Трафик")).toBeInTheDocument();
-    expect(screen.queryByText(/Трафик через вход пока не учитывается/)).toBeNull();
+    expect(screen.queryByText(/Подключения через вход не попадают/)).toBeNull();
   });
 
   it("VLESS не настроен — так и сказано, без пустого трафика", async () => {

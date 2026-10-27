@@ -381,8 +381,14 @@ for (const width of [1280, 375]) test(`окно клиента выдаёт сс
   await vlessTab.click();
   await expect(vlessTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Напрямую", { exact: true })).toBeVisible();
-  await expect(page.getByText("Показан только трафик напрямую. Трафик через вход пока не учитывается")).toBeVisible();
+  await expect(page.getByText("Подключения через вход не попадают в график, трафик и последнюю активность — если клиент подключается только так, здесь будет пусто")).toBeVisible();
   await expect(page.getByText("Через вход RU", { exact: true })).toBeVisible();
+  // amnezia-vpn-server-14y0.9: у VLESS свой график, «Удалить» — внизу окна,
+  // и окно не прокручивается вбок ни на одной ширине.
+  await expect(page.getByRole("tabpanel").getByText(/^Скорость/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Удалить" })).toBeVisible();
+  const body = page.locator('[data-slot="dialog-body"]').first();
+  expect(await body.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 
   await page.getByRole("button", { name: "Скопировать ссылку: Через вход RU" }).click();
   await expect(page.getByText("Ссылка скопирована")).toBeVisible();
