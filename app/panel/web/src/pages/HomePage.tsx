@@ -11,6 +11,7 @@ import { MailFailureBanner } from "@/components/MailFailureBanner";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import {
   api,
+  fetchVless,
   mutationOk,
   setCsrf,
   setLastUsername,
@@ -262,6 +263,7 @@ export default function HomePage() {
           if (!open) setInfoId(null);
         }}
         onQr={() => infoClient && setQrId(infoClient.id)}
+        loadVless={fetchVless}
         onDownload={() => infoClient && downloadConfig(infoClient.id)}
         onToggle={() => infoClient && void toggleClient(infoClient)}
         onDelete={() => infoClient && void deleteClient(infoClient)}

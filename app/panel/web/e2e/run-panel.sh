@@ -19,6 +19,14 @@ go run . server init "10.8.0.1/24" "51820" --endpoint "127.0.0.1:51820"
 if [ "${AMNEZIA_E2E_NO_CLIENTS:-0}" != "1" ]; then
     go run . client add "alice" >/dev/null
     go run . client add "bob" >/dev/null
+    # VLESS в окне клиента (amnezia-vpn-server-14y0.5): ключи Reality и один
+    # узел-вход, чтобы маршрутов было два. Сокет API — во временном каталоге:
+    # настоящего Xray здесь нет, и тест не должен искать его в /run.
+    export AMNEZIA_XRAY_API_ADDR="unix:$DIR/xray-api.sock"
+    go run . xray init --server-name vpn.example.com >/dev/null
+    go run . xray entry set ru --host ru.example.com --sni ru.example.com \
+        --public-key u1D_noKldM-_gg6X9g-5wUPsdBXPUU-M_Zjv9Z4FlhQ \
+        --short-id a1b2 --path /entry --prefix "RU " >/dev/null
 fi
 # История скорости: без неё график в карточке проверять нечем
 # (amnezia-vpn-server-tmjw). Кладём последние десять минут так, как их писал бы

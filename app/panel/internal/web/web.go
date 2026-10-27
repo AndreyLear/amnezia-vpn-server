@@ -293,6 +293,9 @@ func New(cfg Config) (*Server, error) {
 	// вечером не грузило» разбиралась только по ssh и снимкам экрана с
 	// роутера (amnezia-vpn-server-8lnv).
 	s.mux.Handle("GET /api/clients/{id}/speed", s.auth.RequireAPI(http.HandlerFunc(s.apiClientSpeed)))
+	// Ссылки VLESS и их QR (amnezia-vpn-server-14y0.5, см. api_vless.go).
+	s.mux.Handle("GET /api/clients/{id}/vless", s.auth.RequireAPI(http.HandlerFunc(s.apiClientVLESS)))
+	s.mux.Handle("GET /api/clients/{id}/vless/qr", s.auth.RequireAPI(http.HandlerFunc(s.apiClientVLESSQR)))
 	s.mux.Handle("PATCH /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsPatch))))
 	s.mux.Handle("DELETE /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsDelete))))
 	distRoot, err := fs.Sub(distFS, "dist")

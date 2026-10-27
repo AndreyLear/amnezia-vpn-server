@@ -235,6 +235,38 @@ export function fetchSpeed(
   return api<SpeedSeries>(`/api/clients/${id}/speed?window=${window}&columns=${columns}`);
 }
 
+/**
+ * Маршрут VLESS клиента (amnezia-vpn-server-14y0.5): напрямую к серверу
+ * (`entry` пусто) или через узел-вход. Ссылка — секрет того же рода, что
+ * конфиг AWG: живёт только в состоянии открытого окна, никуда не
+ * сохраняется, а сервер отвечает с no-store.
+ */
+export type VlessRoute = {
+  entry: string;
+  prefix: string;
+  link: string;
+};
+
+export type VlessInfo = {
+  enabled: boolean;
+  routes: VlessRoute[];
+};
+
+export async function fetchVless(id: number): Promise<VlessInfo> {
+  const res = await apiRequest(`/api/clients/${id}/vless`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`vless: ${res.status}`);
+  const info = (await res.json()) as VlessInfo;
+  if (!info || !Array.isArray(info.routes)) throw new Error("vless: malformed response");
+  return info;
+}
+
+/** Адрес QR маршрута; рисует его сервер, как и QR для AWG. */
+export function vlessQrUrl(id: number, entry: string): string {
+  return entry
+    ? `/api/clients/${id}/vless/qr?entry=${encodeURIComponent(entry)}`
+    : `/api/clients/${id}/vless/qr`;
+}
+
 export type LoginResponse = {
   ok: boolean;
   message?: string;
