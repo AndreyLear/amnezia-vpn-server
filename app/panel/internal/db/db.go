@@ -47,8 +47,9 @@ func mapNameConstraint(err error) error {
 // carry IPv6, and the prefix it carries is the one thing about that
 // which cannot be derived (amnezia-vpn-server-xy6j). Archives written
 // by older releases are still accepted by restore and migrated here at
-// apply time (T-110 backward compatibility).
-const SchemaVersion = "10"
+// apply time (T-110 backward compatibility). Bumped to 11 when every
+// client got a VLESS UUID next to its AWG keys (amnezia-vpn-server-14y0.1).
+const SchemaVersion = "11"
 
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS server (
@@ -75,7 +76,8 @@ var schemaStatements = []string{
 		updated_at TEXT NOT NULL,
 		expires_at TEXT,
 		mtu INTEGER NOT NULL DEFAULT 0,
-		rate_limit INTEGER NOT NULL DEFAULT 0
+		rate_limit INTEGER NOT NULL DEFAULT 0,
+		vless_uuid TEXT NOT NULL DEFAULT ''
 	);`,
 	`CREATE TABLE IF NOT EXISTS settings (
 		key TEXT PRIMARY KEY,
@@ -117,6 +119,8 @@ var schemaStatements = []string{
 	// восстановлении получит пустую таблицу через Migrate, а прежняя
 	// версия, восстановив новый архив, лишнюю таблицу просто не читает.
 	mailSettingsTable,
+	// Настройки Xray (amnezia-vpn-server-14y0.1, см. xray.go).
+	xrayTable,
 }
 
 // Open creates a new SQLite database file (including parent directories)
@@ -191,6 +195,9 @@ func Migrate(handle *sql.DB) error {
 		return err
 	}
 	if err := migrateClientRateLimit(handle); err != nil {
+		return err
+	}
+	if err := migrateClientVLESS(handle); err != nil {
 		return err
 	}
 	if _, err := handle.Exec(
@@ -773,6 +780,9 @@ type ClientRecord struct {
 	// «без предела» и является обычным состоянием
 	// (amnezia-vpn-server-jzzu).
 	RateLimit int64
+	// VLESSUUID — способ подключения к Xray; включается и выключается
+	// вместе с клиентом (amnezia-vpn-server-14y0.1).
+	VLESSUUID string
 }
 
 // Expired reports whether the record is past expires_at (see ClientRow.
@@ -806,6 +816,9 @@ type NewClient struct {
 	// same INSERT: set afterwards, a failed second write left the client
 	// enabled with no expiry at all (amnezia-vpn-server-76mp.24).
 	ExpiresAt string
+	// VLESSUUID — UUID для Xray; пусто — создать новый. Задаётся явно
+	// только при переносе клиента с уже выданной ссылкой.
+	VLESSUUID string
 }
 
 // CreateClient allocates the first free /32 host address in the server
@@ -823,6 +836,19 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 	}
 	if nc.PresharedKey != "" && !keys.ValidKey(nc.PresharedKey) {
 		return nil, fmt.Errorf("db: invalid preshared key: not a 32-byte base64 key")
+	}
+	// Каждый новый клиент сразу получает и VLESS: способ подключения,
+	// который включается позже, пришлось бы раздавать отдельным шагом
+	// всем, кто уже есть (amnezia-vpn-server-14y0.1).
+	vlessUUID := nc.VLESSUUID
+	if vlessUUID == "" {
+		u, err := NewVLESSUUID()
+		if err != nil {
+			return nil, err
+		}
+		vlessUUID = u
+	} else if !ValidVLESSUUID(vlessUUID) {
+		return nil, fmt.Errorf("db: invalid VLESS UUID")
 	}
 	tx, err := handle.Begin()
 	if err != nil {
@@ -864,9 +890,9 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 
 	now := stamp()
 	res, err := tx.Exec(
-		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, description, expires_at)
-		 VALUES (?, ?, ?, NULLIF(?, ''), ?, 1, ?, ?, ?, NULLIF(?, ''))`,
-		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now, nc.Description, nc.ExpiresAt,
+		`INSERT INTO clients (name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, description, expires_at, vless_uuid)
+		 VALUES (?, ?, ?, NULLIF(?, ''), ?, 1, ?, ?, ?, NULLIF(?, ''), ?)`,
+		nc.Name, nc.PrivateKey, nc.PublicKey, nc.PresharedKey, address, now, now, nc.Description, nc.ExpiresAt, vlessUUID,
 	)
 	if err != nil {
 		if mapped := mapNameConstraint(err); errors.Is(mapped, ErrClientNameExists) {
@@ -893,6 +919,7 @@ func CreateClient(handle *sql.DB, serverAddress string, nc NewClient) (*ClientRe
 		UpdatedAt:    now,
 		Description:  nc.Description,
 		ExpiresAt:    nc.ExpiresAt,
+		VLESSUUID:    vlessUUID,
 	}, nil
 }
 
@@ -1032,7 +1059,7 @@ func ClientAddress6(serverAddress, serverAddress6, clientAddress string) (string
 // ErrClientNotFound.
 func ClientByID(handle *sql.DB, id int64) (*ClientRecord, error) {
 	row := handle.QueryRow(
-		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu, rate_limit
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu, rate_limit, vless_uuid
 		   FROM clients WHERE id = ?`, id,
 	)
 	c, err := scanClient(row)
@@ -1048,7 +1075,7 @@ func ClientByID(handle *sql.DB, id int64) (*ClientRecord, error) {
 // ClientsAll loads all client records, ordered by id.
 func ClientsAll(handle *sql.DB) ([]ClientRecord, error) {
 	rows, err := handle.Query(
-		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu, rate_limit
+		`SELECT id, name, private_key, public_key, preshared_key, address, enabled, created_at, updated_at, expires_at, description, mtu, rate_limit, vless_uuid
 		   FROM clients ORDER BY id`,
 	)
 	if err != nil {
@@ -1083,7 +1110,7 @@ func scanClient(row rowScanner) (*ClientRecord, error) {
 	)
 	if err := row.Scan(&c.ID, &c.Name, &c.PrivateKey, &c.PublicKey, &psk,
 		&c.Address, &enabled, &c.CreatedAt, &c.UpdatedAt, &expiresAt, &c.Description,
-		&c.MTU, &c.RateLimit); err != nil {
+		&c.MTU, &c.RateLimit, &c.VLESSUUID); err != nil {
 		return nil, err
 	}
 	c.PresharedKey = psk.String

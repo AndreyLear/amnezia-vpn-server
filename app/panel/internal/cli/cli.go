@@ -55,6 +55,12 @@ commands:
   client set-expiry <id> <RFC3339|none>
   client delete <id>
   client config <id>
+  xray init [--address <host>] [--server-name <name>] [--target <host:port>]
+    (generates the Reality keys once; later runs only change the given
+     settings — the keys are part of every link already handed out)
+  xray import <dir>              take over a hand-made Xray setup: users.json,
+                                 keys.txt, shortid.txt, path.txt
+  xray link <id>                 print the client's vless:// link
   auth add-user <username> (--password-stdin | --password-env <ENV>)
   auth change-password <username> --old-password-stdin --new-password-stdin
   auth set-password <username> --password-stdin
@@ -91,6 +97,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return a.cmdServer(args[1:])
 	case "client":
 		return a.cmdClient(args[1:])
+	case "xray":
+		return a.cmdXray(args[1:])
 	case "auth":
 		return a.cmdAuth(args[1:])
 	case "status":
