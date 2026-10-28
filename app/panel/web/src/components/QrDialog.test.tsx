@@ -4,48 +4,20 @@ import { describe, expect, it } from "vitest";
 import { QrDialog } from "@/components/QrDialog";
 
 describe("QrDialog", () => {
-  // Подпись называла одно приложение, тогда как конфигурацию AWG понимают
-  // несколько клиентов: человеку с другим клиентом она говорила неправду
-  // (amnezia-vpn-server-d86w).
-  it("не называет одно приложение и не ставит точку в конце", () => {
-    render(
-      <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
-    );
-
-    const hint = screen.getByText(/Отсканируйте QR/);
-    expect(hint).toBeInTheDocument();
-    expect(hint.textContent).not.toMatch(/AmneziaVPN/);
-    expect(hint.textContent?.trim().endsWith(".")).toBe(false);
-  });
-
-  it("называет примеры приложений, а не одно и не ссылки", () => {
-    render(
-      <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
-    );
-
-    const hint = screen.getByText(/Отсканируйте QR/);
-    expect(hint.textContent).toContain("AmneziaWG");
-    expect(hint.textContent).toContain("WG Tunnel");
-    // «или другом приложении» — важная часть: список открытый.
-    expect(hint.textContent).toMatch(/другом приложении/);
-    // Уровень протокола назван, потому что старый клиент конфиг не прочтёт.
-    expect(hint.textContent).toContain("AmneziaWG 2.0 и выше");
-    // Ссылок нет намеренно: адреса магазинов в маленьком окне мешают.
-    expect(screen.queryByRole("link")).toBeNull();
-  });
-
-  it("puts title and hint in a header with 8px gap", () => {
+  // amnezia-vpn-server-14y0.17: владелец попросил убрать пояснения из окна
+  // целиком. Прежние подсказки называли приложения (d86w, d077a64), а
+  // названия приложений устаревают; в шапке остаётся только заголовок.
+  it("без пояснений: в шапке только заголовок", () => {
     render(
       <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
     );
 
     const title = screen.getByRole("heading", { name: "QR-код: Alice" });
-    const hint = screen.getByText(/Отсканируйте QR/);
     const header = title.parentElement;
-
     expect(header).toHaveAttribute("data-slot", "dialog-header");
-    expect(header).toHaveClass("gap-2");
-    expect(header).toContainElement(hint);
+    expect(header?.children).toHaveLength(1);
+    expect(screen.queryByText(/Отсканируйте/)).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
   });
 
   // A fixed 256 px box was what the dialog shipped with, and 256 px over

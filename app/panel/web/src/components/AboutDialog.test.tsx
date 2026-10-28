@@ -14,6 +14,11 @@ function reply(versions: Partial<Versions> & { schema?: string }) {
   answer = versions;
 }
 
+// Значение строки «О версиях» по её подписи (пара dt/dd).
+function rowValue(label: string): string | null | undefined {
+  return screen.getByText(label, { selector: "dt" }).nextElementSibling?.textContent;
+}
+
 beforeEach(() => {
   reply({});
   vi.stubGlobal(
@@ -68,6 +73,63 @@ describe("о версиях", () => {
     expect(await screen.findByText("Модуль ядра")).toBeInTheDocument();
     expect(screen.getByText("3.1.20260812")).toBeInTheDocument();
     expect(screen.queryByText("amneziawg-go")).not.toBeInTheDocument();
+  });
+
+  // После AmneziaWG — Xray: версия ядра, включён ли VLESS и когда каждый
+  // узел-вход последний раз забирал конфиг (amnezia-vpn-server-14y0.16).
+  // «Нет связи» решает сервер по своим часам (online), а не браузер.
+  it("показывает Xray, VLESS и время синка каждого входа", async () => {
+    const synced = new Date(Date.now() - 90_000).toISOString();
+    reply({
+      product: "3.0.1",
+      xray: "26.10.21",
+      vless_state: "up",
+      entries: [
+        { name: "entry", last_sync_utc: synced, online: true },
+        { name: "ru", last_sync_utc: "2026-10-01T00:00:00Z", online: false },
+        { name: "fi", last_sync_utc: null, online: false },
+      ],
+    });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+
+    expect(await screen.findByText("Xray")).toBeInTheDocument();
+    expect(screen.getByText("26.10.21")).toBeInTheDocument();
+    expect(rowValue("VLESS")).toBe("Включён");
+    expect(rowValue("Каскад entry")).toBe("1 мин назад");
+    expect(rowValue("Каскад ru")).toBe("Нет связи");
+    expect(rowValue("Каскад fi")).toBe("Нет связи");
+  });
+
+  // Опрос Xray не ответил — VLESS всё равно включён: строка говорит о
+  // настройке, а не о том, ответил ли Xray в последние пять секунд.
+  it("считает VLESS включённым при любом состоянии, кроме none", async () => {
+    for (const state of ["down", "na"]) {
+      reply({ product: "3.0.1", xray: "26.10.21", vless_state: state, entries: [] });
+      const { unmount } = render(<AboutDialog open onOpenChange={() => {}} />);
+      await screen.findByText("Xray");
+      expect(rowValue("VLESS")).toBe("Включён");
+      unmount();
+    }
+  });
+
+  // Входы есть, а VLESS выключен — строки остаются, и выключенное названо
+  // выключенным.
+  it("не прячет Xray, когда VLESS выключен, но входы есть", async () => {
+    reply({ product: "3.0.1", xray: "26.10.21", vless_state: "none", entries: [{ name: "entry", last_sync_utc: null, online: false }] });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText("Xray")).toBeInTheDocument();
+    expect(rowValue("VLESS")).toBe("Выключен");
+    expect(rowValue("Каскад entry")).toBe("Нет связи");
+  });
+
+  // Установка только с AWG выглядит как раньше.
+  it("прячет Xray, когда VLESS выключен и входов нет", async () => {
+    reply({ product: "3.0.1", xray: "26.10.21", vless_state: "none", entries: [] });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    await screen.findByText("3.0.1");
+    expect(screen.queryByText("Xray")).not.toBeInTheDocument();
+    expect(screen.queryByText("VLESS")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Каскад/)).not.toBeInTheDocument();
   });
 
   it("показывает amneziawg-go, когда туннель на нём или неизвестно на чём", async () => {

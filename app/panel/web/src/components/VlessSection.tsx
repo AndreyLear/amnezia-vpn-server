@@ -29,13 +29,14 @@ import { cn } from "@/lib/utils";
 // вкладок (не своих карточек): график скорости VLESS (свой журнал панели по
 // тем же счётчикам), трафик с активностью и ссылки.
 
-// Подпись маршрута (решение владельца 28.10.2026): узел-вход один —
-// просто «Через вход»; узлов несколько — с именем узла. Приставка ссылки
-// («VLESS ») для подписи не годится: она одинакова у всех узлов.
+// Подпись маршрута (решения владельца 28.10.2026): узел-вход один —
+// просто «Каскад»; узлов несколько — с именем узла. Приставка ссылки
+// («VLESS ») для подписи не годится: она одинакова у всех узлов. Прежнее
+// «Через вход» владелец сменил на «Каскад» (amnezia-vpn-server-14y0.17).
 export function vlessRouteLabel(route: VlessRoute, routes: VlessRoute[]): string {
   if (!route.entry) return "Напрямую";
   const entries = routes.filter((r) => r.entry).length;
-  return entries > 1 ? `Через вход ${route.entry}` : "Через вход";
+  return entries > 1 ? `Каскад ${route.entry}` : "Каскад";
 }
 
 export function vlessRouteHint(route: VlessRoute): string {
@@ -208,9 +209,11 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
         <DialogContent onOpenAutoFocus={(e) => e.preventDefault()}>
           <DialogHeader>
             <DialogTitle>QR-код VLESS: {clientName}</DialogTitle>
+            {/* Без названий приложений: они устаревают, а подсказка должна
+                оставаться правдой (amnezia-vpn-server-14y0.17). */}
             <p className="text-sm text-muted-foreground">
-              {qrRoute ? vlessRouteLabel(qrRoute, info.routes) : ""}: отсканируйте QR в v2RayTun, Happ
-              или другом приложении с поддержкой VLESS
+              {qrRoute ? vlessRouteLabel(qrRoute, info.routes) : ""}: отсканируйте QR в приложении с
+              поддержкой VLESS
             </p>
           </DialogHeader>
           {qrRoute ? (

@@ -40,7 +40,11 @@ function itemClass(size: SegmentSize, active: boolean) {
   return cn(
     buttonVariants({ variant: active ? "secondary" : "ghost", size: size === "md" ? "default" : "sm" }),
     size === "md" && "px-3",
-    !active && "text-muted-foreground",
+    // Под курсором ghost давал фон и полный цвет текста — невыбранный
+    // вариант становился похож на выбранный, и в окне QR было не понять,
+    // какой маршрут выбран (amnezia-vpn-server-14y0.17). Фон — признак
+    // выбора и только его; наведение лишь проявляет текст.
+    !active && "text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent",
   );
 }
 
@@ -76,6 +80,13 @@ export function Segment<T extends string>(props: SegmentProps<T>) {
           type="button"
           aria-pressed={o.value === value}
           className={itemClass(size, o.value === value)}
+          // Мышью фокус на кнопку не переносим (amnezia-vpn-server-14y0.17):
+          // кнопка, оставшаяся в фокусе после клика, по первому же нажатию
+          // клавиши — хоть Cmd+Shift+4 для скриншота — начинает подходить
+          // под :focus-visible, и вокруг AWG/VLESS вставал толстый контур.
+          // С клавиатуры фокус и контур — как раньше. Вкладки (tabs) так не
+          // сделать: Radix переключает их как раз по mousedown.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => onValueChange(o.value)}
         >
           {o.label}
