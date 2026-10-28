@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { Segment } from "@/components/Segment";
-import { vlessRouteHint, vlessRouteLabel } from "@/components/VlessSection";
+import { vlessRouteLabel } from "@/components/VlessSection";
 import {
   Dialog,
   DialogContent,
@@ -36,6 +36,10 @@ const directKey = "@direct";
  * Теперь в окне выбор протокола — тем же сегментом первого уровня, что в
  * окне клиента, — а у VLESS ещё выбор маршрута сегментом второго уровня,
  * если у сервера есть входы. Тексты согласованы с редактором.
+ *
+ * С amnezia-vpn-server-14y0.17 окно без пояснений (владелец счёл его
+ * перегруженным): ни подзаголовка с приложениями, ни строки под маршрутом.
+ * Маршрут — справа в строке вкладок, а не отдельной строкой под ними.
  */
 export function QrDialog({
   clientId,
@@ -74,21 +78,10 @@ export function QrDialog({
     };
   }, [wantVless, clientId, loadVless]);
 
-  let hint: string | null = null;
+  // Справа от вкладок — выбор маршрута VLESS, если есть из чего выбирать.
+  let route: ReactNode = null;
   let body: ReactNode = null;
   if (clientId !== null && protocol === "awg") {
-    // Названия приложений здесь — примеры, а не список: конфигурацию
-    // читает любой клиент, понимающий протокол. Ссылок нет намеренно —
-    // кому нужно, тот найдёт приложение по названию, а три адреса на две
-    // строки в маленьком окне мешают больше, чем помогают
-    // (amnezia-vpn-server-d86w).
-    //
-    // Уровень 2.0 назван не наугад: набор параметров, который мы выдаём
-    // (Jc/Jmin/Jmax, S1-S4, H1-H4, I1-I5), — это именно он
-    // (internal/awgconf/generator.go). Клиент постарше конфиг не прочтёт,
-    // поэтому цифра в подписи важнее вежливости.
-    hint =
-      "Отсканируйте QR в AmneziaWG, WG Tunnel или другом приложении с поддержкой AmneziaWG 2.0 и выше";
     // The symbol fills the dialog instead of sitting in a fixed 256 px box:
     // a client config needs 89 modules, and a camera reading them off a
     // screen needs every pixel of pitch it can get (T-ky6l). The PNG is
@@ -116,56 +109,59 @@ export function QrDialog({
     } else if (info.routes.length === 0) {
       body = <p className="text-sm text-muted-foreground">VLESS на сервере не настроен</p>;
     } else {
-      hint = "Отсканируйте QR в v2RayTun, Happ или другом приложении с поддержкой VLESS";
-      const route =
+      const current =
         info.routes.find((r) => (r.entry || directKey) === routeKey) ?? info.routes[0];
-      const label = vlessRouteLabel(route, info.routes);
-      body = (
-        <>
-          {/* Маршрут выбирают только когда есть из чего: без входов он
-              один. Подсказка — та же, что у маршрута в окне клиента: без
-              неё выбор между «напрямую» и «через вход» слепой. */}
-          {info.routes.length > 1 ? (
-            <div className="grid gap-2">
-              <Segment
-                label="Маршрут"
-                size="sm"
-                value={route.entry || directKey}
-                onValueChange={setRouteKey}
-                options={info.routes.map((r) => ({
-                  value: r.entry || directKey,
-                  label: vlessRouteLabel(r, info.routes),
-                }))}
-              />
-              <p className="text-sm text-muted-foreground">{vlessRouteHint(route)}</p>
-            </div>
-          ) : null}
-          <img
-            className="mx-auto aspect-square w-full"
-            alt={`QR-код VLESS клиента ${clientName}, маршрут «${label}»`}
-            src={vlessQrUrl(clientId, route.entry)}
+      const label = vlessRouteLabel(current, info.routes);
+      // Маршрут выбирают только когда есть из чего: без входов он один.
+      // ml-auto держит его справа и тогда, когда на узком экране он
+      // переносится под вкладки (amnezia-vpn-server-14y0.17).
+      if (info.routes.length > 1) {
+        route = (
+          <Segment
+            label="Маршрут"
+            size="sm"
+            className="ml-auto"
+            value={current.entry || directKey}
+            onValueChange={setRouteKey}
+            options={info.routes.map((r) => ({
+              value: r.entry || directKey,
+              label: vlessRouteLabel(r, info.routes),
+            }))}
           />
-        </>
+        );
+      }
+      body = (
+        <img
+          className="mx-auto aspect-square w-full"
+          alt={`QR-код VLESS клиента ${clientName}, маршрут «${label}»`}
+          src={vlessQrUrl(clientId, current.entry)}
+        />
       );
     }
   }
 
   return (
     <Dialog open={clientId !== null} onOpenChange={onOpenChange}>
-      <DialogContent onOpenAutoFocus={(e) => e.preventDefault()}>
+      {/* Шапка → содержимое 24px, строка вкладок → QR 16px — правила UI
+          владельца, как в окне клиента (amnezia-vpn-server-14y0.17). */}
+      <DialogContent bodyClassName="gap-6" onOpenAutoFocus={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>QR-код: {clientName}</DialogTitle>
-          {hint ? <p className="text-sm text-muted-foreground">{hint}</p> : null}
         </DialogHeader>
-        {loadVless ? (
-          <Segment
-            label="Протокол"
-            value={protocol}
-            onValueChange={setProtocol}
-            options={protocolOptions}
-          />
-        ) : null}
-        {body}
+        <div className="grid gap-4">
+          {loadVless ? (
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <Segment
+                label="Протокол"
+                value={protocol}
+                onValueChange={setProtocol}
+                options={protocolOptions}
+              />
+              {route}
+            </div>
+          ) : null}
+          {body}
+        </div>
       </DialogContent>
     </Dialog>
   );

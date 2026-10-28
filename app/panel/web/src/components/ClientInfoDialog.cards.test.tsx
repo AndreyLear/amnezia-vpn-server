@@ -188,7 +188,7 @@ describe("ClientInfoDialog: блоки", () => {
     const user = userEvent.setup();
     renderDialog();
     await user.click(screen.getByRole("tab", { name: "VLESS" }));
-    const label = await screen.findByText("Через вход");
+    const label = await screen.findByText("Каскад");
     const row = label.closest("li")!;
     expect(row).toHaveClass("flex-col");
     expect(row.className).not.toMatch(/sm:flex-row/);
@@ -209,7 +209,7 @@ describe("ClientInfoDialog: блоки", () => {
     expect(within(parts[1]).getByText("Трафик")).toBeInTheDocument();
     expect(within(parts[1]).getByText("Последняя активность")).toBeInTheDocument();
     expect(within(panel).queryByText(/Подключения через вход/)).toBeNull();
-    expect(within(parts[2]).getByText("Через вход")).toBeInTheDocument();
+    expect(within(parts[2]).getByText("Каскад")).toBeInTheDocument();
     expect(screen.queryByText(/пока не учитывается/)).toBeNull();
   });
 
