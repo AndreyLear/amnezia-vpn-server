@@ -310,6 +310,8 @@ func New(cfg Config) (*Server, error) {
 	// Узел-вход забирает свою конфигурацию по своему секрету, без входа в
 	// панель (amnezia-vpn-server-14y0.6, см. api_entry.go).
 	s.mux.HandleFunc("GET /api/entry/config", s.apiEntryConfig)
+	// Его показатели для шапки — тем же секретом (amnezia-vpn-server-q1do.1).
+	s.mux.HandleFunc("POST /api/entry/report", s.apiEntryReport)
 	s.mux.Handle("PATCH /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsPatch))))
 	s.mux.Handle("DELETE /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsDelete))))
 	distRoot, err := fs.Sub(distFS, "dist")

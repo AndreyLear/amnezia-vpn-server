@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-import type { HostSnapshot, IfaceState, VLESSState } from "@/lib/api";
+import type { EntryHost, HostSnapshot, IfaceState, VLESSState } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -120,27 +120,45 @@ function Metric({
   );
 }
 
-function cpuValue(host: HostSnapshot | null): string {
+/**
+ * Три числа шапки — общие для основного сервера и каскада
+ * (amnezia-vpn-server-q1do.1): узел присылает те же поля в том же виде.
+ */
+type Load = Pick<
+  Partial<HostSnapshot>,
+  | "cpu_percent"
+  | "ram_percent"
+  | "disk_percent"
+  | "ram_used_bytes"
+  | "ram_total_bytes"
+  | "disk_used_bytes"
+  | "disk_total_bytes"
+>;
+
+function cpuValue(host: Load | null): string {
   if (host?.cpu_percent == null) return DASH;
   return `${roundPercent(host.cpu_percent)}%`;
 }
 
-function ramValue(host: HostSnapshot | null): string {
+function ramValue(host: Load | null): string {
   if (host?.ram_percent == null) return DASH;
   return `${roundPercent(host.ram_percent)}%`;
 }
 
-function diskValue(host: HostSnapshot | null): string {
+function diskValue(host: Load | null): string {
   if (host?.disk_used_bytes == null) return DASH;
   return formatBytes(host.disk_used_bytes);
 }
 
-function cpuTooltip(host: HostSnapshot | null): string | null {
+// subject — чья нагрузка: пусто у основного сервера, « каскада» или
+// « каскада <имя>» у узла, чтобы подсказку под строкой каскада не приняли
+// за подсказку про этот сервер.
+function cpuTooltip(host: Load | null, subject = ""): string | null {
   if (host?.cpu_percent == null) return null;
-  return `Загрузка CPU: ${roundPercent(host.cpu_percent)}%`;
+  return `Загрузка CPU${subject}: ${roundPercent(host.cpu_percent)}%`;
 }
 
-function ramTooltip(host: HostSnapshot | null): string | null {
+function ramTooltip(host: Load | null, subject = ""): string | null {
   if (
     host?.ram_percent == null ||
     host.ram_used_bytes == null ||
@@ -148,10 +166,10 @@ function ramTooltip(host: HostSnapshot | null): string | null {
   ) {
     return null;
   }
-  return `Загрузка RAM: ${roundPercent(host.ram_percent)}% (${formatBytes(host.ram_used_bytes)} / ${formatBytes(host.ram_total_bytes)})`;
+  return `Загрузка RAM${subject}: ${roundPercent(host.ram_percent)}% (${formatBytes(host.ram_used_bytes)} / ${formatBytes(host.ram_total_bytes)})`;
 }
 
-function diskTooltip(host: HostSnapshot | null): string | null {
+function diskTooltip(host: Load | null, subject = ""): string | null {
   if (
     host?.disk_percent == null ||
     host.disk_used_bytes == null ||
@@ -159,7 +177,47 @@ function diskTooltip(host: HostSnapshot | null): string | null {
   ) {
     return null;
   }
-  return `Загрузка диска: ${roundPercent(host.disk_percent)}% (${formatBytes(host.disk_used_bytes)} / ${formatBytes(host.disk_total_bytes)})`;
+  return `Загрузка диска${subject}: ${roundPercent(host.disk_percent)}% (${formatBytes(host.disk_used_bytes)} / ${formatBytes(host.disk_total_bytes)})`;
+}
+
+/** «2% / 21% / 6,4 Гб» — без подписей, подписи в aria-label и подсказках. */
+function LoadValues({
+  load,
+  labels,
+  subject,
+}: {
+  load: Load | null;
+  labels: { cpu: string; ram: string; disk: string };
+  subject?: string;
+}) {
+  return (
+    <>
+      <Metric
+        ariaLabel={labels.cpu}
+        value={cpuValue(load)}
+        colorPercent={load?.cpu_percent}
+        tooltip={cpuTooltip(load, subject)}
+      />
+      <span aria-hidden className="text-muted-foreground">
+        /
+      </span>
+      <Metric
+        ariaLabel={labels.ram}
+        value={ramValue(load)}
+        colorPercent={load?.ram_percent}
+        tooltip={ramTooltip(load, subject)}
+      />
+      <span aria-hidden className="text-muted-foreground">
+        /
+      </span>
+      <Metric
+        ariaLabel={labels.disk}
+        value={diskValue(load)}
+        colorPercent={load?.disk_percent}
+        tooltip={diskTooltip(load, subject)}
+      />
+    </>
+  );
 }
 
 function ifaceName(host: HostSnapshot | null): string {
@@ -228,11 +286,13 @@ function StatusWord({
   text,
   state,
   tooltip,
+  className,
 }: {
   ariaLabel: string;
   text: string;
   state: IfaceState | "loading";
-  tooltip: string;
+  tooltip: ReactNode;
+  className?: string;
 }) {
   const shimmer =
     (state === "loading" || state === "na") && !prefersReducedMotion();
@@ -240,7 +300,7 @@ function StatusWord({
     ? "header-iface-shimmer"
     : ifaceColorClass[state === "loading" ? "na" : state];
   const inner = (
-    <span aria-label={ariaLabel} className={cn("w-fit text-xs", colorClass)}>
+    <span aria-label={ariaLabel} className={cn("w-fit text-xs", colorClass, className)}>
       {text}
     </span>
   );
@@ -289,6 +349,71 @@ function HeaderIface({ host }: { host: HostSnapshot | null }) {
   );
 }
 
+// Подсказка слова «Каскад» (amnezia-vpn-server-q1do.1). «5 минут» — порог
+// entryOfflineAfter на сервере: состояние считает он.
+function entryTooltip(entry: EntryHost): ReactNode {
+  if (entry.state !== "up") {
+    return entry.seen
+      ? "Каскад не выходил на связь больше 5 минут. Проверьте, что сервер включён и видит панель"
+      : "Каскад ещё ни разу не выходил на связь. Проверьте адрес панели и секрет узла на нём";
+  }
+  if (!entry.reporting) {
+    return "Каскад на связи, но показатели не приходят — на нём старая версия. Обновите: запустите на узле install.sh --role entry";
+  }
+  if (entry.rx_bytes == null || entry.tx_bytes == null) return "Каскад работает";
+  // Трафик всего основного интерфейса узла, а не только клиентов, — отсюда
+  // «за минуту», а не «клиенты передали». Узел ходит раз в минуту; пропуски
+  // растягивают интервал, и он назван как есть.
+  const minutes = Math.round((entry.interval_seconds ?? 60) / 60);
+  const span = minutes <= 1 ? "За минуту" : `За ${minutes} мин`;
+  // Одним столбцом: содержимое подсказки — flex-ряд, и две строки без
+  // обёртки вставали рядом колонками.
+  return (
+    <span className="flex flex-col">
+      <span>Каскад работает</span>
+      <span>
+        {`${span} принято ${formatBytes(entry.rx_bytes)}, отправлено ${formatBytes(entry.tx_bytes)}`}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Строка узла-входа под строкой основного сервера: слово «Каскад» (с
+ * именем, когда узлов несколько), окрашенное как AWG и VLESS, и те же три
+ * числа. Узел молчит дольше 5 минут — слово красное, вместо чисел
+ * прочерки: сервер не отдаёт числа несвежего отчёта.
+ */
+function EntryRow({ entry, named }: { entry: EntryHost; named: boolean }) {
+  const suffix = named ? ` ${entry.name}` : "";
+  const reporting = entry.state === "up" && entry.reporting;
+  // На телефоне «Каскад de-1» с числами в ширину рядом с кнопками не
+  // влезает: слово и числа не рвутся внутри себя, а числа целиком уходят
+  // под слово.
+  return (
+    <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 tabular-nums">
+      <StatusWord
+        ariaLabel={`Состояние каскада${suffix}`}
+        text={named ? `Каскад ${entry.name}` : "Каскад"}
+        state={entry.state === "up" ? "up" : "down"}
+        tooltip={entryTooltip(entry)}
+        className="me-1 whitespace-nowrap"
+      />
+      <span className="flex items-center gap-1 whitespace-nowrap">
+        <LoadValues
+          load={reporting ? entry : null}
+          labels={{
+            cpu: `CPU каскада${suffix}`,
+            ram: `RAM каскада${suffix}`,
+            disk: `Диск каскада${suffix}`,
+          }}
+          subject={` каскада${suffix}`}
+        />
+      </span>
+    </div>
+  );
+}
+
 export function HeaderStats({
   host,
   className,
@@ -296,6 +421,7 @@ export function HeaderStats({
   host: HostSnapshot | null;
   className?: string;
 }) {
+  const entries = host?.entries ?? [];
   return (
     <TooltipProvider>
       <div
@@ -306,31 +432,11 @@ export function HeaderStats({
       >
         <HeaderIface host={host} />
         <div className="flex items-center gap-1 tabular-nums">
-          <Metric
-            ariaLabel="CPU"
-            value={cpuValue(host)}
-            colorPercent={host?.cpu_percent}
-            tooltip={cpuTooltip(host)}
-          />
-          <span aria-hidden className="text-muted-foreground">
-            /
-          </span>
-          <Metric
-            ariaLabel="RAM"
-            value={ramValue(host)}
-            colorPercent={host?.ram_percent}
-            tooltip={ramTooltip(host)}
-          />
-          <span aria-hidden className="text-muted-foreground">
-            /
-          </span>
-          <Metric
-            ariaLabel="Диск"
-            value={diskValue(host)}
-            colorPercent={host?.disk_percent}
-            tooltip={diskTooltip(host)}
-          />
+          <LoadValues load={host} labels={{ cpu: "CPU", ram: "RAM", disk: "Диск" }} />
         </div>
+        {entries.map((entry) => (
+          <EntryRow key={entry.name} entry={entry} named={entries.length > 1} />
+        ))}
       </div>
     </TooltipProvider>
   );

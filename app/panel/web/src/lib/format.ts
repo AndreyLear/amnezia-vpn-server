@@ -98,7 +98,16 @@ export function formatHandshakeAge(iso: string | null, now = Date.now()): string
   // Отсчёт зажимается в ноль, а не подменяется словом вроде «только что»:
   // здесь возвращается ДЛИТЕЛЬНОСТЬ, и вызывающий вправе дописать к ней
   // «назад». Наречие на этом месте дало бы «Проверено только что назад».
-  const sec = Math.max(0, Math.floor((now - t) / 1000));
+  return formatDurationSeconds((now - t) / 1000);
+}
+
+/**
+ * Длительность в том же виде, что у formatHandshakeAge: «40 сек», «5 мин»,
+ * «3 ч», «3 дн». Отрицательное — ноль. Нужна и для аптайма узла в окне
+ * «О версиях» (amnezia-vpn-server-q1do.1).
+ */
+export function formatDurationSeconds(seconds: number): string {
+  const sec = Math.max(0, Math.floor(seconds));
   if (sec < 60) return `${sec} сек`;
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min} мин`;

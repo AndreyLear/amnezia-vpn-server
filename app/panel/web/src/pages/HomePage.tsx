@@ -82,6 +82,8 @@ export default function HomePage() {
           iface: snap.iface?.trim() || "awg0",
           iface_state: snap.iface_state ?? "na",
           vless_state: snap.vless_state ?? "none",
+          // Строки «Каскад» (amnezia-vpn-server-q1do.1); не список — строк нет.
+          entries: Array.isArray(snap.entries) ? snap.entries : [],
         });
       }
     } catch {

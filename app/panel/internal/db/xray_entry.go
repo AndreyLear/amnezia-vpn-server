@@ -33,7 +33,9 @@ const xrayEntriesTable = `CREATE TABLE IF NOT EXISTS xray_entries (
 		link_prefix TEXT NOT NULL DEFAULT '',
 		updated_at_utc TEXT NOT NULL,
 		token_hash TEXT NOT NULL DEFAULT '',
-		last_sync_utc TEXT NOT NULL DEFAULT ''
+		last_sync_utc TEXT NOT NULL DEFAULT '',
+		report_json TEXT NOT NULL DEFAULT '',
+		report_utc TEXT NOT NULL DEFAULT ''
 	);`
 
 // XrayEntry — узел-вход. Секретов в нём нет: всё это и так видно в любой
@@ -334,6 +336,79 @@ func migrateXrayEntrySync(handle *sql.DB) error {
 	}
 	if _, err := handle.Exec(`ALTER TABLE xray_entries ADD COLUMN last_sync_utc TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("db: add xray_entries.last_sync_utc: %w", err)
+	}
+	return nil
+}
+
+// Последний отчёт узла о его показателях (amnezia-vpn-server-q1do.1): CPU,
+// память, диск, трафик, аптайм и версии — шапка и окно «О версиях». Один
+// отчёт на узел, без истории: новый заменяет прежний. База хранит его
+// JSON как есть — разбирает и проверяет его пакет xray и при записи, и
+// при чтении; время отчёта отдельно от времени синка: старый узел
+// синхронизируется, но отчётов не шлёт.
+
+// XrayEntryReport — узел, его время синка и последний отчёт; нулевое
+// время и пустой Report — не было ни разу.
+type XrayEntryReport struct {
+	Name       string
+	LastSync   time.Time
+	ReportedAt time.Time
+	Report     string
+}
+
+// SaveXrayEntryReport запоминает отчёт узла name, полученный в момент
+// now. Узла нет — не ошибка: его могли удалить между проверкой секрета и
+// этой записью.
+func SaveXrayEntryReport(handle *sql.DB, name, report string, now time.Time) error {
+	if _, err := handle.Exec(`UPDATE xray_entries SET report_json = ?, report_utc = ? WHERE name = ?`,
+		report, now.UTC().Format(time.RFC3339), name); err != nil {
+		return fmt.Errorf("db: write entry report: %w", err)
+	}
+	return nil
+}
+
+// XrayEntryReports — время синка и последний отчёт всех узлов по имени.
+// Нечитаемое время считается «ни разу», как в XrayEntrySyncs.
+func XrayEntryReports(handle Querier) ([]XrayEntryReport, error) {
+	rows, err := handle.Query(`SELECT name, last_sync_utc, report_utc, report_json FROM xray_entries ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("db: query entry reports: %w", err)
+	}
+	defer rows.Close()
+	out := []XrayEntryReport{}
+	for rows.Next() {
+		var (
+			r              XrayEntryReport
+			sync, reported string
+		)
+		if err := rows.Scan(&r.Name, &sync, &reported, &r.Report); err != nil {
+			return nil, fmt.Errorf("db: scan entry report: %w", err)
+		}
+		if t, err := time.Parse(time.RFC3339, sync); err == nil {
+			r.LastSync = t.UTC()
+		}
+		if t, err := time.Parse(time.RFC3339, reported); err == nil {
+			r.ReportedAt = t.UTC()
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// migrateXrayEntryReport добавляет колонки отчёта в таблицу узлов
+// выпуска 3.1.0. Аддитивно, без подъёма SchemaVersion, как last_sync_utc.
+func migrateXrayEntryReport(handle *sql.DB) error {
+	for _, col := range []string{"report_json", "report_utc"} {
+		has, err := tableHasColumn(handle, "xray_entries", col)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := handle.Exec(`ALTER TABLE xray_entries ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("db: add xray_entries.%s: %w", col, err)
+		}
 	}
 	return nil
 }

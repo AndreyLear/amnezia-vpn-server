@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/xray"
 )
 
 // Что стоит на сервере (amnezia-vpn-server-rdcz, -8bt5).
@@ -54,10 +56,18 @@ type versionsJSON struct {
 // entryAboutJSON — узел-вход для окна «О версиях». Online считает сервер
 // по своим часам: часы браузера могут отставать, и «нет связи» зависело бы
 // от устройства, на котором открыта панель.
+//
+// Xray, Release и UptimeSeconds — из отчёта узла (amnezia-vpn-server-q1do.1).
+// Версии — последние известные, сколько бы им ни было: при «нет связи»
+// они и подсказывают, что обновлять. Аптайм — только из свежего отчёта:
+// старый аптайм врёт.
 type entryAboutJSON struct {
-	Name     string  `json:"name"`
-	LastSync *string `json:"last_sync_utc"`
-	Online   bool    `json:"online"`
+	Name          string  `json:"name"`
+	LastSync      *string `json:"last_sync_utc"`
+	Online        bool    `json:"online"`
+	Xray          string  `json:"xray"`
+	Release       string  `json:"release"`
+	UptimeSeconds *int64  `json:"uptime_seconds"`
 }
 
 // entryOfflineAfter — после скольких минут без синка узел считается без
@@ -71,18 +81,43 @@ func xrayVersion() string {
 	return os.Getenv("AMNEZIA_XRAY_VERSION")
 }
 
-func entriesAbout(syncs []db.XrayEntrySync, now time.Time) []entryAboutJSON {
-	out := make([]entryAboutJSON, 0, len(syncs))
-	for _, s := range syncs {
+func entriesAbout(reports []db.XrayEntryReport, now time.Time) []entryAboutJSON {
+	out := make([]entryAboutJSON, 0, len(reports))
+	for _, s := range reports {
 		e := entryAboutJSON{Name: s.Name}
 		if !s.LastSync.IsZero() {
 			v := s.LastSync.UTC().Format(time.RFC3339)
 			e.LastSync = &v
 			e.Online = now.Sub(s.LastSync) <= entryOfflineAfter
 		}
+		if report, ok := storedEntryReport(s.Report); ok {
+			e.Xray, e.Release = report.XrayVersion, report.Release
+			if entryFresh(s.ReportedAt, now) {
+				e.UptimeSeconds = report.UptimeSeconds
+			}
+		}
 		out = append(out, e)
 	}
 	return out
+}
+
+// entryFresh — было ли событие узла не дольше entryOfflineAfter назад.
+func entryFresh(t, now time.Time) bool {
+	return !t.IsZero() && now.Sub(t) <= entryOfflineAfter
+}
+
+// storedEntryReport — отчёт узла из базы, снова проверенный: строка могла
+// остаться от другой версии панели или быть поправлена руками. Пустая или
+// нечитаемая — ok=false, и вместо значений прочерки.
+func storedEntryReport(raw string) (xray.EntryReport, bool) {
+	if raw == "" {
+		return xray.EntryReport{}, false
+	}
+	var r xray.EntryReport
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		return xray.EntryReport{}, false
+	}
+	return r.Sanitized(), true
 }
 
 // productVersion is what this deployment runs; empty when the container
@@ -133,8 +168,8 @@ func (s *Server) apiVersions(w http.ResponseWriter, r *http.Request) {
 		VLESSState: s.vlessStateJSON(),
 		Entries:    []entryAboutJSON{},
 	}
-	if syncs, err := db.XrayEntrySyncs(s.db()); err == nil {
-		out.Entries = entriesAbout(syncs, time.Now().UTC())
+	if reports, err := db.XrayEntryReports(s.db()); err == nil {
+		out.Entries = entriesAbout(reports, time.Now().UTC())
 	}
 	dir := filepath.Dir(s.cfg.StatusPath)
 

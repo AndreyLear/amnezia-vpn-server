@@ -92,12 +92,43 @@ describe("о версиях", () => {
     });
     render(<AboutDialog open onOpenChange={() => {}} />);
 
-    expect(await screen.findByText("Xray")).toBeInTheDocument();
+    expect((await screen.findAllByText("Xray"))[0]).toBeInTheDocument();
     expect(screen.getByText("26.10.21")).toBeInTheDocument();
     expect(rowValue("VLESS")).toBe("Включён");
     expect(rowValue("Каскад entry")).toBe("1 мин назад");
     expect(rowValue("Каскад ru")).toBe("Нет связи");
     expect(rowValue("Каскад fi")).toBe("Нет связи");
+  });
+
+  // Под строкой узла — его версия выпуска, Xray и время без перезагрузки из
+  // отчёта узла (amnezia-vpn-server-q1do.1). Неизвестное — «Неизвестно»:
+  // старый узел отчётов не шлёт.
+  it("показывает версию, Xray и аптайм каждого входа под его строкой", async () => {
+    const synced = new Date(Date.now() - 90_000).toISOString();
+    reply({
+      product: "3.1.0",
+      xray: "26.10.21",
+      vless_state: "up",
+      entries: [
+        { name: "entry", last_sync_utc: synced, online: true, xray: "26.11.2", release: "3.2.0", uptime_seconds: 3 * 86400 + 5 },
+        { name: "old", last_sync_utc: synced, online: true },
+      ],
+    });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    await screen.findByText("3.1.0");
+
+    const values = (label: string) =>
+      screen.getAllByText(label, { selector: "dt" }).map((dt) => dt.nextElementSibling?.textContent);
+    // Порядок: строка основного сервера, потом узлы по порядку.
+    expect(values("Версия")).toEqual(["3.1.0", "3.2.0", "Неизвестно"]);
+    expect(values("Xray")).toEqual(["26.10.21", "26.11.2", "Неизвестно"]);
+    expect(values("Без перезагрузки")).toEqual(["3 дн", "Неизвестно"]);
+
+    // Строки узла идут сразу под его строкой и отличаются отступом.
+    const entryRow = screen.getByText("Каскад entry", { selector: "dt" }).parentElement as HTMLElement;
+    const sub = entryRow.nextElementSibling as HTMLElement;
+    expect(sub.querySelector("dt")).toHaveTextContent("Версия");
+    expect(sub.querySelector("dt")).toHaveClass("ps-4");
   });
 
   // Опрос Xray не ответил — VLESS всё равно включён: строка говорит о
@@ -117,7 +148,7 @@ describe("о версиях", () => {
   it("не прячет Xray, когда VLESS выключен, но входы есть", async () => {
     reply({ product: "3.0.1", xray: "26.10.21", vless_state: "none", entries: [{ name: "entry", last_sync_utc: null, online: false }] });
     render(<AboutDialog open onOpenChange={() => {}} />);
-    expect(await screen.findByText("Xray")).toBeInTheDocument();
+    expect((await screen.findAllByText("Xray"))[0]).toBeInTheDocument();
     expect(rowValue("VLESS")).toBe("Выключен");
     expect(rowValue("Каскад entry")).toBe("Нет связи");
   });
