@@ -123,25 +123,33 @@ test("карточка клиента показывает график скор
   await expect(chart).toBeVisible();
 });
 
-// Трафик по дням — своя карточка под вкладками, одна на клиента: на
-// вкладке VLESS она та же, что на AWG (amnezia-vpn-server-gzmb). История
-// у свежей фикстуры пуста — это и проверяется: заглушка объясняет, откуда
-// она возьмётся, и на 375px карточка не шире окна.
-for (const width of [1280, 375]) test(`окно клиента показывает трафик по дням под вкладками (${width}px)`, async ({ page }) => {
+// Трафик по дням — во вкладке протокола, под графиком скорости, как и он
+// свой у AWG и у VLESS (amnezia-vpn-server-gzmb). История у свежей
+// фикстуры пуста — это и проверяется: заглушка объясняет, откуда она
+// возьмётся, и на 375px график не шире окна.
+for (const width of [1280, 375]) test(`вкладки клиента показывают трафик по дням под скоростью (${width}px)`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 });
   await login(page);
   await expect(page.getByLabel("Протокол: AWG").first()).toBeVisible();
   if (width < 640) await page.getByText("alice", { exact: true }).click();
   else await page.getByRole("button", { name: "alice", exact: true }).click();
-  const card = page.getByTestId("client-daily-traffic");
-  await expect(card.getByText("Трафик по дням")).toBeVisible();
-  await expect(card.getByText("За 30 дней трафика нет")).toBeVisible();
-  await expect(card.getByText("История копится с обновления панели")).toBeVisible();
-  await expect(page.getByTestId("client-protocols").getByText(/^Трафик по дням/)).toHaveCount(0);
-  const box = await card.boundingBox();
-  expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
-  await page.getByRole("tab", { name: "VLESS" }).click();
-  await expect(page.getByText(/^Трафик по дням/)).toHaveCount(1);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.locator('[data-slot="info-block"]')).toHaveCount(2);
+  for (const tab of ["AWG", "VLESS"]) {
+    await page.getByRole("tab", { name: tab }).click();
+    const panel = page.getByRole("tabpanel");
+    await expect(panel.getByText(/^Скорость/)).toBeVisible();
+    const title = panel.getByText("Трафик по дням", { exact: true });
+    await expect(title).toBeVisible();
+    await expect(panel.getByText("За 30 дней трафика нет")).toBeVisible();
+    await expect(panel.getByText("История копится с обновления панели")).toBeVisible();
+    await expect(dialog.getByText(/^Трафик по дням/)).toHaveCount(1);
+    const speedBox = await panel.getByText(/^Скорость/).boundingBox();
+    const titleBox = await title.boundingBox();
+    expect(speedBox && titleBox && titleBox.y > speedBox.y).toBe(true);
+    const box = await panel.getByText("За 30 дней трафика нет").boundingBox();
+    expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
+  }
 });
 
 // Ширину меню юнит-тест не измерит: в jsdom вёрстки нет вовсе, там любая

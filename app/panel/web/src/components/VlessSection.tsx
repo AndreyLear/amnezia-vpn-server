@@ -3,6 +3,7 @@ import { Copy, QrCode } from "lucide-react";
 import { toast } from "sonner";
 
 import { InfoSection, infoRowClass, infoRowsClass } from "@/components/InfoBlock";
+import { DailyTrafficChart } from "@/components/DailyTrafficChart";
 import { SpeedChart } from "@/components/SpeedChart";
 import { Button } from "@/components/ui/button";
 import {
@@ -126,8 +127,11 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
   // рядом с ним то, что он показывает в цифрах, ссылки — отдельно.
   const chart = (
     <InfoSection>
-      <dl>
+      {/* Как во вкладке AWG: под скоростью — трафик по дням
+          (amnezia-vpn-server-gzmb). */}
+      <dl className="grid gap-4">
         <SpeedChart clientId={clientId} protocol="vless" />
+        <DailyTrafficChart clientId={clientId} protocol="vless" />
       </dl>
     </InfoSection>
   );

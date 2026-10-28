@@ -102,18 +102,15 @@ describe("ClientInfoDialog: блоки", () => {
   });
 
   // Владелец: «Табы и контент табов внутри блока. Это всё один блок» —
-  // общее и вкладки целиком (amnezia-vpn-server-14y0.9). Третья — трафик
-  // по дням: он общий для обоих протоколов и стоит под вкладками, а не в
-  // каждой из них (amnezia-vpn-server-gzmb).
-  it("три карточки: общее, вкладки вместе с их содержимым, трафик по дням", async () => {
+  // ровно две карточки: общее и вкладки целиком (amnezia-vpn-server-14y0.9).
+  // Трафик по дням — тоже внутри вкладок, своя карточка у него была и
+  // владелец её убрал (amnezia-vpn-server-gzmb).
+  it("две карточки: общее и вкладки вместе с их содержимым", async () => {
     const user = userEvent.setup();
     renderDialog();
     const dialog = screen.getByRole("dialog");
     const cards = blocks(dialog);
-    expect(cards).toHaveLength(3);
-    expect(cards[2]).toBe(screen.getByTestId("client-daily-traffic"));
-    expect(within(cards[2]).getByText(/^Трафик по дням/)).toBeInTheDocument();
-    expect(within(cards[1]).queryByText(/^Трафик по дням/)).toBeNull();
+    expect(cards).toHaveLength(2);
     expect(cards[0]).toBe(screen.getByTestId("client-common"));
     const tabsCard = cards[1];
     for (const cls of ["p-4", "rounded-[1rem]", "border", "border-border"]) {
@@ -124,11 +121,27 @@ describe("ClientInfoDialog: блоки", () => {
 
     await user.click(screen.getByRole("tab", { name: "VLESS" }));
     await screen.findByText("Напрямую");
-    // На вкладке VLESS график тот же и там же — один на клиента.
-    expect(blocks(screen.getByRole("dialog"))).toHaveLength(3);
-    expect(screen.getAllByText(/^Трафик по дням/)).toHaveLength(1);
-    expect(fetchTraffic).toHaveBeenCalledTimes(1);
+    expect(blocks(screen.getByRole("dialog"))).toHaveLength(2);
     expect(tabsCard).toContainElement(screen.getByRole("tabpanel"));
+  });
+
+  // Трафик по дням — во вкладке, под графиком скорости, и показывает протокол
+  // своей вкладки, как график скорости (amnezia-vpn-server-gzmb).
+  it("трафик по дням — под графиком скорости, свой у каждой вкладки", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    const awgChart = sections(screen.getByRole("tabpanel"))[0];
+    const speed = within(awgChart).getByText(/^Скорость/);
+    const daily = within(awgChart).getByText(/^Трафик по дням/);
+    expect(speed.compareDocumentPosition(daily) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await waitFor(() => expect(fetchTraffic).toHaveBeenCalledWith(7, expect.any(Date)));
+
+    await user.click(screen.getByRole("tab", { name: "VLESS" }));
+    await screen.findByText("Напрямую");
+    const vlessChart = sections(screen.getByRole("tabpanel"))[0];
+    expect(within(vlessChart).getByText(/^Скорость/)).toBeInTheDocument();
+    expect(within(vlessChart).getByText(/^Трафик по дням/)).toBeInTheDocument();
+    expect(screen.getAllByText(/^Трафик по дням/)).toHaveLength(1);
   });
 
   it("AWG — разделы через разделители, не карточки: график; IP с конфигом; MTU с ограничением; рукопожатие с трафиком", () => {
