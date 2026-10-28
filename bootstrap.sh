@@ -100,8 +100,8 @@ Options:
                        --client-domain. Omitted: public IP. The panel
                        hostname is never copied onto clients.
   --client-domain FQDN alias of --vpn-domain
-  --awg-port PORT      AmneziaWG UDP port (default: 4500; avoid 443,
-                       which mobile carriers throttle as QUIC, and 51820)
+  --awg-port PORT      AmneziaWG UDP port (default: 4500; avoid 443, where
+                       speed on mobile networks is lower, and 51820)
   --root DIR           deployment root on the server (default: /opt/amnezia-vpn)
   --ipv6               carry IPv6 inside the tunnel; --no-ipv6 keeps it
                        IPv4-only. A fresh install decides for itself when

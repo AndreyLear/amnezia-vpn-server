@@ -2,7 +2,7 @@
 
 A script that sets up a VPN on your server, plus a web panel where you add clients with a button and connect them by QR code. One command from your computer, about five minutes.
 
-The VPN runs on AmneziaWG: WireGuard with packets that do not look like WireGuard, which makes it harder to block.
+The VPN runs on AmneziaWG: WireGuard with packets that look different from plain WireGuard.
 
 Русская версия: [README.md](README.md) · Security: [SECURITY.md](SECURITY.md) · Development: [DEVELOPMENT.md](DEVELOPMENT.md)
 
@@ -84,7 +84,7 @@ Endpoint:  example.com:4500
 
 1. Open the panel at the address from the summary. Without a panel domain the browser warns about a self-signed certificate: compare the fingerprint with the one printed and continue
 2. [Change the password](#changing-the-panel-password)
-3. Press "Add client" (the panel itself is in Russian) and connect a device as described in [Clients](#clients)
+3. Press "Add client" (the panel interface is in Russian) and connect a device as described in [Clients](#clients)
 
 ### What the installer turns on
 
@@ -175,6 +175,82 @@ Your server's address or an error means all is well. The provider's address mean
 
 **MTU.** A router on a wire carries larger packets than a phone on a mobile network, and the server default is sized for the phone. You can raise it for one client: "Сведения" → MTU → "Изменить", 1280–1440 allowed. That speeds up what the household sends out. The other direction is set by the server and shared by everyone
 
+## Entry through an intermediate server
+
+A second server, the entry node. It fits when connecting directly does not work: the client connects to the node over VLESS. Sites on its direct-exit list open straight from the node, from its address, without going through the main server. By default the list holds local sites of the country where the node stands. The node sends everything else to the main server. The link through the node appears in the client window in the panel. In the app it is called "VLESS Phone", and the direct link to the main server is "VLESS direct Phone". In the client window the route is labelled "Через вход" ("Via entry"), or "Через вход entry" if there are several nodes. The main server counts traffic through the entry per client, just like direct traffic.
+
+**What you need**
+
+- A main server installed with `--xray`, and a panel domain. The node fetches the client list from the panel over https, so without a panel domain it does not work
+- A separate server: Debian 12, Ubuntu 22.04 or 24.04. Xray takes TCP port 443 on it
+- For your own stub (the site a stranger sees): a domain pointing at this server and open TCP port 80, which issues the Let's Encrypt certificate
+
+### How to install
+
+1. **On the node.** Copy the repository or a release archive there and run in its directory:
+
+   ```sh
+   ./install.sh --role entry --panel https://panel.example.com --entry-domain entry.example.com
+   ```
+
+   At the end the installer prints a ready command to register the node in the panel: `panel xray entry set <name> --host … --sni … --public-key … --short-id … --path … --prefix "VLESS "`
+
+2. **On the main server.** Run that command the way you run other panel commands:
+
+   ```sh
+   ssh root@203.0.113.10 "cd /opt/amnezia-vpn && docker compose --env-file versions.lock \
+     run --rm -T panel-init /app/panel xray entry set entry --host entry.example.com --sni entry.example.com \
+     --public-key … --short-id … --path … --prefix 'VLESS '"
+   ```
+
+   The command prints the node's secret once: the last word on the line with `token`, 43 characters. Copy it right away: the panel stores only a hash and cannot show it a second time.
+
+3. **On the node.** Pass the secret to the installer:
+
+   ```sh
+   ./install.sh --role entry --entry-token -
+   ```
+
+   Paste the secret and press Enter. With `-` it stays out of the shell history.
+
+From then on the node fetches the client list from the panel every minute. A new client can connect through the entry a minute after being added, and a disabled one is cut off there too.
+
+### What the role installs
+
+- Xray at a pinned version, the archive checked against its sha256
+- Sync with the panel every minute
+- Direct-exit site lists, updated weekly
+- TCP settings for mobile networks (BBR)
+- fail2ban for SSH. Not needed? Add `--no-fail2ban`
+
+Docker and the panel are not needed on the node.
+
+### If the node already has a site
+
+You can show strangers your own site instead of the stub. Instead of `--entry-domain` pass:
+
+```sh
+./install.sh --role entry --panel https://panel.example.com \
+  --entry-dest 127.0.0.1:4441 --entry-server-names site.example,www.site.example --entry-xver 1
+```
+
+The site must listen on 127.0.0.1 only, not on port 443. With `--entry-xver 1` it receives the visitor's address over PROXY protocol. In nginx that is `listen 127.0.0.1:4441 ssl proxy_protocol;`. Links point to the first name in the list.
+
+### If something changes
+
+- **The panel is down.** The node keeps working with the last list it received. Changes arrive once the connection is back
+- **The secret leaked.** Issue a new one on the main server, and the old one stops working at once:
+
+  ```sh
+  ssh root@203.0.113.10 "cd /opt/amnezia-vpn && docker compose --env-file versions.lock \
+    run --rm -T panel-init /app/panel xray entry token entry"
+  ```
+
+  Then run `./install.sh --role entry --entry-token -` on the node and paste the new secret
+- **Renaming.** `panel xray entry rename <old> <new>` on the main server: the secret and the node's parameters stay, only the name changes
+- **Rerun.** `./install.sh --role entry` with no flags changes no keys: the Reality keys, shortId and path are created once and kept in `/opt/xray-entry/settings.json`, so links already issued keep working
+- **A node set up by hand.** If it is already in `/opt/xray-entry`, the installer takes it over in place, with the same keys. A settings file from elsewhere is brought in with `--import-settings FILE`
+
 ## Changing the panel password
 
 The panel has no password form on purpose, so the password cannot be guessed through a browser. It is changed with a command on the server:
@@ -255,9 +331,9 @@ Four containers run on the server: the panel (which keeps its data in SQLite), A
 
 Client configs route IPv6 into the tunnel too, so it does not go around the VPN with your real address. If the tunnel carries no IPv6, those connections fail and apps fall back to IPv4.
 
-The tunnel runs on UDP 4500. Port 443 is open almost everywhere, but it is the QUIC port, and mobile carriers throttle it to slow video down. A tunnel on it inherited the limit: 20 Mbit/s against 45 on port 4500 and 40 with no tunnel at all. Port 4500 belongs to IPsec, which corporate VPNs use, so carriers let it through.
+The tunnel runs on UDP 4500. Port 443 is open almost everywhere, but it is the QUIC port, and on mobile networks it is slower. A tunnel on that port gave 20 Mbit/s against 45 on port 4500 and 40 with no tunnel at all. Port 4500 belongs to IPsec, which corporate VPNs use, and its speed does not drop.
 
-The in-tunnel DNS exists because of the panel. It sits at the address where the tunnel ends. A packet sent to that address never enters the tunnel, and iOS creates no bypass route for it, so without answering the hostname differently the panel would be unreachable from exactly the devices connected to it. Clients get our DNS. If the tunnel carries IPv6, a public fallback is added after it: if ours stops, names keep resolving.
+The in-tunnel DNS exists because of the panel. It sits at the address where the tunnel ends. A packet sent to that address never enters the tunnel, and iOS creates no separate route outside the tunnel for it, so without answering the hostname differently the panel would be unreachable from exactly the devices connected to it. Clients get our DNS. If the tunnel carries IPv6, a public fallback is added after it: if ours stops, names keep resolving.
 
 Without IPv6 there is no fallback: a public DNS would return IPv6 addresses the tunnel cannot carry, and you would get "pages open, video does not" with no visible cause. Here a failure is visible at once, and the watchdog brings DNS back within a minute.
 

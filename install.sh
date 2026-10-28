@@ -276,9 +276,9 @@ Options:
                 so the panel is no longer reachable from a device
                 connected to this VPN.
   --tunnel-dns  turn it back on after --no-tunnel-dns
-  --xray        run Xray (VLESS+XHTTP+Reality) next to AmneziaWG: the one
-                protocol that still gets through on Russian mobile
-                networks. Off by default. Needs a VPN domain
+  --xray        run Xray (VLESS+XHTTP+Reality) next to AmneziaWG: a second
+                protocol over TCP 443, for networks where AmneziaWG does
+                not connect. Off by default. Needs a VPN domain
                 (--vpn-domain): Reality presents the server's own site.
                 TCP 443 is then split by name in nginx stream: the
                 panel domain goes to the panel, everything else to
