@@ -181,7 +181,22 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
         // sticky item with z-index:auto paints in DOM order rather than
         // above later siblings). Harmless when the dialog is short enough
         // that nothing scrolls — sticky then behaves exactly like static.
-        "sticky top-0 z-10 flex flex-col gap-2 bg-popover max-sm:pr-12",
+        //
+        // Фон — на всю полосу от края окна до содержимого, а не на высоту
+        // текста (amnezia-vpn-server-hscw). Chromium и WebKit отсчитывают
+        // top у sticky от края ОТСТУПА прокручиваемого тела, поэтому при
+        // top-0 шапка вставала на 16px ниже верха окна, и в этой полосе, как
+        // и по бокам, проезжало содержимое. Отрицательные поля на ширину
+        // отступа тела (p-4) растягивают шапку до краёв окна, свои px-4/pt-4
+        // возвращают текст на прежнее место, а -top-4 прижимает её к самому
+        // верху. Снизу pb-4 с -mb-4: фон закрывает 16px под заголовком, а
+        // следующий элемент в покое стоит там же, где стоял, — зазор сетки
+        // тела (gap-4 или gap-6) не меньше этих 16px, так что фон шапки
+        // ничего не перекрывает. Если окну понадобится другой отступ тела,
+        // эти четыре значения меняются вместе с ним. max-sm:pr-16, а не
+        // pr-12: шапка шире на 16px, и место под крестик отсчитывается от
+        // края окна.
+        "sticky -top-4 z-10 -mx-4 -mt-4 -mb-4 flex flex-col gap-2 bg-popover px-4 pt-4 pb-4 max-sm:pr-16",
         className
       )}
       {...props}

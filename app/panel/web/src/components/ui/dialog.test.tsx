@@ -67,8 +67,11 @@ describe("шапка не прокручивается вместе с соде�
       .getByText("Заголовок")
       .closest('[data-slot="dialog-header"]');
     expect(header).not.toBeNull();
-    expect(header).toHaveClass("sticky", "top-0");
-    // Хедер физически внутри прокручиваемой обёртки — иначе его top-0
+    // -top-4 и отрицательные поля на ширину отступа тела: шапка прилипает
+    // к самому краю окна и красит фон на всю полосу над содержимым, а не
+    // на высоту текста (amnezia-vpn-server-hscw; проверка вёрсткой — в e2e).
+    expect(header).toHaveClass("sticky", "-top-4", "-mx-4", "-mt-4", "px-4", "pt-4");
+    // Хедер физически внутри прокручиваемой обёртки — иначе его top
     // некуда прикреплять, — но закреплён в ней, а не течёт вместе с ней.
     expect(body).toContainElement(header as HTMLElement);
 
