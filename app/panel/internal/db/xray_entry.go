@@ -71,11 +71,54 @@ func ValidateXrayEntry(e XrayEntry) error {
 		return fmt.Errorf("db: entry %s: short id must be 0–16 lowercase hex digits, even length", e.Name)
 	case !xhttpPathPattern.MatchString(e.Path):
 		return fmt.Errorf("db: entry %s: path must start with / and contain only URL-safe characters", e.Name)
-	case len([]rune(e.LinkPrefix)) > 16 || strings.IndexFunc(e.LinkPrefix, unicode.IsControl) >= 0:
+	case !validLinkPrefix(e.LinkPrefix):
 		return fmt.Errorf("db: entry %s: link prefix must be at most 16 printable characters", e.Name)
 	}
 	if raw, err := base64.RawURLEncoding.DecodeString(e.PublicKey); err != nil || len(raw) != 32 {
 		return fmt.Errorf("db: entry %s: public key is not 32 bytes of base64 raw url", e.Name)
+	}
+	return nil
+}
+
+// validLinkPrefix — приставка к имени подключения в ссылке: до 16
+// печатных символов (уходит в фрагмент ссылки и в подпись в приложении).
+func validLinkPrefix(p string) bool {
+	return len([]rune(p)) <= 16 && strings.IndexFunc(p, unicode.IsControl) < 0
+}
+
+// ErrXrayEntryExists — узел с таким именем уже есть.
+var ErrXrayEntryExists = errors.New("db: xray entry with this name already exists")
+
+// RenameXrayEntry меняет имя узла, сохраняя параметры и секрет: узел
+// перенастраивать не нужно (решение владельца 28.10.2026 — «ru» → «entry»).
+func RenameXrayEntry(handle *sql.DB, oldName, newName string) error {
+	if !entryNamePattern.MatchString(newName) {
+		return fmt.Errorf("db: entry name must be 1–32 lowercase letters, digits or -")
+	}
+	tx, err := handle.Begin()
+	if err != nil {
+		return fmt.Errorf("db: begin entry rename: %w", err)
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM xray_entries WHERE name = ?`, newName).Scan(&n); err != nil {
+		return fmt.Errorf("db: check entry name: %w", err)
+	}
+	if n > 0 {
+		return ErrXrayEntryExists
+	}
+	res, err := tx.Exec(`UPDATE xray_entries SET name = ?, updated_at_utc = ? WHERE name = ?`,
+		newName, time.Now().UTC().Format(time.RFC3339), oldName)
+	if err != nil {
+		return fmt.Errorf("db: rename entry: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("db: rename entry: %w", err)
+	} else if n == 0 {
+		return ErrXrayEntryNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit entry rename: %w", err)
 	}
 	return nil
 }
@@ -214,6 +257,21 @@ func migrateXrayEntryToken(handle *sql.DB) error {
 	}
 	if _, err := handle.Exec(`ALTER TABLE xray_entries ADD COLUMN token_hash TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("db: add xray_entries.token_hash: %w", err)
+	}
+	return nil
+}
+
+// migrateXrayLinkPrefix добавляет приставку прямых ссылок в настройки
+// Xray выпусков 2.11–2.12. Значение по умолчанию — новая подпись «VLESS
+// direct » (решение владельца 28.10.2026): прежняя жёсткая «VPN » меняется
+// на неё и у уже настроенного сервера.
+func migrateXrayLinkPrefix(handle *sql.DB) error {
+	has, err := tableHasColumn(handle, "xray", "link_prefix")
+	if err != nil || has {
+		return err
+	}
+	if _, err := handle.Exec(`ALTER TABLE xray ADD COLUMN link_prefix TEXT NOT NULL DEFAULT 'VLESS direct '`); err != nil {
+		return fmt.Errorf("db: add xray.link_prefix: %w", err)
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ const (
 	opXrayEntryList   = "xray entry list"
 	opXrayEntryRemove = "xray entry remove"
 	opXrayEntryToken  = "xray entry token"
+	opXrayEntryRename = "xray entry rename"
 	opXrayUsersJSON   = "xray users-json"
 )
 
@@ -35,6 +36,8 @@ func (a *app) cmdXrayEntry(args []string) int {
 		return a.cmdXrayEntryRemove(args[1:])
 	case "token":
 		return a.cmdXrayEntryToken(args[1:])
+	case "rename":
+		return a.cmdXrayEntryRename(args[1:])
 	default:
 		a.usage()
 		return 2
@@ -72,7 +75,8 @@ func (a *app) cmdXrayEntrySet(args []string) int {
 				return a.usageError(opXrayEntrySet, "a new entry needs --host, --sni, --public-key, --short-id and --path")
 			}
 		}
-		e = &db.XrayEntry{Name: name, LinkPort: 443}
+		// Подпись ссылок через узел по умолчанию — «VLESS <имя>».
+		e = &db.XrayEntry{Name: name, LinkPort: 443, LinkPrefix: db.XrayEntryDefaultLinkPrefix}
 	case err != nil:
 		return a.fatal(opXrayEntrySet, err)
 	}
@@ -103,6 +107,23 @@ func (a *app) cmdXrayEntrySet(args []string) int {
 		return 0
 	}
 	return a.issueEntryToken(handle, opXrayEntrySet, name)
+}
+
+// cmdXrayEntryRename меняет имя узла; параметры и секрет остаются, узел
+// перенастраивать не нужно.
+func (a *app) cmdXrayEntryRename(args []string) int {
+	if len(args) != 2 {
+		return a.usageError(opXrayEntryRename, "want <name> <new-name>")
+	}
+	handle, err := a.openDBForChange()
+	if err != nil {
+		return a.fatal(opXrayEntryRename, err)
+	}
+	defer handle.Close()
+	if err := db.RenameXrayEntry(handle, args[0], args[1]); err != nil {
+		return a.fatal(opXrayEntryRename, err)
+	}
+	return a.ok(opXrayEntryRename, "entry "+args[0]+" renamed to "+args[1])
 }
 
 // cmdXrayEntryToken выдаёт узлу новый секрет взамен прежнего: прежний

@@ -58,10 +58,12 @@ commands:
   client delete <id>
   client config <id>
   xray init [--address <host>] [--server-name <name>] [--target <host:port>]
+      [--link-prefix <text>]
     (generates the Reality keys once; later runs only change the given
      settings — the keys are part of every link already handed out)
     (Reality steals its own site: --server-name defaults to the endpoint's
      domain, --target to the local nginx on 127.0.0.1:4433)
+    (--link-prefix starts the name of direct links, "VLESS direct " by default)
   xray import <dir>              take over a hand-made Xray setup: settings.json
                                  and users.json (or keys.txt, shortid.txt, path.txt)
   xray link <id> [--entry <name>]  print the client's vless:// link, direct or
@@ -69,11 +71,14 @@ commands:
   xray entry set <name> [--host <host>] [--port <port>] [--sni <name>]
       [--public-key <key>] [--short-id <hex>] [--path </path>] [--prefix <text>]
     (an entry node: a server without a panel that clients reach first, with
-     the same UUIDs; a new entry needs every flag but --port and --prefix)
+     the same UUIDs; a new entry needs every flag but --port and --prefix;
+     --prefix starts the name of its links, "VLESS " by default)
     (a new entry, or one without a token yet, gets the secret token its
      node syncs with; it is printed once and only its hash is kept)
   xray entry token <name>        issue a new token for the entry node; the old
                                  one stops working at once
+  xray entry rename <name> <new-name>  rename an entry node; its settings and
+                                 token stay
   xray entry list
   xray entry remove <name>
   xray users-json                print [{client_id,name,uuid,enabled}] for an entry node

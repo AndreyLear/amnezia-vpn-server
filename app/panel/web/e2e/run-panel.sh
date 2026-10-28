@@ -24,9 +24,9 @@ if [ "${AMNEZIA_E2E_NO_CLIENTS:-0}" != "1" ]; then
     # настоящего Xray здесь нет, и тест не должен искать его в /run.
     export AMNEZIA_XRAY_API_ADDR="unix:$DIR/xray-api.sock"
     go run . xray init --server-name vpn.example.com >/dev/null
-    go run . xray entry set ru --host ru.example.com --sni ru.example.com \
+    go run . xray entry set entry --host entry.example.com --sni entry.example.com \
         --public-key u1D_noKldM-_gg6X9g-5wUPsdBXPUU-M_Zjv9Z4FlhQ \
-        --short-id a1b2 --path /entry --prefix "RU " >/dev/null
+        --short-id a1b2 --path /entry >/dev/null
 fi
 # История скорости: без неё график в карточке проверять нечем
 # (amnezia-vpn-server-tmjw). Кладём последние десять минут так, как их писал бы

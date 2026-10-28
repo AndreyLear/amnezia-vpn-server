@@ -90,7 +90,7 @@ die_op() { die 1 "$1"; }
 usage() {
     cat <<'EOF'
 install.sh --role entry — an entry node: Xray that takes clients in first,
-sends Russian sites direct and everything else to the main server.
+sends sites from the direct-exit list straight out and everything else to the main server.
 
 Usage:
   ./install.sh --role entry --panel URL --entry-token TOKEN|-
@@ -517,7 +517,7 @@ cat <<EOF
 install: entry node ready.
 install: register it in the panel (on the main server), once:
 install:   panel xray entry set <name> --host $(param host)${port_flag} --sni $(param sni) \\
-install:       --public-key $(param public_key) --short-id $(param short_id) --path $(param path) --prefix "RU "
+install:       --public-key $(param public_key) --short-id $(param short_id) --path $(param path) --prefix "VLESS "
 install: a new entry prints its token there; give it to this node with
 install:   ./install.sh --role entry --entry-token -
 EOF

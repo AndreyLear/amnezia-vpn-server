@@ -36,7 +36,8 @@ const xrayTable = `CREATE TABLE IF NOT EXISTS xray (
 		server_name TEXT NOT NULL,
 		link_address TEXT NOT NULL DEFAULT '',
 		link_port INTEGER NOT NULL DEFAULT 443,
-		updated_at_utc TEXT NOT NULL
+		updated_at_utc TEXT NOT NULL,
+		link_prefix TEXT NOT NULL DEFAULT 'VLESS direct '
 	);`
 
 // xrayServiceUsersTable — служебные учётки VLESS, не принадлежащие ни
@@ -60,6 +61,15 @@ const xrayServiceUsersTable = `CREATE TABLE IF NOT EXISTS xray_service_users (
 const (
 	XrayDefaultTarget   = "127.0.0.1:4433"
 	XrayDefaultLinkPort = 443
+)
+
+// Подписи ссылок в приложениях (решение владельца 28.10.2026): по имени
+// протокола и маршрута, без страны. Прямая ссылка — «VLESS direct <имя>»,
+// через узел-вход — «VLESS <имя>». Приставка прямых ссылок — в настройках
+// Xray (xray.link_prefix), узла — в xray_entries.link_prefix.
+const (
+	XrayDefaultLinkPrefix      = "VLESS direct "
+	XrayEntryDefaultLinkPrefix = "VLESS "
 )
 
 // ErrXrayNotConfigured — строки xray нет: ключей Reality на сервере ещё не
@@ -87,6 +97,8 @@ type XraySettings struct {
 	// хост из endpoint, тот же, что у AWG.
 	LinkAddress string
 	LinkPort    int64
+	// LinkPrefix — начало имени подключения в прямой ссылке.
+	LinkPrefix string
 }
 
 // XraySettingsRow читает настройки Xray; ErrXrayNotConfigured, если строки
@@ -94,9 +106,9 @@ type XraySettings struct {
 func XraySettingsRow(handle Querier) (*XraySettings, error) {
 	var s XraySettings
 	err := handle.QueryRow(
-		`SELECT private_key, public_key, short_id, path, target, server_name, link_address, link_port
+		`SELECT private_key, public_key, short_id, path, target, server_name, link_address, link_port, link_prefix
 		   FROM xray WHERE id = 1`,
-	).Scan(&s.PrivateKey, &s.PublicKey, &s.ShortID, &s.Path, &s.Target, &s.ServerName, &s.LinkAddress, &s.LinkPort)
+	).Scan(&s.PrivateKey, &s.PublicKey, &s.ShortID, &s.Path, &s.Target, &s.ServerName, &s.LinkAddress, &s.LinkPort, &s.LinkPrefix)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrXrayNotConfigured
 	}
@@ -135,6 +147,8 @@ func validateXraySettings(s XraySettings) error {
 		return errors.New("db: xray settings: empty target or server name")
 	case s.LinkPort < 1 || s.LinkPort > 65535:
 		return fmt.Errorf("db: xray settings: invalid link port %d", s.LinkPort)
+	case !validLinkPrefix(s.LinkPrefix):
+		return fmt.Errorf("db: xray settings: link prefix must be at most 16 printable characters")
 	}
 	return nil
 }
@@ -145,14 +159,15 @@ type execer interface {
 
 func saveXraySettings(handle execer, s XraySettings) error {
 	if _, err := handle.Exec(
-		`INSERT INTO xray (id, private_key, public_key, short_id, path, target, server_name, link_address, link_port, updated_at_utc)
-		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO xray (id, private_key, public_key, short_id, path, target, server_name, link_address, link_port, link_prefix, updated_at_utc)
+		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 			private_key = excluded.private_key, public_key = excluded.public_key,
 			short_id = excluded.short_id, path = excluded.path, target = excluded.target,
 			server_name = excluded.server_name, link_address = excluded.link_address,
-			link_port = excluded.link_port, updated_at_utc = excluded.updated_at_utc`,
-		s.PrivateKey, s.PublicKey, s.ShortID, s.Path, s.Target, s.ServerName, s.LinkAddress, s.LinkPort,
+			link_port = excluded.link_port, link_prefix = excluded.link_prefix,
+			updated_at_utc = excluded.updated_at_utc`,
+		s.PrivateKey, s.PublicKey, s.ShortID, s.Path, s.Target, s.ServerName, s.LinkAddress, s.LinkPort, s.LinkPrefix,
 		time.Now().UTC().Format(time.RFC3339),
 	); err != nil {
 		return fmt.Errorf("db: write xray settings: %w", err)

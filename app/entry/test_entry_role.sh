@@ -300,6 +300,7 @@ check "запуск: xray-entry запущен, таймеры включены"
 check "запуск: без лишнего перезапуска" test "$(calls 'systemctl restart xray-entry')" = 0
 check "панель: секрет в заголовке, не в адресе" test "$(cat "$WORK/panel.log")" = "/api/entry/config auth=ok"
 check "итог: команда регистрации узла в панели" grep -q "panel xray entry set <name> --host a.example.ru --sni a.example.ru" "$WORK/out.log"
+check "итог: ссылки через узел подписаны «VLESS <имя>»" grep -q -- '--prefix "VLESS "' "$WORK/out.log"
 
 # --- 2. синхронизация ------------------------------------------------------------
 

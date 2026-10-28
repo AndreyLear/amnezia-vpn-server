@@ -384,7 +384,7 @@ for (const width of [1280, 375]) test(`окно клиента выдаёт сс
   // Оговорки про вход больше нет: трафик через вход учитывается
   // (amnezia-vpn-server-14y0.12).
   await expect(page.getByText(/Подключения через вход/)).toHaveCount(0);
-  await expect(page.getByText("Через вход RU", { exact: true })).toBeVisible();
+  await expect(page.getByText("Через вход", { exact: true })).toBeVisible();
   // amnezia-vpn-server-14y0.9: у VLESS свой график, «Удалить» — внизу окна,
   // и окно не прокручивается вбок ни на одной ширине.
   await expect(page.getByRole("tabpanel").getByText(/^Скорость/)).toBeVisible();
@@ -392,11 +392,12 @@ for (const width of [1280, 375]) test(`окно клиента выдаёт сс
   const body = page.locator('[data-slot="dialog-body"]').first();
   expect(await body.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 
-  await page.getByRole("button", { name: "Скопировать ссылку: Через вход RU" }).click();
+  await page.getByRole("button", { name: "Скопировать ссылку: Через вход", exact: true }).click();
   await expect(page.getByText("Ссылка скопирована")).toBeVisible();
   const link = await page.evaluate(() => navigator.clipboard.readText());
-  expect(link).toMatch(/^vless:\/\/[0-9a-f-]{36}@ru\.example\.com:443\?type=xhttp&path=%2Fentry&/);
-  expect(link.endsWith("#RU%20alice")).toBe(true);
+  expect(link).toMatch(/^vless:\/\/[0-9a-f-]{36}@entry\.example\.com:443\?type=xhttp&path=%2Fentry&/);
+  // Подпись в приложении — «VLESS <имя>» (решение владельца 28.10.2026).
+  expect(link.endsWith("#VLESS%20alice")).toBe(true);
 
   await page.getByRole("button", { name: "QR: Напрямую" }).click();
   const img = page.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Напрямую»" });
@@ -431,9 +432,9 @@ for (const width of [1280, 375]) test(`окно QR из меню строки: A
   await expect(dialog.getByRole("group", { name: "Маршрут" })).toBeVisible();
   const direct = dialog.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Напрямую»" });
   await expect.poll(async () => direct.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
-  await dialog.getByRole("button", { name: "Через вход RU" }).click();
-  const viaEntry = dialog.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Через вход RU»" });
-  await expect(viaEntry).toHaveAttribute("src", /\/vless\/qr\?entry=ru$/);
+  await dialog.getByRole("button", { name: "Через вход", exact: true }).click();
+  const viaEntry = dialog.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Через вход»" });
+  await expect(viaEntry).toHaveAttribute("src", /\/vless\/qr\?entry=entry$/);
   await expect.poll(async () => viaEntry.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
   const box = await viaEntry.boundingBox();
   expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);

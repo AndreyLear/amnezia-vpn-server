@@ -16,9 +16,9 @@ import { formatBytes, formatHandshake } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // Раздел VLESS в окне клиента (amnezia-vpn-server-14y0.5): второй способ
-// подключения рядом с AmneziaWG. На мобильном интернете в РФ AmneziaWG
-// режется, а VLESS+XHTTP+Reality на 443 проходит — напрямую или через
-// российский узел-вход. Тексты согласованы с редактором.
+// подключения рядом с AmneziaWG, поверх TCP 443 — напрямую или через
+// узел-вход, когда напрямую подключиться не получается. Тексты согласованы
+// с редактором.
 //
 // С amnezia-vpn-server-14y0.8 раздел — содержимое вкладки «VLESS»: кроме
 // ссылок в нём трафик VLESS и последняя активность — по счётчикам Xray.
@@ -29,14 +29,18 @@ import { cn } from "@/lib/utils";
 // вкладок (не своих карточек): график скорости VLESS (свой журнал панели по
 // тем же счётчикам), трафик с активностью и ссылки.
 
-export function vlessRouteLabel(route: VlessRoute): string {
+// Подпись маршрута (решение владельца 28.10.2026): узел-вход один —
+// просто «Через вход»; узлов несколько — с именем узла. Приставка ссылки
+// («VLESS ») для подписи не годится: она одинакова у всех узлов.
+export function vlessRouteLabel(route: VlessRoute, routes: VlessRoute[]): string {
   if (!route.entry) return "Напрямую";
-  return `Через вход ${route.prefix.trim() || route.entry}`;
+  const entries = routes.filter((r) => r.entry).length;
+  return entries > 1 ? `Через вход ${route.entry}` : "Через вход";
 }
 
 export function vlessRouteHint(route: VlessRoute): string {
   return route.entry
-    ? "Для мобильного интернета, где напрямую не подключается. Российские сайты открываются мимо VPN."
+    ? "Подходит, когда напрямую подключиться не получается. Сайты из списка прямого выхода открываются без основного сервера."
     : "Подходит для Wi-Fi и домашнего интернета, на мобильном работает не всегда";
 }
 
@@ -157,7 +161,7 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
       <InfoSection data-testid="vless-section">
         <ul aria-label="Маршруты" className={infoRowsClass}>
           {info.routes.map((route) => {
-            const label = vlessRouteLabel(route);
+            const label = vlessRouteLabel(route, info.routes);
             return (
               <li
                 key={route.entry || "direct"}
@@ -205,14 +209,14 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
           <DialogHeader>
             <DialogTitle>QR-код VLESS: {clientName}</DialogTitle>
             <p className="text-sm text-muted-foreground">
-              {qrRoute ? vlessRouteLabel(qrRoute) : ""}: отсканируйте QR в v2RayTun, Happ
+              {qrRoute ? vlessRouteLabel(qrRoute, info.routes) : ""}: отсканируйте QR в v2RayTun, Happ
               или другом приложении с поддержкой VLESS
             </p>
           </DialogHeader>
           {qrRoute ? (
             <img
               className="mx-auto aspect-square w-full"
-              alt={`QR-код VLESS клиента ${clientName}, маршрут «${vlessRouteLabel(qrRoute)}»`}
+              alt={`QR-код VLESS клиента ${clientName}, маршрут «${vlessRouteLabel(qrRoute, info.routes)}»`}
               src={vlessQrUrl(clientId, qrRoute.entry)}
             />
           ) : null}

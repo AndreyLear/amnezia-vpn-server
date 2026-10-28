@@ -208,6 +208,9 @@ func Migrate(handle *sql.DB) error {
 	if err := migrateXrayEntryToken(handle); err != nil {
 		return err
 	}
+	if err := migrateXrayLinkPrefix(handle); err != nil {
+		return err
+	}
 	if _, err := handle.Exec(
 		`INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)
 		 ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
