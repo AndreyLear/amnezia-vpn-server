@@ -56,7 +56,7 @@ describe("QrDialog", () => {
       <QrDialog clientId={1} clientName="Alice" onOpenChange={() => {}} />,
     );
 
-    const qr = screen.getByRole("img", { name: "QR-код клиента Alice" });
+    const qr = screen.getByRole("img", { name: "QR-код AmneziaWG клиента Alice" });
 
     expect(qr).toHaveClass("w-full");
     expect(qr).toHaveClass("aspect-square");

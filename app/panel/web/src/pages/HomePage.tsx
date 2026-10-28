@@ -21,6 +21,7 @@ import {
   type MutationResponse,
 } from "@/lib/api";
 import { nextDemoHost } from "@/lib/demoHost";
+import { lastProtocol, type Protocol } from "@/lib/protocol";
 import { useUpdateInfo } from "@/lib/update";
 
 const DEMO_HOST_OVERLAY =
@@ -33,6 +34,10 @@ export default function HomePage() {
   const [addOpen, setAddOpen] = useState(false);
   const [infoId, setInfoId] = useState<number | null>(null);
   const [qrId, setQrId] = useState<number | null>(null);
+  // С какого протокола открыть окно QR (amnezia-vpn-server-14y0.13): из
+  // меню строки — по последней активности клиента, из вкладки AWG окна
+  // клиента — AWG.
+  const [qrProtocol, setQrProtocol] = useState<Protocol>("awg");
   const [pendingId, setPendingId] = useState<number | "new" | null>(null);
   // Окно с описанием выпуска открывают двое: плашка и пункт меню, поэтому
   // его состояние живёт здесь (amnezia-vpn-server-919e).
@@ -242,7 +247,10 @@ export default function HomePage() {
               client={client}
               pending={pendingId === client.id}
               onInfo={() => setInfoId(client.id)}
-              onQr={() => setQrId(client.id)}
+              onQr={() => {
+                setQrProtocol(lastProtocol(client));
+                setQrId(client.id);
+              }}
               onDownload={() => downloadConfig(client.id)}
               onToggle={() => void toggleClient(client)}
               onDelete={() => void deleteClient(client)}
@@ -262,7 +270,11 @@ export default function HomePage() {
         onOpenChange={(open) => {
           if (!open) setInfoId(null);
         }}
-        onQr={() => infoClient && setQrId(infoClient.id)}
+        onQr={() => {
+          if (!infoClient) return;
+          setQrProtocol("awg");
+          setQrId(infoClient.id);
+        }}
         loadVless={fetchVless}
         onDownload={() => infoClient && downloadConfig(infoClient.id)}
         onToggle={() => infoClient && void toggleClient(infoClient)}
@@ -272,6 +284,8 @@ export default function HomePage() {
       <QrDialog
         clientId={qrId}
         clientName={qrClient?.name ?? ""}
+        initialProtocol={qrProtocol}
+        loadVless={fetchVless}
         onOpenChange={(open) => {
           if (!open) setQrId(null);
         }}

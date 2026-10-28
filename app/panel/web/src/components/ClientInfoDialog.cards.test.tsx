@@ -39,8 +39,6 @@ const routes: VlessInfo = {
   ],
 };
 
-const entryCaption =
-  "Подключения через вход не попадают в график, трафик и последнюю активность — если клиент подключается только так, здесь будет пусто";
 
 function renderDialog(load = vi.fn().mockResolvedValue(routes)) {
   render(
@@ -155,13 +153,48 @@ describe("ClientInfoDialog: блоки", () => {
     expect(after[after.length - 1]).toBe(screen.getByRole("button", { name: "Удалить" }));
   });
 
-  it("окно шире прежнего sm:max-w-md", () => {
+  // Владелец: после sm:max-w-2xl — «немного уже» (amnezia-vpn-server-14y0.13).
+  it("окно шире sm:max-w-md, но уже sm:max-w-2xl", () => {
     renderDialog();
     const content = document.querySelector('[data-slot="dialog-content"]');
-    expect(content).toHaveClass("sm:max-w-2xl");
+    expect(content).toHaveClass("sm:max-w-xl");
+    expect(content).not.toHaveClass("sm:max-w-2xl");
   });
 
-  it("VLESS: свой график по счётчикам Xray, разделы и понятная оговорка про вход рядом с трафиком", async () => {
+  // Вкладки — сегмент первого уровня: по содержимому и слева, ниже прежней
+  // полосы h-10 (amnezia-vpn-server-14y0.13).
+  it("вкладки AWG|VLESS — сегмент первого уровня, не на всю ширину", () => {
+    renderDialog();
+    const list = screen.getByRole("tablist", { name: "Протокол" });
+    expect(list).toHaveAttribute("data-slot", "segment");
+    expect(list).toHaveAttribute("data-size", "md");
+    expect(list).toHaveClass("w-fit");
+    expect(list).not.toHaveClass("w-full");
+    expect(list).not.toHaveClass("h-10");
+    expect(screen.getByRole("tab", { name: "AWG" })).toHaveClass("h-8");
+  });
+
+  // Период графика — тот же сегмент, второго уровня.
+  it("период графика — сегмент второго уровня", () => {
+    renderDialog();
+    const range = screen.getByRole("group", { name: "Период" });
+    expect(range).toHaveAttribute("data-slot", "segment");
+    expect(range).toHaveAttribute("data-size", "sm");
+  });
+
+  // Подписи маршрутов не ломаются в три строки рядом с кнопками: кнопки
+  // всегда под подписью (amnezia-vpn-server-14y0.13).
+  it("кнопки маршрута — под подписью на любой ширине", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(screen.getByRole("tab", { name: "VLESS" }));
+    const label = await screen.findByText("Через вход RU");
+    const row = label.closest("li")!;
+    expect(row).toHaveClass("flex-col");
+    expect(row.className).not.toMatch(/sm:flex-row/);
+  });
+
+  it("VLESS: свой график по счётчикам Xray и разделы, без оговорки про вход", async () => {
     const user = userEvent.setup();
     renderDialog();
     await user.click(screen.getByRole("tab", { name: "VLESS" }));
@@ -175,17 +208,9 @@ describe("ClientInfoDialog: блоки", () => {
     expect(within(parts[0]).getByText(/^Скорость/)).toBeInTheDocument();
     expect(within(parts[1]).getByText("Трафик")).toBeInTheDocument();
     expect(within(parts[1]).getByText("Последняя активность")).toBeInTheDocument();
-    expect(within(parts[1]).getByText(entryCaption)).toBeInTheDocument();
+    expect(within(panel).queryByText(/Подключения через вход/)).toBeNull();
     expect(within(parts[2]).getByText("Через вход RU")).toBeInTheDocument();
     expect(screen.queryByText(/пока не учитывается/)).toBeNull();
-  });
-
-  it("VLESS без входов — оговорки нет", async () => {
-    const user = userEvent.setup();
-    renderDialog(vi.fn().mockResolvedValue({ enabled: true, routes: [routes.routes[0]] }));
-    await user.click(screen.getByRole("tab", { name: "VLESS" }));
-    await screen.findByText("Напрямую");
-    expect(screen.queryByText(entryCaption)).toBeNull();
   });
 
   it("AWG-график просит ряды AWG", async () => {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { Segment } from "@/components/Segment";
 import { fetchSpeed, type SpeedSeries } from "@/lib/api";
 import { formatDateShort } from "@/lib/format";
 import type { Protocol } from "@/lib/protocol";
@@ -35,6 +35,13 @@ type Range = "10min" | "day";
  * ухудшила бы второе окно ради первого.
  */
 const COLUMNS: Record<Range, number> = { "10min": 120, day: 180 };
+// "10 минут" starts with a digit on purpose and is left alone; "сутки" is
+// a plain word caption, so it gets a capital letter like any other
+// standalone label (amnezia-vpn-server-4cnf).
+const RANGE_OPTIONS: { value: Range; label: string }[] = [
+  { value: "10min", label: "10 минут" },
+  { value: "day", label: "Сутки" },
+];
 const HEIGHT = 120;
 /** Такт записи истории; в коротком окне он и есть шаг обновления. */
 const REFRESH_MS = 5000;
@@ -107,44 +114,19 @@ export function SpeedChart({
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-2">
         <dt className="text-muted-foreground">Скорость{unit ? `, ${unit}` : ""}</dt>
-        <div className="flex gap-1">
-          <RangeButton current={range} value="10min" onSelect={setRange}>
-            10 минут
-          </RangeButton>
-          {/* "10 минут" starts with a digit on purpose and is left alone;
-              "сутки" is a plain word caption, so it gets a capital letter
-              like any other standalone label (amnezia-vpn-server-4cnf). */}
-          <RangeButton current={range} value="day" onSelect={setRange}>
-            Сутки
-          </RangeButton>
-        </div>
+        {/* Сегмент второго уровня — тот же, что вкладки протокола в окне
+            клиента, только меньше: график вложен во вкладку
+            (amnezia-vpn-server-14y0.13). */}
+        <Segment
+          label="Период"
+          size="sm"
+          value={range}
+          onValueChange={setRange}
+          options={RANGE_OPTIONS}
+        />
       </div>
       <SpeedPlot series={series} loading={loading} failed={failed} />
     </div>
-  );
-}
-
-function RangeButton({
-  current,
-  value,
-  onSelect,
-  children,
-}: {
-  current: Range;
-  value: Range;
-  onSelect: (r: Range) => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant={current === value ? "secondary" : "ghost"}
-      aria-pressed={current === value}
-      onClick={() => onSelect(value)}
-    >
-      {children}
-    </Button>
   );
 }
 

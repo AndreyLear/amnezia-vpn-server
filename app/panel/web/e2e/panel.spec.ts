@@ -381,7 +381,9 @@ for (const width of [1280, 375]) test(`окно клиента выдаёт сс
   await vlessTab.click();
   await expect(vlessTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Напрямую", { exact: true })).toBeVisible();
-  await expect(page.getByText("Подключения через вход не попадают в график, трафик и последнюю активность — если клиент подключается только так, здесь будет пусто")).toBeVisible();
+  // Оговорки про вход больше нет: трафик через вход учитывается
+  // (amnezia-vpn-server-14y0.12).
+  await expect(page.getByText(/Подключения через вход/)).toHaveCount(0);
   await expect(page.getByText("Через вход RU", { exact: true })).toBeVisible();
   // amnezia-vpn-server-14y0.9: у VLESS свой график, «Удалить» — внизу окна,
   // и окно не прокручивается вбок ни на одной ширине.
@@ -402,5 +404,37 @@ for (const width of [1280, 375]) test(`окно клиента выдаёт сс
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
   // Ширина: окно QR не выезжает за экран.
   const box = await img.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
+});
+
+// amnezia-vpn-server-14y0.13: пункт «QR-код» в меню строки показывал только
+// AWG. Теперь в окне выбор протокола и, у VLESS, маршрута; открывается на
+// протоколе последней активности (alice ещё не была на связи — AWG).
+for (const width of [1280, 375]) test(`окно QR из меню строки: AWG и VLESS (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await login(page);
+  // Меню строки есть только на широком экране; на телефоне окно QR
+  // открывает кнопка «QR» во вкладке AWG окна клиента — тоже на AWG.
+  if (width < 640) {
+    await page.getByText("alice", { exact: true }).click();
+    await page.getByRole("tabpanel").getByRole("button", { name: "QR", exact: true }).click();
+  } else {
+    await page.getByRole("button", { name: "Действия для alice" }).click();
+    await page.getByRole("menuitem", { name: "QR-код" }).click();
+  }
+  const dialog = page.getByRole("dialog", { name: "QR-код: alice" });
+  await expect(dialog.getByRole("button", { name: "AWG" })).toHaveAttribute("aria-pressed", "true");
+  const awg = dialog.getByRole("img", { name: "QR-код AmneziaWG клиента alice" });
+  await expect.poll(async () => awg.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+
+  await dialog.getByRole("button", { name: "VLESS" }).click();
+  await expect(dialog.getByRole("group", { name: "Маршрут" })).toBeVisible();
+  const direct = dialog.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Напрямую»" });
+  await expect.poll(async () => direct.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  await dialog.getByRole("button", { name: "Через вход RU" }).click();
+  const viaEntry = dialog.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Через вход RU»" });
+  await expect(viaEntry).toHaveAttribute("src", /\/vless\/qr\?entry=ru$/);
+  await expect.poll(async () => viaEntry.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  const box = await viaEntry.boundingBox();
   expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
 });

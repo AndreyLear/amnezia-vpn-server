@@ -13,6 +13,12 @@ export const protocolLabel: Record<Protocol, string> = {
   vless: "VLESS",
 };
 
+/** Варианты сегмента протокола: окно клиента и окно QR. */
+export const protocolOptions: { value: Protocol; label: string }[] = [
+  { value: "awg", label: protocolLabel.awg },
+  { value: "vless", label: protocolLabel.vless },
+];
+
 function time(iso: string | null | undefined): number | null {
   if (!iso) return null;
   const t = new Date(iso).getTime();

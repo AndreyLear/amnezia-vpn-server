@@ -21,10 +21,9 @@ import { cn } from "@/lib/utils";
 // российский узел-вход. Тексты согласованы с редактором.
 //
 // С amnezia-vpn-server-14y0.8 раздел — содержимое вкладки «VLESS»: кроме
-// ссылок в нём трафик VLESS и последняя активность. Панель считает их по
-// счётчикам Xray только для подключений напрямую: через вход трафик
-// приходит одной служебной учёткой, и по клиентам его не разложить —
-// об этом оговорка под полями, когда входы есть.
+// ссылок в нём трафик VLESS и последняя активность — по счётчикам Xray.
+// Вход пересылает каждого клиента под его UUID, так что трафик через вход
+// учтён тоже, и оговорки про него больше нет (amnezia-vpn-server-14y0.12).
 //
 // С amnezia-vpn-server-14y0.9 раздел — несколько разделов карточки
 // вкладок (не своих карточек): график скорости VLESS (свой журнал панели по
@@ -35,7 +34,7 @@ export function vlessRouteLabel(route: VlessRoute): string {
   return `Через вход ${route.prefix.trim() || route.entry}`;
 }
 
-function vlessRouteHint(route: VlessRoute): string {
+export function vlessRouteHint(route: VlessRoute): string {
   return route.entry
     ? "Для мобильного интернета, где напрямую не подключается. Российские сайты открываются мимо VPN."
     : "Подходит для Wi-Fi и домашнего интернета, на мобильном работает не всегда";
@@ -118,7 +117,6 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
       </InfoSection>
     );
   }
-  const hasEntry = info.routes.some((route) => route.entry);
   // Разделы — как у вкладки AWG (amnezia-vpn-server-14y0.9): график первым,
   // рядом с ним то, что он показывает в цифрах, ссылки — отдельно.
   const chart = (
@@ -129,23 +127,13 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
     </InfoSection>
   );
   const usage = (
-    <InfoSection className="grid gap-2">
+    <InfoSection>
       <dl className={infoRowsClass}>
         <Field label="Трафик">
           ↓ {formatBytes(traffic.down)} · ↑ {formatBytes(traffic.up)}
         </Field>
         <Field label="Последняя активность">{formatHandshake(traffic.lastActive)}</Field>
       </dl>
-      {/* Оговорка касается графика над блоком и обоих полей: подключение
-          через вход не видно ни там, ни там. Без входов её нет. Текст —
-          редактора: прежний («трафик через вход пока не учитывается»)
-          владелец не понял (amnezia-vpn-server-14y0.9). */}
-      {hasEntry ? (
-        <p className="text-muted-foreground">
-          Подключения через вход не попадают в график, трафик и последнюю
-          активность — если клиент подключается только так, здесь будет пусто
-        </p>
-      ) : null}
     </InfoSection>
   );
   if (!info.enabled) {
@@ -173,9 +161,10 @@ export function VlessSection({ clientId, clientName, enabled, load, traffic }: V
             return (
               <li
                 key={route.entry || "direct"}
-                // На телефоне кнопки — под подписью: рядом им не хватает
-                // ширины, и подпись ломалась бы по слову в строку.
-                className={cn("flex flex-col gap-2 sm:flex-row sm:items-center", infoRowClass)}
+                // Кнопки — под подписью на любой ширине: рядом с ними
+                // подсказка входа ломалась в три строки, а окно владелец
+                // просил не расширять (amnezia-vpn-server-14y0.13).
+                className={cn("flex flex-col gap-2", infoRowClass)}
               >
                 <div className="min-w-0 flex-1">
                   <div>{label}</div>
