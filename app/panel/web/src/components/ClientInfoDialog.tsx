@@ -421,9 +421,14 @@ export function ClientInfoDialog({
                           график — отвечает (amnezia-vpn-server-tmjw). Стоит он
                           первым: за ним вкладку и открывают, когда разбирают
                           жалобу (amnezia-vpn-server-6kj9). */}
+                      {/* Под скоростью — трафик по дням того же протокола: оба
+                          графика про «что было», и читаются вместе. Своей
+                          карточкой под вкладками он стоял сначала, владелец
+                          перенёс его сюда (amnezia-vpn-server-gzmb). */}
                       <InfoSection>
-                        <dl>
+                        <dl className="grid gap-4">
                           <SpeedChart clientId={client.id} protocol="awg" />
+                          <DailyTrafficChart clientId={client.id} protocol="awg" />
                         </dl>
                       </InfoSection>
                       <InfoSection>
@@ -552,15 +557,6 @@ export function ClientInfoDialog({
                       ) : null}
                     </TabsContent>
                   </Tabs>
-                </InfoBlock>
-                {/* Трафик по дням — своей карточкой под вкладками, а не во
-                    вкладке и не у строки «Трафик»: график один на клиента и
-                    показывает оба протокола, а во вкладках он повторился бы
-                    дважды и каждый раз наполовину чужой. Так же над
-                    вкладками стоит общее для обоих протоколов
-                    (amnezia-vpn-server-gzmb). */}
-                <InfoBlock data-testid="client-daily-traffic">
-                  <DailyTrafficChart clientId={client.id} />
                 </InfoBlock>
               </div>
               {/* Удаление — в самом низу окна, вне карточек: оно

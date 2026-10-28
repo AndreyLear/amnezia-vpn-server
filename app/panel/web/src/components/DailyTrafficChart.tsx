@@ -3,34 +3,52 @@ import { useEffect, useRef, useState } from "react";
 import { fetchTraffic } from "@/lib/api";
 import { foldDays, periodStart, TRAFFIC_DAYS, type DayTraffic } from "@/lib/dailyTraffic";
 import { formatBytes, formatLocalDateShort } from "@/lib/format";
+import type { Protocol } from "@/lib/protocol";
 
 /**
  * Трафик клиента по дням за тридцать дней (amnezia-vpn-server-gzmb).
  *
- * Своим svg, как график скорости рядом (SpeedChart): те же поле, сетка,
- * ось справа без единиц и единицы в заголовке, та же подсказка. Цвет
- * говорит о направлении так же, как там: синий — скачал, оранжевый —
- * отдал. На день — два столбика рядом, а не один сложенный: отдача обычно
- * в десятки раз меньше приёма и поверх него терялась бы.
+ * Стоит во вкладке протокола под графиком скорости и, как он, показывает
+ * только свой протокол. Сначала это была отдельная карточка под вкладками
+ * с обоими протоколами сразу; владелец перенёс график во вкладки: рядом с
+ * графиком скорости того же протокола он читается вместе с ним, а два
+ * протокола на одном поле требовали второй легенды. Сервер отдаёт оба
+ * протокола одним ответом, нужный отбирается здесь.
  *
- * Протокол — насыщенностью того же цвета: AWG снизу плотным, VLESS сверху
- * полупрозрачным. Полупрозрачный, а не светлый оттенок: на тёмной теме
- * светлый горел бы ярче плотного и читался бы главным. Владелец просил
- * один график на клиента, а не по графику во вкладке протокола, — поэтому
- * оба протокола здесь, а образцы протоколов в легенде серые: синий или
- * оранжевый образец спутался бы с направлением.
+ * Своим svg, как график скорости (SpeedChart): те же поле, сетка, ось
+ * справа без единиц и единицы в заголовке, та же подсказка. Цвет говорит о
+ * направлении так же, как там: синий — скачал, оранжевый — отдал. На день —
+ * два столбика рядом, а не один сложенный: отдача обычно в десятки раз
+ * меньше приёма и поверх него терялась бы.
  */
 
 const HEIGHT = 120;
 /** Доля ширины дня под один столбик; остальное — зазоры. */
 const BAR = 0.34;
 
+/** День одного протокола: столько скачал и столько отдал. */
+type Day = { date: Date; down: number; up: number };
+
 type Load =
   | { state: "loading" }
   | { state: "failed" }
-  | { state: "ready"; days: DayTraffic[]; now: number };
+  | { state: "ready"; days: Day[]; now: number };
 
-export function DailyTrafficChart({ clientId }: { clientId: number }) {
+function ofProtocol(days: DayTraffic[], protocol: Protocol): Day[] {
+  return days.map((d) =>
+    protocol === "vless"
+      ? { date: d.date, down: d.vlessDown, up: d.vlessUp }
+      : { date: d.date, down: d.awgDown, up: d.awgUp },
+  );
+}
+
+export function DailyTrafficChart({
+  clientId,
+  protocol,
+}: {
+  clientId: number;
+  protocol: Protocol;
+}) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
 
   useEffect(() => {
@@ -49,7 +67,11 @@ export function DailyTrafficChart({ clientId }: { clientId: number }) {
           setLoad({ state: "failed" });
           return;
         }
-        setLoad({ state: "ready", days: foldDays(data.hours, now), now: now.getTime() });
+        setLoad({
+          state: "ready",
+          days: ofProtocol(foldDays(data.hours, now), protocol),
+          now: now.getTime(),
+        });
       })
       .catch(() => {
         if (active) setLoad({ state: "failed" });
@@ -57,16 +79,12 @@ export function DailyTrafficChart({ clientId }: { clientId: number }) {
     return () => {
       active = false;
     };
-  }, [clientId]);
+  }, [clientId, protocol]);
 
   const scale = load.state === "ready" ? byteScale(load.days) : null;
   return (
     <div className="grid gap-2">
-      <div className="flex min-h-8 items-center">
-        <h3 className="text-muted-foreground">
-          Трафик по дням{scale ? `, ${scale.unit}` : ""}
-        </h3>
-      </div>
+      <dt className="text-muted-foreground">Трафик по дням{scale ? `, ${scale.unit}` : ""}</dt>
       {load.state === "failed" ? (
         <Empty>Историю прочитать не удалось</Empty>
       ) : load.state === "loading" ? (
@@ -93,8 +111,8 @@ type Scale = { top: number; unit: string; step: number };
  * единицах (как у скорости): «5» на оси читается лучше «3,1». Единица —
  * та, в которой верх шкалы не меньше единицы; null — трафика не было.
  */
-function byteScale(days: DayTraffic[]): Scale | null {
-  const peak = Math.max(0, ...days.map((d) => Math.max(down(d), up(d))));
+function byteScale(days: Day[]): Scale | null {
+  const peak = Math.max(0, ...days.map((d) => Math.max(d.down, d.up)));
   if (peak <= 0) return null;
   const units = ["Б", "Кб", "Мб", "Гб", "Тб"];
   const i = Math.min(units.length - 1, Math.floor(Math.log(peak) / Math.log(1024)));
@@ -111,10 +129,7 @@ function roundUpNicely(value: number): number {
   return 10 * power;
 }
 
-const down = (d: DayTraffic) => d.awgDown + d.vlessDown;
-const up = (d: DayTraffic) => d.awgUp + d.vlessUp;
-
-function TrafficPlot({ days, now, scale }: { days: DayTraffic[]; now: number; scale: Scale }) {
+function TrafficPlot({ days, now, scale }: { days: Day[]; now: number; scale: Scale }) {
   // День под указателем или пальцем.
   const [at, setAt] = useState<number | null>(null);
   const plot = useRef<HTMLDivElement>(null);
@@ -134,9 +149,7 @@ function TrafficPlot({ days, now, scale }: { days: DayTraffic[]; now: number; sc
 
   // «Больше всего» — день с наибольшим трафиком в обе стороны вместе:
   // то, сколько клиент потратил за день, а не высота одного столбика.
-  const busiest = days.reduce((a, b) => (down(b) + up(b) > down(a) + up(a) ? b : a));
-  const hasAWG = days.some((d) => d.awgDown + d.awgUp > 0);
-  const hasVLESS = days.some((d) => d.vlessDown + d.vlessUp > 0);
+  const busiest = days.reduce((a, b) => (b.down + b.up > a.down + a.up ? b : a));
   const pick = (clientX: number) => {
     const box = plot.current?.getBoundingClientRect();
     if (!box || box.width === 0) return;
@@ -144,50 +157,37 @@ function TrafficPlot({ days, now, scale }: { days: DayTraffic[]; now: number; sc
     setAt(Math.min(n - 1, Math.max(0, i)));
   };
 
-  // Столбик: AWG от основания, VLESS поверх него.
-  const stack = (i: number, x: number, awg: number, vless: number, dir: "down" | "up") => {
-    const ha = h(awg);
-    const hv = Math.min(h(vless), HEIGHT - ha);
-    const color = dir === "down" ? "fill-sky-500" : "fill-orange-500";
-    return (
-      <g key={`${dir}${i}`}>
-        {awg > 0 ? (
-          <rect
-            data-series={`awg-${dir}`}
-            data-day={i}
-            x={x}
-            width={BAR}
-            y={HEIGHT - ha}
-            height={ha}
-            className={color}
-          />
-        ) : null}
-        {vless > 0 ? (
-          <rect
-            data-series={`vless-${dir}`}
-            data-day={i}
-            x={x}
-            width={BAR}
-            y={HEIGHT - ha - hv}
-            height={hv}
-            className={`${color} opacity-45`}
-          />
-        ) : null}
-      </g>
-    );
-  };
+  const bar = (i: number, x: number, bytes: number, dir: "down" | "up") =>
+    bytes > 0 ? (
+      <rect
+        key={`${dir}${i}`}
+        data-series={dir}
+        data-day={i}
+        x={x}
+        width={BAR}
+        y={HEIGHT - h(bytes)}
+        height={h(bytes)}
+        className={dir === "down" ? "fill-sky-500" : "fill-orange-500"}
+      />
+    ) : null;
 
   return (
     <div className="grid gap-1">
       <div className="flex gap-1">
         <div ref={plot} className="relative min-w-0 flex-1">
           {at !== null ? (
-            <Readout day={days[at]} at={at} n={n} now={now} tall={Math.max(down(days[at]), up(days[at])) > scale.top / 2} />
+            <Readout
+              day={days[at]}
+              at={at}
+              n={n}
+              now={now}
+              tall={Math.max(days[at].down, days[at].up) > scale.top / 2}
+            />
           ) : null}
           <svg
             role="img"
             aria-label={`Трафик по дням за ${TRAFFIC_DAYS} дней: больше всего ${formatBytes(
-              down(busiest) + up(busiest),
+              busiest.down + busiest.up,
             )}, ${formatLocalDateShort(busiest.date, now)}`}
             viewBox={`0 0 ${n} ${HEIGHT}`}
             preserveAspectRatio="none"
@@ -200,9 +200,8 @@ function TrafficPlot({ days, now, scale }: { days: DayTraffic[]; now: number; sc
             onPointerCancel={() => setAt(null)}
           >
             {/* Подсветка дня под указателем — под столбиками, во всю
-                высоту: у столбиков черта, как у скорости, легла бы
-                ровно между двумя столбиками дня и ни к одному не
-                относилась бы. */}
+                высоту: черта, как у скорости, легла бы ровно между двумя
+                столбиками дня и ни к одному не относилась бы. */}
             {at !== null ? (
               <rect x={at} width={1} y={0} height={HEIGHT} className="fill-foreground/10" />
             ) : null}
@@ -221,8 +220,8 @@ function TrafficPlot({ days, now, scale }: { days: DayTraffic[]; now: number; sc
             ))}
             {days.map((d, i) => (
               <g key={i}>
-                {stack(i, i + 0.5 - BAR - 0.02, d.awgDown, d.vlessDown, "down")}
-                {stack(i, i + 0.5 + 0.02, d.awgUp, d.vlessUp, "up")}
+                {bar(i, i + 0.5 - BAR - 0.02, d.down, "down")}
+                {bar(i, i + 0.5 + 0.02, d.up, "up")}
               </g>
             ))}
           </svg>
@@ -236,13 +235,13 @@ function TrafficPlot({ days, now, scale }: { days: DayTraffic[]; now: number; sc
       </div>
       {/* Даты и легенда одной строкой, как у скорости: первый день слева,
           «Сегодня» справа — неполный последний столбик так объясняет себя
-          сам. На узком экране легенда переносится, края остаются. */}
+          сам. */}
       <div
         data-slot="traffic-legend"
-        className="flex items-start justify-between gap-x-4 pt-1 pb-2 pr-10 text-xs text-muted-foreground"
+        className="flex items-center justify-between gap-4 pt-1 pb-2 pr-10 text-xs text-muted-foreground"
       >
-        <span className="shrink-0 tabular-nums">{formatLocalDateShort(days[0].date, now)}</span>
-        <span className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+        <span className="tabular-nums">{formatLocalDateShort(days[0].date, now)}</span>
+        <span className="flex items-center gap-4">
           <span className="flex items-center gap-1.5">
             <span className="text-sky-500" aria-hidden>
               ↓
@@ -255,31 +254,14 @@ function TrafficPlot({ days, now, scale }: { days: DayTraffic[]; now: number; sc
             </span>
             Отдал
           </span>
-          {/* Протоколы называются, только когда на графике оба: при одном
-              подпись объясняла бы различие, которого нет. */}
-          {hasAWG && hasVLESS ? (
-            <>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block size-2.5 rounded-sm bg-muted-foreground" aria-hidden />
-                AWG
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span
-                  className="inline-block size-2.5 rounded-sm bg-muted-foreground opacity-45"
-                  aria-hidden
-                />
-                VLESS
-              </span>
-            </>
-          ) : null}
         </span>
-        <span className="shrink-0">Сегодня</span>
+        <span>Сегодня</span>
       </div>
     </div>
   );
 }
 
-/** Цифры дня под указателем: итог, а при двух протоколах — и каждый. */
+/** Цифры дня под указателем. */
 function Readout({
   day,
   at,
@@ -287,15 +269,13 @@ function Readout({
   now,
   tall,
 }: {
-  day: DayTraffic;
+  day: Day;
   at: number;
   n: number;
   now: number;
   tall: boolean;
 }) {
   const right = at > n / 2;
-  const total = down(day) + up(day);
-  const both = day.awgDown + day.awgUp > 0 && day.vlessDown + day.vlessUp > 0;
   return (
     <div
       role="status"
@@ -306,30 +286,15 @@ function Readout({
       }}
     >
       <div className="tabular-nums text-muted-foreground">{formatLocalDateShort(day.date, now)}</div>
-      {total === 0 ? (
+      {day.down + day.up === 0 ? (
         <div>Трафика не было</div>
       ) : (
-        <>
-          <Pair down={down(day)} up={up(day)} />
-          {both ? (
-            <>
-              <Pair label="AWG" down={day.awgDown} up={day.awgUp} />
-              <Pair label="VLESS" down={day.vlessDown} up={day.vlessUp} />
-            </>
-          ) : null}
-        </>
+        <div className="tabular-nums">
+          <span className="text-sky-500">↓ {formatBytes(day.down)}</span>
+          {" · "}
+          <span className="text-orange-500">↑ {formatBytes(day.up)}</span>
+        </div>
       )}
-    </div>
-  );
-}
-
-function Pair({ label, down, up }: { label?: string; down: number; up: number }) {
-  return (
-    <div className="tabular-nums">
-      {label ? <span className="text-muted-foreground">{label} </span> : null}
-      <span className="text-sky-500">↓ {formatBytes(down)}</span>
-      {" · "}
-      <span className="text-orange-500">↑ {formatBytes(up)}</span>
     </div>
   );
 }
