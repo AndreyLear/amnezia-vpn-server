@@ -129,8 +129,9 @@ Everything is managed in the browser.
 
 <p align="center"><img src="screenshots/mobile.png" width="280" alt="Main panel screen on a phone: AWG and VLESS in the header, a protocol icon on each client"><br>The same panel on a phone</p>
 
-- **Header.** CPU, memory and disk load, tunnel state
-- **Clients.** One card each: name, address, whether it is enabled, when it last connected, how much traffic it received and sent
+- **Header.** State of AWG and VLESS (red if a protocol is not working), then CPU, memory and disk load
+- **Clients.** One card each: name, an icon for the protocol the client last connected over, when that was, how much it downloaded and uploaded. A disabled client is marked "Пауза" (Paused)
+- **Client window.** Opens on the name: AWG and VLESS tabs, speed chart, IP address, config and QR code
 - **"Бэкап" (Backup) button.** Download or upload the settings file
 - **"Ещё" (More) menu.** Versions, service status, log, update check and "Уведомления" (Notifications), which sends failure alerts by email
 

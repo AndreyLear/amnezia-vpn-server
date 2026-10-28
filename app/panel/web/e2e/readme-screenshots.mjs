@@ -370,9 +370,10 @@ async function shoot(browser) {
     optimize(file);
     await page.context().close();
   }
-  // Окно клиента и его QR поверх.
+  // Окно клиента и его QR поверх. Окно клиента высокое: в 800 точек оно
+  // не влезало целиком, и низ (трафик, «Удалить») срезался.
   {
-    const page = await newPage(browser, { width: 1280, height: 800 }, 2);
+    const page = await newPage(browser, { width: 1280, height: 1000 }, 2);
     await page.getByRole("button", { name: featured, exact: true }).click();
     const dialog = page.getByRole("dialog");
     await dialog.waitFor();
@@ -381,6 +382,7 @@ async function shoot(browser) {
     await page.screenshot({ path: file });
     optimize(file);
 
+    await page.setViewportSize({ width: 1280, height: 800 });
     await dialog.getByRole("button", { name: "QR", exact: true }).click();
     const qr = page.getByRole("dialog", { name: new RegExp(`QR`) });
     await qr.waitFor();
