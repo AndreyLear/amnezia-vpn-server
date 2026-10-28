@@ -114,20 +114,20 @@ Endpoint:  example.com:4500
 
 Всё управление — в браузере.
 
-<p align="center"><img src="screenshots/main.png" alt="Главный экран панели: список клиентов, в шапке загрузка сервера"><br>Главный экран: клиенты и загрузка сервера</p>
+<p align="center"><img src="screenshots/main.png" alt="Главный экран панели: список клиентов, в шапке состояние AWG и VLESS и загрузка сервера"><br>Главный экран: клиенты, протоколы и загрузка сервера</p>
 
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/client.png" alt="Окно «Сведения» клиента с графиком скорости за 10 минут"></td>
-    <td width="50%"><img src="screenshots/qr.png" alt="Окно с QR-кодом клиента"></td>
+    <td width="50%"><img src="screenshots/client.png" alt="Окно «Клиент» с вкладками AWG и VLESS и графиком скорости за 10 минут"></td>
+    <td width="50%"><img src="screenshots/qr.png" alt="Окно с QR-кодом клиента для AWG и VLESS"></td>
   </tr>
   <tr>
-    <td align="center">Сведения о клиенте и график скорости</td>
-    <td align="center">QR-код для приложения на телефоне</td>
+    <td align="center">Окно клиента: вкладки протоколов и график скорости</td>
+    <td align="center">QR-коды AWG и VLESS для приложения на телефоне</td>
   </tr>
 </table>
 
-<p align="center"><img src="screenshots/mobile.png" width="280" alt="Главный экран панели на телефоне"><br>Та же панель на телефоне</p>
+<p align="center"><img src="screenshots/mobile.png" width="280" alt="Главный экран панели на телефоне: в шапке AWG и VLESS, у клиентов значок протокола"><br>Та же панель на телефоне</p>
 
 - **Шапка.** Загрузка процессора, памяти и диска, состояние туннеля
 - **Клиенты.** У каждого карточка: имя, адрес, включён ли, когда выходил на связь, сколько трафика получил и отправил
