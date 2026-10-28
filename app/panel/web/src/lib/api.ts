@@ -395,6 +395,22 @@ export type Versions = {
   update_check: boolean | null;
   os: string;
   docker: string;
+  /** Версия Xray из versions.lock; пусто — неизвестно (amnezia-vpn-server-14y0.16). */
+  xray?: string;
+  /** То же, что vless_state в /api/stats/host: "none" — VLESS не настроен. */
+  vless_state?: string;
+  /** Узлы-входы и когда каждый последний раз забирал конфиг. */
+  entries?: EntryAbout[];
+};
+
+/**
+ * Узел-вход в окне «О версиях». online считает сервер по своим часам
+ * (не дольше 5 минут с последнего синка); last_sync_utc null — ни разу.
+ */
+export type EntryAbout = {
+  name: string;
+  last_sync_utc: string | null;
+  online: boolean;
 };
 
 /** Всё про обновление одним ответом (amnezia-vpn-server-tjoq). */

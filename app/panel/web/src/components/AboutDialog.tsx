@@ -6,7 +6,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { api, type Versions } from "@/lib/api";
+import { api, type EntryAbout, type Versions } from "@/lib/api";
+import { formatHandshakeAge } from "@/lib/format";
 
 /**
  * Окно «О версиях» (amnezia-vpn-server-8bt5).
@@ -34,6 +35,21 @@ function flag(value: boolean | null | undefined): string {
   if (value === true) return "Включён";
   if (value === false) return "Выключен";
   return unknown;
+}
+
+// VLESS включён, когда Xray настроен: up, down и na — это ответил ли он на
+// последний опрос, а строка говорит о настройке (то же состояние, что
+// vless_state в шапке, amnezia-vpn-server-14y0.16).
+function vlessFlag(state: string | undefined): string {
+  if (!state) return unknown;
+  return flag(state !== "none");
+}
+
+// Когда вход последний раз забирал конфиг. Связь решает сервер по своим
+// часам (online), а «сколько назад» — тот же отсчёт, что у проверки служб.
+function entrySync(entry: EntryAbout): string {
+  if (!entry.online || !entry.last_sync_utc) return "Нет связи";
+  return `${formatHandshakeAge(entry.last_sync_utc)} назад`;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -77,6 +93,10 @@ export function AboutDialog({
     return installed;
   })();
 
+  const entries = versions?.entries ?? [];
+  const vlessState = versions?.vless_state;
+  const showXray = (vlessState !== undefined && vlessState !== "none") || entries.length > 0;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent bodyClassName="gap-6">
@@ -96,6 +116,20 @@ export function AboutDialog({
             <Row label="amneziawg-go" value={text(versions?.amneziawg_go)} />
           )}
           <Row label="amneziawg-tools" value={text(versions?.amneziawg_tools)} />
+          {/* Xray (amnezia-vpn-server-14y0.16): на установке только с AWG
+              строк нет вовсе, окно выглядит как раньше. Пока ответа нет,
+              их тоже нет — vless_state ещё не пришёл. Узел подписан
+              «Каскад», как маршрут в окне клиента (14y0.17): одно понятие —
+              одно слово. */}
+          {showXray && (
+            <>
+              <Row label="Xray" value={text(versions?.xray)} />
+              <Row label="VLESS" value={vlessFlag(versions?.vless_state)} />
+              {entries.map((entry) => (
+                <Row key={entry.name} label={`Каскад ${entry.name}`} value={entrySync(entry)} />
+              ))}
+            </>
+          )}
           <Row label="IPv6 в туннеле" value={flag(versions?.tunnel_ipv6)} />
           <Row label="Резолвер в туннеле" value={flag(versions?.tunnel_dns)} />
           <Row label="Сторож" value={flag(versions?.watchdog)} />

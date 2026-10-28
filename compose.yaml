@@ -41,6 +41,9 @@ services:
       # Значение то же, что в теге образа, из versions.lock — одно место, а не
       # два, которые могут разойтись.
       AMNEZIA_VERSION: ${IMAGE_VERSION:?IMAGE_VERSION must be set via versions.lock}
+      # Версия Xray для окна «О версиях» — то же значение, что в теге образа
+      # xray ниже (amnezia-vpn-server-14y0.16).
+      AMNEZIA_XRAY_VERSION: ${XRAY_VERSION:?XRAY_VERSION must be set via versions.lock}
     depends_on:
       panel-init:
         condition: service_completed_successfully

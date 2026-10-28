@@ -32,7 +32,8 @@ const xrayEntriesTable = `CREATE TABLE IF NOT EXISTS xray_entries (
 		path TEXT NOT NULL,
 		link_prefix TEXT NOT NULL DEFAULT '',
 		updated_at_utc TEXT NOT NULL,
-		token_hash TEXT NOT NULL DEFAULT ''
+		token_hash TEXT NOT NULL DEFAULT '',
+		last_sync_utc TEXT NOT NULL DEFAULT ''
 	);`
 
 // XrayEntry — узел-вход. Секретов в нём нет: всё это и так видно в любой
@@ -257,6 +258,82 @@ func migrateXrayEntryToken(handle *sql.DB) error {
 	}
 	if _, err := handle.Exec(`ALTER TABLE xray_entries ADD COLUMN token_hash TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("db: add xray_entries.token_hash: %w", err)
+	}
+	return nil
+}
+
+// Когда узел последний раз забирал конфиг (amnezia-vpn-server-14y0.16):
+// окно «О версиях» показывает по нему, жив ли вход. Пишется только по
+// успешному GET /api/entry/config.
+//
+// entrySyncResolution — точность этого времени. Узел ходит раз в минуту,
+// так что его обычный запрос пишет всегда; порог отсекает лишь повторы
+// подряд (ручной перезапуск узла, повтор после сбоя сети). Проверка — в
+// самом UPDATE, без памяти в процессе: при свежем времени строка просто
+// не подходит под условие, и записи нет.
+const entrySyncResolution = 30 * time.Second
+
+// XrayEntrySync — узел и время его последнего синка; нулевое — ни разу.
+type XrayEntrySync struct {
+	Name     string
+	LastSync time.Time
+}
+
+// TouchXrayEntrySync запоминает, что узел name забрал конфиг в момент now.
+// Время старше now на entrySyncResolution и больше не переписывается;
+// время «из будущего» (часы сервера ушли назад) переписывается сразу,
+// иначе застыло бы, пока часы его не догонят. Узла нет — не ошибка: его
+// могли удалить между проверкой секрета и этой записью.
+func TouchXrayEntrySync(handle *sql.DB, name string, now time.Time) error {
+	now = now.UTC()
+	// RFC 3339 в UTC без долей секунды — строки одной длины, и порядок
+	// строк совпадает с порядком времени.
+	if _, err := handle.Exec(
+		`UPDATE xray_entries SET last_sync_utc = ?1
+		  WHERE name = ?2 AND (last_sync_utc = '' OR last_sync_utc <= ?3 OR last_sync_utc > ?1)`,
+		now.Format(time.RFC3339), name, now.Add(-entrySyncResolution).Format(time.RFC3339),
+	); err != nil {
+		return fmt.Errorf("db: write entry sync time: %w", err)
+	}
+	return nil
+}
+
+// XrayEntrySyncs — время последнего синка всех узлов по имени.
+// Нечитаемое значение считается «ни разу», а не ошибкой: окну про узел
+// лучше сказать «нет связи», чем не открыться.
+func XrayEntrySyncs(handle Querier) ([]XrayEntrySync, error) {
+	rows, err := handle.Query(`SELECT name, last_sync_utc FROM xray_entries ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("db: query entry sync times: %w", err)
+	}
+	defer rows.Close()
+	out := []XrayEntrySync{}
+	for rows.Next() {
+		var (
+			s   XrayEntrySync
+			raw string
+		)
+		if err := rows.Scan(&s.Name, &raw); err != nil {
+			return nil, fmt.Errorf("db: scan entry sync time: %w", err)
+		}
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			s.LastSync = t.UTC()
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// migrateXrayEntrySync добавляет колонку времени синка в таблицу узлов
+// выпуска 3.0.0. Аддитивно, без подъёма SchemaVersion, как token_hash:
+// прежняя панель, вернувшаяся откатом, колонку просто не читает.
+func migrateXrayEntrySync(handle *sql.DB) error {
+	has, err := tableHasColumn(handle, "xray_entries", "last_sync_utc")
+	if err != nil || has {
+		return err
+	}
+	if _, err := handle.Exec(`ALTER TABLE xray_entries ADD COLUMN last_sync_utc TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("db: add xray_entries.last_sync_utc: %w", err)
 	}
 	return nil
 }

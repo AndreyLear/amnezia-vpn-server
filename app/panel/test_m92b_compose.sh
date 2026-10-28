@@ -111,6 +111,9 @@ test_xray_topology() {
     check_in '^xray:.*restart: unless-stopped' "xray: restart: unless-stopped"
     check_in '^xray:.*profiles: \["xray"\]' "xray: optional profile (stack starts without Xray)"
     check_in '^xray:.*XRAY_VERSION:?' "xray: image pinned via versions.lock"
+    # amnezia-vpn-server-14y0.16: the "About" window names the Xray version
+    # from the same versions.lock value the image tag uses.
+    check_in '^panel:.*AMNEZIA_XRAY_VERSION: \${XRAY_VERSION:?' "panel: Xray version from versions.lock"
     check_in '^xray:.*- ALL' "xray: every capability dropped"
     check_in '^xray:.*no-new-privileges:true' "xray: no-new-privileges"
     check_in '^xray:.*- ./config/xray:/etc/xray:ro' "xray: own config directory, read-only"
