@@ -1058,6 +1058,21 @@ for sub in config/xray run run/xray; do
     chmod 0700 "$ROOT_DIR/$sub"
 done
 
+# Конфиг Xray до того, как установщик что-либо тронул
+# (amnezia-vpn-server-14y0.11). Его переписывают panel-init и панель при
+# подъёме стека и `panel xray init` в xray_setup, а Xray читает его только
+# при старте: `up -d xray` контейнер с тем же образом не пересоздаёт —
+# конфиг лежит в томе, и для compose ничего не изменилось. После 2.12.1 на
+# боевом Xray так и работал со старым конфигом, без stats/policy, и трафик
+# VLESS не считался. Снимок здесь, до первого вызова compose: сравнение с
+# состоянием перед xray init пропустило бы то, что переписано раньше.
+xray_config_sum() {
+    local f="$ROOT_DIR/config/xray/config.json"
+    [ -f "$f" ] || return 0
+    cksum < "$f"
+}
+XRAY_CONFIG_SUM_BEFORE="$(xray_config_sum)"
+
 # --- 9. install/copy repository deployment files ----------------------
 
 # Дерево заменяется целиком, а не копируется поверх (amnezia-vpn-server-0dzh).
@@ -1532,6 +1547,46 @@ remember_switch "$FAIL2BAN_ENABLED" FAIL2BAN_DISABLED
 remember_switch "$WATCHDOG_ENABLED" WATCHDOG_DISABLED
 remember_switch "$UPDATE_CHECK_ENABLED" UPDATE_CHECK_DISABLED
 
+# nginx_stream_block_state: что в nginx.conf с блоком stream —
+#   none    — блока stream нет;
+#   ours    — есть, и в нём include <stream.d>/*.conf (деление 443 на месте);
+#   foreign — есть, но нашего include в нём нет.
+# Разбор по словам nginx, а не по строкам (amnezia-vpn-server-14y0.10):
+# раньше узнавался только однострочный 'stream { include …; }', ручной блок
+# в три строки на боевом сошёл за отсутствующий, установщик дописал второй,
+# и nginx -t отказал — nginx принимает один блок stream. Комментарии
+# отбрасываются, { } ; — отдельные слова, так что разметка не важна.
+# Относительный путь include nginx считает от каталога nginx.conf.
+nginx_stream_block_state() {
+    [ -f "$NGINX_MAIN_CONF" ] || { echo none; return 0; }
+    awk -v want="$NGINX_STREAM_DIR/*.conf" -v base="$(dirname "$NGINX_MAIN_CONF")" '
+        {
+            sub(/#.*/, "")
+            gsub(/[{};]/, " & ")
+            n = split($0, w, /[ \t\r]+/)
+            for (i = 1; i <= n; i++) if (w[i] != "") tok[++t] = w[i]
+        }
+        END {
+            depth = 0; seen = 0; found = 0; inside = 0
+            for (i = 1; i <= t; i++) {
+                x = tok[i]
+                if (x == "{") {
+                    depth++
+                    if (depth == 1 && tok[i - 1] == "stream") { inside = 1; seen = 1 }
+                    continue
+                }
+                if (x == "}") { if (depth == 1) inside = 0; depth--; continue }
+                if (inside && depth == 1 && x == "include" && tok[i + 2] == ";") {
+                    p = tok[i + 1]
+                    gsub(/^["\047]|["\047]$/, "", p)
+                    if (substr(p, 1, 1) != "/") p = base "/" p
+                    if (p == want) found = 1
+                }
+            }
+            print (seen ? (found ? "ours" : "foreign") : "none")
+        }' "$NGINX_MAIN_CONF"
+}
+
 # Xray и TCP 443 (amnezia-vpn-server-14y0.7) — до того, как --xray
 # запомнится и что-либо на хосте изменится: отказ здесь ничего не оставляет.
 # 443 делится по имени из TLS, поэтому:
@@ -1549,6 +1604,13 @@ check_xray_front() {
             die_usage "TCP 443 is split by name in nginx stream ($NGINX_STREAM_CONF), but this deployment does not run Xray. Rerun with --xray to keep the split (the installer takes it over) or with --no-xray to remove it"
         fi
         return 0
+    fi
+    # Чужой блок stream (amnezia-vpn-server-14y0.10): второй nginx не примет,
+    # а вписывать include внутрь чужой настройки установщик не берётся — у
+    # неё может быть свой listen 443, и на чей лад делить порт, решает
+    # оператор. Отказ здесь, пока ничего не тронуто.
+    if [ "$(nginx_stream_block_state)" = "foreign" ]; then
+        die_op "$NGINX_MAIN_CONF already has a stream block, and it does not include $NGINX_STREAM_DIR: nginx accepts only one stream block. Add the line 'include $NGINX_STREAM_DIR/*.conf;' inside that block (make sure nothing else in it listens on TCP 443) and rerun"
     fi
     [ -n "$CLIENT_DOMAIN" ] \
         || die_usage "--xray needs a VPN domain: Reality presents the server's own site under it. Rerun with --vpn-domain <fqdn>"
@@ -3043,6 +3105,7 @@ apply_deployment_values
 # до Xray доводит nginx stream ниже, в nginx_setup (amnezia-vpn-server-14y0.7).
 xray_setup() {
     if [ "$XRAY_ENABLED" != "1" ]; then
+        xray_restart_request_disarm
         if [ "$XRAY_WAS_ENABLED" = "1" ]; then
             docker_compose --profile xray --env-file versions.lock rm -s -f xray >/dev/null 2>&1 \
                 || log "WARNING: could not remove the xray container; stop it with: docker compose --profile xray rm -s -f xray"
@@ -3050,6 +3113,7 @@ xray_setup() {
         fi
         return 0
     fi
+    xray_restart_request_arm
     if [ "$NO_SERVER_ROW" = "1" ]; then
         log "xray: fresh install — Reality keys are made after 'server init', on the next run of install.sh"
         return 0
@@ -3058,7 +3122,75 @@ xray_setup() {
         || die_op "xray: making the Reality keys failed. Reality presents the server's own site, so the deployment needs a VPN domain: rerun with --vpn-domain <fqdn>"
     docker_compose --env-file versions.lock up -d xray \
         || die_op "xray: docker compose up -d xray failed"
+    xray_restart_if_config_changed
     log "xray: running on 127.0.0.1:4432"
+}
+
+# Перезапуск по конфигу (amnezia-vpn-server-14y0.11): изменился с начала
+# установки — xray перезапускается, иначе остаётся работать. Смену образа
+# этим не ловят и не нужно: её видит сам compose, и `up -d` пересоздаёт
+# контейнер. Перезапуск после пересоздания лишний, но безвредный — а без
+# него новый образ мог бы стартовать раньше, чем xray init переписал конфиг.
+xray_restart_if_config_changed() {
+    if [ "$(xray_config_sum)" = "$XRAY_CONFIG_SUM_BEFORE" ]; then
+        log "xray: config unchanged; xray keeps running"
+        return 0
+    fi
+    # Просьбу панели, если она есть, закрывает этот же перезапуск.
+    rm -f "$XRAY_RESTART_REQUEST"
+    log "xray: config changed; restarting xray to apply it"
+    docker_compose --env-file versions.lock restart xray >/dev/null 2>&1 \
+        || die_op "xray: restart failed; xray may still run with the previous config (check: docker compose --profile xray logs xray)"
+}
+
+# Просьба панели о перезапуске Xray (amnezia-vpn-server-14y0.11).
+# Настройки сервера (ключи, путь, порт, stats/policy) API Xray не применяет
+# — только перезапуск, а Docker панели недоступен: его сокет — это root на
+# хосте. Панель оставляет файл в run/xray (смонтирован у неё на запись, там
+# же сокет API; internal/xray RequestRestart), дорожка systemd перезапускает
+# по нему один сервис xray. Как и с запросом обновления, захвативший панель
+# получает этим только возможность перезапустить Xray. Файл снимается до
+# перезапуска: новая просьба, пришедшая во время него, не теряется.
+XRAY_RESTART_REQUEST="$ROOT_DIR/run/xray/restart-request"
+xray_restart_request_arm() {
+    cat > "$SYSTEMD_DIR/amnezia-vpn-xray-restart.service" <<EOF
+# amnezia-vpn managed: restart Xray so it reads the config the panel wrote.
+[Unit]
+Description=Amnezia VPN Xray restart
+
+[Service]
+Type=oneshot
+WorkingDirectory=${ROOT_DIR}
+ExecStartPre=/bin/rm -f ${XRAY_RESTART_REQUEST}
+ExecStart=/usr/bin/docker compose --profile xray --env-file versions.lock restart xray
+TimeoutStartSec=5min
+EOF
+    chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-xray-restart.service"
+    cat > "$SYSTEMD_DIR/amnezia-vpn-xray-restart.path" <<EOF
+# amnezia-vpn managed: restart Xray when the panel asks.
+[Unit]
+Description=Amnezia VPN Xray restart request
+
+[Path]
+PathExists=${XRAY_RESTART_REQUEST}
+
+[Install]
+WantedBy=paths.target
+EOF
+    chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-xray-restart.path"
+    cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed (xray restart units)"
+    cmd systemctl enable --now amnezia-vpn-xray-restart.path \
+        || die_op "systemctl enable --now amnezia-vpn-xray-restart.path failed"
+    log "xray restart on the panel's request armed (watching $XRAY_RESTART_REQUEST)"
+}
+
+xray_restart_request_disarm() {
+    rm -f "$XRAY_RESTART_REQUEST"
+    [ -e "$SYSTEMD_DIR/amnezia-vpn-xray-restart.path" ] || [ -e "$SYSTEMD_DIR/amnezia-vpn-xray-restart.service" ] \
+        || return 0
+    cmd systemctl disable --now amnezia-vpn-xray-restart.path >/dev/null 2>&1 || true
+    rm -f "$SYSTEMD_DIR/amnezia-vpn-xray-restart.path" "$SYSTEMD_DIR/amnezia-vpn-xray-restart.service"
+    cmd systemctl daemon-reload >/dev/null 2>&1 || true
 }
 xray_setup
 
@@ -3375,9 +3507,11 @@ nginx_write() {
         || { rm -f "$tmp"; return 1; }
 }
 
-# The stream block in nginx.conf: the one line `stream { include
-# <stream.d>/*.conf; }`, in the form the hand-made setup used. Present in
-# any spacing counts — the installer never adds a second one.
+# The stream block the installer writes: the one line `stream { include
+# <stream.d>/*.conf; }`, in the form the hand-made setup used. Only this
+# form is ever removed again. Whether nginx.conf already has a stream
+# block — ours in any layout, or someone else's — is
+# nginx_stream_block_state's call (amnezia-vpn-server-14y0.10).
 nginx_stream_include_re() {
     printf '^[[:space:]]*stream[[:space:]]*\\{[[:space:]]*include[[:space:]]+%s/\\*\\.conf;[[:space:]]*\\}[[:space:]]*$' \
         "$(printf '%s' "$NGINX_STREAM_DIR" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
@@ -3385,8 +3519,13 @@ nginx_stream_include_re() {
 NGINX_STREAM_MARK="# amnezia-vpn-server: TCP 443 split for Xray (managed by install.sh)"
 
 nginx_stream_block_add() {
-    grep -qE "$(nginx_stream_include_re)" "$NGINX_MAIN_CONF" 2>/dev/null && return 0
     [ -f "$NGINX_MAIN_CONF" ] || nginx_abort "$NGINX_MAIN_CONF not found: is nginx installed?"
+    case "$(nginx_stream_block_state)" in
+        ours) return 0 ;;
+        # check_xray_front refuses this before anything is touched; this is
+        # the backstop for a nginx.conf that changed under a running install.
+        foreign) nginx_abort "$NGINX_MAIN_CONF has a stream block without 'include $NGINX_STREAM_DIR/*.conf;': nginx accepts only one stream block" ;;
+    esac
     {
         cat "$NGINX_MAIN_CONF"
         # A file without a final newline would glue the block to its last line.
@@ -3399,7 +3538,14 @@ nginx_stream_block_add() {
 # someone else's file keeps the include they rely on.
 nginx_stream_block_remove() {
     [ -f "$NGINX_MAIN_CONF" ] || return 0
-    grep -qE "$(nginx_stream_include_re)" "$NGINX_MAIN_CONF" || return 0
+    if ! grep -qE "$(nginx_stream_include_re)" "$NGINX_MAIN_CONF"; then
+        # A block written by hand in another layout is the operator's: it is
+        # left in place, and with stream.d empty it is an empty stream block,
+        # which nginx accepts.
+        [ "$(nginx_stream_block_state)" != "ours" ] \
+            || log "nginx: the stream block in $(basename "$NGINX_MAIN_CONF") was written by hand; it stays, without the split in $NGINX_STREAM_DIR"
+        return 0
+    fi
     if compgen -G "$NGINX_STREAM_DIR/*.conf" >/dev/null; then
         log "nginx: $NGINX_STREAM_DIR holds other stream configs; its include in $(basename "$NGINX_MAIN_CONF") stays"
         return 0
@@ -3530,12 +3676,25 @@ nginx_front_remove() {
     nginx_stream_block_remove
 }
 
+# nginx_test: nginx -t, and when it refuses, what it said goes to the log.
+# A bare "test failed" left the reason on the host only: the update agent's
+# log, which is what the panel shows, had nothing to go on
+# (amnezia-vpn-server-14y0.10).
+nginx_test() {
+    local out line
+    out="$(cmd nginx -t 2>&1)" && return 0
+    while IFS= read -r line; do
+        [ -z "$line" ] || log "nginx -t: $line"
+    done <<< "$out"
+    return 1
+}
+
 # nginx_apply PHASE MESSAGE: render, test, and only then reload — or put
 # every file back and stop with MESSAGE.
 nginx_apply() {
     nginx_txn_begin
     nginx_sites_render "$1"
-    cmd nginx -t >/dev/null 2>&1 || nginx_abort "$2"
+    nginx_test || nginx_abort "$2"
     nginx_txn_end
     cmd systemctl enable nginx >/dev/null 2>&1 || die_op "systemctl enable nginx failed"
     if ! cmd systemctl is-active --quiet nginx; then
@@ -3647,7 +3806,7 @@ nginx_retire() {
     nginx_txn_begin
     rm -f "$NGINX_SITES_DIR/$NGINX_SITE" "$NGINX_CONF_DIR/panel.conf"
     nginx_front_remove
-    if cmd nginx -t >/dev/null 2>&1; then
+    if nginx_test; then
         nginx_txn_end
         cmd systemctl reload nginx >/dev/null 2>&1 \
             || log "WARNING: nginx reload failed after retiring the panel site"
