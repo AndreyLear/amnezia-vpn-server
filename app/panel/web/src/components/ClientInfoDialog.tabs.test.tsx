@@ -103,22 +103,22 @@ describe("ClientInfoDialog: вкладки протоколов", () => {
     expect(within(panel).getByText("↓ 5,0 Мб · ↑ 3,0 Кб")).toBeInTheDocument();
     expect(within(panel).getByText("Последняя активность")).toBeInTheDocument();
     expect(within(panel).getByText("27 окт, 09:00:00")).toBeInTheDocument();
-    expect(
-      within(panel).getByText("Подключения через вход не попадают в график, трафик и последнюю активность — если клиент подключается только так, здесь будет пусто"),
-    ).toBeInTheDocument();
+    // Трафик через вход теперь учитывается по клиенту, оговорки больше нет
+    // (amnezia-vpn-server-14y0.12).
+    expect(within(panel).queryByText(/Подключения через вход/)).toBeNull();
     // Ничего из AWG.
     expect(within(panel).queryByText("IP")).toBeNull();
     expect(within(panel).queryByText("MTU")).toBeNull();
   });
 
-  it("без узлов-входов оговорки про вход нет", async () => {
+  it("без узлов-входов — только прямой маршрут", async () => {
     const user = userEvent.setup();
     renderDialog(client, vi.fn().mockResolvedValue({ enabled: true, routes: [withEntry.routes[0]] }));
 
     await user.click(screen.getByRole("tab", { name: "VLESS" }));
     expect(await screen.findByText("Напрямую")).toBeInTheDocument();
     expect(screen.getByText("Трафик")).toBeInTheDocument();
-    expect(screen.queryByText(/Подключения через вход не попадают/)).toBeNull();
+    expect(screen.queryByText("Через вход RU")).toBeNull();
   });
 
   it("VLESS не настроен — так и сказано, без пустого трафика", async () => {

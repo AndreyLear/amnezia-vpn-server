@@ -224,7 +224,7 @@ describe("ClientInfoDialog", () => {
       "max-sm:rounded-b-none",
       "h-auto",
       "max-h-[calc(100dvh-2rem)]",
-      "sm:max-w-2xl",
+      "sm:max-w-xl",
     );
     // Overflow and padding now live on the scrolling body wrapper, not the
     // outer content box — that box no longer scrolls itself, so the header

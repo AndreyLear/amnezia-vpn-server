@@ -27,10 +27,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { InfoBlock, InfoSection, infoRowClass, infoRowsClass } from "@/components/InfoBlock";
 import { UserText } from "@/components/UserText";
 import { VlessSection } from "@/components/VlessSection";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Segment } from "@/components/Segment";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { Client, VlessInfo } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
-import { lastProtocol, protocolLabel, type Protocol } from "@/lib/protocol";
+import { lastProtocol, protocolOptions, type Protocol } from "@/lib/protocol";
 import { cn } from "@/lib/utils";
 
 // Границы MTU повторяют серверные (db.ClientMTUFloor/Ceiling): ниже нижней
@@ -295,11 +296,12 @@ export function ClientInfoDialog({
   return (
     <>
       <Dialog open={client !== null} onOpenChange={onOpenChange}>
-        {/* Шире прочих окон: блоки с рамкой и отступом съедают ширину, а
-            подписи маршрутов VLESS рядом с кнопками «Ссылка» и «QR»
-            ломались на три строки (amnezia-vpn-server-14y0.9). */}
+        {/* Шире прочих окон: карточки с рамкой и отступом съедают ширину
+            (amnezia-vpn-server-14y0.9). Но не 2xl — владелец просил
+            «немного уже»; кнопки маршрутов VLESS для этого стоят под
+            подписью (amnezia-vpn-server-14y0.13). */}
         <DialogContent
-          className="sm:max-w-2xl" bodyClassName="gap-6 pb-6"
+          className="sm:max-w-xl" bodyClassName="gap-6 pb-6"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           {client ? (
@@ -399,10 +401,15 @@ export function ClientInfoDialog({
                     один блок» (amnezia-vpn-server-14y0.9). */}
                 <InfoBlock data-testid="client-protocols">
                   <Tabs value={tab} onValueChange={(v) => setTab(v as Protocol)}>
-                    <TabsList aria-label="Протокол" className="h-10 w-full">
-                      <TabsTrigger value="awg">{protocolLabel.awg}</TabsTrigger>
-                      <TabsTrigger value="vless">{protocolLabel.vless}</TabsTrigger>
-                    </TabsList>
+                    {/* Сегмент первого уровня, по содержимому и слева: полоса
+                        на всю ширину была выше и тяжелее всего остального
+                        (amnezia-vpn-server-14y0.13). */}
+                    <Segment
+                      tabs
+                      label="Протокол"
+                      value={tab}
+                      options={protocolOptions}
+                    />
                     {/* Разделы вкладки сгруппированы по смыслу: график;
                         адрес и выдача настроек; то, что меняют руками; то, что
                         только смотрят. Это разделы одной карточки, а не свои
