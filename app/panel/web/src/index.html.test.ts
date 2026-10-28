@@ -22,4 +22,9 @@ describe("index.html", () => {
     expect(title![1].trim()).not.toBe("web");
     expect(title![1].trim().length).toBeGreaterThan(0);
   });
+
+  it("называет проект AVL, а не прежним Amnezia VPN (amnezia-vpn-server-45ds)", () => {
+    const title = html.match(/<title>([^<]*)<\/title>/);
+    expect(title![1].trim()).toBe("AVL");
+  });
 });

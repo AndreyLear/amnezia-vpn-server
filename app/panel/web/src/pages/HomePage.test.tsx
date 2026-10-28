@@ -76,6 +76,27 @@ describe("HomePage load", () => {
     expect(screen.getByText("Alice")).toBeInTheDocument();
   });
 
+  // Шапка показывает VLESS по vless_state из /api/stats/host
+  // (amnezia-vpn-server-45ds): поле должно дойти до HeaderStats.
+  it("passes vless_state from host stats to the header", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/me")) return jsonResponse({ username: "admin", csrf: "token" });
+        if (path.includes("/api/clients")) return jsonResponse([alice]);
+        if (path.includes("/api/stats/host")) {
+          return jsonResponse({ iface: "awg0", iface_state: "up", vless_state: "down" });
+        }
+        throw new Error(path);
+      }),
+    );
+
+    render(<HomePage />);
+    expect(await screen.findByLabelText("Состояние VLESS")).toHaveClass("text-red-500");
+    expect(screen.getByLabelText("Состояние AWG")).toHaveTextContent("AWG");
+  });
+
   it("lists clients in one column with mt-6 gap-2 and no add tile", async () => {
     vi.stubGlobal(
       "fetch",
@@ -236,7 +257,7 @@ describe("HomePage load", () => {
     );
 
     render(<HomePage />);
-    expect(screen.getByRole("img", { name: "AWG Panel" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "AVL" })).toBeInTheDocument();
     expect(screen.queryByText("Пока нет клиентов")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Тёмная тема" })).toBeInTheDocument();
     expect(within(screen.getByRole("banner")).getByRole("button", { name: "Добавить клиента" })).toBeInTheDocument();

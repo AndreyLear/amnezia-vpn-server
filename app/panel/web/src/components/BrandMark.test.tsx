@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest";
 import { BrandMark } from "@/components/BrandMark";
 
 describe("BrandMark", () => {
-  it("renders an AWG Panel mark with theme-aware fills", () => {
+  it("renders the AVL mark with theme-aware fills", () => {
     render(<BrandMark />);
 
-    const mark = screen.getByRole("img", { name: "AWG Panel" });
+    const mark = screen.getByRole("img", { name: "AVL" });
     expect(mark.tagName.toLowerCase()).toBe("svg");
     expect(mark).toHaveAttribute("viewBox", "0 0 32 32");
 

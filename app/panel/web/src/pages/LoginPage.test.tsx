@@ -29,7 +29,7 @@ describe("LoginPage", () => {
     const form = container.querySelector("form");
     expect(form).toHaveClass("gap-6");
     expect(form).not.toHaveClass("gap-3");
-    const logo = screen.getByRole("img", { name: "AWG Panel" });
+    const logo = screen.getByRole("img", { name: "AVL" });
     expect(logo.tagName.toLowerCase()).toBe("svg");
     expect(logo).not.toHaveAttribute("src");
     expect(logo).toHaveClass("size-12");

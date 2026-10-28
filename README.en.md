@@ -1,8 +1,12 @@
-# AmneziaWG VPN Server
+# AVL
+
+**AmneziaWG + VLESS**
 
 A script that sets up a VPN on your server, plus a web panel where you add clients with a button and connect them by QR code. One command from your computer, about five minutes.
 
-The VPN runs on AmneziaWG: WireGuard with packets that do not look like WireGuard, which makes it harder to block.
+The VPN runs on two protocols. A client can use either one or both.
+
+AmneziaWG is WireGuard with packets that do not look like WireGuard, which makes it harder to block. VLESS is installed alongside it and is for networks that block AmneziaWG too, such as mobile networks in Russia: it runs over TCP 443 and looks like ordinary HTTPS traffic.
 
 Русская версия: [README.md](README.md) · Security: [SECURITY.md](SECURITY.md) · Development: [DEVELOPMENT.md](DEVELOPMENT.md)
 

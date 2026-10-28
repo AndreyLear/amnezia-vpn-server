@@ -81,6 +81,7 @@ export default function HomePage() {
           disk_total_bytes: snap.disk_total_bytes ?? null,
           iface: snap.iface?.trim() || "awg0",
           iface_state: snap.iface_state ?? "na",
+          vless_state: snap.vless_state ?? "none",
         });
       }
     } catch {

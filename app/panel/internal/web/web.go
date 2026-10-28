@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
@@ -138,6 +139,10 @@ type Server struct {
 	// loginVerify holds one token per running Argon2 check
 	// (loginVerifySlots, amnezia-vpn-server-76mp.1).
 	loginVerify chan struct{}
+	// xrayAPI — ответил ли Xray на последний опрос счётчиков
+	// (xrayAPIUnknown/Up/Down): шапка панели показывает по нему состояние
+	// VLESS рядом с туннелем AWG (amnezia-vpn-server-45ds).
+	xrayAPI atomic.Int32
 }
 
 // db returns the live database handle (RLock-protected swap access).

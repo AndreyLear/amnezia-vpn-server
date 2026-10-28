@@ -346,4 +346,20 @@ describe("ClientCard", () => {
     await user.click(menu);
     expect(screen.getByRole("menuitem", { name: "Сведения" })).toBeInTheDocument();
   });
+  // Удаление снимает клиента и с AWG, и с VLESS, а awg0.conf человеку ни о
+  // чём не говорит (amnezia-vpn-server-45ds).
+  it("explains the delete confirm by its result, not by awg0.conf", async () => {
+    stubMinWidthSm(true);
+    const user = userEvent.setup();
+    render(<ClientCard client={base} onDelete={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: "Действия для Alice" }));
+    await user.click(screen.getByRole("menuitem", { name: "Удалить" }));
+
+    const alert = screen.getByRole("alertdialog");
+    expect(alert).toHaveTextContent(
+      "Клиент больше не сможет подключиться, а удаление нельзя отменить",
+    );
+    expect(alert).not.toHaveTextContent("awg0.conf");
+  });
 });

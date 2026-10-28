@@ -27,6 +27,15 @@ const XrayTrafficInterval = 10 * time.Second
 // на 120 таких замеров, по одному на столбец.
 const XraySpeedInterval = 5 * time.Second
 
+// Ответ Xray на последний опрос — для шапки панели
+// (amnezia-vpn-server-45ds). Отдельной проверки нет: «Xray отвечает на API»
+// и есть «VLESS работает», а опрос и так идёт каждые XraySpeedInterval.
+const (
+	xrayAPIUnknown int32 = iota // опроса ещё не было или Xray не настроен
+	xrayAPIUp
+	xrayAPIDown
+)
+
 // collectXrayTraffic — один опрос с записью в базу.
 func (s *Server) collectXrayTraffic(ctx context.Context, api xray.StatsReader, now time.Time) error {
 	return s.pollXrayTraffic(ctx, api, now, true)
@@ -38,14 +47,17 @@ func (s *Server) collectXrayTraffic(ctx context.Context, api xray.StatsReader, n
 func (s *Server) pollXrayTraffic(ctx context.Context, api xray.StatsReader, now time.Time, record bool) error {
 	if _, err := db.XraySettingsRow(s.db()); err != nil {
 		if errors.Is(err, db.ErrXrayNotConfigured) {
+			s.xrayAPI.Store(xrayAPIUnknown)
 			return nil
 		}
 		return err
 	}
 	started, counters, err := xray.ReadTraffic(ctx, api, now)
 	if err != nil {
+		s.xrayAPI.Store(xrayAPIDown)
 		return err
 	}
+	s.xrayAPI.Store(xrayAPIUp)
 	// Запись — под тем же замком, что изменения и восстановление из
 	// копии: восстановление подменяет базу, и опрос не должен писать в
 	// уже снятую.
