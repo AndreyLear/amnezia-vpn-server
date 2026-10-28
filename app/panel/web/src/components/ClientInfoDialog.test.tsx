@@ -587,6 +587,11 @@ describe("ClientInfoDialog", () => {
       "max-sm:h-12",
     );
     expect(alert).toHaveClass("max-sm:max-w-none", "max-sm:w-full");
+    // Удаление снимает клиента и с AWG, и с VLESS (amnezia-vpn-server-45ds).
+    expect(alert).toHaveTextContent(
+      "Клиент больше не сможет подключиться, а удаление нельзя отменить",
+    );
+    expect(alert).not.toHaveTextContent("awg0.conf");
     expect(alert.className).not.toMatch(/data-\[size=default\]:max-w-xs(?!:)/);
   });
 });

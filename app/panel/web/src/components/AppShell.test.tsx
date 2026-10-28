@@ -27,7 +27,7 @@ describe("AppShell header", () => {
     expect(screen.queryByText("Системная")).not.toBeInTheDocument();
     expect(screen.queryByText("Аккаунт")).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Аккаунт" })).not.toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "AWG Panel" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "AVL" })).toBeInTheDocument();
     expect(screen.queryByText("AmneziaVPN")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Бэкап" }));
@@ -101,7 +101,7 @@ describe("AppShell header", () => {
     );
 
     const header = screen.getByRole("banner");
-    const logo = within(header).getByRole("img", { name: "AWG Panel" });
+    const logo = within(header).getByRole("img", { name: "AVL" });
     expect(logo.tagName.toLowerCase()).toBe("svg");
     expect(logo).not.toHaveAttribute("src");
     expect(logo).toHaveClass("size-8", "shrink-0");
@@ -190,7 +190,7 @@ describe("AppShell header", () => {
     expect(header).not.toHaveClass("py-4");
     expect(header).not.toHaveClass("gap-2");
 
-    const title = screen.getByRole("img", { name: "AWG Panel" });
+    const title = screen.getByRole("img", { name: "AVL" });
     expect(title).toHaveClass("shrink-0");
     expect(title).not.toHaveClass("truncate");
 
@@ -225,7 +225,7 @@ describe("AppShell header", () => {
     expect(header).not.toHaveClass("sm:pt-8");
     const column = header.parentElement;
     expect(column).toHaveClass("flex", "min-h-svh", "flex-col", "items-center", "justify-center", "gap-8");
-    expect(screen.getByRole("img", { name: "AWG Panel" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "AVL" })).toBeInTheDocument();
     expect(within(header).queryByLabelText("CPU")).toBeNull();
     expect(within(header).queryByLabelText("RAM")).toBeNull();
     expect(within(header).queryByLabelText("Диск")).toBeNull();
