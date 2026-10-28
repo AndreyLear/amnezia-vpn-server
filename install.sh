@@ -33,6 +33,9 @@
 #  16. final status + SSH tunnel hint for the loopback-only panel
 #
 # Arguments (only these are supported):
+#   --role panel|entry  what this server is (default: panel). entry is an
+#                   entry node without the panel: app/entry/install-entry.sh
+#                   takes the rest of the arguments (amnezia-vpn-server-14y0.6)
 #   --root DIR      deployment root (default: /opt/amnezia-vpn)
 #   --awg-port PORT external UDP port of the AWG runtime, 1..65535
 #                   (default: 4500 — the IPsec NAT-T port, which carriers
@@ -196,6 +199,9 @@ Usage:
                [--panel-port PORT] [--panel-tls-regen] [--build]
                [--[no-]fail2ban] [--[no-]watchdog] [--[no-]update-check]
                [--[no-]tunnel-dns] [--[no-]ipv6] [--[no-]xray]
+  ./install.sh --role entry --panel URL --entry-token TOKEN|- …
+               an entry node instead: no panel, no Docker — see
+               ./install.sh --role entry --help
 
 Options:
   --root DIR        deployment root (default: /opt/amnezia-vpn)
@@ -424,6 +430,32 @@ switch_value() { # switch_value --X|--no-X — 1 or 0
         *) printf '1' ;;
     esac
 }
+
+# Роль сервера (amnezia-vpn-server-14y0.6). По умолчанию — основной сервер
+# с панелью; --role entry — узел-вход без панели и Docker: у него свой
+# установщик (app/entry/install-entry.sh), и ни один шаг ниже к нему не
+# относится.
+INSTALL_ROLE=panel
+ROLE_ARGS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --role)
+            [ "$#" -ge 2 ] || die_usage "--role requires panel or entry"
+            INSTALL_ROLE="$2"
+            shift 2
+            ;;
+        *)
+            ROLE_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- ${ROLE_ARGS[@]+"${ROLE_ARGS[@]}"}
+case "$INSTALL_ROLE" in
+    panel) ;;
+    entry) exec bash "$SCRIPT_DIR/app/entry/install-entry.sh" "$@" ;;
+    *) die_usage "--role must be panel or entry (got: $INSTALL_ROLE)" ;;
+esac
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
