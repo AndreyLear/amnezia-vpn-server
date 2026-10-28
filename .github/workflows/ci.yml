@@ -60,6 +60,8 @@ jobs:
         run: go test ./...
       - name: Bootstrap harness
         run: bash app/panel/test_m123_bootstrap.sh
+      - name: Entry node role harness
+        run: bash app/entry/test_entry_role.sh
       - name: Install harness
         run: bash app/panel/test_m91_install.sh
       - name: Compose topology harness
