@@ -98,7 +98,7 @@ describe("ClientInfoDialog: вкладки протоколов", () => {
     expect(screen.getByRole("tab", { name: "VLESS" })).toHaveAttribute("aria-selected", "true");
     const panel = screen.getByRole("tabpanel");
     expect(await within(panel).findByText("Напрямую")).toBeInTheDocument();
-    expect(within(panel).getByText("Через вход RU")).toBeInTheDocument();
+    expect(within(panel).getByText("Через вход")).toBeInTheDocument();
     expect(within(panel).getByText("Трафик")).toBeInTheDocument();
     expect(within(panel).getByText("↓ 5,0 Мб · ↑ 3,0 Кб")).toBeInTheDocument();
     expect(within(panel).getByText("Последняя активность")).toBeInTheDocument();
@@ -118,7 +118,7 @@ describe("ClientInfoDialog: вкладки протоколов", () => {
     await user.click(screen.getByRole("tab", { name: "VLESS" }));
     expect(await screen.findByText("Напрямую")).toBeInTheDocument();
     expect(screen.getByText("Трафик")).toBeInTheDocument();
-    expect(screen.queryByText("Через вход RU")).toBeNull();
+    expect(screen.queryByText("Через вход")).toBeNull();
   });
 
   it("VLESS не настроен — так и сказано, без пустого трафика", async () => {

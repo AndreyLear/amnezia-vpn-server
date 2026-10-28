@@ -63,11 +63,11 @@ describe("QrDialog: AWG и VLESS", () => {
       screen.getByRole("img", { name: "QR-код VLESS клиента Alice, маршрут «Напрямую»" }),
     ).toHaveAttribute("src", "/api/clients/7/vless/qr");
 
-    await user.click(screen.getByRole("button", { name: "Через вход RU" }));
+    await user.click(screen.getByRole("button", { name: "Через вход" }));
     expect(
-      screen.getByRole("img", { name: "QR-код VLESS клиента Alice, маршрут «Через вход RU»" }),
+      screen.getByRole("img", { name: "QR-код VLESS клиента Alice, маршрут «Через вход»" }),
     ).toHaveAttribute("src", "/api/clients/7/vless/qr?entry=ru");
-    expect(screen.getByText(/Для мобильного интернета/)).toBeInTheDocument();
+    expect(screen.getByText(/Подходит, когда напрямую подключиться не получается/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "AWG" }));
     expect(screen.getByRole("img", { name: "QR-код AmneziaWG клиента Alice" })).toBeInTheDocument();

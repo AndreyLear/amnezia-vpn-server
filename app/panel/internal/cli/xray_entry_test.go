@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/xray"
 )
 
 const testEntryPub = "u1D_noKldM-_gg6X9g-5wUPsdBXPUU-M_Zjv9Z4FlhQ"
@@ -67,4 +70,70 @@ func TestXrayUsersJSON(t *testing.T) {
 	if len(got[0]) != 4 {
 		t.Fatalf("лишние поля: %v", got[0])
 	}
+}
+
+// Секрет узла для автосинхронизации (amnezia-vpn-server-14y0.6): новый узел
+// получает его при `entry set`, показывается он один раз, правка полей его
+// не меняет, `entry token` выдаёт новый взамен прежнего.
+func TestXrayEntryToken(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+
+	out := c.mustRun("xray", "entry", "set", "ru", "--host", "ru.example.com", "--sni", "ru.example.com",
+		"--public-key", testEntryPub, "--short-id", "a1b2", "--path", "/entry", "--prefix", "RU ")
+	first := entryTokenFrom(t, out)
+	if name, err := xray.AuthenticateEntry(c.openDB(), first); err != nil || name != "ru" {
+		t.Fatalf("секрет из вывода не принят: %q, %v", name, err)
+	}
+	if out := c.mustRun("xray", "entry", "set", "ru", "--port", "8443"); strings.Contains(out, "token") {
+		t.Fatalf("правка узла показала секрет снова:\n%s", out)
+	}
+	if !strings.Contains(c.mustRun("xray", "entry", "list"), "\tyes\n") {
+		t.Fatal("в списке не видно, что у узла есть секрет")
+	}
+
+	second := entryTokenFrom(t, c.mustRun("xray", "entry", "token", "ru"))
+	if second == first {
+		t.Fatal("новый секрет совпал с прежним")
+	}
+	if _, err := xray.AuthenticateEntry(c.openDB(), first); err == nil {
+		t.Fatal("прежний секрет работает после замены")
+	}
+	if code, _, _ := c.run("xray", "entry", "token", "nope"); code != 1 {
+		t.Fatalf("секрет неизвестному узлу: exit %d", code)
+	}
+	if code, _, _ := c.run("xray", "entry", "token"); code != 2 {
+		t.Fatalf("без имени: exit %d", code)
+	}
+}
+
+// Узел, заведённый до автосинхронизации, получает секрет первой же
+// правкой: так переводится уже работающий вход.
+func TestXrayEntrySetGivesLegacyEntryAToken(t *testing.T) {
+	c := newCtx(t)
+	c.seedServer("", "")
+	if err := db.SaveXrayEntry(c.openDB(), db.XrayEntry{Name: "ru", LinkHost: "ru.example.com", LinkPort: 443,
+		SNI: "ru.example.com", PublicKey: testEntryPub, ShortID: "a1b2", Path: "/entry"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c.mustRun("xray", "entry", "list"), "\tno\n") {
+		t.Fatal("в списке не видно, что секрета нет")
+	}
+	token := entryTokenFrom(t, c.mustRun("xray", "entry", "set", "ru", "--prefix", "RU "))
+	if name, err := xray.AuthenticateEntry(c.openDB(), token); err != nil || name != "ru" {
+		t.Fatalf("секрет не принят: %q, %v", name, err)
+	}
+}
+
+// entryTokenFrom — секрет из строки «… token …: <секрет>».
+func entryTokenFrom(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "token") {
+			f := strings.Fields(line)
+			return f[len(f)-1]
+		}
+	}
+	t.Fatalf("секрета нет в выводе:\n%s", out)
+	return ""
 }

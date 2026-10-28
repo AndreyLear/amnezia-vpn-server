@@ -119,7 +119,7 @@ export function QrDialog({
       hint = "Отсканируйте QR в v2RayTun, Happ или другом приложении с поддержкой VLESS";
       const route =
         info.routes.find((r) => (r.entry || directKey) === routeKey) ?? info.routes[0];
-      const label = vlessRouteLabel(route);
+      const label = vlessRouteLabel(route, info.routes);
       body = (
         <>
           {/* Маршрут выбирают только когда есть из чего: без входов он
@@ -134,7 +134,7 @@ export function QrDialog({
                 onValueChange={setRouteKey}
                 options={info.routes.map((r) => ({
                   value: r.entry || directKey,
-                  label: vlessRouteLabel(r),
+                  label: vlessRouteLabel(r, info.routes),
                 }))}
               />
               <p className="text-sm text-muted-foreground">{vlessRouteHint(route)}</p>

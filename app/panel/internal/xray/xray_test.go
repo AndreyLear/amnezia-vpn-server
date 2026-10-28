@@ -122,7 +122,9 @@ func fixtureSettings() *db.XraySettings {
 	return &db.XraySettings{
 		PrivateKey: fixturePriv, PublicKey: fixturePub, ShortID: "6ba85179e30d4fc2",
 		Path: "/f3a9c1d27e", Target: db.XrayDefaultTarget, ServerName: "vpn.example.com",
-		LinkPort: 443,
+		// Приставка ручной настройки: выданные тогда ссылки называются
+		// «VPN <имя>», и импорт обязан сохранить их до байта.
+		LinkPort: 443, LinkPrefix: "VPN ",
 	}
 }
 
@@ -350,6 +352,7 @@ func TestImportProdSettings(t *testing.T) {
 	want := db.XraySettings{
 		PrivateKey: fixturePriv, PublicKey: fixturePub, ShortID: "6ba85179e30d4fc2", Path: "/f3a9c1d27e",
 		Target: "127.0.0.1:4433", ServerName: "super-space.example", LinkAddress: "super-space.example", LinkPort: 443,
+		LinkPrefix: "VPN ",
 	}
 	if *s != want {
 		t.Fatalf("настройки %+v, ожидались %+v", *s, want)

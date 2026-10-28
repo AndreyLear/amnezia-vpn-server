@@ -139,6 +139,10 @@ type Server struct {
 	// loginVerify holds one token per running Argon2 check
 	// (loginVerifySlots, amnezia-vpn-server-76mp.1).
 	loginVerify chan struct{}
+	// entryRequests and entryFails limit the entry node route per address:
+	// every request, and failed secrets (amnezia-vpn-server-14y0.6).
+	entryRequests *loginLimiter
+	entryFails    *loginLimiter
 	// xrayAPI — ответил ли Xray на последний опрос счётчиков
 	// (xrayAPIUnknown/Up/Down): шапка панели показывает по нему состояние
 	// VLESS рядом с туннелем AWG (amnezia-vpn-server-45ds).
@@ -223,7 +227,8 @@ func New(cfg Config) (*Server, error) {
 	if cfg.HostDiskPath == "" {
 		cfg.HostDiskPath = "/data"
 	}
-	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, loginLimit: newLoginLimiter(), verifyPassword: auth.VerifyPassword, loginVerify: make(chan struct{}, loginVerifySlots)}
+	s := &Server{cfg: cfg, mux: http.NewServeMux(), auth: auth.NewAuth(cfg.Sessions).WithDBPath(cfg.DBPath), dbh: cfg.DB, loginLimit: newLoginLimiter(), verifyPassword: auth.VerifyPassword, loginVerify: make(chan struct{}, loginVerifySlots),
+		entryRequests: newRateLimiter(entryRequestLimit, entryRequestWindow), entryFails: newRateLimiter(entryFailLimit, entryFailWindow)}
 	if cfg.PersistSessions {
 		// A failure to read stored sessions is logged, not fatal: the panel
 		// must still start, and the worst outcome is the old behavior —
@@ -301,6 +306,9 @@ func New(cfg Config) (*Server, error) {
 	// Ссылки VLESS и их QR (amnezia-vpn-server-14y0.5, см. api_vless.go).
 	s.mux.Handle("GET /api/clients/{id}/vless", s.auth.RequireAPI(http.HandlerFunc(s.apiClientVLESS)))
 	s.mux.Handle("GET /api/clients/{id}/vless/qr", s.auth.RequireAPI(http.HandlerFunc(s.apiClientVLESSQR)))
+	// Узел-вход забирает свою конфигурацию по своему секрету, без входа в
+	// панель (amnezia-vpn-server-14y0.6, см. api_entry.go).
+	s.mux.HandleFunc("GET /api/entry/config", s.apiEntryConfig)
 	s.mux.Handle("PATCH /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsPatch))))
 	s.mux.Handle("DELETE /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsDelete))))
 	distRoot, err := fs.Sub(distFS, "dist")

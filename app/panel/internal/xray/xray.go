@@ -106,6 +106,7 @@ func NewServerSettings(serverName string) (*db.XraySettings, error) {
 		Target:     db.XrayDefaultTarget,
 		ServerName: serverName,
 		LinkPort:   db.XrayDefaultLinkPort,
+		LinkPrefix: db.XrayDefaultLinkPrefix,
 	}, nil
 }
 
@@ -158,11 +159,12 @@ func escape(s string) string {
 // Порядок параметров и кодирование повторяют ссылки, выданные вручную
 // 27.10.2026 (amnezia-vpn-server-adaw): приложение различает подключения
 // по строке целиком, и та же ссылка в другом порядке стала бы для него
-// вторым сервером. Имя в ссылке — «VPN <имя клиента>», как раздавалось.
+// вторым сервером. Имя в ссылке — приставка из настроек Xray и имя
+// клиента («VLESS direct andrey»).
 func Link(s *db.XraySettings, address string, c db.VLESSClient) string {
 	return buildLink(linkParams{
 		Address: address, Port: s.LinkPort, Path: s.Path, SNI: s.ServerName,
-		PublicKey: s.PublicKey, ShortID: s.ShortID, NamePrefix: linkNamePrefix,
+		PublicKey: s.PublicKey, ShortID: s.ShortID, NamePrefix: s.LinkPrefix,
 	}, c)
 }
 

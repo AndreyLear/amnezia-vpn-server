@@ -27,6 +27,13 @@ AMNEZIAWG_TOOLS_COMMIT=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 # Образ проекта XTLS, та же версия, что поднята вручную на боевом
 # (amnezia-vpn-server-adaw).
 XRAY_VERSION=26.10.21
+# Узел-вход (install.sh --role entry, amnezia-vpn-server-14y0.6) ставит Xray
+# той же версии бинарником из релиза XTLS, без Docker. Архив
+# Xray-linux-<arch>.zip сверяется с sha256 ниже (строка SHA2-256 из
+# Xray-linux-<arch>.zip.dgst того же релиза); без значения установщик узла
+# отказывается ставить Xray.
+XRAY_SHA256_LINUX_64=0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978
+XRAY_SHA256_LINUX_ARM64_V8A=d1304946c486d98e6b886e9b931eaaaebb23835b30e217638037b7f2721d4e9c
 
 # SQLite Go driver
 SQLITE_DRIVER=modernc.org/sqlite

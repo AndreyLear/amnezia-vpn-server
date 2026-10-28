@@ -44,7 +44,7 @@ func (a *app) cmdXray(args []string) int {
 // переданные флаги. Существующие ключи, shortId и путь не трогает никогда:
 // они зашиты во все выданные ссылки (amnezia-vpn-server-14y0.1).
 func (a *app) cmdXrayInit(args []string) int {
-	parsed, err := parseArgs(args, map[string]bool{"address": true, "server-name": true, "target": true})
+	parsed, err := parseArgs(args, map[string]bool{"address": true, "server-name": true, "target": true, "link-prefix": true})
 	if err != nil {
 		return a.usageError(opXrayInit, err.Error())
 	}
@@ -96,6 +96,13 @@ func (a *app) cmdXrayInit(args []string) int {
 	}
 	if v, ok := parsed.flags["target"]; ok {
 		s.Target = v
+	}
+	// Приставка к имени в прямых ссылках («VLESS direct andrey»). Она —
+	// только подпись в приложении, но приложение различает подключения по
+	// ссылке целиком: после смены люди увидят новое подключение рядом со
+	// старым.
+	if v, ok := parsed.flags["link-prefix"]; ok {
+		s.LinkPrefix = v
 	}
 	if err := db.SaveXraySettings(handle, *s); err != nil {
 		return a.fatal(opXrayInit, err)

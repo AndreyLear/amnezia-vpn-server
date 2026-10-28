@@ -83,7 +83,7 @@ type prodSettings struct {
 // транзакцией. Ошибки не содержат ключей.
 func Import(handle *sql.DB, dir string) (ImportResult, error) {
 	var res ImportResult
-	s := db.XraySettings{Target: db.XrayDefaultTarget, LinkPort: db.XrayDefaultLinkPort}
+	s := db.XraySettings{Target: db.XrayDefaultTarget, LinkPort: db.XrayDefaultLinkPort, LinkPrefix: legacyLinkPrefix}
 	switch cur, err := db.XraySettingsRow(handle); {
 	case err == nil:
 		s = *cur
@@ -136,8 +136,10 @@ func Import(handle *sql.DB, dir string) (ImportResult, error) {
 	return res, nil
 }
 
-// linkNamePrefix — начало имени подключения в ссылке («VPN andrey»).
-const linkNamePrefix = "VPN "
+// legacyLinkPrefix — начало имени в ссылках, выданных ручной настройкой
+// без link_prefix («VPN andrey»). Импорт оставляет ссылки такими, какими их
+// раздали: иначе приложение увидело бы второй сервер.
+const legacyLinkPrefix = "VPN "
 
 func applyProdSettings(s *db.XraySettings, data []byte, res *ImportResult) ([]db.VLESSServiceUser, error) {
 	var p prodSettings
@@ -184,8 +186,8 @@ func applyProdSettings(s *db.XraySettings, data []byte, res *ImportResult) ([]db
 	if p.AcceptProxyProtocol != nil && !*p.AcceptProxyProtocol {
 		res.Warnings = append(res.Warnings, "accept_proxy_protocol=false is not carried over: the panel's xray expects PROXY protocol from nginx stream")
 	}
-	if p.LinkPrefix != "" && p.LinkPrefix != linkNamePrefix {
-		res.Warnings = append(res.Warnings, fmt.Sprintf("link_prefix %q is not carried over: links are named %q + client name", p.LinkPrefix, linkNamePrefix))
+	if p.LinkPrefix != "" {
+		s.LinkPrefix = p.LinkPrefix
 	}
 
 	service := make([]db.VLESSServiceUser, 0, len(p.ExtraClients))

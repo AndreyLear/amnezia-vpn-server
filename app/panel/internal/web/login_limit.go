@@ -44,14 +44,24 @@ type loginBucket struct {
 	windowStart time.Time
 }
 
+// loginLimiter is a fixed-window counter per key. The login uses it for
+// failed attempts; the entry node route (api_entry.go) for every request
+// and, separately, for failed ones — hence the limit and the window are
+// per instance.
 type loginLimiter struct {
 	mu        sync.Mutex
 	byIP      map[string]loginBucket
 	lastSweep time.Time
+	limit     int
+	window    time.Duration
 }
 
 func newLoginLimiter() *loginLimiter {
-	return &loginLimiter{byIP: make(map[string]loginBucket)}
+	return newRateLimiter(loginFailLimit, loginFailWindow)
+}
+
+func newRateLimiter(limit int, window time.Duration) *loginLimiter {
+	return &loginLimiter{byIP: make(map[string]loginBucket), limit: limit, window: window}
 }
 
 // clientIP is the rate-limit key. X-Real-IP is trusted only when it is
@@ -96,14 +106,14 @@ func (l *loginLimiter) retryAfterLocked(key string, now time.Time) (int, bool) {
 	if !ok {
 		return 0, false
 	}
-	if now.Sub(b.windowStart) >= loginFailWindow {
+	if now.Sub(b.windowStart) >= l.window {
 		delete(l.byIP, key)
 		return 0, false
 	}
-	if b.count < loginFailLimit {
+	if b.count < l.limit {
 		return 0, false
 	}
-	rem := b.windowStart.Add(loginFailWindow).Sub(now)
+	rem := b.windowStart.Add(l.window).Sub(now)
 	sec := int(rem / time.Second)
 	if rem%time.Second != 0 {
 		sec++
@@ -164,7 +174,7 @@ func (l *loginLimiter) sweepLocked(now time.Time) {
 	}
 	l.lastSweep = now
 	for key, b := range l.byIP {
-		if now.Sub(b.windowStart) >= loginFailWindow {
+		if now.Sub(b.windowStart) >= l.window {
 			delete(l.byIP, key)
 		}
 	}
