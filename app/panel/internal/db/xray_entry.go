@@ -17,10 +17,11 @@ import (
 // Российский вход — отдельный сервер без панели и базы: принимает VLESS от
 // клиентов внутри страны, российское пускает напрямую, остальное отправляет
 // на этот сервер. Клиент подключается к нему с тем же UUID, что и сюда:
-// вход получает список пользователей панели (`panel xray users-json`) и
-// собирает свой Xray сам. Панели о входе нужно знать только то, из чего
-// складывается ссылка: адрес, Reality входа, путь XHTTP и приставку к имени
-// («RU »), по которой человек отличит ссылку через вход от прямой.
+// вход получает список пользователей панели и собирает свой Xray сам —
+// раз в минуту по своему секрету (token_hash, см. ниже). Панели о входе
+// нужно знать только то, из чего складывается ссылка: адрес, Reality
+// входа, путь XHTTP и приставку к имени («RU »), по которой человек
+// отличит ссылку через вход от прямой.
 const xrayEntriesTable = `CREATE TABLE IF NOT EXISTS xray_entries (
 		name TEXT PRIMARY KEY,
 		link_host TEXT NOT NULL,
@@ -30,7 +31,8 @@ const xrayEntriesTable = `CREATE TABLE IF NOT EXISTS xray_entries (
 		short_id TEXT NOT NULL,
 		path TEXT NOT NULL,
 		link_prefix TEXT NOT NULL DEFAULT '',
-		updated_at_utc TEXT NOT NULL
+		updated_at_utc TEXT NOT NULL,
+		token_hash TEXT NOT NULL DEFAULT ''
 	);`
 
 // XrayEntry — узел-вход. Секретов в нём нет: всё это и так видно в любой
@@ -145,6 +147,73 @@ func DeleteXrayEntry(handle *sql.DB, name string) error {
 		return fmt.Errorf("db: delete xray entry: %w", err)
 	} else if n == 0 {
 		return ErrXrayEntryNotFound
+	}
+	return nil
+}
+
+// Секрет узла (автосинхронизация, amnezia-vpn-server-14y0.6, решение
+// владельца 28.10.2026). Узел забирает у панели список клиентов по своему
+// секрету; в базе — только SHA-256 секрета: украденная база или резервная
+// копия не даёт права выдать себя за узел. Секрет — 32 случайных байта,
+// поэтому медленный хэш вроде Argon2 здесь не нужен, а частые запросы узла
+// не стоят ему памяти.
+var entryTokenHashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// XrayEntryToken — хэш секрета узла; пустой Hash — секрета у узла нет.
+type XrayEntryToken struct {
+	Name string
+	Hash string
+}
+
+// SetXrayEntryTokenHash задаёт хэш секрета узла взамен прежнего: прежний
+// секрет перестаёт действовать сразу. ErrXrayEntryNotFound — узла нет.
+func SetXrayEntryTokenHash(handle *sql.DB, name, hash string) error {
+	if !entryTokenHashPattern.MatchString(hash) {
+		return errors.New("db: entry token hash must be 64 lowercase hex digits")
+	}
+	res, err := handle.Exec(`UPDATE xray_entries SET token_hash = ?, updated_at_utc = ? WHERE name = ?`,
+		hash, time.Now().UTC().Format(time.RFC3339), name)
+	if err != nil {
+		return fmt.Errorf("db: write entry token: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("db: write entry token: %w", err)
+	} else if n == 0 {
+		return ErrXrayEntryNotFound
+	}
+	return nil
+}
+
+// XrayEntryTokens — хэши секретов всех узлов по имени, включая узлы без
+// секрета (Hash пуст).
+func XrayEntryTokens(handle Querier) ([]XrayEntryToken, error) {
+	rows, err := handle.Query(`SELECT name, token_hash FROM xray_entries ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("db: query entry tokens: %w", err)
+	}
+	defer rows.Close()
+	var out []XrayEntryToken
+	for rows.Next() {
+		var t XrayEntryToken
+		if err := rows.Scan(&t.Name, &t.Hash); err != nil {
+			return nil, fmt.Errorf("db: scan entry token: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// migrateXrayEntryToken добавляет колонку секрета в таблицу узлов,
+// заведённую выпусками 2.11–2.12. Аддитивно, без подъёма SchemaVersion: у
+// прежних узлов секрета нет, и прежняя версия панели, вернувшаяся
+// откатом, колонку просто не читает.
+func migrateXrayEntryToken(handle *sql.DB) error {
+	has, err := tableHasColumn(handle, "xray_entries", "token_hash")
+	if err != nil || has {
+		return err
+	}
+	if _, err := handle.Exec(`ALTER TABLE xray_entries ADD COLUMN token_hash TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("db: add xray_entries.token_hash: %w", err)
 	}
 	return nil
 }

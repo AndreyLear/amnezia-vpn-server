@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ const (
 	opXrayEntrySet    = "xray entry set"
 	opXrayEntryList   = "xray entry list"
 	opXrayEntryRemove = "xray entry remove"
+	opXrayEntryToken  = "xray entry token"
 	opXrayUsersJSON   = "xray users-json"
 )
 
@@ -31,6 +33,8 @@ func (a *app) cmdXrayEntry(args []string) int {
 		return a.cmdXrayEntryList(args[1:])
 	case "remove":
 		return a.cmdXrayEntryRemove(args[1:])
+	case "token":
+		return a.cmdXrayEntryToken(args[1:])
 	default:
 		a.usage()
 		return 2
@@ -39,7 +43,9 @@ func (a *app) cmdXrayEntry(args []string) int {
 
 // cmdXrayEntrySet создаёт узел или меняет у существующего только
 // переданные поля. У нового обязательно всё, кроме порта (443) и
-// приставки к имени.
+// приставки к имени. Узел без секрета — новый или заведённый до
+// автосинхронизации — получает секрет здесь же, и он показывается один раз
+// (amnezia-vpn-server-14y0.6); правка полей узла с секретом его не трогает.
 func (a *app) cmdXrayEntrySet(args []string) int {
 	parsed, err := parseArgs(args, map[string]bool{
 		"host": true, "port": true, "sni": true, "public-key": true,
@@ -88,7 +94,52 @@ func (a *app) cmdXrayEntrySet(args []string) int {
 	if err := db.SaveXrayEntry(handle, *e); err != nil {
 		return a.fatal(opXrayEntrySet, err)
 	}
-	return a.ok(opXrayEntrySet, "entry "+name+" saved")
+	hasToken, err := entryHasToken(handle, name)
+	if err != nil {
+		return a.fatal(opXrayEntrySet, err)
+	}
+	a.ok(opXrayEntrySet, "entry "+name+" saved")
+	if hasToken {
+		return 0
+	}
+	return a.issueEntryToken(handle, opXrayEntrySet, name)
+}
+
+// cmdXrayEntryToken выдаёт узлу новый секрет взамен прежнего: прежний
+// перестаёт действовать сразу, и узел надо перенастроить новым.
+func (a *app) cmdXrayEntryToken(args []string) int {
+	if len(args) != 1 {
+		return a.usageError(opXrayEntryToken, "want <name>")
+	}
+	handle, err := a.openDBForChange()
+	if err != nil {
+		return a.fatal(opXrayEntryToken, err)
+	}
+	defer handle.Close()
+	return a.issueEntryToken(handle, opXrayEntryToken, args[0])
+}
+
+// issueEntryToken — новый секрет узла на stdout. Это единственное место,
+// где секрет виден: в базе только его хэш.
+func (a *app) issueEntryToken(handle *sql.DB, op, name string) int {
+	token, err := xray.RotateEntryToken(handle, name)
+	if err != nil {
+		return a.fatal(op, err)
+	}
+	return a.ok(op, "entry "+name+" token (shown only now; the node takes it as --entry-token): "+token)
+}
+
+func entryHasToken(handle db.Querier, name string) (bool, error) {
+	tokens, err := db.XrayEntryTokens(handle)
+	if err != nil {
+		return false, err
+	}
+	for _, t := range tokens {
+		if t.Name == name {
+			return t.Hash != "", nil
+		}
+	}
+	return false, nil
 }
 
 func (a *app) cmdXrayEntryList(args []string) int {
@@ -104,10 +155,24 @@ func (a *app) cmdXrayEntryList(args []string) int {
 	if err != nil {
 		return a.fatal(opXrayEntryList, err)
 	}
-	fmt.Fprintln(a.stdout, "name\thost\tport\tsni\tpath\tshort_id\tpublic_key\tprefix")
+	tokens, err := db.XrayEntryTokens(handle)
+	if err != nil {
+		return a.fatal(opXrayEntryList, err)
+	}
+	hasToken := map[string]bool{}
+	for _, t := range tokens {
+		hasToken[t.Name] = t.Hash != ""
+	}
+	// token — есть ли у узла секрет для автосинхронизации; сам секрет не
+	// показывается никогда, кроме момента выдачи.
+	fmt.Fprintln(a.stdout, "name\thost\tport\tsni\tpath\tshort_id\tpublic_key\tprefix\ttoken")
 	for _, e := range entries {
-		fmt.Fprintf(a.stdout, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%q\n",
-			e.Name, e.LinkHost, e.LinkPort, e.SNI, e.Path, e.ShortID, e.PublicKey, e.LinkPrefix)
+		token := "no"
+		if hasToken[e.Name] {
+			token = "yes"
+		}
+		fmt.Fprintf(a.stdout, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%q\t%s\n",
+			e.Name, e.LinkHost, e.LinkPort, e.SNI, e.Path, e.ShortID, e.PublicKey, e.LinkPrefix, token)
 	}
 	return 0
 }
@@ -127,10 +192,10 @@ func (a *app) cmdXrayEntryRemove(args []string) int {
 	return a.ok(opXrayEntryRemove, "entry "+args[0]+" removed")
 }
 
-// cmdXrayUsersJSON печатает users.json для узла-входа: его build.py
-// собирает из этого списка пользователей своего Xray с теми же UUID.
-// Автосинхронизация — позже (amnezia-vpn-server-14y0.6); пока список
-// переносят руками.
+// cmdXrayUsersJSON печатает users.json для узла-входа, настроенного
+// вручную: его build.py собирает из этого списка пользователей своего Xray
+// с теми же UUID. Узел с ролью entry забирает список сам
+// (GET /api/entry/config, amnezia-vpn-server-14y0.6).
 func (a *app) cmdXrayUsersJSON(args []string) int {
 	if len(args) != 0 {
 		return a.usageError(opXrayUsersJSON, "unexpected arguments")

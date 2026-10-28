@@ -70,6 +70,10 @@ commands:
       [--public-key <key>] [--short-id <hex>] [--path </path>] [--prefix <text>]
     (an entry node: a server without a panel that clients reach first, with
      the same UUIDs; a new entry needs every flag but --port and --prefix)
+    (a new entry, or one without a token yet, gets the secret token its
+     node syncs with; it is printed once and only its hash is kept)
+  xray entry token <name>        issue a new token for the entry node; the old
+                                 one stops working at once
   xray entry list
   xray entry remove <name>
   xray users-json                print [{client_id,name,uuid,enabled}] for an entry node
