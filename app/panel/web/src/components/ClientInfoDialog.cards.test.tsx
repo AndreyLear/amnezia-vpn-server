@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchSpeed = vi.hoisted(() => vi.fn());
+const fetchTraffic = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (orig) => ({
   ...(await orig<typeof import("@/lib/api")>()),
   fetchSpeed,
+  fetchTraffic,
 }));
 
 import { ClientInfoDialog } from "@/components/ClientInfoDialog";
@@ -69,6 +71,8 @@ function bodyButtons(): HTMLElement[] {
 }
 
 beforeEach(() => {
+  fetchTraffic.mockReset();
+  fetchTraffic.mockResolvedValue({ from_utc: "", to_utc: "", hours: [] });
   fetchSpeed.mockReset();
   fetchSpeed.mockResolvedValue({
     window: "10min",
@@ -98,13 +102,18 @@ describe("ClientInfoDialog: блоки", () => {
   });
 
   // Владелец: «Табы и контент табов внутри блока. Это всё один блок» —
-  // ровно две карточки: общее и вкладки целиком (amnezia-vpn-server-14y0.9).
-  it("две карточки: общее и вкладки вместе с их содержимым", async () => {
+  // общее и вкладки целиком (amnezia-vpn-server-14y0.9). Третья — трафик
+  // по дням: он общий для обоих протоколов и стоит под вкладками, а не в
+  // каждой из них (amnezia-vpn-server-gzmb).
+  it("три карточки: общее, вкладки вместе с их содержимым, трафик по дням", async () => {
     const user = userEvent.setup();
     renderDialog();
     const dialog = screen.getByRole("dialog");
     const cards = blocks(dialog);
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(3);
+    expect(cards[2]).toBe(screen.getByTestId("client-daily-traffic"));
+    expect(within(cards[2]).getByText(/^Трафик по дням/)).toBeInTheDocument();
+    expect(within(cards[1]).queryByText(/^Трафик по дням/)).toBeNull();
     expect(cards[0]).toBe(screen.getByTestId("client-common"));
     const tabsCard = cards[1];
     for (const cls of ["p-4", "rounded-[1rem]", "border", "border-border"]) {
@@ -115,7 +124,10 @@ describe("ClientInfoDialog: блоки", () => {
 
     await user.click(screen.getByRole("tab", { name: "VLESS" }));
     await screen.findByText("Напрямую");
-    expect(blocks(screen.getByRole("dialog"))).toHaveLength(2);
+    // На вкладке VLESS график тот же и там же — один на клиента.
+    expect(blocks(screen.getByRole("dialog"))).toHaveLength(3);
+    expect(screen.getAllByText(/^Трафик по дням/)).toHaveLength(1);
+    expect(fetchTraffic).toHaveBeenCalledTimes(1);
     expect(tabsCard).toContainElement(screen.getByRole("tabpanel"));
   });
 

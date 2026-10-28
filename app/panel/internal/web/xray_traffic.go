@@ -105,19 +105,30 @@ func (s *Server) appendVLESSSpeed(counters map[int64]db.VLESSCounters, now time.
 	return status.AppendSample(s.vlessSpeedLog(), st)
 }
 
-// WatchXrayTraffic опрашивает Xray раз в every, пока ctx не отменён; в базу
+// WatchTraffic опрашивает Xray раз в every, пока ctx не отменён; в базу
 // пишет не чаще XrayTrafficInterval. В журнал — только смена состояния:
 // Xray, который не запущен или ещё не перезапущен с включённой
 // статистикой, не должен писать строку на каждом опросе.
-func (s *Server) WatchXrayTraffic(ctx context.Context, every time.Duration) {
+//
+// Тем же шагом в базу идёт и трафик AWG по часам из status.json
+// (amnezia-vpn-server-gzmb). Отдельного цикла под него нет: этот и так
+// просыпается каждые пять секунд и пишет в базу под замком панели, а
+// второй таймер ради чтения одного файла раз в десять секунд был бы ещё
+// одним местом, которое надо останавливать и проверять. Своё у AWG —
+// только отметка последней записи: Xray может быть не настроен или
+// лежать, а AWG при этом работает.
+func (s *Server) WatchTraffic(ctx context.Context, every time.Duration) {
 	api := xray.NewAPI(xray.APIAddr())
 	t := time.NewTicker(every)
 	defer t.Stop()
-	failing := false
-	var recorded time.Time
+	failing, awgFailing := false, false
+	var recorded, awgRecorded time.Time
 	for {
 		now := time.Now().UTC()
-		record := now.Sub(recorded) >= XrayTrafficInterval-every/2 || now.Before(recorded)
+		due := func(last time.Time) bool {
+			return now.Sub(last) >= XrayTrafficInterval-every/2 || now.Before(last)
+		}
+		record := due(recorded)
 		callCtx, cancel := context.WithTimeout(ctx, every)
 		err := s.pollXrayTraffic(callCtx, api, now, record)
 		cancel()
@@ -131,6 +142,20 @@ func (s *Server) WatchXrayTraffic(ctx context.Context, every time.Duration) {
 		case err == nil && failing:
 			s.cfg.Logger.Printf("xray: traffic stats available again")
 			failing = false
+		}
+		if due(awgRecorded) {
+			awgErr := s.recordAWGTraffic(now)
+			switch {
+			case awgErr == nil:
+				awgRecorded = now
+				if awgFailing {
+					s.cfg.Logger.Printf("awg: traffic history recording again")
+					awgFailing = false
+				}
+			case !awgFailing && ctx.Err() == nil:
+				s.cfg.Logger.Printf("awg: traffic history not recorded: %v", awgErr)
+				awgFailing = true
+			}
 		}
 		select {
 		case <-ctx.Done():

@@ -303,6 +303,7 @@ func New(cfg Config) (*Server, error) {
 	// вечером не грузило» разбиралась только по ssh и снимкам экрана с
 	// роутера (amnezia-vpn-server-8lnv).
 	s.mux.Handle("GET /api/clients/{id}/speed", s.auth.RequireAPI(http.HandlerFunc(s.apiClientSpeed)))
+	s.mux.Handle("GET /api/clients/{id}/traffic", s.auth.RequireAPI(http.HandlerFunc(s.apiClientTraffic)))
 	// Ссылки VLESS и их QR (amnezia-vpn-server-14y0.5, см. api_vless.go).
 	s.mux.Handle("GET /api/clients/{id}/vless", s.auth.RequireAPI(http.HandlerFunc(s.apiClientVLESS)))
 	s.mux.Handle("GET /api/clients/{id}/vless/qr", s.auth.RequireAPI(http.HandlerFunc(s.apiClientVLESSQR)))

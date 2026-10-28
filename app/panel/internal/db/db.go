@@ -126,6 +126,10 @@ var schemaStatements = []string{
 	// Трафик VLESS по клиентам (amnezia-vpn-server-14y0.8, см.
 	// xray_traffic.go). SchemaVersion не поднимается — таблица аддитивна.
 	vlessTrafficTable,
+	// Трафик клиента по часам и точка отсчёта счётчиков AWG
+	// (amnezia-vpn-server-gzmb, см. client_traffic.go). Аддитивны.
+	clientTrafficTable,
+	awgTrafficTable,
 }
 
 // Open creates a new SQLite database file (including parent directories)
@@ -1290,6 +1294,10 @@ func DeleteClient(handle *sql.DB, id int64) error {
 		return ErrClientNotFound
 	}
 	if err := resetVLESSTraffic(tx, id); err != nil {
+		return err
+	}
+	// И его история по часам (amnezia-vpn-server-gzmb).
+	if err := deleteClientTraffic(tx, id); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

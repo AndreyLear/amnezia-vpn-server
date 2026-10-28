@@ -123,6 +123,27 @@ test("карточка клиента показывает график скор
   await expect(chart).toBeVisible();
 });
 
+// Трафик по дням — своя карточка под вкладками, одна на клиента: на
+// вкладке VLESS она та же, что на AWG (amnezia-vpn-server-gzmb). История
+// у свежей фикстуры пуста — это и проверяется: заглушка объясняет, откуда
+// она возьмётся, и на 375px карточка не шире окна.
+for (const width of [1280, 375]) test(`окно клиента показывает трафик по дням под вкладками (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await login(page);
+  await expect(page.getByLabel("Протокол: AWG").first()).toBeVisible();
+  if (width < 640) await page.getByText("alice", { exact: true }).click();
+  else await page.getByRole("button", { name: "alice", exact: true }).click();
+  const card = page.getByTestId("client-daily-traffic");
+  await expect(card.getByText("Трафик по дням")).toBeVisible();
+  await expect(card.getByText("За 30 дней трафика нет")).toBeVisible();
+  await expect(card.getByText("История копится с обновления панели")).toBeVisible();
+  await expect(page.getByTestId("client-protocols").getByText(/^Трафик по дням/)).toHaveCount(0);
+  const box = await card.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
+  await page.getByRole("tab", { name: "VLESS" }).click();
+  await expect(page.getByText(/^Трафик по дням/)).toHaveCount(1);
+});
+
 // Ширину меню юнит-тест не измерит: в jsdom вёрстки нет вовсе, там любая
 // ширина равна нулю. Именно поэтому первый заход прошёл зелёным, а у
 // владельца меню прыгало под курсором (amnezia-vpn-server-x65u).
