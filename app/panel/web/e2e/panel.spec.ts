@@ -469,7 +469,9 @@ for (const width of [1280, 375]) test(`окно клиента выдаёт сс
   // (amnezia-vpn-server-14y0.12).
   await expect(page.getByText(/Подключения через вход/)).toHaveCount(0);
   // Маршрут через узел-вход называется «Каскад» (amnezia-vpn-server-14y0.17).
-  await expect(page.getByText("Каскад", { exact: true })).toBeVisible();
+  // Ищем в окне: в шапке страницы есть своё «Каскад» — строка узла
+  // (amnezia-vpn-server-q1do.1).
+  await expect(page.getByRole("dialog").getByText("Каскад", { exact: true })).toBeVisible();
   // amnezia-vpn-server-14y0.9: у VLESS свой график, «Удалить» — внизу окна,
   // и окно не прокручивается вбок ни на одной ширине.
   await expect(page.getByRole("tabpanel").getByText(/^Скорость/)).toBeVisible();
