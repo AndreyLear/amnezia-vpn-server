@@ -173,6 +173,28 @@ check "the request is consumed" test ! -f "$ROOT/data/update-request.json"
 check "a copy of the database was asked for" grep -q "docker compose" "$CALLS"
 check "the snapshot is cleared once it worked" test ! -d "$ROOT/.rollback"
 
+# --- where it goes for the release --------------------------------------
+# Репозиторий переехал в AndreyLear/avl (amnezia-vpn-server-a33h). Старый
+# адрес держится только на переадресации GitHub, а она пропадёт, как только
+# кто-то займёт старое имя. Агенты, уже стоящие на серверах, ходят по
+# старому адресу до первого обновления — поэтому оба запроса обязаны идти
+# за переадресацией (-L), иначе обновиться им было бы нечем.
+setup_deployment 2.8.2
+request 2.9.0
+run_agent RELEASE_BODY="$BODY" ASSET_FILE="$ASSET" \
+    AMNEZIA_UPDATE_API="https://api.github.com" \
+    AMNEZIA_UPDATE_DOWNLOADS="https://github.com" >/dev/null 2>&1
+check "it asks the renamed repository about the release" \
+    grep -q "https://api.github.com/repos/AndreyLear/avl/releases/tags/v2.9.0" "$CALLS"
+check "and downloads the archive from it" \
+    grep -q "https://github.com/AndreyLear/avl/releases/download/v2.9.0/amnezia-vpn-server-2.9.0.tar.gz" "$CALLS"
+check_not "the old repository name is gone" \
+    grep -q "AndreyLear/amnezia-vpn-server" "$CALLS"
+check "the release lookup follows redirects" \
+    grep -qE "^curl -[a-zA-Z]*L[a-zA-Z]* .*releases/tags/" "$CALLS"
+check "and so does the download" \
+    grep -qE "^curl -[a-zA-Z]*L[a-zA-Z]* .*releases/download/" "$CALLS"
+
 # --- the request is not taken at its word ------------------------------
 setup_deployment 2.8.2
 request 2.7.0

@@ -34,8 +34,10 @@ CHECK_FILE="${STATUS_DIR}/update-check.json"
 # прочитать всё, что изменилось между его версией и свежей, а не только
 # последнюю запись. Двадцати хватает с большим запасом — сервер, отставший
 # на двадцать выпусков, всё равно обновляется мастером
-# (amnezia-vpn-server-tjoq).
-RELEASE_URL="${AMNEZIA_UPDATE_URL:-https://api.github.com/repos/AndreyLear/amnezia-vpn-server/releases?per_page=20}"
+# (amnezia-vpn-server-tjoq). Репозиторий переехал в AndreyLear/avl; старые
+# копии скрипта доходят по прежнему имени через переадресацию GitHub, за
+# которой curl идёт по -L (amnezia-vpn-server-a33h).
+RELEASE_URL="${AMNEZIA_UPDATE_URL:-https://api.github.com/repos/AndreyLear/avl/releases?per_page=20}"
 CURL_BIN="${AMNEZIA_UPDATE_CURL:-curl}"
 
 log() { printf 'update-check: %s\n' "$*"; }

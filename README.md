@@ -50,7 +50,7 @@ English: [README.en.md](README.en.md) · Безопасность: [SECURITY.md]
 ## Установка
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/AndreyLear/avl/main/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh
 ```
 
@@ -294,7 +294,7 @@ ssh root@203.0.113.10 "cd /opt/amnezia-vpn && docker compose --env-file versions
 Обновление — это тот же мастер, запущенный ещё раз. Он помнит настройки сервера, флаги повторять не нужно:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/AndreyLear/avl/main/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh --ip 203.0.113.10
 ```
 

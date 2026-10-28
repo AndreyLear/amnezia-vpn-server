@@ -1366,6 +1366,17 @@ test_standalone_downloads_the_project() {
     grep -q "releases/download/v2.10.40/amnezia-vpn-server-2.10.40.tar.gz" "$FAKE_CALLS" \
         && pass "and downloads that release's own archive" \
         || fail "the release archive was not downloaded"
+    # Репозиторий переехал в AndreyLear/avl (amnezia-vpn-server-a33h): старый
+    # адрес держится на переадресации GitHub, пока никто не занял имя.
+    grep -q "https://api.github.com/repos/AndreyLear/avl/releases/latest" "$FAKE_CALLS" \
+        && pass "the latest release is asked of the renamed repository" \
+        || fail "the latest release is not asked of AndreyLear/avl"
+    grep -q "https://github.com/AndreyLear/avl/releases/download/v2.10.40/" "$FAKE_CALLS" \
+        && pass "and the archive comes from it" \
+        || fail "the release archive does not come from AndreyLear/avl"
+    grep -q "AndreyLear/amnezia-vpn-server" "$FAKE_CALLS" \
+        && fail "the old repository name is still used" \
+        || pass "the old repository name is gone"
     grep -q "fake-tarball" "$FAKE_DIR/last-bundle" 2>/dev/null \
         && pass "the verified archive is what reaches the server" \
         || fail "the server got something other than the release archive"

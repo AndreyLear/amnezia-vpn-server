@@ -50,7 +50,7 @@ Everything is tested on Ubuntu 24.04. Debian 12 is not: AmneziaWG comes as a ker
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/AndreyLear/avl/main/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh
 ```
 
@@ -294,7 +294,7 @@ The first time is the old way: the update service ships with a release, so a ser
 An update is the same wizard run again. It remembers the server's settings, so no flags are needed:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/AndreyLear/amnezia-vpn-server/main/bootstrap.sh -o bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/AndreyLear/avl/main/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh --ip 203.0.113.10
 ```
 
