@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/auth"
@@ -142,6 +143,10 @@ type Server struct {
 	// every request, and failed secrets (amnezia-vpn-server-14y0.6).
 	entryRequests *loginLimiter
 	entryFails    *loginLimiter
+	// xrayAPI — ответил ли Xray на последний опрос счётчиков
+	// (xrayAPIUnknown/Up/Down): шапка панели показывает по нему состояние
+	// VLESS рядом с туннелем AWG (amnezia-vpn-server-45ds).
+	xrayAPI atomic.Int32
 }
 
 // db returns the live database handle (RLock-protected swap access).

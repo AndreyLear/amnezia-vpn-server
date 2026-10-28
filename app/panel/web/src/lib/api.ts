@@ -520,6 +520,13 @@ export type MutationResponse = {
 
 export type IfaceState = "up" | "na" | "down" | "error";
 
+/**
+ * Состояние VLESS для шапки (amnezia-vpn-server-45ds): up/down — ответил ли
+ * Xray на последний опрос панели, na — опроса ещё не было, none — VLESS на
+ * сервере не настроен, и шапка его не показывает.
+ */
+export type VLESSState = "up" | "down" | "na" | "none";
+
 export type HostSnapshot = {
   cpu_percent: number | null;
   ram_percent: number | null;
@@ -530,6 +537,8 @@ export type HostSnapshot = {
   disk_total_bytes: number | null;
   iface: string;
   iface_state: IfaceState;
+  /** Нет у старой панели — тогда VLESS в шапке не показывается. */
+  vless_state?: VLESSState;
 };
 
 /** Toast only after a confirmed success: `{ok:true}` or a created/patched client. */

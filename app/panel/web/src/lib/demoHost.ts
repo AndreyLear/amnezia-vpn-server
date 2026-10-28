@@ -60,5 +60,6 @@ export function nextDemoHost(prev: HostSnapshot | null, rng: Rng = Math.random):
     disk_total_bytes,
     iface: "awg0",
     iface_state: "up",
+    vless_state: "up",
   };
 }

@@ -46,7 +46,7 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/notify"
 )
 
-const usageText = `awgmail — отправляет письма-уведомления оператору Amnezia VPN.
+const usageText = `awgmail — отправляет письма-уведомления оператору AVL.
 
 Запускается таймером раз в минуту. Читает настройки почты из
 data/mail.conf, которые записывает панель; нет файла — почта выключена,
