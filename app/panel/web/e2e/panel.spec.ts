@@ -152,6 +152,61 @@ for (const width of [1280, 375]) test(`вкладки клиента показ�
   }
 });
 
+// Закреплённая шапка красила фон только на высоту заголовка: sticky top-0
+// отсчитывается от края отступа прокручиваемого тела, и в полосе над шапкой
+// и по её бокам проезжало содержимое (amnezia-vpn-server-hscw). Проверяется
+// вёрсткой: от верхнего края окна до низа шапки по всей ширине под точкой
+// не должно оказаться ничего из прокручиваемого тела, кроме самой шапки.
+for (const width of [1280, 375]) test(`шапка окна клиента закрывает прокручиваемое содержимое (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 720 });
+  await login(page);
+  await expect(page.getByLabel("Протокол: AWG").first()).toBeVisible();
+  if (width < 640) await page.getByText("alice", { exact: true }).click();
+  else await page.getByRole("button", { name: "alice", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("tab", { name: "AWG" })).toBeVisible();
+  const body = dialog.locator('[data-slot="dialog-body"]');
+  expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight + 200)).toBe(true);
+  await body.evaluate((el) => (el.scrollTop = 200));
+  // Окно открывается с zoom-in: замер в середине анимации даёт сдвинутые
+  // координаты, поэтому ждём, пока положение шапки перестанет меняться.
+  const header = dialog.locator('[data-slot="dialog-header"]');
+  let last = "";
+  await expect.poll(async () => {
+    const box = JSON.stringify(await header.boundingBox());
+    const same = box === last;
+    last = box;
+    return same;
+  }).toBe(true);
+
+  const leaks = await page.evaluate(() => {
+    const content = document.querySelector('[data-slot="dialog-content"]')!;
+    const body = content.querySelector('[data-slot="dialog-body"]')!;
+    const header = body.querySelector('[data-slot="dialog-header"]')!;
+    const c = content.getBoundingClientRect();
+    const h = header.getBoundingClientRect();
+    const out: string[] = [];
+    for (let y = c.top + 1; y < h.bottom; y += 3) {
+      for (const x of [c.left + 4, c.left + 12, c.left + c.width / 2, c.right - 30]) {
+        const el = document.elementFromPoint(x, y);
+        // Скругление угла окна отдаёт точку подложке — это не содержимое.
+        if (!el || !body.contains(el) || header.contains(el)) continue;
+        out.push(`${Math.round(x)},${Math.round(y)}: ${el.tagName}.${el.className}`.slice(0, 120));
+      }
+    }
+    return out;
+  });
+  expect(leaks).toEqual([]);
+
+  // Крестик остаётся над шапкой: в его центре — он сам.
+  const close = await page.evaluate(() => {
+    const btn = document.querySelector('[data-slot="dialog-close"]')!;
+    const r = btn.getBoundingClientRect();
+    return btn.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+  });
+  expect(close).toBe(true);
+});
+
 // Ширину меню юнит-тест не измерит: в jsdom вёрстки нет вовсе, там любая
 // ширина равна нулю. Именно поэтому первый заход прошёл зелёным, а у
 // владельца меню прыгало под курсором (amnezia-vpn-server-x65u).

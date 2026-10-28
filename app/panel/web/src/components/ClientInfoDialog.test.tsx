@@ -563,7 +563,7 @@ describe("ClientInfoDialog", () => {
     expect(close).toHaveAttribute("data-size", "icon-sm");
     expect(
       document.querySelector('[data-slot="dialog-header"]'),
-    ).toHaveClass("max-sm:pr-12");
+    ).toHaveClass("max-sm:pr-16");
   });
 
   it("gives delete confirm Отмена and Удалить 48px mobile tap targets", async () => {
