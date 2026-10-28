@@ -689,6 +689,21 @@ case "$*" in
         ;;
 esac
 if [ "$*" = "-t" ]; then
+    # Второй блок stream настоящий nginx не принимает — ровно так упала
+    # выкатка 2.12.1, когда установщик не узнал многострочный блок и дописал
+    # свой (amnezia-vpn-server-14y0.10). Отказ печатает в stderr то же, что
+    # nginx: установщик обязан донести эти строки до журнала.
+    conf="${AMNEZIA_INSTALL_NGINX_CONF:-/nonexistent}"
+    streams="$(sed 's/#.*//' "$conf" 2>/dev/null | grep -cE '(^|[[:space:];}])stream[[:space:]]*(\{|$)')"
+    if [ "${streams:-0}" -gt 1 ]; then
+        echo "nginx: [emerg] \"stream\" directive is duplicate in $conf" >&2
+        echo "nginx: configuration file $conf test failed" >&2
+        exit 1
+    fi
+    if [ "${NGINX_T_RC:-0}" != "0" ]; then
+        echo "nginx: [emerg] fake refusal for the harness in $conf" >&2
+        echo "nginx: configuration file $conf test failed" >&2
+    fi
     exit "${NGINX_T_RC:-0}"
 fi
 exit 0
@@ -3356,6 +3371,74 @@ EOF
         || pass "manual setup adopted: every reload kept the split and the panel (no downtime)"
 }
 
+# Блок stream с нашим include бывает записан руками не в одну строку — так
+# было на боевом при выкатке 2.12.1 (amnezia-vpn-server-14y0.10): установщик
+# его не узнал, дописал второй, и nginx -t отказал. Блок в любой разметке —
+# свой: второго нет, nginx.conf не меняется, установка проходит.
+test_xray_front_adopts_a_multiline_stream_block() {
+    local layout
+    for layout in multiline brace-own-line commented relative; do
+        fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+        rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --panel-domain panel.example.com --vpn-domain vpn.example.com)"
+        [ "$rc" = "0" ] || fail "multiline stream ($layout) base: exit $rc"
+        mkdir -p "$NGINX_STREAM_TEST" "$NGINX_MODULES_TEST"
+        : > "$NGINX_MODULES_TEST/50-mod-stream.conf"
+        case "$layout" in
+            multiline)
+                printf '\nstream {\n    include %s/*.conf;\n}\n' "$NGINX_STREAM_TEST" >> "$NGINX_CONF_TEST" ;;
+            brace-own-line)
+                printf '\nstream\n{\n\tinclude   %s/*.conf ;\n\n}\n' "$NGINX_STREAM_TEST" >> "$NGINX_CONF_TEST" ;;
+            commented)
+                printf '\n# TCP 443 по SNI\nstream { # руками, 27.10\n    include %s/*.conf; # amnezia\n}\n' \
+                    "$NGINX_STREAM_TEST" >> "$NGINX_CONF_TEST" ;;
+            relative)
+                # nginx считает относительный include от каталога nginx.conf.
+                printf '\nstream {\n    include "%s/*.conf";\n}\n' "$(basename "$NGINX_STREAM_TEST")" >> "$NGINX_CONF_TEST" ;;
+        esac
+        cp "$NGINX_CONF_TEST" "$TMP_TEST/nginx.conf.manual"
+        : > "$FAKE_CALLS"
+        rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --xray)"
+        [ "$rc" = "0" ] \
+            && pass "multiline stream ($layout): the install goes through" \
+            || fail "multiline stream ($layout): exit $rc ($(tail -1 "$TMP_TEST/err"))"
+        cmp -s "$NGINX_CONF_TEST" "$TMP_TEST/nginx.conf.manual" \
+            && pass "multiline stream ($layout): nginx.conf is left as it was, no second block" \
+            || fail "multiline stream ($layout): nginx.conf was changed: $(diff "$TMP_TEST/nginx.conf.manual" "$NGINX_CONF_TEST" | tr '\n' ' ')"
+        grep -q '^nginx-state -t ' "$FAKE_CALLS" && ! grep -q 'directive is duplicate' "$TMP_TEST/err" "$TMP_TEST/out" \
+            && pass "multiline stream ($layout): nginx -t accepts the result" \
+            || fail "multiline stream ($layout): nginx -t was not run or refused"
+        [ -f "$(STREAM_CONF_TEST)" ] \
+            && pass "multiline stream ($layout): the split is in stream.d" \
+            || fail "multiline stream ($layout): no $(STREAM_CONF_TEST)"
+    done
+}
+
+# Чужой блок stream без нашего include: второй блок nginx не примет, а
+# вписывать свою строку внутрь чужой настройки установщик не берётся —
+# там может быть свой 443. Отказ с понятной ошибкой и до любых изменений.
+test_xray_front_refuses_a_foreign_stream_block() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --panel-domain panel.example.com --vpn-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "foreign stream base: exit $rc"
+    printf '\nstream {\n    server {\n        listen 5353 udp;\n        proxy_pass 127.0.0.1:53;\n    }\n}\n' >> "$NGINX_CONF_TEST"
+    cp "$NGINX_CONF_TEST" "$TMP_TEST/nginx.conf.foreign"
+    cp "$ROOT/nginx/panel.conf" "$TMP_TEST/panel.before"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --xray)"
+    [ "$rc" != "0" ] && grep -qF "include $NGINX_STREAM_TEST/*.conf;" "$TMP_TEST/err" \
+        && grep -q "stream" "$TMP_TEST/err" \
+        && pass "foreign stream: refused, the error names the include to add" \
+        || fail "foreign stream: exit $rc, $(tail -1 "$TMP_TEST/err")"
+    cmp -s "$NGINX_CONF_TEST" "$TMP_TEST/nginx.conf.foreign" \
+        && pass "foreign stream: nginx.conf untouched (no second stream block)" \
+        || fail "foreign stream: nginx.conf was changed"
+    [ -e "$(STREAM_CONF_TEST)" ] || ! cmp -s "$ROOT/nginx/panel.conf" "$TMP_TEST/panel.before" \
+        && fail "foreign stream: nginx was half changed before the refusal" \
+        || pass "foreign stream: nothing of the split written"
+    grep -q '^XRAY_ENABLED=1' "$ROOT/.env" \
+        && fail "foreign stream: --xray was remembered anyway" || pass "foreign stream: --xray not remembered"
+}
+
 # --no-xray возвращает панели прямой listen 443 и убирает всё деление.
 test_xray_front_switched_off() {
     fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
@@ -3429,6 +3512,11 @@ test_xray_front_rolls_back_a_rejected_config() {
     [ "$rc" = "1" ] || fail "rollback: exit $rc, want 1"
     grep -q "nginx configuration test failed" "$TMP_TEST/err" \
         && pass "rollback: the refusal is reported" || fail "rollback: no nginx -t message"
+    # Одного «test failed» мало: почему nginx отказал, видно только из его
+    # собственного вывода (amnezia-vpn-server-14y0.10).
+    grep -qF "[emerg] fake refusal for the harness" "$TMP_TEST/out" "$TMP_TEST/err" \
+        && pass "rollback: what nginx -t said reaches the installer's log" \
+        || fail "rollback: the output of nginx -t is lost"
     cmp -s "$ROOT/nginx/panel.conf" "$TMP_TEST/panel.before" \
         && pass "rollback: the panel site is the one that worked" \
         || fail "rollback: the panel site was left rewritten"
@@ -4029,6 +4117,8 @@ test_xray_switch
 test_xray_needs_domain
 test_xray_front_with_panel_domain
 test_xray_front_adopts_the_manual_setup
+test_xray_front_adopts_a_multiline_stream_block
+test_xray_front_refuses_a_foreign_stream_block
 test_xray_front_switched_off
 test_xray_front_with_panel_port
 test_xray_front_with_loopback_panel
