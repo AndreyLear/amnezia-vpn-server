@@ -161,6 +161,8 @@ V6_DU_OUT_ACCEPT=0
 UFW_ACTIVE=no
 UFW_RC=0
 XRAY_INIT_RC=0
+XRAY_CONFIG_BODY=xray-config-1
+XRAY_UP_BODY=
 NGINX_T_RC=0
 EOF
     # The panel-init log the installer inspects on `up -d` failure
@@ -247,6 +249,12 @@ if [ "${1:-}" = "compose" ]; then
             # never wrote it would make the guard untestable and, worse,
             # would make every run look like "port unknown".
             fake_awg_status "${LIVE_PORT:-}"
+            # XRAY_UP_BODY: конфиг Xray переписан уже при подъёме стека
+            # (panel-init, панель) — раньше, чем до Xray дошла очередь.
+            if [ -n "${XRAY_UP_BODY:-}" ]; then
+                mkdir -p config/xray
+                printf '%s\n' "$XRAY_UP_BODY" > config/xray/config.json
+            fi
             exit "${UP_RC:-0}"
             ;;
         restart)
@@ -297,7 +305,13 @@ if [ "${1:-}" = "compose" ]; then
                 *"/app/panel xray init"*)
                     # Без домена в endpoint панель ключей Reality не
                     # заводит (amnezia-vpn-server-14y0.3).
-                    exit "${XRAY_INIT_RC:-0}"
+                    [ "${XRAY_INIT_RC:-0}" = "0" ] || exit "${XRAY_INIT_RC}"
+                    # Панель пересобирает конфиг Xray из базы; новый выпуск
+                    # пишет его по-новому (stats/policy в 2.12.1,
+                    # amnezia-vpn-server-14y0.11).
+                    mkdir -p config/xray
+                    printf '%s\n' "${XRAY_CONFIG_BODY:-xray-config-1}" > config/xray/config.json
+                    exit 0
                     ;;
                 *"server update"*)
                     # CONFIG_REGEN=0 stands for the update that reports
@@ -3186,6 +3200,109 @@ test_xray_switch() {
         && fail "--no-xray still brings xray up" || pass "--no-xray: the stack comes up without it"
 }
 
+# Конфиг Xray — файл в томе: `up -d xray` контейнер с тем же образом не
+# пересоздаёт, и Xray работает со старым конфигом, пока его не перезапустят.
+# После 2.12.1 на боевом так и вышло: конфиг со stats/policy записан, xray
+# «Up 14 hours», счётчиков нет, трафик VLESS не считался
+# (amnezia-vpn-server-14y0.11). Установщик сравнивает конфиг до своих
+# действий и после и перезапускает xray, если тот изменился.
+xray_restarts() { grep -c "versions.lock restart xray$" "$FAKE_CALLS"; }
+
+test_xray_restarted_when_its_config_changed() {
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --xray --vpn-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "xray restart base: exit $rc"
+
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "xray restart, same config: exit $rc"
+    [ "$(xray_restarts)" = "0" ] \
+        && pass "xray config unchanged: xray keeps running" \
+        || fail "xray restarted although its config did not change"
+
+    # Новый выпуск пишет конфиг по-новому (как stats/policy в 2.12.1).
+    setstate XRAY_CONFIG_BODY xray-config-2 "$FAKE_STATE"
+    printf 'old\n' > "$ROOT/run/xray/restart-request"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "xray restart, new config: exit $rc"
+    [ "$(xray_restarts)" = "1" ] \
+        && pass "xray config changed: xray is restarted once" \
+        || fail "xray config changed: $(xray_restarts) restarts of xray, want 1"
+    awk '/versions.lock up -d xray$/ {up=NR} /versions.lock restart xray$/ {r=NR} END {exit !(up && r > up)}' "$FAKE_CALLS" \
+        && pass "xray config changed: the restart comes after xray init and up -d xray" \
+        || fail "xray config changed: restart not after up -d xray"
+    grep -q "docker compose --profile xray --env-file versions.lock restart xray$" "$FAKE_CALLS" \
+        && pass "xray config changed: the restart carries the xray profile" \
+        || fail "xray config changed: restart without --profile xray"
+    [ -e "$ROOT/run/xray/restart-request" ] \
+        && fail "xray config changed: the panel's restart request outlived the restart" \
+        || pass "xray config changed: the panel's restart request is settled by it"
+
+    # Конфиг переписан ещё при подъёме стека (panel-init, панель), а
+    # xray init его уже не меняет: сравнивать надо с тем, что было до
+    # установщика, а не до xray init.
+    setstate XRAY_CONFIG_BODY xray-config-3 "$FAKE_STATE"
+    setstate XRAY_UP_BODY xray-config-3 "$FAKE_STATE"
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "xray restart, config changed at up: exit $rc"
+    [ "$(xray_restarts)" = "1" ] \
+        && pass "xray config changed while the stack came up: xray is restarted" \
+        || fail "xray config changed while the stack came up: $(xray_restarts) restarts, want 1"
+
+    # Без Xray перезапускать нечего.
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-xray)"
+    [ "$rc" = "0" ] || fail "xray restart, --no-xray: exit $rc"
+    [ "$(xray_restarts)" = "0" ] \
+        && pass "--no-xray: no xray restart" || fail "--no-xray restarted xray"
+}
+
+# Конфиг меняет и сама панель — ключи, путь, порт, маскировка: API этого не
+# применяет, а Docker панели недоступен. Она оставляет просьбу в run/xray
+# (смонтирован у неё на запись), и хост перезапускает xray по ней —
+# дорожка systemd по образцу запроса обновления (amnezia-vpn-server-14y0.11).
+test_xray_restart_request_path() {
+    local path="$SYSTEMD_DIR_TEST/amnezia-vpn-xray-restart.path"
+    local svc="$SYSTEMD_DIR_TEST/amnezia-vpn-xray-restart.service"
+    fakes_reset; os_release ubuntu 24.04 noble; rm -rf "$ROOT"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install)"
+    [ "$rc" = "0" ] || fail "xray restart path, no xray: exit $rc"
+    [ -e "$path" ] || [ -e "$svc" ] \
+        && fail "xray restart units written without --xray" || pass "no xray restart units without --xray"
+
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --xray --vpn-domain vpn.example.com)"
+    [ "$rc" = "0" ] || fail "xray restart path: exit $rc"
+    [ -f "$path" ] && [ -f "$svc" ] \
+        && pass "xray restart units written" || { fail "xray restart units missing"; return 0; }
+    grep -Fxq "PathExists=${ROOT}/run/xray/restart-request" "$path" \
+        && pass "the path unit watches run/xray, the directory the panel shares" \
+        || fail "the path unit watches the wrong file: $(grep '^Path' "$path")"
+    grep -Fxq "WorkingDirectory=${ROOT}" "$svc" \
+        && grep -Eq "^ExecStart=[^ ]*docker compose --profile xray --env-file versions.lock restart xray$" "$svc" \
+        && pass "the service restarts the xray service alone" \
+        || fail "the service does not restart xray: $(grep -E '^(Exec|Working)' "$svc" | tr '\n' ' ')"
+    grep -Fxq "ExecStartPre=/bin/rm -f ${ROOT}/run/xray/restart-request" "$svc" \
+        && pass "the request is taken before the restart (a new one during it is not lost)" \
+        || fail "the request is not removed before the restart"
+    grep -q "systemctl enable --now amnezia-vpn-xray-restart.path" "$FAKE_CALLS" \
+        && pass "the xray restart path is armed" || fail "the xray restart path was never enabled"
+    # Имя файла — одно на панель и хост.
+    grep -qE 'RestartRequestName[[:space:]]*=[[:space:]]*"restart-request"' "$M91_REPO/app/panel/internal/xray/regenerate.go" \
+        && pass "the panel writes the file the host watches" \
+        || fail "the panel's restart request file and the path unit disagree"
+
+    : > "$FAKE_CALLS"
+    rc="$(AMNEZIA_INSTALL_IPV6_PROBE=fail run_install --no-xray)"
+    [ "$rc" = "0" ] || fail "xray restart path, --no-xray: exit $rc"
+    grep -q "systemctl disable --now amnezia-vpn-xray-restart.path" "$FAKE_CALLS" \
+        && ! [ -e "$path" ] && ! [ -e "$svc" ] \
+        && pass "--no-xray disarms and removes the xray restart units" \
+        || fail "--no-xray left the xray restart path in place"
+}
+
 # Xray без домена: ключи Reality не заводятся, и установщик говорит, что
 # нужен --vpn-domain, а не падает молча.
 test_xray_needs_domain() {
@@ -4114,6 +4231,8 @@ test_deployment_facts_follow_the_flags
 test_on_demand_check_armed
 test_on_demand_check_follows_the_flag
 test_xray_switch
+test_xray_restarted_when_its_config_changed
+test_xray_restart_request_path
 test_xray_needs_domain
 test_xray_front_with_panel_domain
 test_xray_front_adopts_the_manual_setup

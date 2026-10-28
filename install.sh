@@ -1058,6 +1058,21 @@ for sub in config/xray run run/xray; do
     chmod 0700 "$ROOT_DIR/$sub"
 done
 
+# Конфиг Xray до того, как установщик что-либо тронул
+# (amnezia-vpn-server-14y0.11). Его переписывают panel-init и панель при
+# подъёме стека и `panel xray init` в xray_setup, а Xray читает его только
+# при старте: `up -d xray` контейнер с тем же образом не пересоздаёт —
+# конфиг лежит в томе, и для compose ничего не изменилось. После 2.12.1 на
+# боевом Xray так и работал со старым конфигом, без stats/policy, и трафик
+# VLESS не считался. Снимок здесь, до первого вызова compose: сравнение с
+# состоянием перед xray init пропустило бы то, что переписано раньше.
+xray_config_sum() {
+    local f="$ROOT_DIR/config/xray/config.json"
+    [ -f "$f" ] || return 0
+    cksum < "$f"
+}
+XRAY_CONFIG_SUM_BEFORE="$(xray_config_sum)"
+
 # --- 9. install/copy repository deployment files ----------------------
 
 # Дерево заменяется целиком, а не копируется поверх (amnezia-vpn-server-0dzh).
@@ -3090,6 +3105,7 @@ apply_deployment_values
 # до Xray доводит nginx stream ниже, в nginx_setup (amnezia-vpn-server-14y0.7).
 xray_setup() {
     if [ "$XRAY_ENABLED" != "1" ]; then
+        xray_restart_request_disarm
         if [ "$XRAY_WAS_ENABLED" = "1" ]; then
             docker_compose --profile xray --env-file versions.lock rm -s -f xray >/dev/null 2>&1 \
                 || log "WARNING: could not remove the xray container; stop it with: docker compose --profile xray rm -s -f xray"
@@ -3097,6 +3113,7 @@ xray_setup() {
         fi
         return 0
     fi
+    xray_restart_request_arm
     if [ "$NO_SERVER_ROW" = "1" ]; then
         log "xray: fresh install — Reality keys are made after 'server init', on the next run of install.sh"
         return 0
@@ -3105,7 +3122,75 @@ xray_setup() {
         || die_op "xray: making the Reality keys failed. Reality presents the server's own site, so the deployment needs a VPN domain: rerun with --vpn-domain <fqdn>"
     docker_compose --env-file versions.lock up -d xray \
         || die_op "xray: docker compose up -d xray failed"
+    xray_restart_if_config_changed
     log "xray: running on 127.0.0.1:4432"
+}
+
+# Перезапуск по конфигу (amnezia-vpn-server-14y0.11): изменился с начала
+# установки — xray перезапускается, иначе остаётся работать. Смену образа
+# этим не ловят и не нужно: её видит сам compose, и `up -d` пересоздаёт
+# контейнер. Перезапуск после пересоздания лишний, но безвредный — а без
+# него новый образ мог бы стартовать раньше, чем xray init переписал конфиг.
+xray_restart_if_config_changed() {
+    if [ "$(xray_config_sum)" = "$XRAY_CONFIG_SUM_BEFORE" ]; then
+        log "xray: config unchanged; xray keeps running"
+        return 0
+    fi
+    # Просьбу панели, если она есть, закрывает этот же перезапуск.
+    rm -f "$XRAY_RESTART_REQUEST"
+    log "xray: config changed; restarting xray to apply it"
+    docker_compose --env-file versions.lock restart xray >/dev/null 2>&1 \
+        || die_op "xray: restart failed; xray may still run with the previous config (check: docker compose --profile xray logs xray)"
+}
+
+# Просьба панели о перезапуске Xray (amnezia-vpn-server-14y0.11).
+# Настройки сервера (ключи, путь, порт, stats/policy) API Xray не применяет
+# — только перезапуск, а Docker панели недоступен: его сокет — это root на
+# хосте. Панель оставляет файл в run/xray (смонтирован у неё на запись, там
+# же сокет API; internal/xray RequestRestart), дорожка systemd перезапускает
+# по нему один сервис xray. Как и с запросом обновления, захвативший панель
+# получает этим только возможность перезапустить Xray. Файл снимается до
+# перезапуска: новая просьба, пришедшая во время него, не теряется.
+XRAY_RESTART_REQUEST="$ROOT_DIR/run/xray/restart-request"
+xray_restart_request_arm() {
+    cat > "$SYSTEMD_DIR/amnezia-vpn-xray-restart.service" <<EOF
+# amnezia-vpn managed: restart Xray so it reads the config the panel wrote.
+[Unit]
+Description=Amnezia VPN Xray restart
+
+[Service]
+Type=oneshot
+WorkingDirectory=${ROOT_DIR}
+ExecStartPre=/bin/rm -f ${XRAY_RESTART_REQUEST}
+ExecStart=/usr/bin/docker compose --profile xray --env-file versions.lock restart xray
+TimeoutStartSec=5min
+EOF
+    chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-xray-restart.service"
+    cat > "$SYSTEMD_DIR/amnezia-vpn-xray-restart.path" <<EOF
+# amnezia-vpn managed: restart Xray when the panel asks.
+[Unit]
+Description=Amnezia VPN Xray restart request
+
+[Path]
+PathExists=${XRAY_RESTART_REQUEST}
+
+[Install]
+WantedBy=paths.target
+EOF
+    chmod 0644 "$SYSTEMD_DIR/amnezia-vpn-xray-restart.path"
+    cmd systemctl daemon-reload || die_op "systemctl daemon-reload failed (xray restart units)"
+    cmd systemctl enable --now amnezia-vpn-xray-restart.path \
+        || die_op "systemctl enable --now amnezia-vpn-xray-restart.path failed"
+    log "xray restart on the panel's request armed (watching $XRAY_RESTART_REQUEST)"
+}
+
+xray_restart_request_disarm() {
+    rm -f "$XRAY_RESTART_REQUEST"
+    [ -e "$SYSTEMD_DIR/amnezia-vpn-xray-restart.path" ] || [ -e "$SYSTEMD_DIR/amnezia-vpn-xray-restart.service" ] \
+        || return 0
+    cmd systemctl disable --now amnezia-vpn-xray-restart.path >/dev/null 2>&1 || true
+    rm -f "$SYSTEMD_DIR/amnezia-vpn-xray-restart.path" "$SYSTEMD_DIR/amnezia-vpn-xray-restart.service"
+    cmd systemctl daemon-reload >/dev/null 2>&1 || true
 }
 xray_setup
 
