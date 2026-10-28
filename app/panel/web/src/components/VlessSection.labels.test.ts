@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { vlessRouteHint, vlessRouteLabel } from "@/components/VlessSection";
 
-// Подписи маршрутов (решение владельца 28.10.2026): узел один — просто
-// «Через вход», узлов несколько — с именем узла, не с приставкой ссылки.
+// Подписи маршрутов (решения владельца 28.10.2026, amnezia-vpn-server-14y0.17):
+// узел один — просто «Каскад», узлов несколько — с именем узла, не с
+// приставкой ссылки.
 describe("vlessRouteLabel", () => {
   const direct = { entry: "", prefix: "", link: "vless://direct" };
   const entry = { entry: "entry", prefix: "VLESS ", link: "vless://entry" };
@@ -14,12 +15,12 @@ describe("vlessRouteLabel", () => {
   });
 
   it("omits the node name when there is one entry node", () => {
-    expect(vlessRouteLabel(entry, [direct, entry])).toBe("Через вход");
+    expect(vlessRouteLabel(entry, [direct, entry])).toBe("Каскад");
   });
 
   it("names the node when there are several", () => {
-    expect(vlessRouteLabel(entry, [direct, entry, second])).toBe("Через вход entry");
-    expect(vlessRouteLabel(second, [direct, entry, second])).toBe("Через вход kz");
+    expect(vlessRouteLabel(entry, [direct, entry, second])).toBe("Каскад entry");
+    expect(vlessRouteLabel(second, [direct, entry, second])).toBe("Каскад kz");
   });
 });
 

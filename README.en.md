@@ -181,7 +181,7 @@ Your server's address or an error means all is well. The provider's address mean
 
 ## Entry through an intermediate server
 
-A second server, the entry node. It fits when connecting directly does not work: the client connects to the node over VLESS. Sites on its direct-exit list open straight from the node, from its address, without going through the main server. By default the list holds local sites of the country where the node stands. The node sends everything else to the main server. The link through the node appears in the client window in the panel. In the app it is called "VLESS Phone", and the direct link to the main server is "VLESS direct Phone". In the client window the route is labelled "Через вход" ("Via entry"), or "Через вход entry" if there are several nodes. The main server counts traffic through the entry per client, just like direct traffic.
+A second server, the entry node. It fits when connecting directly does not work: the client connects to the node over VLESS. Sites on its direct-exit list open straight from the node, from its address, without going through the main server. By default the list holds local sites of the country where the node stands. The node sends everything else to the main server. The link through the node appears in the client window in the panel. In the app it is called "VLESS Phone", and the direct link to the main server is "VLESS direct Phone". In the client window the route is labelled "Каскад" ("Cascade"), or "Каскад entry" if there are several nodes. The main server counts traffic through the entry per client, just like direct traffic.
 
 **What you need**
 

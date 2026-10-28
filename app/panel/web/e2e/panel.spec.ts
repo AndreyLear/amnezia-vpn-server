@@ -384,7 +384,8 @@ for (const width of [1280, 375]) test(`окно клиента выдаёт сс
   // Оговорки про вход больше нет: трафик через вход учитывается
   // (amnezia-vpn-server-14y0.12).
   await expect(page.getByText(/Подключения через вход/)).toHaveCount(0);
-  await expect(page.getByText("Через вход", { exact: true })).toBeVisible();
+  // Маршрут через узел-вход называется «Каскад» (amnezia-vpn-server-14y0.17).
+  await expect(page.getByText("Каскад", { exact: true })).toBeVisible();
   // amnezia-vpn-server-14y0.9: у VLESS свой график, «Удалить» — внизу окна,
   // и окно не прокручивается вбок ни на одной ширине.
   await expect(page.getByRole("tabpanel").getByText(/^Скорость/)).toBeVisible();
@@ -392,7 +393,7 @@ for (const width of [1280, 375]) test(`окно клиента выдаёт сс
   const body = page.locator('[data-slot="dialog-body"]').first();
   expect(await body.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 
-  await page.getByRole("button", { name: "Скопировать ссылку: Через вход", exact: true }).click();
+  await page.getByRole("button", { name: "Скопировать ссылку: Каскад", exact: true }).click();
   await expect(page.getByText("Ссылка скопирована")).toBeVisible();
   const link = await page.evaluate(() => navigator.clipboard.readText());
   expect(link).toMatch(/^vless:\/\/[0-9a-f-]{36}@entry\.example\.com:443\?type=xhttp&path=%2Fentry&/);
@@ -432,8 +433,29 @@ for (const width of [1280, 375]) test(`окно QR из меню строки: A
   await expect(dialog.getByRole("group", { name: "Маршрут" })).toBeVisible();
   const direct = dialog.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Напрямую»" });
   await expect.poll(async () => direct.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
-  await dialog.getByRole("button", { name: "Через вход", exact: true }).click();
-  const viaEntry = dialog.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Через вход»" });
+  // Вкладки и маршрут — одна строка: протокол слева, маршрут справа, и
+  // на 375px вкладки не ломаются (amnezia-vpn-server-14y0.17).
+  const protoBox = await dialog.getByRole("group", { name: "Протокол" }).boundingBox();
+  const routeBox = await dialog.getByRole("group", { name: "Маршрут" }).boundingBox();
+  const vlessBox = await dialog.getByRole("button", { name: "VLESS" }).boundingBox();
+  const awgBox = await dialog.getByRole("button", { name: "AWG" }).boundingBox();
+  expect(protoBox && routeBox && routeBox.x > protoBox.x + protoBox.width).toBe(true);
+  expect(awgBox && vlessBox && awgBox.y === vlessBox.y).toBe(true);
+  await expect(dialog.getByText(/Отсканируйте|Подходит/)).toHaveCount(0);
+  // Клик мышью не оставляет фокус на кнопках окна: нажатие клавиши после
+  // него не рисует контур (amnezia-vpn-server-14y0.17).
+  await page.keyboard.press("Shift");
+  await expect(dialog.locator("button:focus-visible")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Каскад", exact: true }).click();
+  // Выбранный маршрут виден и под курсором: фон только у него.
+  const routeBg = async (name: string) =>
+    dialog.getByRole("button", { name, exact: true }).evaluate((el) => getComputedStyle(el).backgroundColor);
+  await expect(dialog.getByRole("button", { name: "Каскад", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await dialog.getByRole("button", { name: "Напрямую", exact: true }).hover();
+  // Цвет меняется с переходом (transition-all) — ждём, пока он закончится.
+  await expect.poll(() => routeBg("Напрямую")).toBe("rgba(0, 0, 0, 0)");
+  await expect.poll(() => routeBg("Каскад")).not.toBe("rgba(0, 0, 0, 0)");
+  const viaEntry = dialog.getByRole("img", { name: "QR-код VLESS клиента alice, маршрут «Каскад»" });
   await expect(viaEntry).toHaveAttribute("src", /\/vless\/qr\?entry=entry$/);
   await expect.poll(async () => viaEntry.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
   const box = await viaEntry.boundingBox();

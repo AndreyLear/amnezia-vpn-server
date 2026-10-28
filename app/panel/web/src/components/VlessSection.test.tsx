@@ -50,7 +50,7 @@ describe("VLESS в окне клиента", () => {
     render(<ClientInfoDialog client={client} onOpenChange={() => {}} loadVless={load} />);
 
     expect(await screen.findByText("Напрямую")).toBeInTheDocument();
-    expect(screen.getByText("Через вход")).toBeInTheDocument();
+    expect(screen.getByText("Каскад")).toBeInTheDocument();
     expect(
       screen.getByText("Подходит для Wi-Fi и домашнего интернета, на мобильном работает не всегда"),
     ).toBeInTheDocument();
@@ -67,7 +67,7 @@ describe("VLESS в окне клиента", () => {
       <ClientInfoDialog client={client} onOpenChange={() => {}} loadVless={() => Promise.resolve(twoRoutes)} />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Скопировать ссылку: Через вход" }));
+    await user.click(await screen.findByRole("button", { name: "Скопировать ссылку: Каскад" }));
     expect(writeText).toHaveBeenCalledWith(viaRu);
     expect(toastSuccess).toHaveBeenCalledWith("Ссылка скопирована");
   });
@@ -89,10 +89,13 @@ describe("VLESS в окне клиента", () => {
       <ClientInfoDialog client={client} onOpenChange={() => {}} loadVless={() => Promise.resolve(twoRoutes)} />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "QR: Через вход" }));
+    await user.click(await screen.findByRole("button", { name: "QR: Каскад" }));
     expect(await screen.findByRole("heading", { name: "QR-код VLESS: Alice" })).toBeInTheDocument();
-    const img = screen.getByAltText("QR-код VLESS клиента Alice, маршрут «Через вход»");
+    const img = screen.getByAltText("QR-код VLESS клиента Alice, маршрут «Каскад»");
     expect(img).toHaveAttribute("src", "/api/clients/7/vless/qr?entry=ru");
+    // Подсказка осталась, но без названий приложений: они устаревают
+    // (amnezia-vpn-server-14y0.17).
+    expect(screen.getByText("Каскад: отсканируйте QR в приложении с поддержкой VLESS")).toBeInTheDocument();
   });
 
   it("у клиента на паузе ссылок нет", async () => {
