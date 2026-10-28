@@ -217,6 +217,17 @@ install_script() { # install_script SRC DEST — рядом, потом rename
     cp -p "$1" "$2.new" && chmod 0700 "$2.new" && mv -f "$2.new" "$2" || die_op "cannot install $2"
 }
 install_script "$ENTRY_SCRIPT_DIR/entry-sync.py" "$SYNC"
+# Версия выпуска, с которого поставлен узел: синк отправляет её панели
+# вместе с показателями, окно «О версиях» показывает, что обновлять
+# (amnezia-vpn-server-q1do.1). Нет её в versions.lock — файла нет, и
+# панель пишет «Неизвестно».
+RELEASE_VERSION="$(lock_value IMAGE_VERSION)"
+if [ -n "$RELEASE_VERSION" ]; then
+    printf '%s\n' "$RELEASE_VERSION" > "$ENTRY_DIR/release.new" && chmod 0644 "$ENTRY_DIR/release.new" \
+        && mv -f "$ENTRY_DIR/release.new" "$ENTRY_DIR/release" || die_op "cannot write $ENTRY_DIR/release"
+else
+    rm -f "$ENTRY_DIR/release"
+fi
 
 sync_py() { python3 -I "$SYNC" "$@"; }
 

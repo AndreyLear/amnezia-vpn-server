@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import {
   Dialog,
@@ -7,7 +7,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { api, type EntryAbout, type Versions } from "@/lib/api";
-import { formatHandshakeAge } from "@/lib/format";
+import { formatDurationSeconds, formatHandshakeAge } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 /**
  * Окно «О версиях» (amnezia-vpn-server-8bt5).
@@ -52,10 +53,25 @@ function entrySync(entry: EntryAbout): string {
   return `${formatHandshakeAge(entry.last_sync_utc)} назад`;
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+// Сколько узел работает без перезагрузки — только из свежего отчёта
+// (сервер иначе отдаёт null): устаревший аптайм врёт.
+function entryUptime(entry: EntryAbout): string {
+  if (entry.uptime_seconds == null) return unknown;
+  return formatDurationSeconds(entry.uptime_seconds);
+}
+
+function Row({
+  label,
+  value,
+  nested = false,
+}: {
+  label: string;
+  value: string;
+  nested?: boolean;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-2">
-      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dt className={cn("shrink-0 text-muted-foreground", nested && "ps-4")}>{label}</dt>
       <dd className="min-w-0 text-end break-words">{value}</dd>
     </div>
   );
@@ -125,8 +141,19 @@ export function AboutDialog({
             <>
               <Row label="Xray" value={text(versions?.xray)} />
               <Row label="VLESS" value={vlessFlag(versions?.vless_state)} />
+              {/* Под строкой узла — его версия выпуска, Xray и время без
+                  перезагрузки из отчёта узла (amnezia-vpn-server-q1do.1).
+                  Подписи без имени и с отступом: они стоят прямо под своим
+                  узлом, а отступ не даёт спутать «Xray» узла с «Xray»
+                  этого сервера выше. Версии — последние известные и при
+                  «Нет связи»: по ним видно, что обновлять. */}
               {entries.map((entry) => (
-                <Row key={entry.name} label={`Каскад ${entry.name}`} value={entrySync(entry)} />
+                <Fragment key={entry.name}>
+                  <Row label={`Каскад ${entry.name}`} value={entrySync(entry)} />
+                  <Row nested label="Версия" value={text(entry.release)} />
+                  <Row nested label="Xray" value={text(entry.xray)} />
+                  <Row nested label="Без перезагрузки" value={entryUptime(entry)} />
+                </Fragment>
               ))}
             </>
           )}

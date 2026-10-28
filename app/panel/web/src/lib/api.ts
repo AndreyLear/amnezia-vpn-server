@@ -411,6 +411,11 @@ export type EntryAbout = {
   name: string;
   last_sync_utc: string | null;
   online: boolean;
+  /** Из отчёта узла (amnezia-vpn-server-q1do.1): последние известные версии, пусто — неизвестно. */
+  xray?: string;
+  release?: string;
+  /** Только из свежего отчёта; null — неизвестно. */
+  uptime_seconds?: number | null;
 };
 
 /** Всё про обновление одним ответом (amnezia-vpn-server-tjoq). */
@@ -555,6 +560,33 @@ export type HostSnapshot = {
   iface_state: IfaceState;
   /** Нет у старой панели — тогда VLESS в шапке не показывается. */
   vless_state?: VLESSState;
+  /** Узлы-входы для строк «Каскад» (amnezia-vpn-server-q1do.1); нет — строк нет. */
+  entries?: EntryHost[];
+};
+
+/**
+ * Узел-вход в шапке (amnezia-vpn-server-q1do.1). Состояние считает сервер
+ * по своим часам: up — синк или отчёт за последние 5 минут, down — нет;
+ * reporting — числа из свежего отчёта (up без reporting — узел со старым
+ * entry-sync); seen — был ли узел на связи хоть раз. Числа — те же, что у
+ * основного сервера, null — неизвестно.
+ */
+export type EntryHost = {
+  name: string;
+  state: "up" | "down";
+  reporting: boolean;
+  seen: boolean;
+  cpu_percent?: number | null;
+  ram_percent?: number | null;
+  disk_percent?: number | null;
+  ram_used_bytes?: number | null;
+  ram_total_bytes?: number | null;
+  disk_used_bytes?: number | null;
+  disk_total_bytes?: number | null;
+  /** Трафик основного интерфейса узла за interval_seconds. */
+  rx_bytes?: number | null;
+  tx_bytes?: number | null;
+  interval_seconds?: number | null;
 };
 
 /** Toast only after a confirmed success: `{ok:true}` or a created/patched client. */

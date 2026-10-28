@@ -172,11 +172,27 @@ class H(http.server.BaseHTTPRequestHandler):
         body = open(os.path.join(work, "panel.json"), "rb").read()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(body)
+    def do_POST(self):
+        # Отчёт о показателях (amnezia-vpn-server-q1do.1). report.status:
+        # 204 — принят, 404 — панель старше отчётов, прочее — отказ.
+        ok = self.headers.get("Authorization") == "Bearer " + token
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        with open(os.path.join(work, "report.log"), "a") as f:
+            f.write("%s auth=%s type=%s\n" % (self.path, "ok" if ok else "bad", self.headers.get("Content-Type")))
+        if self.path != "/api/entry/report" or not os.path.exists(os.path.join(work, "report.status")):
+            self.send_response(404); self.end_headers(); return
+        if not ok:
+            self.send_response(401); self.end_headers(); return
+        status = int(open(os.path.join(work, "report.status")).read().strip())
+        if status == 204:
+            open(os.path.join(work, "report.json"), "wb").write(body)
+        self.send_response(status); self.end_headers()
 srv = http.server.HTTPServer(("127.0.0.1", 0), H)
 open(os.path.join(work, "panel.port"), "w").write(str(srv.server_port))
 srv.serve_forever()
 EOF
 echo 200 > "$WORK/panel.status"
+echo 204 > "$WORK/report.status"
 python3 -I "$WORK/panel.py" "$WORK" "$TOKEN" &
 PANEL_PID=$!
 for _ in $(seq 50); do [ -s "$WORK/panel.port" ] && break; sleep 0.1; done
@@ -187,10 +203,12 @@ PANEL="http://127.0.0.1:$(cat "$WORK/panel.port")"
 ED="$WORK/opt/xray-entry"
 reset_host() {
     rm -rf "$WORK/opt" "$WORK/systemd" "$WORK/sysctl" "$WORK/modules" "$WORK/f2b" "$WORK/sites" \
-        "$WORK/le" "$WORK/acme" "$WORK/stub" "$WORK/active" "$WORK/panel.log"
+        "$WORK/le" "$WORK/acme" "$WORK/stub" "$WORK/active" "$WORK/panel.log" \
+        "$WORK/report.log" "$WORK/report.json"
     mkdir -p "$WORK/sites"
     : > "$CALLS"
     echo 200 > "$WORK/panel.status"
+    echo 204 > "$WORK/report.status"
     printf 'XRAY_TEST_RC=0\nNGINX_T_RC=0\nCERTBOT_RC=0\nXRAY_START_RC=0\n' > "$STATE"
     write_lock "$XRAY_ZIP_SHA"
     panel_clients true false
@@ -223,6 +241,7 @@ run_install() {
 # run_sync ARGS… — entry-sync.py так, как его зовёт таймер.
 run_sync() {
     env PATH="$FAKE:$PATH" AMNEZIA_ENTRY_DIR="$ED" AMNEZIA_ENTRY_GEO_BASE="file://$GEO" \
+        AMNEZIA_ENTRY_PROC="$WORK/proc" AMNEZIA_ENTRY_DISK_PATH="$WORK" \
         python3 -I "$ED/entry-sync.py" "$@" > "$WORK/sync.log" 2>&1
 }
 # cfg PYTHON-EXPR — истинность выражения над config.json (c) и settings.json (s).
@@ -237,6 +256,36 @@ outs = {o["tag"]: o for o in c["outbounds"]}
 rules = c["routing"]["rules"]
 emails = [x["email"] for x in inb["settings"]["clients"]]
 sys.exit(0 if eval(sys.argv[3]) else 1)
+EOF
+}
+# report PYTHON-EXPR — истинность выражения над последним принятым отчётом (r).
+report() {
+    python3 -I - "$WORK/report.json" "$1" <<'EOF'
+import json, sys
+r = json.load(open(sys.argv[1]))
+sys.exit(0 if eval(sys.argv[2]) else 1)
+EOF
+}
+# fake_proc UPTIME CPU_BUSY CPU_IDLE RX TX — поддельный /proc узла: основной
+# интерфейс eth0 (маршрут по умолчанию), рядом туннель с бо́льшим трафиком.
+fake_proc() {
+    mkdir -p "$WORK/proc/net"
+    printf '%s 1000.00\n' "$1" > "$WORK/proc/uptime"
+    # user nice system idle iowait irq softirq steal: занято — user+system.
+    printf 'cpu  %d 0 %d %d 0 0 0 0 0 0\ncpu0 1 0 1 1 0 0 0 0 0 0\n' "$(($2 / 2))" "$(($2 - $2 / 2))" "$3" > "$WORK/proc/stat"
+    printf 'MemTotal:        2000000 kB\nMemFree:          100000 kB\nMemAvailable:    1500000 kB\n' > "$WORK/proc/meminfo"
+    cat > "$WORK/proc/net/route" <<'EOF'
+Iface	Destination	Gateway 	Flags	RefCnt	Use	Metric	Mask		MTU	Window	IRTT
+wg0	0000000A	00000000	0001	0	0	0	00FFFFFF	0	0	0
+eth0	00000000	0102A8C0	0003	0	0	100	00000000	0	0	0
+eth0	0002A8C0	00000000	0001	0	0	100	00FFFFFF	0	0	0
+EOF
+    cat > "$WORK/proc/net/dev" <<EOF
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo:     500       5    0    0    0     0          0         0      500       5    0    0    0     0       0          0
+  eth0: $4    100    0    0    0     0          0         0 $5    90    0    0    0     0       0          0
+   wg0: 999999999  100    0    0    0     0          0         0 999999999  90    0    0    0     0       0          0
 EOF
 }
 calls() { grep -c -- "$1" "$CALLS" 2>/dev/null || true; }
@@ -299,6 +348,11 @@ check "fail2ban: jail для sshd" grep -q '^\[sshd\]' "$WORK/f2b/jail.d/amnezia
 check "запуск: xray-entry запущен, таймеры включены" test "$(calls 'systemctl start xray-entry')" = 1 -a "$(calls 'enable --now xray-entry-sync.timer xray-entry-geo.timer')" = 1
 check "запуск: без лишнего перезапуска" test "$(calls 'systemctl restart xray-entry')" = 0
 check "панель: секрет в заголовке, не в адресе" test "$(cat "$WORK/panel.log")" = "/api/entry/config auth=ok"
+check "показатели: после синка — POST /api/entry/report с секретом в заголовке, JSON" \
+    test "$(cat "$WORK/report.log" 2>/dev/null)" = "/api/entry/report auth=ok type=application/json"
+check "показатели: версия выпуска из versions.lock и версия Xray" \
+    report 'r["release"] == "2.12.2" and r["xray_version"] == "'$XRAY_VERSION'"'
+check "показатели: версия выпуска записана установщиком" test "$(cat "$ED/release" 2>/dev/null)" = 2.12.2
 check "итог: команда регистрации узла в панели" grep -q "panel xray entry set <name> --host a.example.ru --sni a.example.ru" "$WORK/out.log"
 check "итог: ссылки через узел подписаны «VLESS <имя>»" grep -q -- '--prefix "VLESS "' "$WORK/out.log"
 
@@ -358,6 +412,70 @@ run_sync sync
 check "Xray не принял новый конфиг: прежний на месте, без перезапуска" \
     test $? = 1 -a "$(cksum < "$ED/config.json")" = "$saved" -a "$(calls 'systemctl restart')" = 0 -a ! -e "$ED/config.new.json"
 setstate XRAY_TEST_RC 0
+
+# --- 2б. показатели узла (amnezia-vpn-server-q1do.1) ---------------------------------
+
+# Первый запуск: CPU и трафик — разница между запусками, их ещё нет;
+# память, диск и аптайм — сразу. Список клиентов — тот, что уже в
+# конфиге: секция про отчёт, а не про перезапуски.
+panel_clients false true
+rm -f "$ED/state/metrics.json" "$WORK/report.json"
+: > "$WORK/report.log"
+fake_proc 3600.50 1000 9000 100000 50000
+run_sync sync
+check "показатели: первый запуск — синк прошёл, отчёт отправлен" test $? = 0 -a -s "$WORK/report.json"
+check "показатели: первый запуск — без CPU и трафика" \
+    report 'r["cpu_percent"] is None and r["rx_bytes"] is None and r["tx_bytes"] is None and r["interval_seconds"] is None'
+check "показатели: память — занятое из MemAvailable, в байтах" \
+    report 'r["ram_total_bytes"] == 2000000 * 1024 and r["ram_used_bytes"] == 500000 * 1024 and r["ram_percent"] == 25.0'
+check "показатели: диск и аптайм" \
+    report 'r["disk_total_bytes"] > 0 and 0 <= r["disk_used_bytes"] <= r["disk_total_bytes"] and 0 <= r["disk_percent"] <= 100 and r["uptime_seconds"] == 3600'
+check "показатели: состояние для разницы — рядом, 0600" test "$(mode_of "$ED/state/metrics.json")" = 0o600
+
+# Минуту спустя: занято +250 из +1000 — 25%, трафик основного интерфейса
+# (eth0, не туннель) — за этот интервал.
+fake_proc 3660.50 1250 9750 106000 53000
+run_sync sync
+check "показатели: CPU — по разнице /proc/stat" report 'r["cpu_percent"] == 25.0'
+check "показатели: трафик основного интерфейса за интервал" \
+    report 'r["rx_bytes"] == 6000 and r["tx_bytes"] == 3000 and r["interval_seconds"] == 60'
+
+# Перезагрузка: счётчики сброшены — разницы нет, а не отрицательная.
+fake_proc 30.00 10 90 500 400
+run_sync sync
+check "показатели: после перезагрузки — без CPU и трафика" \
+    report 'r["cpu_percent"] is None and r["rx_bytes"] is None and r["uptime_seconds"] == 30'
+
+# Без /proc (не Linux, нет прав) — отчёт без чисел, синк не падает.
+mv "$WORK/proc" "$WORK/proc.off"
+run_sync sync
+check "показатели: без /proc — синк прошёл" test $? = 0
+check "показатели: без /proc — числа пустые" \
+    report 'r["cpu_percent"] is None and r["ram_percent"] is None and r["uptime_seconds"] is None'
+mv "$WORK/proc.off" "$WORK/proc"
+
+# Панель старше отчётов отвечает 404 — узел молча обходится без них.
+rm -f "$WORK/report.status"
+run_sync sync
+rc=$?
+check "старая панель: синк прошёл, код 0" test "$rc" = 0
+if grep -q "показател" "$WORK/sync.log"; then fail "старая панель: в журнале тихо"; else pass "старая панель: в журнале тихо"; fi
+
+# Отчёт отвергнут — работе узла это не мешает.
+echo 400 > "$WORK/report.status"
+run_sync sync
+check "отчёт отвергнут: синк прошёл, код 0" test $? = 0
+grep -q "панель не приняла показатели: ответила 400" "$WORK/sync.log" \
+    && pass "отчёт отвергнут: так и сказано" || fail "отчёт отвергнут: так и сказано"
+echo 204 > "$WORK/report.status"
+
+# Синк не удался — отчёт не отправляется: неверный секрет не тратит
+# лишнюю попытку из лимита панели.
+echo 503 > "$WORK/panel.status"
+: > "$WORK/report.log"
+run_sync sync
+check "панель ответила 503: отчёт не отправлялся" test ! -s "$WORK/report.log"
+echo 200 > "$WORK/panel.status"
 
 # --- 3. geo-списки ---------------------------------------------------------------
 

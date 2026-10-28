@@ -10,6 +10,7 @@ import (
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/hostmetrics"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/xray"
 )
 
 type hostStatsResponse struct {
@@ -26,6 +27,49 @@ type hostStatsResponse struct {
 	// up/down — ответил ли он на последний опрос, na — опроса ещё не было,
 	// none — VLESS не настроен, и шапка его не показывает.
 	VLESSState string `json:"vless_state"`
+	// Entries — узлы-входы для строк «Каскад» в шапке
+	// (amnezia-vpn-server-q1do.1); пустой список — узлов нет.
+	Entries []entryHostJSON `json:"entries"`
+}
+
+// entryHostJSON — узел-вход в шапке: те же CPU, память и диск, что у
+// этого сервера, из последнего отчёта узла. Состояние считает сервер по
+// своим часам, как online в окне «О версиях»:
+//   - state up — узел синхронизировался или прислал отчёт за последние
+//     entryOfflineAfter, down — нет (или не было ни разу);
+//   - reporting — отчёт свежий, и числа взяты из него; up без reporting —
+//     узел со старым entry-sync, который отчётов не шлёт;
+//   - seen — был ли узел на связи хоть раз: «не выходил больше 5 минут» и
+//     «ни разу» — разные подсказки.
+//
+// Числа несвежего отчёта не отдаются: шапка показала бы прочерк вместо
+// нагрузки пятиминутной давности, выдающей себя за текущую.
+type entryHostJSON struct {
+	Name      string `json:"name"`
+	State     string `json:"state"`
+	Reporting bool   `json:"reporting"`
+	Seen      bool   `json:"seen"`
+	xray.EntryReport
+}
+
+func entriesHost(reports []db.XrayEntryReport, now time.Time) []entryHostJSON {
+	out := make([]entryHostJSON, 0, len(reports))
+	for _, r := range reports {
+		e := entryHostJSON{
+			Name:      r.Name,
+			State:     "down",
+			Reporting: entryFresh(r.ReportedAt, now),
+			Seen:      !r.LastSync.IsZero() || !r.ReportedAt.IsZero(),
+		}
+		if e.Reporting || entryFresh(r.LastSync, now) {
+			e.State = "up"
+		}
+		if e.Reporting {
+			e.EntryReport, _ = storedEntryReport(r.Report)
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // vlessStateJSON — состояние VLESS для шапки. Настроен ли Xray, читается
@@ -88,6 +132,12 @@ func (s *Server) apiStatsHost(w http.ResponseWriter, r *http.Request) {
 		iface = st.Interface.Iface
 	}
 
+	// Узлов не прочитать — шапка без строк каскада, а не без всего.
+	entries := []entryHostJSON{}
+	if reports, err := db.XrayEntryReports(s.db()); err == nil {
+		entries = entriesHost(reports, time.Now().UTC())
+	}
+
 	writeJSON(w, http.StatusOK, hostStatsResponse{
 		CPUPercent:     snap.CPU,
 		RAMPercent:     snap.RAM,
@@ -99,5 +149,6 @@ func (s *Server) apiStatsHost(w http.ResponseWriter, r *http.Request) {
 		Iface:          iface,
 		IfaceState:     ifaceStateJSON(rec.Interface),
 		VLESSState:     s.vlessStateJSON(),
+		Entries:        entries,
 	})
 }

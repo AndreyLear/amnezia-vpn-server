@@ -1,7 +1,9 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -38,30 +40,42 @@ func entryBearer(r *http.Request) string {
 	return ""
 }
 
-func (s *Server) apiEntryConfig(w http.ResponseWriter, r *http.Request) {
+// entryAuth — общий вход узла для конфига и отчёта: лимиты на адрес и
+// секрет. ok=false — ответ уже записан. Отчёт (amnezia-vpn-server-q1do.1)
+// идёт через те же корзины лимитов, что и конфиг: секрет, кому бы он ни
+// достался, не даёт ни лишних запросов, ни лишних попыток подбора.
+func (s *Server) entryAuth(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
 	key := requestLoginKey(r)
-	now := time.Now()
 	if sec, ok := s.entryRequests.reserve(key, now); !ok {
 		setRetryAfter(w, sec)
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"ok": false, "message": "Слишком много запросов."})
-		return
+		return "", false
 	}
 	// Попытка занимается до проверки и возвращается при успехе — как у
 	// входа в панель: параллельные запросы не проскочат лимит.
 	if sec, ok := s.entryFails.reserve(key, now); !ok {
 		setRetryAfter(w, sec)
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"ok": false, "message": "Слишком много запросов."})
-		return
+		return "", false
 	}
 	name, err := xray.AuthenticateEntry(s.db(), entryBearer(r))
 	if errors.Is(err, xray.ErrEntryTokenInvalid) {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "message": "Нет доступа."})
-		return
+		return "", false
 	}
 	s.entryFails.release(key)
 	if err != nil {
-		internalFailure(w, r, s, "api entry config", err)
+		internalFailure(w, r, s, "api entry auth", err)
+		return "", false
+	}
+	return name, true
+}
+
+func (s *Server) apiEntryConfig(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	name, ok := s.entryAuth(w, r, now)
+	if !ok {
 		return
 	}
 	cfg, err := xray.BuildEntryConfig(s.db(), name)
@@ -84,3 +98,44 @@ func (s *Server) apiEntryConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, cfg)
 }
+
+// POST /api/entry/report — показатели узла (amnezia-vpn-server-q1do.1).
+//
+// Отдельный запрос, а не тело или заголовок у GET /api/entry/config:
+// конфиг — то, без чего узел не работает, и его путь остаётся прежним
+// байт в байт, поэтому старый entry-sync синхронизируется как раньше, а
+// сбой отчёта на конфиг не влияет никак. Узел шлёт отчёт только после
+// успешного синка — неверный секрет не тратит лишних попыток. Старая
+// панель отвечает 404, и узел молча обходится без отчёта.
+func (s *Server) apiEntryReport(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	name, ok := s.entryAuth(w, r, now)
+	if !ok {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxEntryReportBody+1))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": "Отчёт узла не распознан."})
+		return
+	}
+	report, err := xray.ParseEntryReport(body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": "Отчёт узла не распознан."})
+		return
+	}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		internalFailure(w, r, s, "api entry report", err)
+		return
+	}
+	if err := db.SaveXrayEntryReport(s.db(), name, string(raw), now); err != nil {
+		internalFailure(w, r, s, "api entry report", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// maxEntryReportBody — предел тела отчёта, тот же, что у разбора в
+// xray.ParseEntryReport. Читается на байт больше: слишком большое тело
+// отвергается разбором, а не обрезается до похожего на правду.
+const maxEntryReportBody = 4 << 10

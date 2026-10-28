@@ -97,6 +97,36 @@ describe("HomePage load", () => {
     expect(screen.getByLabelText("Состояние AWG")).toHaveTextContent("AWG");
   });
 
+  // Строки «Каскад» берутся из entries в /api/stats/host
+  // (amnezia-vpn-server-q1do.1): поле должно дойти до HeaderStats, а
+  // непохожее на список — не ронять шапку.
+  it("passes entries from host stats to the header", async () => {
+    let entries: unknown = [
+      { name: "entry", state: "up", reporting: true, seen: true, cpu_percent: 7 },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/me")) return jsonResponse({ username: "admin", csrf: "token" });
+        if (path.includes("/api/clients")) return jsonResponse([alice]);
+        if (path.includes("/api/stats/host")) {
+          return jsonResponse({ iface: "awg0", iface_state: "up", vless_state: "up", entries });
+        }
+        throw new Error(path);
+      }),
+    );
+
+    const { unmount } = render(<HomePage />);
+    expect(await screen.findByLabelText("CPU каскада")).toHaveTextContent("7%");
+    unmount();
+
+    entries = "nope";
+    render(<HomePage />);
+    expect(await screen.findByLabelText("Состояние VLESS")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Состояние каскада")).not.toBeInTheDocument();
+  });
+
   it("lists clients in one column with mt-6 gap-2 and no add tile", async () => {
     vi.stubGlobal(
       "fetch",

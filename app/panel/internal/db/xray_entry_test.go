@@ -164,3 +164,64 @@ func TestXrayEntrySyncTime(t *testing.T) {
 		t.Fatalf("неизвестный узел: %v", err)
 	}
 }
+
+// Последний отчёт узла о его показателях (amnezia-vpn-server-q1do.1):
+// база 3.1.0 колонок не знает — Migrate их добавляет; отчёт хранится один,
+// новый заменяет прежний, переименование узла его сохраняет, а время
+// синка и время отчёта живут отдельно.
+func TestXrayEntryReport(t *testing.T) {
+	handle, _ := openTest(t, "amnezia.sqlite")
+	if _, err := handle.Exec(`CREATE TABLE xray_entries (
+		name TEXT PRIMARY KEY,
+		link_host TEXT NOT NULL,
+		link_port INTEGER NOT NULL DEFAULT 443,
+		sni TEXT NOT NULL,
+		public_key TEXT NOT NULL,
+		short_id TEXT NOT NULL,
+		path TEXT NOT NULL,
+		link_prefix TEXT NOT NULL DEFAULT '',
+		updated_at_utc TEXT NOT NULL,
+		token_hash TEXT NOT NULL DEFAULT '',
+		last_sync_utc TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle.Exec(`INSERT INTO xray_entries VALUES
+		('ru', 'super-space.ru', 443, 'super-space.ru', 'WQcVePR5eFDpkuq8PefEalET53I_3Zb62YjqMLuHMx4', 'a50c249d61c252d0', '/r5', 'RU ', '2026-10-27T00:00:00Z', '', '2026-10-28T11:59:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := Migrate(handle); err != nil {
+			t.Fatalf("Migrate #%d: %v", i+1, err)
+		}
+	}
+	reports, err := XrayEntryReports(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sync := time.Date(2026, 10, 28, 11, 59, 0, 0, time.UTC)
+	if len(reports) != 1 || reports[0] != (XrayEntryReport{Name: "ru", LastSync: sync}) {
+		t.Fatalf("до первого отчёта: %+v", reports)
+	}
+
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	if err := SaveXrayEntryReport(handle, "ru", `{"cpu_percent":1}`, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveXrayEntryReport(handle, "ru", `{"cpu_percent":2}`, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenameXrayEntry(handle, "ru", "entry"); err != nil {
+		t.Fatal(err)
+	}
+	reports, _ = XrayEntryReports(handle)
+	want := XrayEntryReport{Name: "entry", LastSync: sync, ReportedAt: t0.Add(time.Minute), Report: `{"cpu_percent":2}`}
+	if len(reports) != 1 || reports[0] != want {
+		t.Fatalf("после отчётов: %+v, want %+v", reports, want)
+	}
+	// Неизвестный узел — не ошибка: его могли удалить между проверкой
+	// секрета и записью.
+	if err := SaveXrayEntryReport(handle, "nope", `{}`, t0); err != nil {
+		t.Fatalf("неизвестный узел: %v", err)
+	}
+}

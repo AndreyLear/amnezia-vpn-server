@@ -19,6 +19,13 @@ update-geo.sh, 28.10.2026):
     перезапуск — только при изменении;
   - нет связи с панелью — узел работает на последнем конфиге.
 
+После успешного синка узел отправляет панели свои показатели
+(POST /api/entry/report тем же секретом, amnezia-vpn-server-q1do.1): CPU,
+память, диск, трафик основного интерфейса за интервал между синками,
+аптайм, версии Xray и выпуска. Отчёт — не обязанность: панель старше
+отчётов отвечает 404, и узел молча обходится без него; любой сбой отчёта
+на синк и его код выхода не влияет.
+
 Ключи Reality узла живут только здесь, в settings.json (0600); панель о них
 не знает ничего, кроме публичного ключа в ссылках. Секрет узла — в файле
 token (0600) и только в заголовке запроса: ни в адресе, ни в журнале.
@@ -52,6 +59,10 @@ import zipfile
 D = os.environ.get("AMNEZIA_ENTRY_DIR", "/opt/xray-entry")
 SERVICE = "xray-entry"
 CONFIG_PATH = "/api/entry/config"
+REPORT_PATH = "/api/entry/report"
+# Откуда брать показатели: /proc и корень — у узла; харнесс подменяет.
+PROC = os.environ.get("AMNEZIA_ENTRY_PROC", "/proc")
+DISK_PATH = os.environ.get("AMNEZIA_ENTRY_DISK_PATH", "/")
 XRAY_BASE = os.environ.get("AMNEZIA_ENTRY_XRAY_BASE", "https://github.com/XTLS/Xray-core/releases/download")
 GEO_BASE = os.environ.get("AMNEZIA_ENTRY_GEO_BASE",
                           "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download")
@@ -73,6 +84,7 @@ HOST_RE = re.compile(r"^[A-Za-z0-9.:-]{1,253}$")
 NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 CLIENT_EMAIL_RE = re.compile(r"^c[0-9]+$")
+VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$")
 
 
 class Fail(Exception):
@@ -368,22 +380,35 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, "перенаправление не принимается", headers, fp)
 
 
-def fetch(settings):
+def read_token():
+    try:
+        return open(path("token"), encoding="utf-8").read().strip()
+    except FileNotFoundError:
+        raise Fail("секрета узла нет (install.sh --role entry --entry-token …)")
+
+
+def panel_request(settings, api_path, body=None, timeout=20):
+    """Запрос к панели с секретом узла в заголовке, без перенаправлений.
+    body — JSON для POST. Возвращает тело ответа; ошибки — как у urllib."""
     url = settings.get("panel_url", "")
     if not url:
         raise Fail("адрес панели не задан (install.sh --role entry --panel …)")
     check_panel_url(url)
-    try:
-        token = open(path("token"), encoding="utf-8").read().strip()
-    except FileNotFoundError:
-        raise Fail("секрета узла нет (install.sh --role entry --entry-token …)")
-    req = urllib.request.Request(url.rstrip("/") + CONFIG_PATH, headers={
-        "Authorization": "Bearer " + token, "Accept": "application/json",
-        "User-Agent": "amnezia-entry-sync"})
+    headers = {"Authorization": "Bearer " + read_token(), "Accept": "application/json",
+               "User-Agent": "amnezia-entry-sync"}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url.rstrip("/") + api_path, data=data, headers=headers)
     opener = urllib.request.build_opener(_NoRedirect)
+    with opener.open(req, timeout=timeout) as r:
+        return r.read(1 << 20)
+
+
+def fetch(settings):
     try:
-        with opener.open(req, timeout=20) as r:
-            body = r.read(1 << 20)
+        body = panel_request(settings, CONFIG_PATH)
     except urllib.error.HTTPError as e:
         hint = {401: ": секрет узла не принят (panel xray entry token …)",
                 429: ": слишком часто", 503: ": на сервере не настроен Xray"}.get(e.code, "")
@@ -394,6 +419,199 @@ def fetch(settings):
         return check_panel(json.loads(body))
     except ValueError:
         raise Fail("ответ панели — не JSON")
+
+
+# --- показатели узла (amnezia-vpn-server-q1do.1) --------------------------
+# Те же числа, что панель показывает про свой сервер: CPU — доля занятого
+# времени между двумя запусками по /proc/stat, память — занятое по
+# MemAvailable, диск — занятое по statvfs (зарезервированное root тоже
+# недоступно). CPU и трафик — разница с state/metrics.json прошлого
+# запуска; часы — /proc/uptime: аптайм заодно отличает перезагрузку (он
+# меньше прежнего, счётчики сброшены), и разницы тогда нет, а не
+# отрицательная. Всё, что не прочиталось, уходит пустым (null) — панель
+# покажет прочерк.
+
+def proc_text(name):
+    with open(os.path.join(PROC, name), encoding="utf-8") as f:
+        return f.read()
+
+
+def read_uptime():
+    try:
+        return float(proc_text("uptime").split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def read_cpu():
+    """Сумма счётчиков, idle и iowait строки cpu; None — не прочиталось."""
+    try:
+        for line in proc_text("stat").splitlines():
+            f = line.split()
+            if f and f[0] == "cpu":
+                vals = [int(v) for v in f[1:9]]
+                if len(vals) < 4:
+                    return None
+                return {"total": sum(vals), "idle": vals[3], "iowait": vals[4] if len(vals) > 4 else 0}
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def cpu_percent(prev, cur):
+    # iowait может уменьшаться (так его считает ядро), поэтому сброс
+    # счётчиков проверяется только по занятому времени — как в hostmetrics
+    # панели.
+    busy_prev = prev["total"] - prev["idle"] - prev["iowait"]
+    busy_cur = cur["total"] - cur["idle"] - cur["iowait"]
+    if busy_cur < busy_prev:
+        return None
+    busy = busy_cur - busy_prev
+    idle = max(0, cur["idle"] - prev["idle"]) + max(0, cur["iowait"] - prev["iowait"])
+    if busy + idle == 0:
+        return None
+    return round(min(100.0, busy * 100.0 / (busy + idle)), 1)
+
+
+def read_memory():
+    try:
+        info = {}
+        for line in proc_text("meminfo").splitlines():
+            key, _, rest = line.partition(":")
+            if key in ("MemTotal", "MemAvailable") and rest.split():
+                info[key] = int(rest.split()[0]) * 1024
+        total, avail = info["MemTotal"], info["MemAvailable"]
+    except (OSError, ValueError, KeyError):
+        return None, None, None
+    if total <= 0:
+        return None, None, None
+    used = max(0, total - avail)
+    return round(used * 100.0 / total, 1), used, total
+
+
+def read_disk():
+    try:
+        st = os.statvfs(DISK_PATH)
+    except OSError:
+        return None, None, None
+    total = st.f_blocks * st.f_frsize
+    if total <= 0:
+        return None, None, None
+    used = max(0, total - st.f_bavail * st.f_frsize)
+    return round(used * 100.0 / total, 1), used, total
+
+
+def main_iface():
+    """Интерфейс маршрута по умолчанию с наименьшей метрикой: через него
+    узел и принимает клиентов, и ходит на основной сервер."""
+    best = None
+    try:
+        for line in proc_text("net/route").splitlines()[1:]:
+            f = line.split()
+            if len(f) >= 7 and f[1] == "00000000" and int(f[3], 16) & 1:
+                metric = int(f[6])
+                if best is None or metric < best[0]:
+                    best = (metric, f[0])
+    except (OSError, ValueError):
+        return None
+    return best[1] if best else None
+
+
+def read_iface_bytes(iface):
+    try:
+        for line in proc_text("net/dev").splitlines()[2:]:
+            name, sep, rest = line.partition(":")
+            f = rest.split()
+            if sep and name.strip() == iface and len(f) >= 9:
+                return int(f[0]), int(f[8])
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def release_version():
+    """Версия выпуска, с которого поставлен узел: install-entry.sh пишет
+    IMAGE_VERSION из versions.lock в файл release."""
+    try:
+        v = open(path("release"), encoding="utf-8").read().strip()
+    except OSError:
+        return None
+    return v if VERSION_RE.match(v) else None
+
+
+def xray_version():
+    """Версия Xray — из отметки install-xray: «версия архитектура sha256»."""
+    try:
+        v = (open(path("xray.release"), encoding="utf-8").read().split() or [""])[0]
+    except OSError:
+        return None
+    return v if VERSION_RE.match(v) else None
+
+
+def collect_metrics(prev):
+    """(отчёт, состояние для следующего запуска); prev — прошлое
+    состояние или {}."""
+    up = read_uptime()
+    cpu = read_cpu()
+    iface = main_iface()
+    counters = read_iface_bytes(iface) if iface else None
+    ram_pct, ram_used, ram_total = read_memory()
+    disk_pct, disk_used, disk_total = read_disk()
+    report = {"cpu_percent": None, "ram_percent": ram_pct, "ram_used_bytes": ram_used, "ram_total_bytes": ram_total,
+              "disk_percent": disk_pct, "disk_used_bytes": disk_used, "disk_total_bytes": disk_total,
+              "rx_bytes": None, "tx_bytes": None, "interval_seconds": None,
+              "uptime_seconds": int(up) if up is not None else None,
+              "xray_version": xray_version(), "release": release_version()}
+    prev_up = prev.get("uptime")
+    # Тот же запуск системы — аптайм вырос. Иначе перезагрузка или первый
+    # запуск, и разницы нет.
+    same_boot = isinstance(prev_up, (int, float)) and up is not None and up > prev_up
+    if same_boot and cpu and isinstance(prev.get("cpu"), dict):
+        try:
+            report["cpu_percent"] = cpu_percent(prev["cpu"], cpu)
+        except (KeyError, TypeError):
+            pass
+    pnet = prev.get("net")
+    if same_boot and counters and isinstance(pnet, dict) and pnet.get("iface") == iface:
+        try:
+            rx, tx = counters[0] - int(pnet["rx"]), counters[1] - int(pnet["tx"])
+        except (KeyError, TypeError, ValueError):
+            rx = tx = -1
+        if rx >= 0 and tx >= 0:
+            report.update(rx_bytes=rx, tx_bytes=tx, interval_seconds=int(round(up - prev_up)))
+    state = {"uptime": up, "cpu": cpu,
+             "net": {"iface": iface, "rx": counters[0], "tx": counters[1]} if counters else None}
+    return report, state
+
+
+def send_report(settings):
+    """Собрать показатели и отправить панели. Ничего не бросает: отчёт не
+    должен мешать синку."""
+    state_file = path("state/metrics.json")
+    try:
+        prev = read_json(state_file)
+        if not isinstance(prev, dict):
+            prev = {}
+    except (OSError, ValueError):
+        prev = {}
+    try:
+        report, state = collect_metrics(prev)
+        os.makedirs(path("state"), mode=0o700, exist_ok=True)
+        write_atomic(state_file, dump(state))
+    except Exception as e:  # сбой сбора не должен ронять синк
+        warn("показатели не собраны: %s (работе узла это не мешает)" % e.__class__.__name__)
+        return
+    try:
+        panel_request(settings, REPORT_PATH, body=report, timeout=10)
+    except urllib.error.HTTPError as e:
+        # 404/405 — панель старше отчётов: молча, она их и не ждёт.
+        if e.code not in (404, 405):
+            warn("панель не приняла показатели: ответила %d (работе узла это не мешает)" % e.code)
+    except (urllib.error.URLError, OSError) as e:
+        warn("показатели не отправлены — панель недоступна: %s (работе узла это не мешает)"
+             % getattr(e, "reason", e.__class__.__name__))
+    except Fail as e:
+        warn("показатели не отправлены: %s (работе узла это не мешает)" % e)
 
 
 # --- конфиг Xray ---------------------------------------------------------
@@ -504,9 +722,11 @@ def cmd_sync(args):
         cache = path("state/panel.json")
         fetch_error = None
         panel = None
+        fetched = False
         if "--offline" not in opts:
             try:
                 panel = fetch(s)
+                fetched = True
                 os.makedirs(path("state"), mode=0o700, exist_ok=True)
                 write_atomic(cache, dump(panel))
             except Fail as e:
@@ -522,12 +742,20 @@ def cmd_sync(args):
             except (Fail, ValueError, OSError):
                 warn("сохранённый список клиентов повреждён, конфиг оставлен как есть")
                 return 1
-        cfg = build(s, panel)
-        clients = len(cfg["inbounds"][0]["settings"]["clients"])
-        if apply(cfg):
-            log("конфиг обновлён, вход перезапущен; клиентов: %d" % clients)
-        else:
-            log("без изменений; клиентов: %d" % clients)
+        try:
+            cfg = build(s, panel)
+            clients = len(cfg["inbounds"][0]["settings"]["clients"])
+            if apply(cfg):
+                log("конфиг обновлён, вход перезапущен; клиентов: %d" % clients)
+            else:
+                log("без изменений; клиентов: %d" % clients)
+        finally:
+            # Показатели — только после успешного ответа панели: при
+            # неверном секрете или без связи отчёт лишь тратил бы попытки
+            # из лимита панели (amnezia-vpn-server-q1do.1). После apply —
+            # чтобы новый конфиг не ждал отчёта.
+            if fetched:
+                send_report(s)
     return 1 if fetch_error else 0
 
 
