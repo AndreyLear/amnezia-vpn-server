@@ -114,23 +114,24 @@ Turning IPv6 off removes it completely: the rules, the routing and the addresses
 
 Everything is managed in the browser.
 
-<p align="center"><img src="screenshots/main.png" alt="Main panel screen: the client list, server load in the header"><br>Main screen: clients and server load</p>
+<p align="center"><img src="screenshots/main.png" alt="Main panel screen: the client list, AWG and VLESS state and server load in the header"><br>Main screen: clients, protocols and server load</p>
 
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/client.png" alt="Client details window with a 10-minute speed chart"></td>
-    <td width="50%"><img src="screenshots/qr.png" alt="Client QR code window"></td>
+    <td width="50%"><img src="screenshots/client.png" alt="Client window with AWG and VLESS tabs and a 10-minute speed chart"></td>
+    <td width="50%"><img src="screenshots/qr.png" alt="Client QR code window for AWG and VLESS"></td>
   </tr>
   <tr>
-    <td align="center">Client details with the speed chart</td>
-    <td align="center">QR code for the phone app</td>
+    <td align="center">Client window: protocol tabs and speed chart</td>
+    <td align="center">AWG and VLESS QR codes for the phone app</td>
   </tr>
 </table>
 
-<p align="center"><img src="screenshots/mobile.png" width="280" alt="Main panel screen on a phone"><br>The same panel on a phone</p>
+<p align="center"><img src="screenshots/mobile.png" width="280" alt="Main panel screen on a phone: AWG and VLESS in the header, a protocol icon on each client"><br>The same panel on a phone</p>
 
-- **Header.** CPU, memory and disk load, tunnel state
-- **Clients.** One card each: name, address, whether it is enabled, when it last connected, how much traffic it received and sent
+- **Header.** State of AWG and VLESS (red if a protocol is not working), then CPU, memory and disk load
+- **Clients.** One card each: name, an icon for the protocol the client last connected over, when that was, how much it downloaded and uploaded. A disabled client is marked "Пауза" (Paused)
+- **Client window.** Opens on the name: AWG and VLESS tabs, speed chart, IP address, config and QR code
 - **"Бэкап" (Backup) button.** Download or upload the settings file
 - **"Ещё" (More) menu.** Versions, service status, log, update check and "Уведомления" (Notifications), which sends failure alerts by email
 
