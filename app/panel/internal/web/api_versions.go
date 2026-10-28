@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
@@ -41,6 +42,47 @@ type versionsJSON struct {
 	UpdateCheck     *bool  `json:"update_check"`
 	OS              string `json:"os"`
 	Docker          string `json:"docker"`
+	// Xray (amnezia-vpn-server-14y0.16): версия ядра из versions.lock,
+	// состояние VLESS — то же, что vless_state в /api/stats/host, и узлы-входы
+	// с временем последнего синка. Окно прячет эти строки, когда
+	// vless_state = none и узлов нет.
+	Xray       string           `json:"xray"`
+	VLESSState string           `json:"vless_state"`
+	Entries    []entryAboutJSON `json:"entries"`
+}
+
+// entryAboutJSON — узел-вход для окна «О версиях». Online считает сервер
+// по своим часам: часы браузера могут отставать, и «нет связи» зависело бы
+// от устройства, на котором открыта панель.
+type entryAboutJSON struct {
+	Name     string  `json:"name"`
+	LastSync *string `json:"last_sync_utc"`
+	Online   bool    `json:"online"`
+}
+
+// entryOfflineAfter — после скольких минут без синка узел считается без
+// связи (просьба владельца, amnezia-vpn-server-14y0.16): узел ходит раз в
+// минуту, пять пропусков подряд — уже не случайность.
+const entryOfflineAfter = 5 * time.Minute
+
+// xrayVersion — версия Xray из versions.lock, которую compose передаёт
+// панели; пусто — контейнер старше этой возможности.
+func xrayVersion() string {
+	return os.Getenv("AMNEZIA_XRAY_VERSION")
+}
+
+func entriesAbout(syncs []db.XrayEntrySync, now time.Time) []entryAboutJSON {
+	out := make([]entryAboutJSON, 0, len(syncs))
+	for _, s := range syncs {
+		e := entryAboutJSON{Name: s.Name}
+		if !s.LastSync.IsZero() {
+			v := s.LastSync.UTC().Format(time.RFC3339)
+			e.LastSync = &v
+			e.Online = now.Sub(s.LastSync) <= entryOfflineAfter
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // productVersion is what this deployment runs; empty when the container
@@ -85,7 +127,15 @@ func dnsIsOurResolver(dns, tunnelHost string) bool {
 }
 
 func (s *Server) apiVersions(w http.ResponseWriter, r *http.Request) {
-	out := versionsJSON{Product: productVersion()}
+	out := versionsJSON{
+		Product:    productVersion(),
+		Xray:       xrayVersion(),
+		VLESSState: s.vlessStateJSON(),
+		Entries:    []entryAboutJSON{},
+	}
+	if syncs, err := db.XrayEntrySyncs(s.db()); err == nil {
+		out.Entries = entriesAbout(syncs, time.Now().UTC())
+	}
 	dir := filepath.Dir(s.cfg.StatusPath)
 
 	if v, err := status.ReadVersions(filepath.Join(dir, "versions.json")); err == nil && v != nil {

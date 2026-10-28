@@ -6,10 +6,60 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/xray"
 )
+
+// Панель запоминает, когда узел забирал конфиг, только по успешному
+// запросу: чужой секрет или ответ 503 время узла не трогают
+// (amnezia-vpn-server-14y0.16).
+func TestAPIEntryConfigRecordsSync(t *testing.T) {
+	f, _, _ := vlessFixture(t)
+	token, err := xray.RotateEntryToken(f.h, "ru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastSync := func() time.Time {
+		t.Helper()
+		syncs, err := db.XrayEntrySyncs(f.h)
+		if err != nil || len(syncs) != 1 {
+			t.Fatalf("syncs %+v, %v", syncs, err)
+		}
+		return syncs[0].LastSync
+	}
+
+	if rec := f.entryGet("198.51.100.8", "Bearer "+strings.Repeat("A", len(token))); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("чужой секрет: код %d", rec.Code)
+	}
+	if got := lastSync(); !got.IsZero() {
+		t.Fatalf("неуспешный запрос записал время: %v", got)
+	}
+
+	before := time.Now().UTC().Truncate(time.Second)
+	if rec := f.entryGet("198.51.100.7", "Bearer "+token); rec.Code != http.StatusOK {
+		t.Fatalf("код %d", rec.Code)
+	}
+	if got := lastSync(); got.Before(before) || got.After(time.Now().UTC()) {
+		t.Fatalf("время синка %v, запрос был после %v", got, before)
+	}
+
+	// Xray не настроен — конфиг узел не получил, время прежнее.
+	old := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	if _, err := f.h.Exec(`UPDATE xray_entries SET last_sync_utc = ?`, old.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.h.Exec(`DELETE FROM xray`); err != nil {
+		t.Fatal(err)
+	}
+	if rec := f.entryGet("198.51.100.7", "Bearer "+token); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("без Xray: код %d", rec.Code)
+	}
+	if got := lastSync(); !got.Equal(old) {
+		t.Fatalf("ответ 503 записал время: %v", got)
+	}
+}
 
 // entryGet — запрос узла: без сессии панели, с секретом в заголовке.
 func (f *fixture) entryGet(ip, authorization string) *httptest.ResponseRecorder {

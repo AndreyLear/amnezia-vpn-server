@@ -6,11 +6,89 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/awgconf"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/xray"
 )
+
+// После AmneziaWG окно показывает Xray: версию ядра (из versions.lock через
+// окружение панели), включён ли VLESS — то же состояние, что vless_state в
+// шапке, — и когда каждый узел-вход последний раз забирал конфиг
+// (amnezia-vpn-server-14y0.16). online считает сервер по своим часам:
+// часы браузера могут отставать.
+func TestAPIVersionsReportsXray(t *testing.T) {
+	f, _, _ := vlessFixture(t)
+	t.Setenv("AMNEZIA_XRAY_VERSION", "26.10.21")
+	for _, name := range []string{"de", "fi"} {
+		if err := db.SaveXrayEntry(f.h, db.XrayEntry{
+			Name: name, LinkHost: name + ".example.com", LinkPort: 443, SNI: name + ".example.com",
+			PublicKey: "WQcVePR5eFDpkuq8PefEalET53I_3Zb62YjqMLuHMx4", ShortID: "a1b2", Path: "/" + name,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// ru забрал конфиг только что, de — шесть минут назад, fi — ни разу.
+	token, err := xray.RotateEntryToken(f.h, "ru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := f.entryGet("198.51.100.7", "Bearer "+token); rec.Code != http.StatusOK {
+		t.Fatalf("запрос узла: код %d", rec.Code)
+	}
+	stale := time.Now().UTC().Add(-6 * time.Minute).Truncate(time.Second)
+	if err := db.TouchXrayEntrySync(f.h, "de", stale); err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Xray       string `json:"xray"`
+		VLESSState string `json:"vless_state"`
+		Entries    []struct {
+			Name     string  `json:"name"`
+			LastSync *string `json:"last_sync_utc"`
+			Online   bool    `json:"online"`
+		} `json:"entries"`
+	}
+	rec := f.get("/api/versions")
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Xray != "26.10.21" {
+		t.Fatalf("xray = %q", got.Xray)
+	}
+	if want := hostVLESSState(t, f); got.VLESSState != want || want == "none" {
+		t.Fatalf("vless_state = %q, в шапке %v", got.VLESSState, want)
+	}
+	if len(got.Entries) != 3 {
+		t.Fatalf("entries: %+v", got.Entries)
+	}
+	de, fi, ru := got.Entries[0], got.Entries[1], got.Entries[2]
+	if de.Name != "de" || de.LastSync == nil || *de.LastSync != stale.Format(time.RFC3339) || de.Online {
+		t.Fatalf("de: %+v", de)
+	}
+	if fi.Name != "fi" || fi.LastSync != nil || fi.Online {
+		t.Fatalf("fi: %+v", fi)
+	}
+	if ru.Name != "ru" || ru.LastSync == nil || !ru.Online {
+		t.Fatalf("ru: %+v", ru)
+	}
+}
+
+// Установка только с AWG: VLESS выключен, узлов нет — окну нечего
+// показывать, и строки Xray оно прячет.
+func TestAPIVersionsWithoutXray(t *testing.T) {
+	f := newFixture(t)
+	got := decodeAPI(t, f.get("/api/versions"))
+	if got["vless_state"] != "none" {
+		t.Fatalf("vless_state = %v, want none", got["vless_state"])
+	}
+	if entries, ok := got["entries"].([]any); !ok || len(entries) != 0 {
+		t.Fatalf("entries = %#v, want []", got["entries"])
+	}
+}
 
 // «Что у меня стоит» — вопрос, на который до этого отвечал только SSH
 // (amnezia-vpn-server-rdcz).

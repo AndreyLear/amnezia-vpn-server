@@ -74,6 +74,13 @@ func (s *Server) apiEntryConfig(w http.ResponseWriter, r *http.Request) {
 		internalFailure(w, r, s, "api entry config", err)
 		return
 	}
+	// Время синка — по успешному ответу, а не по одной проверке секрета:
+	// при 503 узел конфига не получил и остался на прежнем
+	// (amnezia-vpn-server-14y0.16). Сбой записи узлу не мешает — это
+	// только подпись в окне «О версиях».
+	if err := db.TouchXrayEntrySync(s.db(), name, now); err != nil {
+		s.cfg.Logger.Printf("api entry config: %v", err)
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, cfg)
 }
