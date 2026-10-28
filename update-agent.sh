@@ -52,7 +52,11 @@ STATE_FILE="${AMNEZIA_UPDATE_STATE:-${ROOT_DIR}/status/update-state.json}"
 LOG_FILE="${AMNEZIA_UPDATE_LOG:-${ROOT_DIR}/status/update-log.txt}"
 LOCK_FILE="${AMNEZIA_UPDATE_LOCK:-${ROOT_DIR}/update-agent.lock}"
 ROLLBACK_DIR="${AMNEZIA_UPDATE_ROLLBACK:-${ROOT_DIR}/.rollback}"
-REPO="${AMNEZIA_UPDATE_REPO:-AndreyLear/amnezia-vpn-server}"
+# Репозиторий переехал из AndreyLear/amnezia-vpn-server (amnezia-vpn-server-
+# a33h). Агенты прежних выпусков ходят по старому имени и живут на
+# переадресации GitHub, поэтому оба запроса ниже идут с -L. Имя архива
+# выпуска прежнее: по нему его ищут уже установленные серверы.
+REPO="${AMNEZIA_UPDATE_REPO:-AndreyLear/avl}"
 API_BASE="${AMNEZIA_UPDATE_API:-https://api.github.com}"
 DOWNLOAD_BASE="${AMNEZIA_UPDATE_DOWNLOADS:-https://github.com}"
 CURL_BIN="${AMNEZIA_UPDATE_CURL:-curl}"

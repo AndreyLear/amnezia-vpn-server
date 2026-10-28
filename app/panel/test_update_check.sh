@@ -140,6 +140,26 @@ check_not "a first check that failed invents no release" \
 check "but it still says a check was attempted" \
     grep -q '"result":"failed"' "$STATUS_DIR/update-check.json"
 
+# --- where it asks ------------------------------------------------------
+# Репозиторий переехал в AndreyLear/avl (amnezia-vpn-server-a33h); старый
+# адрес живёт на переадресации GitHub, и за ней надо идти (-L) — по нему
+# ходят скрипты, ещё не обновлённые на серверах.
+CURL_ARGS="$TMP/curl-args"
+cat > "$FAKE_DIR/curl-logged" <<FAKE
+#!/bin/bash
+printf '%s\n' "\$*" > "$CURL_ARGS"
+exec "$FAKE_DIR/curl" "\$@"
+FAKE
+chmod +x "$FAKE_DIR/curl-logged"
+env PATH="$FAKE_DIR:$PATH" AMNEZIA_UPDATE_STATUS_DIR="$STATUS_DIR" \
+    AMNEZIA_UPDATE_CURL="$FAKE_DIR/curl-logged" \
+    CURL_BODY="$RELEASE" bash "$SCRIPT" >/dev/null 2>&1
+check "it asks the renamed repository for its releases" \
+    grep -qF "https://api.github.com/repos/AndreyLear/avl/releases?per_page=20" "$CURL_ARGS"
+check_not "the old repository name is gone" \
+    grep -q "AndreyLear/amnezia-vpn-server" "$CURL_ARGS"
+check "it follows redirects" grep -qE "^-[a-zA-Z]*L" "$CURL_ARGS"
+
 # --- no deployment ------------------------------------------------------
 env PATH="$FAKE_DIR:$PATH" AMNEZIA_UPDATE_STATUS_DIR="$TMP/nowhere" \
     CURL_BODY="$RELEASE" bash "$SCRIPT" >/dev/null 2>&1

@@ -725,7 +725,9 @@ validate_safe "$REMOTE_TMP" || die_op "SSH failed: unexpected mktemp path from t
 # проверяется он так же, как у агента обновления: сумма из тела выпуска,
 # архив из вложений. Подменивший файл должен ещё и отредактировать текст,
 # который люди читают на странице выпуска.
-PROJECT_REPO="AndreyLear/amnezia-vpn-server"
+# Прежнее имя репозитория AndreyLear/amnezia-vpn-server держится только на
+# переадресации GitHub (amnezia-vpn-server-a33h); имя архива выпуска прежнее.
+PROJECT_REPO="AndreyLear/avl"
 PROJECT_API="${AMNEZIA_BOOTSTRAP_API:-https://api.github.com}"
 PROJECT_DOWNLOADS="${AMNEZIA_BOOTSTRAP_DOWNLOADS:-https://github.com}"
 BUNDLE="$(mktemp "${TMPDIR:-/tmp}/amnezia-bootstrap-src.XXXXXX")"
