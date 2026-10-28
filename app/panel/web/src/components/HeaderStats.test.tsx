@@ -534,4 +534,91 @@ describe("HeaderStats", () => {
     expect(tip.textContent).not.toMatch(/\.$/);
     expect(tip).toHaveAttribute("data-side", "right");
   });
+  // Состояние VLESS рядом с туннелем AWG (amnezia-vpn-server-45ds): с VLESS
+  // первая строка — «AWG  VLESS», каждое слово окрашено своим состоянием, как
+  // раньше awg0; без VLESS — прежний «awg0».
+  describe("VLESS", () => {
+    it.each([undefined, "none"] as const)(
+      "keeps the plain awg0 line when vless_state is %s",
+      (vless) => {
+        render(
+          <HeaderStats
+            host={{ ...emptyHost, iface_state: "up", vless_state: vless } as HostSnapshot}
+          />,
+        );
+        expect(screen.getByLabelText("Интерфейс")).toHaveTextContent("awg0");
+        expect(screen.queryByLabelText("Состояние VLESS")).not.toBeInTheDocument();
+        expect(screen.queryByLabelText("Состояние AWG")).not.toBeInTheDocument();
+        expect(screen.queryByText("VLESS")).not.toBeInTheDocument();
+      },
+    );
+
+    it("keeps the plain awg0 line while the host is loading", () => {
+      render(<HeaderStats host={null} />);
+      expect(screen.getByLabelText("Интерфейс")).toHaveTextContent("awg0");
+      expect(screen.queryByLabelText("Состояние VLESS")).not.toBeInTheDocument();
+    });
+
+    it("shows AWG and VLESS side by side above the load row", () => {
+      render(
+        <HeaderStats
+          host={{ ...emptyHost, cpu_percent: 10, iface_state: "up", vless_state: "up" }}
+        />,
+      );
+      const awg = screen.getByLabelText("Состояние AWG");
+      const vless = screen.getByLabelText("Состояние VLESS");
+      expect(awg).toHaveTextContent(/^AWG$/);
+      expect(vless).toHaveTextContent(/^VLESS$/);
+      expect(screen.queryByLabelText("Интерфейс")).not.toBeInTheDocument();
+      expect(screen.queryByText("awg0")).not.toBeInTheDocument();
+      for (const word of [awg, vless]) {
+        expect(word).toHaveClass("text-xs", "w-fit", "text-muted-foreground");
+      }
+      expect(awg.parentElement).toBe(vless.parentElement);
+      expect(awg.compareDocumentPosition(vless) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      const loadRow = screen.getByLabelText("CPU").closest("[class*='tabular-nums']");
+      expect(loadRow).not.toContainElement(vless);
+      expect(
+        vless.compareDocumentPosition(loadRow as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("colors each word by its own state", () => {
+      render(
+        <HeaderStats
+          host={{ ...emptyHost, iface_state: "up", vless_state: "down" }}
+        />,
+      );
+      expect(screen.getByLabelText("Состояние AWG")).toHaveClass("text-muted-foreground");
+      expect(screen.getByLabelText("Состояние VLESS")).toHaveClass("text-red-500");
+    });
+
+    it("shimmers VLESS until the panel has polled it", () => {
+      render(
+        <HeaderStats
+          host={{ ...emptyHost, iface_state: "down", vless_state: "na" }}
+        />,
+      );
+      expect(screen.getByLabelText("Состояние VLESS")).toHaveClass("header-iface-shimmer");
+      expect(screen.getByLabelText("Состояние AWG")).toHaveClass("text-red-500");
+    });
+
+    it.each([
+      ["Состояние AWG", { iface_state: "up", vless_state: "up" }, "AWG работает"],
+      ["Состояние AWG", { iface_state: "down", vless_state: "up" }, "AWG недоступен"],
+      ["Состояние AWG", { iface_state: "error", vless_state: "up" }, "Ошибка чтения статуса AWG"],
+      ["Состояние AWG", { iface_state: "na", vless_state: "up" }, "Нет данных статуса AWG"],
+      ["Состояние VLESS", { iface_state: "up", vless_state: "up" }, "VLESS работает"],
+      ["Состояние VLESS", { iface_state: "up", vless_state: "down" }, "VLESS не отвечает"],
+      ["Состояние VLESS", { iface_state: "up", vless_state: "na" }, "Нет данных VLESS"],
+    ] as const)("shows a tooltip for %s %o", async (label, states, copy) => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      render(<HeaderStats host={{ ...emptyHost, ...states }} />);
+      await user.hover(screen.getByLabelText(label));
+      const tip = await screen.findByRole("tooltip");
+      expect(tip).toHaveTextContent(copy);
+      expect(tip.textContent).not.toMatch(/\.$/);
+      expect(tip).toHaveAttribute("data-side", "right");
+    });
+  });
 });

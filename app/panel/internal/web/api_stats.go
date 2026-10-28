@@ -1,11 +1,13 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/amnezia-vpn/amnezia-vpn-server/internal/db"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/hostmetrics"
 	"github.com/amnezia-vpn/amnezia-vpn-server/internal/status"
 )
@@ -20,6 +22,30 @@ type hostStatsResponse struct {
 	DiskTotalBytes *int64   `json:"disk_total_bytes"`
 	Iface          string   `json:"iface"`
 	IfaceState     string   `json:"iface_state"`
+	// VLESSState — состояние Xray для шапки (amnezia-vpn-server-45ds):
+	// up/down — ответил ли он на последний опрос, na — опроса ещё не было,
+	// none — VLESS не настроен, и шапка его не показывает.
+	VLESSState string `json:"vless_state"`
+}
+
+// vlessStateJSON — состояние VLESS для шапки. Настроен ли Xray, читается
+// из базы на каждый запрос, а не берётся из опроса: опрос идёт раз в
+// пять секунд и после восстановления копии или настройки VLESS отстал бы.
+func (s *Server) vlessStateJSON() string {
+	if _, err := db.XraySettingsRow(s.db()); err != nil {
+		if errors.Is(err, db.ErrXrayNotConfigured) {
+			return "none"
+		}
+		return "na"
+	}
+	switch s.xrayAPI.Load() {
+	case xrayAPIUp:
+		return "up"
+	case xrayAPIDown:
+		return "down"
+	default:
+		return "na"
+	}
 }
 
 func ifaceNameFromConf(confPath string) string {
@@ -72,5 +98,6 @@ func (s *Server) apiStatsHost(w http.ResponseWriter, r *http.Request) {
 		DiskTotalBytes: snap.DiskTotalBytes,
 		Iface:          iface,
 		IfaceState:     ifaceStateJSON(rec.Interface),
+		VLESSState:     s.vlessStateJSON(),
 	})
 }

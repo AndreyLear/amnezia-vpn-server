@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { HostSnapshot, IfaceState } from "@/lib/api";
+import type { HostSnapshot, IfaceState, VLESSState } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -185,6 +185,33 @@ function ifaceTooltip(state: IfaceState | "loading"): string {
   }
 }
 
+// Рядом с VLESS слово «интерфейс» ничего не говорит, а имя протокола в
+// подсказке сразу показывает, к какому слову она относится
+// (amnezia-vpn-server-45ds).
+function awgTooltip(state: IfaceState | "loading"): string {
+  switch (state) {
+    case "up":
+      return "AWG работает";
+    case "down":
+      return "AWG недоступен";
+    case "error":
+      return "Ошибка чтения статуса AWG";
+    default:
+      return "Нет данных статуса AWG";
+  }
+}
+
+function vlessTooltip(state: Exclude<VLESSState, "none">): string {
+  switch (state) {
+    case "up":
+      return "VLESS работает";
+    case "down":
+      return "VLESS не отвечает";
+    default:
+      return "Нет данных VLESS";
+  }
+}
+
 const ifaceColorClass: Record<IfaceState, string> = {
   up: "text-muted-foreground",
   error: "text-amber-500",
@@ -192,23 +219,73 @@ const ifaceColorClass: Record<IfaceState, string> = {
   na: "text-muted-foreground",
 };
 
-function HeaderIface({ host }: { host: HostSnapshot | null }) {
-  const state = ifaceVisualState(host);
+/**
+ * Слово в первой строке шапки, окрашенное состоянием: спокойный серый, пока
+ * всё работает, жёлтый и красный — когда нет, мерцание — пока данных нет.
+ */
+function StatusWord({
+  ariaLabel,
+  text,
+  state,
+  tooltip,
+}: {
+  ariaLabel: string;
+  text: string;
+  state: IfaceState | "loading";
+  tooltip: string;
+}) {
   const shimmer =
     (state === "loading" || state === "na") && !prefersReducedMotion();
   const colorClass = shimmer
     ? "header-iface-shimmer"
     : ifaceColorClass[state === "loading" ? "na" : state];
   const inner = (
-    <span aria-label="Интерфейс" className={cn("w-fit text-xs", colorClass)}>
-      {ifaceName(host)}
+    <span aria-label={ariaLabel} className={cn("w-fit text-xs", colorClass)}>
+      {text}
     </span>
   );
   return (
     <Tooltip>
       <TooltipTrigger asChild>{inner}</TooltipTrigger>
-      <TooltipContent side="right">{ifaceTooltip(state)}</TooltipContent>
+      <TooltipContent side="right">{tooltip}</TooltipContent>
     </Tooltip>
+  );
+}
+
+/**
+ * Первая строка шапки. Без VLESS — имя интерфейса, как было. С VLESS
+ * (amnezia-vpn-server-45ds) — два протокола рядом, «AWG  VLESS», каждый
+ * своим цветом: «awg0 VLESS» смешивал бы имя интерфейса с именем протокола.
+ * VLESS «работает», когда Xray ответил на последний опрос панели.
+ */
+function HeaderIface({ host }: { host: HostSnapshot | null }) {
+  const state = ifaceVisualState(host);
+  const vless = host?.vless_state ?? "none";
+  if (vless === "none") {
+    return (
+      <StatusWord
+        ariaLabel="Интерфейс"
+        text={ifaceName(host)}
+        state={state}
+        tooltip={ifaceTooltip(state)}
+      />
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <StatusWord
+        ariaLabel="Состояние AWG"
+        text="AWG"
+        state={state}
+        tooltip={awgTooltip(state)}
+      />
+      <StatusWord
+        ariaLabel="Состояние VLESS"
+        text="VLESS"
+        state={vless}
+        tooltip={vlessTooltip(vless)}
+      />
+    </div>
   );
 }
 
