@@ -60,6 +60,18 @@ function entryUptime(entry: EntryAbout): string {
   return formatDurationSeconds(entry.uptime_seconds);
 }
 
+// Самообновление каскада (amnezia-vpn-server-q1do.2): строка есть, только
+// пока есть что сказать. Причины здесь нет — она в полосе на главной, а
+// длинная сломала бы строку списка.
+function entryUpdateState(entry: EntryAbout): string | null {
+  const u = entry.update;
+  if (!u) return null;
+  if (u.state === "updating") return `Обновляется до ${u.target || u.panel}`;
+  if (u.requested) return "Запрошено";
+  if (u.state === "failed" && u.available) return "Не удалось";
+  return null;
+}
+
 function Row({
   label,
   value,
@@ -153,6 +165,9 @@ export function AboutDialog({
                   <Row nested label="Версия" value={text(entry.release)} />
                   <Row nested label="Xray" value={text(entry.xray)} />
                   <Row nested label="Без перезагрузки" value={entryUptime(entry)} />
+                  {entryUpdateState(entry) !== null && (
+                    <Row nested label="Обновление" value={entryUpdateState(entry)!} />
+                  )}
                 </Fragment>
               ))}
             </>

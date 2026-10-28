@@ -131,6 +131,32 @@ describe("о версиях", () => {
     expect(sub.querySelector("dt")).toHaveClass("ps-4");
   });
 
+  // Самообновление каскада (amnezia-vpn-server-q1do.2): строка под узлом —
+  // только когда есть что сказать; при обычном состоянии её нет.
+  it("показывает обновление каскада, только когда оно идёт, запрошено или не удалось", async () => {
+    const base = {
+      supported: true, target: "3.4.0", reason: "", at_utc: "", release: "3.3.0", panel: "3.4.0",
+      available: true, requested: false,
+    };
+    reply({
+      product: "3.4.0",
+      xray: "26.10.21",
+      vless_state: "up",
+      entries: [
+        { name: "a", last_sync_utc: null, online: false, update: { ...base, state: "updating" } },
+        { name: "b", last_sync_utc: null, online: false, update: { ...base, state: "idle", requested: true } },
+        { name: "c", last_sync_utc: null, online: false, update: { ...base, state: "failed", reason: "install" } },
+        { name: "d", last_sync_utc: null, online: false, update: { ...base, state: "idle", available: false } },
+      ],
+    });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    await screen.findByText("Каскад d");
+    const values = screen
+      .getAllByText("Обновление", { selector: "dt" })
+      .map((dt) => dt.nextElementSibling?.textContent);
+    expect(values).toEqual(["Обновляется до 3.4.0", "Запрошено", "Не удалось"]);
+  });
+
   // Опрос Xray не ответил — VLESS всё равно включён: строка говорит о
   // настройке, а не о том, ответил ли Xray в последние пять секунд.
   it("считает VLESS включённым при любом состоянии, кроме none", async () => {

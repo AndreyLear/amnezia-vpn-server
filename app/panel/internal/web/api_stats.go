@@ -50,6 +50,11 @@ type entryHostJSON struct {
 	Reporting bool   `json:"reporting"`
 	Seen      bool   `json:"seen"`
 	xray.EntryReport
+	// Update — самообновление узла (amnezia-vpn-server-q1do.2) по
+	// последнему отчёту, а не только свежему: полоса «Обновить каскад»
+	// не должна пропадать от одного пропущенного синка. Поле отчёта с тем
+	// же именем обнуляется, чтобы в ответе было одно «update».
+	Update *entryUpdateJSON `json:"update"`
 }
 
 func entriesHost(reports []db.XrayEntryReport, now time.Time) []entryHostJSON {
@@ -66,7 +71,9 @@ func entriesHost(reports []db.XrayEntryReport, now time.Time) []entryHostJSON {
 		}
 		if e.Reporting {
 			e.EntryReport, _ = storedEntryReport(r.Report)
+			e.EntryReport.Update = nil
 		}
+		e.Update = entryUpdateOf(r, xray.EntryTargetVersion(productVersion()))
 		out = append(out, e)
 	}
 	return out

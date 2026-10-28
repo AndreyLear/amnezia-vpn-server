@@ -38,19 +38,26 @@ token (0600) и только в заголовке запроса: ни в ад�
   install-xray --version V --sha256 H --arch A
                              поставить закреплённый Xray (сверка sha256 архива)
   pubkey                     публичный ключ Reality из settings.json
+  update                     обновить узел до выпуска из state/update-request.json
+                             (юнит xray-entry-update.service, amnezia-vpn-server-q1do.2)
 
 Каталог — AMNEZIA_ENTRY_DIR (по умолчанию /opt/xray-entry).
 """
 import base64
+import calendar
 import fcntl
 import hashlib
 import json
 import os
 import re
 import secrets
+import shutil
+import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -85,6 +92,29 @@ NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 CLIENT_EMAIL_RE = re.compile(r"^c[0-9]+$")
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$")
+
+# Самообновление (amnezia-vpn-server-q1do.2). Откуда брать выпуск, зашито
+# здесь, а не приходит от панели: секрет узла могли украсть, и его
+# владелец не должен уметь подсунуть узлу свой архив. От панели — только
+# номер выпуска, и тот проверяется строго: три числа без ведущих нулей.
+# Переменные окружения — для харнесса; на узле их задаёт только юнит.
+UPDATE_REPO = os.environ.get("AMNEZIA_ENTRY_UPDATE_REPO", "AndreyLear/avl")
+UPDATE_API = os.environ.get("AMNEZIA_ENTRY_UPDATE_API", "https://api.github.com")
+UPDATE_DOWNLOADS = os.environ.get("AMNEZIA_ENTRY_UPDATE_DOWNLOADS", "https://github.com")
+SYSTEMD_DIR = os.environ.get("AMNEZIA_ENTRY_SYSTEMD_DIR", "/etc/systemd/system")
+UPDATE_UNIT = "xray-entry-update.service"
+# После неудачи — не чаще раза в полчаса: сломанный выпуск не должен
+# каждую минуту качать архив и дёргать Xray.
+UPDATE_PAUSE = int(os.environ.get("AMNEZIA_ENTRY_UPDATE_PAUSE_SEC", "1800"))
+# Срок установщика: обычно он укладывается в минуту, но apt-get на
+# свежем сервере ждёт блокировку dpkg до десяти минут.
+INSTALL_TIMEOUT = int(os.environ.get("AMNEZIA_ENTRY_UPDATE_INSTALL_TIMEOUT_SEC", "1800"))
+RELEASE_RE = re.compile(r"^(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})$")
+REQUEST_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+SHA_IN_RELEASE_RE = re.compile(r"amnezia-sha256: ([0-9a-f]{64})")
+# Причины неудачи — коды, а не текст: панель показывает свои слова, а не
+# то, что прислал узел.
+UPDATE_REASONS = ("download", "checksum", "archive", "install", "inactive", "rollback", "interrupted", "version")
 
 
 class Fail(Exception):
@@ -561,7 +591,8 @@ def collect_metrics(prev):
               "disk_percent": disk_pct, "disk_used_bytes": disk_used, "disk_total_bytes": disk_total,
               "rx_bytes": None, "tx_bytes": None, "interval_seconds": None,
               "uptime_seconds": int(up) if up is not None else None,
-              "xray_version": xray_version(), "release": release_version()}
+              "xray_version": xray_version(), "release": release_version(),
+              "update": update_report()}
     prev_up = prev.get("uptime")
     # Тот же запуск системы — аптайм вырос. Иначе перезагрузка или первый
     # запуск, и разницы нет.
@@ -612,6 +643,370 @@ def send_report(settings):
              % getattr(e, "reason", e.__class__.__name__))
     except Fail as e:
         warn("показатели не отправлены: %s (работе узла это не мешает)" % e)
+
+
+# --- самообновление (amnezia-vpn-server-q1do.2) ------------------------------
+# Кто что решает. Панель называет целевой выпуск (target_version: по
+# умолчанию свою версию) и, если владелец нажал «Обновить каскад», метку
+# этого запроса (update_request). Всё остальное решает узел: выпуск ли это
+# вообще (три числа), новее ли установленного (понижать — нет), не рано
+# ли после неудачи (пауза UPDATE_PAUSE; свежий запрос владельца её
+# пропускает один раз). Откуда качать и с чем сверять — тоже узел: адрес
+# репозитория зашит выше, сумма — из тела выпуска на GitHub, как у
+# update-agent.sh основного сервера. Адрес или сумма в ответе панели не
+# читаются вовсе.
+#
+# Синк сам ничего не ставит: кладёт state/update-request.json и будит
+# отдельный oneshot-юнит xray-entry-update.service (entry-sync.py update).
+# Установщик выпуска заменяет и этот файл, и юниты, и перезапускает Xray —
+# внутри синка с его сроком в 50 секунд и общим замком это бы не
+# уживалось; у update-agent.sh основного сервера установщик к тому же
+# переписывал исполняемый скрипт (amnezia-vpn-server-76mp.4). Python читает
+# файл целиком до запуска, а установщик кладёт его через rename, так что
+# исполняемое под ногами не меняется.
+#
+# Итог — state/update.json: state idle | updating | failed, target, reason
+# (код из UPDATE_REASONS), at_utc, attempt_utc (начало последней попытки —
+# от неё пауза), request (последний обработанный запрос владельца). Он
+# уходит панели в каждом отчёте.
+
+class UpdateFail(Exception):
+    """Неудача обновления: code — для панели, str — для журнала."""
+
+    def __init__(self, code, msg):
+        super().__init__(msg)
+        self.code = code
+
+
+def release_tuple(v):
+    if not isinstance(v, str) or not RELEASE_RE.match(v):
+        return None
+    return tuple(int(x) for x in v.split("."))
+
+
+def utc_now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def utc_seconds(stamp):
+    try:
+        return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+
+
+def read_update_state():
+    try:
+        st = read_json(path("state/update.json"))
+    except (OSError, ValueError):
+        st = {}
+    if not isinstance(st, dict) or st.get("state") not in ("idle", "updating", "failed"):
+        st = {"state": "idle"}
+    return st
+
+
+def write_update_state(st):
+    os.makedirs(path("state"), mode=0o700, exist_ok=True)
+    write_atomic(path("state/update.json"), dump(st))
+
+
+def update_report():
+    """Состояние обновления для отчёта панели — только проверенные поля."""
+    st = read_update_state()
+    reason = st.get("reason") if st.get("reason") in UPDATE_REASONS else ""
+    return {"state": st["state"],
+            "target": st.get("target") if release_tuple(st.get("target")) else "",
+            "reason": reason if st["state"] == "failed" else "",
+            "at_utc": st.get("at_utc") if utc_seconds(st.get("at_utc")) is not None else "",
+            "request": st.get("request") if REQUEST_RE.match(str(st.get("request") or "")) else ""}
+
+
+def update_lock(blocking):
+    """Замок обновителя; None — его держит другой прогон."""
+    os.makedirs(path("state"), mode=0o700, exist_ok=True)
+    f = open(path("state/update.lock"), "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+    except BlockingIOError:
+        f.close()
+        return None
+    return f
+
+
+def installed_release():
+    v = release_version()
+    return v if release_tuple(v) else None
+
+
+def plan_update(panel):
+    """Решить по ответу панели, просить ли обновление. Ничего не бросает
+    наружу: обновление не должно мешать синку."""
+    raw_target = panel.get("target_version")
+    target = raw_target if release_tuple(raw_target) else None
+    if raw_target is not None and target is None:
+        warn("панель назвала целевым выпуском не номер выпуска; обновление пропущено")
+    req = panel.get("update_request")
+    req = req if isinstance(req, str) and REQUEST_RE.match(req) else ""
+    st = read_update_state()
+    before = dict(st)
+    if st["state"] == "updating":
+        held = update_lock(blocking=False)
+        if held is None:
+            return  # идёт
+        held.close()
+        # Замок свободен, а итога нет: прогон умер на полпути (срок юнита,
+        # перезагрузка). Это неудача — с паузой, как любая другая.
+        log("прежнее обновление не дошло до конца")
+        st.update(state="failed", reason="interrupted", at_utc=utc_now(), attempt_utc=utc_now())
+        write_update_state(st)
+    fresh_request = bool(req) and req != st.get("request")
+    if fresh_request:
+        st["request"] = req
+    installed = installed_release()
+    if not target or not installed or release_tuple(target) <= release_tuple(installed):
+        if target and installed and release_tuple(target) < release_tuple(installed):
+            log("панель просит выпуск %s, а стоит %s; понижать не буду" % (target, installed))
+        if st["state"] == "failed" and target and installed and release_tuple(installed) >= release_tuple(target):
+            # Догнали вручную — прежняя неудача больше не про этот узел.
+            st.update(state="idle", reason="", at_utc=utc_now())
+        if st != before:
+            write_update_state(st)
+        return
+    if st["state"] == "failed" and not fresh_request:
+        last = utc_seconds(st.get("attempt_utc"))
+        if last is not None and time.time() - last < UPDATE_PAUSE:
+            return
+    write_atomic(path("state/update-request.json"), dump({"version": target, "request": req}))
+    write_update_state(st)
+    log("запрошено обновление %s -> %s" % (installed, target))
+    r = subprocess.run(["systemctl", "start", "--no-block", UPDATE_UNIT], capture_output=True, text=True)
+    if r.returncode != 0:
+        warn("юнит обновления не запустился: %s" % (r.stderr.strip() or r.returncode))
+
+
+def safe_extract(archive, dest):
+    """Только файлы и каталоги внутри dest: ни ссылок, ни устройств, ни
+    путей наверх. Сумма архива уже сверена, но распаковщик — последний,
+    кто видит имена до диска."""
+    with tarfile.open(archive, "r:gz") as t:
+        members = t.getmembers()
+        for m in members:
+            parts = m.name.split("/")
+            if m.name.startswith("/") or ".." in parts or not (m.isfile() or m.isdir()):
+                raise UpdateFail("archive", "в архиве выпуска недопустимый элемент: %r" % m.name)
+        for m in members:
+            target = os.path.join(dest, m.name)
+            if m.isdir():
+                os.makedirs(target, mode=0o755, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target), mode=0o755, exist_ok=True)
+            with t.extractfile(m) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out)
+            os.chmod(target, 0o755 if m.mode & 0o111 else 0o644)
+
+
+def entry_units():
+    try:
+        names = os.listdir(SYSTEMD_DIR)
+    except OSError:
+        return []
+    return sorted(n for n in names if n.startswith("xray-entry") and n.endswith((".service", ".timer")))
+
+
+# Что откат не трогает: состояние обновления (его пишет этот прогон) и
+# замок синка (его держит этот же прогон на время возврата).
+KEEP_ON_ROLLBACK = ("state", ".lock")
+
+
+def snapshot(backup):
+    """Копия каталога узла и его юнитов перед установкой."""
+    shutil.rmtree(backup, ignore_errors=True)
+    os.makedirs(os.path.join(backup, "units"), mode=0o700)
+    shutil.copytree(D, os.path.join(backup, "entry"), symlinks=True,
+                    ignore=lambda d, names: [n for n in names if d == D and n in KEEP_ON_ROLLBACK])
+    for unit in entry_units():
+        shutil.copy2(os.path.join(SYSTEMD_DIR, unit), os.path.join(backup, "units", unit))
+
+
+def xray_active():
+    return subprocess.run(["systemctl", "is-active", "--quiet", SERVICE]).returncode == 0
+
+
+def rollback(backup):
+    """Вернуть каталог узла и юниты из копии и поднять Xray. True — Xray
+    работает на прежнем."""
+    with lock():
+        saved = os.path.join(backup, "entry")
+        for name in os.listdir(D):
+            if name in KEEP_ON_ROLLBACK:
+                continue
+            p = path(name)
+            if os.path.isdir(p) and not os.path.islink(p):
+                shutil.rmtree(p)
+            else:
+                os.unlink(p)
+        for name in os.listdir(saved):
+            src = os.path.join(saved, name)
+            if os.path.isdir(src) and not os.path.islink(src):
+                shutil.copytree(src, path(name), symlinks=True)
+            else:
+                shutil.copy2(src, path(name), follow_symlinks=False)
+        for unit in os.listdir(os.path.join(backup, "units")):
+            shutil.copy2(os.path.join(backup, "units", unit), os.path.join(SYSTEMD_DIR, unit))
+        subprocess.run(["systemctl", "daemon-reload"])
+        subprocess.run(["systemctl", "restart", SERVICE])
+    return xray_active()
+
+
+def run_installer(installer):
+    """install.sh --role entry из выпуска; код выхода, 124 — не уложился.
+    Флагов нет: адрес панели, маскировка и ключи — в settings.json, секрет —
+    в token, и повторный запуск берёт их оттуда."""
+    env = dict(os.environ, AMNEZIA_INSTALL_ENTRY_DIR=D)
+    logf = open(path("state/update-log.txt"), "a")
+    try:
+        p = subprocess.Popen(["bash", installer, "--role", "entry"], cwd=os.path.dirname(installer), env=env,
+                             stdin=subprocess.DEVNULL, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            return p.wait(timeout=INSTALL_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # Вместе со всем, что он запустил: потомки иначе продолжили бы
+            # менять узел без присмотра.
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+            return 124
+    finally:
+        logf.close()
+
+
+def fetch_release(target, work):
+    """Скачать архив выпуска target и сверить с суммой из тела выпуска.
+    Возвращает каталог установщика."""
+    meta = os.path.join(work, "release.json")
+    tarball = os.path.join(work, "sources.tar.gz")
+    try:
+        download("%s/repos/%s/releases/tags/v%s" % (UPDATE_API, UPDATE_REPO, target), meta, 1 << 20)
+    except (urllib.error.URLError, OSError) as e:
+        raise UpdateFail("download", "описание выпуска v%s не получено: %s"
+                         % (target, getattr(e, "reason", e.__class__.__name__)))
+    try:
+        body = read_json(meta).get("body") or ""
+    except (OSError, ValueError, AttributeError):
+        raise UpdateFail("download", "описание выпуска v%s — не JSON" % target)
+    m = SHA_IN_RELEASE_RE.search(body if isinstance(body, str) else "")
+    if not m:
+        raise UpdateFail("checksum", "в описании выпуска v%s нет контрольной суммы" % target)
+    asset = "amnezia-vpn-server-%s.tar.gz" % target
+    try:
+        download("%s/%s/releases/download/v%s/%s" % (UPDATE_DOWNLOADS, UPDATE_REPO, target, asset), tarball, 256 << 20)
+    except (urllib.error.URLError, OSError) as e:
+        raise UpdateFail("download", "архив выпуска v%s не скачался: %s"
+                         % (target, getattr(e, "reason", e.__class__.__name__)))
+    if sha256_file(tarball) != m.group(1):
+        raise UpdateFail("checksum", "контрольная сумма архива v%s не совпала с объявленной в выпуске" % target)
+    src = os.path.join(work, "src")
+    os.makedirs(src)
+    try:
+        safe_extract(tarball, src)
+    except (tarfile.TarError, OSError, EOFError) as e:
+        raise UpdateFail("archive", "архив выпуска не распаковался: %s" % e.__class__.__name__)
+    top = os.path.join(src, "amnezia-vpn-server-%s" % target)
+    installer = os.path.join(top, "install.sh")
+    if not os.path.isfile(installer) or not os.path.isfile(os.path.join(top, "app/entry/install-entry.sh")):
+        raise UpdateFail("archive", "в архиве выпуска нет install.sh с ролью entry")
+    # Архив обязан быть тем выпуском, что назван: установщик пишет в
+    # release версию из своего versions.lock.
+    try:
+        lock_text = open(os.path.join(top, "versions.lock"), encoding="utf-8").read()
+    except OSError:
+        lock_text = ""
+    if ("IMAGE_VERSION=%s" % target) not in lock_text.splitlines():
+        raise UpdateFail("archive", "versions.lock архива не называет выпуск %s" % target)
+    return installer
+
+
+def do_update(installed, target):
+    work = tempfile.mkdtemp(prefix=".xray-entry-update.", dir=os.path.dirname(D.rstrip("/")) or "/")
+    backup = D.rstrip("/") + ".rollback"
+    try:
+        installer = fetch_release(target, work)
+        snapshot(backup)
+        log("копия %s снята; ставлю выпуск %s" % (D, target))
+        rc = run_installer(installer)
+        if rc == 0 and not xray_active():
+            failure = ("inactive", "после установки %s не работает" % SERVICE)
+        elif rc == 0 and installed_release() != target:
+            failure = ("install", "установщик завершился, но версия узла — не %s" % target)
+        elif rc != 0:
+            failure = ("install", "установщик выпуска %s завершился с кодом %d (журнал: %s)"
+                       % (target, rc, path("state/update-log.txt")))
+        else:
+            shutil.rmtree(backup, ignore_errors=True)
+            return
+        log(failure[1] + "; возвращаю %s" % installed)
+        try:
+            ok = rollback(backup)
+        except OSError as e:
+            ok = False
+            warn("откат прервался: %s" % e)
+        if not ok:
+            raise UpdateFail("rollback", failure[1] + "; ОТКАТ НЕ УДАЛСЯ, узлу нужен человек (копия: %s)" % backup)
+        shutil.rmtree(backup, ignore_errors=True)
+        raise UpdateFail(failure[0], failure[1] + "; узел вернулся на %s" % installed)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def cmd_update(_args):
+    """Обновитель: юнит xray-entry-update.service, запрос — от синка."""
+    held = update_lock(blocking=False)
+    if held is None:
+        log("обновление уже идёт")
+        return 0
+    with held:
+        req_file = path("state/update-request.json")
+        try:
+            req = read_json(req_file)
+        except FileNotFoundError:
+            log("запроса на обновление нет")
+            return 0
+        except (OSError, ValueError):
+            req = {}
+        # Запрос убирается сразу: исход у него один, повторять его будет
+        # следующий синк, если сочтёт нужным.
+        try:
+            os.unlink(req_file)
+        except FileNotFoundError:
+            pass
+        st = read_update_state()
+        target = req.get("version") if isinstance(req, dict) else None
+        installed = installed_release()
+        if not release_tuple(target) or not installed or release_tuple(target) <= release_tuple(installed):
+            warn("запрос на выпуск %r при установленном %s отклонён: только официальный выпуск новее установленного"
+                 % (target, installed))
+            st.update(state="failed", reason="version", at_utc=utc_now(), attempt_utc=utc_now(),
+                      target=target if release_tuple(target) else "")
+            write_update_state(st)
+            return 1
+        st.update(state="updating", target=target, reason="", at_utc=utc_now(), attempt_utc=utc_now())
+        write_update_state(st)
+        log("обновление %s -> %s" % (installed, target))
+        try:
+            do_update(installed, target)
+        except UpdateFail as e:
+            warn(str(e))
+            st.update(state="failed", reason=e.code, at_utc=utc_now())
+            write_update_state(st)
+            return 1
+        except Exception as e:  # что угодно ещё — тоже неудача, а не вечное updating
+            warn("обновление прервано: %s" % e.__class__.__name__)
+            st.update(state="failed", reason="interrupted", at_utc=utc_now())
+            write_update_state(st)
+            return 1
+        st.update(state="idle", reason="", at_utc=utc_now())
+        write_update_state(st)
+        log("узел обновлён до %s" % target)
+        return 0
 
 
 # --- конфиг Xray ---------------------------------------------------------
@@ -755,6 +1150,13 @@ def cmd_sync(args):
             # из лимита панели (amnezia-vpn-server-q1do.1). После apply —
             # чтобы новый конфиг не ждал отчёта.
             if fetched:
+                # Обновление — до отчёта: метка обработанного запроса
+                # владельца уходит панели в этом же синке
+                # (amnezia-vpn-server-q1do.2). Его сбой синку не мешает.
+                try:
+                    plan_update(panel)
+                except Exception as e:
+                    warn("обновление не запрошено: %s (работе узла это не мешает)" % e.__class__.__name__)
                 send_report(s)
     return 1 if fetch_error else 0
 
@@ -870,7 +1272,7 @@ def parse_flags(args, known):
 
 
 COMMANDS = {"sync": cmd_sync, "geo": cmd_geo, "settings": cmd_settings, "describe": cmd_describe,
-            "install-xray": cmd_install_xray, "pubkey": cmd_pubkey}
+            "install-xray": cmd_install_xray, "pubkey": cmd_pubkey, "update": cmd_update}
 
 
 def main(argv):

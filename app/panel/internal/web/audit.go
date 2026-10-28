@@ -31,6 +31,8 @@ const (
 	auditClientToggle = "client.toggle"
 	auditClientDelete = "client.delete"
 	auditRestore      = "backup.restore"
+	// Владелец попросил обновить каскад (amnezia-vpn-server-q1do.2).
+	auditEntryUpdate = "entry.update"
 )
 
 // actorOf — кто это сделал. Для неудачного входа сессии ещё нет, и имя

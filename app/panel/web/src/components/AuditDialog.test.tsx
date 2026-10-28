@@ -61,6 +61,16 @@ describe("журнал", () => {
     expect(await screen.findByText(/Неудачный вход/)).toBeInTheDocument();
   });
 
+  // Запрос владельца на обновление каскада (amnezia-vpn-server-q1do.2).
+  it("называет запрос обновления каскада", async () => {
+    entries = [
+      { at_utc: "2026-09-07T12:00:00Z", actor: "admin", action: "entry.update", subject: "entry", detail: "До версии 3.4.0" },
+    ];
+    render(<AuditDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText(/Обновление каскада/)).toBeInTheDocument();
+    expect(screen.getByText("До версии 3.4.0")).toBeInTheDocument();
+  });
+
   // «Изменён» без указания чего отвечает на вопрос наполовину.
   it("говорит, что именно изменилось", async () => {
     entries = [

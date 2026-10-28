@@ -469,6 +469,23 @@ AccuracySec=5s
 [Install]
 WantedBy=timers.target
 EOF
+# Самообновление (amnezia-vpn-server-q1do.2): синк лишь кладёт запрос и
+# будит этот юнит. Отдельно — потому что установщик выпуска заменяет
+# entry-sync.py и юниты и перезапускает Xray: в синке с его сроком и
+# замком это не уживается. Срок — с запасом на установщик (до 30 минут:
+# apt ждёт блокировку dpkg) и на откат. Не включается: запускается
+# только по запросу.
+write_unit xray-entry-update.service <<EOF
+[Unit]
+Description=Xray entry node: update to the release the panel names
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+Environment=AMNEZIA_ENTRY_DIR=$ENTRY_DIR
+ExecStart=/usr/bin/python3 -I $SYNC update
+TimeoutStartSec=3600
+EOF
 write_unit xray-entry-geo.service <<EOF
 [Unit]
 Description=Xray entry node: update the geo lists
