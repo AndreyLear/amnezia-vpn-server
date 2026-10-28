@@ -312,6 +312,9 @@ func New(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("GET /api/entry/config", s.apiEntryConfig)
 	// Его показатели для шапки — тем же секретом (amnezia-vpn-server-q1do.1).
 	s.mux.HandleFunc("POST /api/entry/report", s.apiEntryReport)
+	// Запрос владельца на обновление каскада (amnezia-vpn-server-q1do.2):
+	// в отличие от двух путей выше — для панели, по сессии и CSRF.
+	s.mux.Handle("POST /api/entries/{name}/update", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiEntryUpdate))))
 	s.mux.Handle("PATCH /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsPatch))))
 	s.mux.Handle("DELETE /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsDelete))))
 	distRoot, err := fs.Sub(distFS, "dist")

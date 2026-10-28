@@ -434,6 +434,27 @@ export type EntryAbout = {
   release?: string;
   /** Только из свежего отчёта; null — неизвестно. */
   uptime_seconds?: number | null;
+  /** Самообновление узла (amnezia-vpn-server-q1do.2); нет у старой панели. */
+  update?: EntryUpdate;
+};
+
+/**
+ * Самообновление каскада (amnezia-vpn-server-q1do.2) по последнему отчёту
+ * узла. supported — узел сообщает о самообновлении (иначе его обновляют
+ * вручную); available — его выпуск ниже версии панели; requested —
+ * владелец попросил, а узел запрос ещё не забрал. reason — код причины
+ * неудачи, текст к нему — у панели (entryUpdateReason).
+ */
+export type EntryUpdate = {
+  supported: boolean;
+  state: "" | "idle" | "updating" | "failed";
+  target: string;
+  reason: string;
+  at_utc: string;
+  release: string;
+  panel: string;
+  available: boolean;
+  requested: boolean;
 };
 
 /** Всё про обновление одним ответом (amnezia-vpn-server-tjoq). */
@@ -605,6 +626,8 @@ export type EntryHost = {
   rx_bytes?: number | null;
   tx_bytes?: number | null;
   interval_seconds?: number | null;
+  /** Самообновление узла (amnezia-vpn-server-q1do.2); нет у старой панели. */
+  update?: EntryUpdate;
 };
 
 /** Toast only after a confirmed success: `{ok:true}` or a created/patched client. */

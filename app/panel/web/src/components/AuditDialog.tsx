@@ -39,6 +39,7 @@ const actions: Record<string, string> = {
   "client.toggle": "Клиент",
   "client.delete": "Клиент удалён",
   "backup.restore": "Восстановление из копии",
+  "entry.update": "Обновление каскада",
 };
 
 function actionTitle(action: string): string {

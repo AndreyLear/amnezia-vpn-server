@@ -68,6 +68,8 @@ type entryAboutJSON struct {
 	Xray          string  `json:"xray"`
 	Release       string  `json:"release"`
 	UptimeSeconds *int64  `json:"uptime_seconds"`
+	// Update — самообновление узла (amnezia-vpn-server-q1do.2).
+	Update *entryUpdateJSON `json:"update"`
 }
 
 // entryOfflineAfter — после скольких минут без синка узел считается без
@@ -96,6 +98,7 @@ func entriesAbout(reports []db.XrayEntryReport, now time.Time) []entryAboutJSON 
 				e.UptimeSeconds = report.UptimeSeconds
 			}
 		}
+		e.Update = entryUpdateOf(s, xray.EntryTargetVersion(productVersion()))
 		out = append(out, e)
 	}
 	return out

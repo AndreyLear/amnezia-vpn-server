@@ -342,6 +342,9 @@ check "юниты: Xray, синхронизация раз в минуту, geo 
 check "юниты: таймер синхронизации — раз в минуту" grep -q '^OnUnitActiveSec=1min$' "$WORK/systemd/xray-entry-sync.timer"
 check "юниты: таймер geo-списков" grep -q '^OnCalendar=Mon 04:30$' "$WORK/systemd/xray-entry-geo.timer"
 check "юниты: синхронизация зовёт entry-sync.py sync" grep -q "python3 -I $ED/entry-sync.py sync" "$WORK/systemd/xray-entry-sync.service"
+check "юниты: обновление — отдельный oneshot entry-sync.py update (amnezia-vpn-server-q1do.2)" \
+    grep -q "python3 -I $ED/entry-sync.py update" "$WORK/systemd/xray-entry-update.service"
+check "юниты: обновление — Type=oneshot" grep -q '^Type=oneshot$' "$WORK/systemd/xray-entry-update.service"
 check "sysctl: BBR, fq, mtu_probing, буферы" grep -q 'net.ipv4.tcp_congestion_control = bbr' "$WORK/sysctl/90-vpn-entry-tcp.conf"
 check "sysctl: mtu_probing" grep -q 'net.ipv4.tcp_mtu_probing = 1' "$WORK/sysctl/90-vpn-entry-tcp.conf"
 check "fail2ban: jail для sshd" grep -q '^\[sshd\]' "$WORK/f2b/jail.d/amnezia-vpn-sshd.conf"
@@ -662,6 +665,244 @@ rc=$?
 check "без секрета: установка прошла" test "$rc" = 0
 check "без секрета: узел поднят без клиентов" cfg 'emails == [] and rules[-1]["outboundTag"] == "block"'
 grep -q "no --entry-token given yet" "$WORK/out.log" && pass "без секрета: так и сказано" || fail "без секрета: так и сказано"
+
+# --- 8. самообновление по сигналу панели (amnezia-vpn-server-q1do.2) ------------------
+#
+# Панель в ответе синка называет только целевую версию (target_version) и,
+# если владелец нажал «Обновить каскад», метку запроса (update_request).
+# Синк лишь кладёт запрос и будит отдельный юнит; качает, сверяет и ставит
+# entry-sync.py update. GitHub — файлы (file://), выпуск — настоящий
+# tar.gz с поддельным install.sh, сумма — настоящая, из тела выпуска.
+
+GH_API="$WORK/gh-api"
+GH_DL="$WORK/gh-dl"
+# publish_release VERSION [SHA_OVERRIDE] — выпуск на «GitHub»: описание с
+# суммой и архив amnezia-vpn-server-VERSION.tar.gz.
+publish_release() {
+    local v="$1" dir="$WORK/rel-src/amnezia-vpn-server-$1" sha
+    rm -rf "$WORK/rel-src"
+    mkdir -p "$dir/app/entry" "$GH_API/repos/AndreyLear/avl/releases/tags" "$GH_DL/AndreyLear/avl/releases/download/v$v"
+    printf 'IMAGE_VERSION=%s\n' "$v" > "$dir/versions.lock"
+    printf '#!/bin/bash\n' > "$dir/app/entry/install-entry.sh"
+    # Поддельный установщик: отмечается, по NEW_INSTALL_RC ломается, по
+    # NEW_INSTALL_STOP гасит Xray. Ломаясь, портит каталог узла — откат
+    # обязан вернуть его как был.
+    cat > "$dir/install.sh" <<'INST'
+#!/bin/bash
+echo "new-installer $*" >> "$FAKE_CALLS"
+. "$FAKE_STATE"
+ed="$AMNEZIA_INSTALL_ENTRY_DIR"
+v="$(sed -n 's/^IMAGE_VERSION=//p' "$(dirname "$0")/versions.lock")"
+printf '%s\n' "$v" > "$ed/release"
+if [ "${NEW_INSTALL_RC:-0}" != 0 ]; then
+    echo broken > "$ed/settings.json"
+    echo junk > "$ed/new-junk"
+    exit "$NEW_INSTALL_RC"
+fi
+[ "${NEW_INSTALL_STOP:-0}" = 0 ] || rm -f "$FAKE_WORK/active/xray-entry"
+touch "$ed/new-marker"
+INST
+    chmod +x "$dir/install.sh"
+    (cd "$WORK/rel-src" && tar -czf "$GH_DL/AndreyLear/avl/releases/download/v$v/amnezia-vpn-server-$v.tar.gz" "amnezia-vpn-server-$v")
+    sha="${2:-$(sha256 "$GH_DL/AndreyLear/avl/releases/download/v$v/amnezia-vpn-server-$v.tar.gz")}"
+    printf '{"tag_name":"v%s","body":"Что нового\\n\\namnezia-sha256: %s\\n"}\n' "$v" "$sha" \
+        > "$GH_API/repos/AndreyLear/avl/releases/tags/v$v"
+}
+# panel_update TARGET [REQUEST] — ответ панели с целевой версией (как есть,
+# JSON-значение) и меткой запроса владельца. Заодно — адрес и сумма
+# «другого выпуска»: узел не должен их брать.
+panel_update() {
+    python3 -I - "$WORK/panel.json" "$1" "${2:-}" <<'EOF'
+import json, sys
+p = json.load(open(sys.argv[1]))
+for k in ("target_version", "update_request"):
+    p.pop(k, None)
+if sys.argv[2] != "-":
+    p["target_version"] = json.loads(sys.argv[2])
+if sys.argv[3]:
+    p["update_request"] = sys.argv[3]
+p["update_url"] = "file:///nonexistent/evil.tar.gz"
+p["update_sha256"] = "0" * 64
+json.dump(p, open(sys.argv[1], "w"))
+EOF
+}
+run_update() {
+    env PATH="$FAKE:$PATH" AMNEZIA_ENTRY_DIR="$ED" AMNEZIA_ENTRY_SYSTEMD_DIR="$WORK/systemd" \
+        AMNEZIA_ENTRY_UPDATE_API="file://$GH_API" AMNEZIA_ENTRY_UPDATE_DOWNLOADS="file://$GH_DL" \
+        AMNEZIA_ENTRY_PROC="$WORK/proc" AMNEZIA_ENTRY_DISK_PATH="$WORK" \
+        python3 -I "$ED/entry-sync.py" update > "$WORK/update.log" 2>&1
+}
+# ustate PYTHON-EXPR — истинность выражения над state/update.json (u).
+ustate() {
+    python3 -I - "$ED/state/update.json" "$1" <<'EOF'
+import json, sys
+u = json.load(open(sys.argv[1]))
+sys.exit(0 if eval(sys.argv[2]) else 1)
+EOF
+}
+requested() { test -f "$ED/state/update-request.json"; }
+
+reset_host
+rm -rf "$GH_API" "$GH_DL"
+printf '%s\n' "$TOKEN" | run_install --panel "$PANEL" --entry-token - --entry-dest 127.0.0.1:4441 --entry-server-names a.example.ru
+check "самообновление: узел поставлен (выпуск 2.12.2)" test $? = 0 -a "$(cat "$ED/release")" = 2.12.2
+fake_proc 100.0 10 90 1000 1000
+printf 'NEW_INSTALL_RC=0\nNEW_INSTALL_STOP=0\n' >> "$STATE"
+publish_release 2.13.0
+
+# Без целевой версии — как раньше: ничего не просит.
+panel_update -
+: > "$CALLS"
+run_sync sync
+check "без целевой версии: синк прошёл, запроса нет" test $? = 0 -a ! -e "$ED/state/update-request.json"
+check "без целевой версии: в отчёте — состояние idle" report 'r["update"]["state"] == "idle"'
+
+# Мусор вместо версии: синк не падает, запрос не кладётся.
+for junk in '"2.13.0; rm -rf /"' '"../../2.13.0"' '"v2.13.0"' '"2.13"' '"2.13.0.1"' '"02.13.0"' '2130' '{"v": "2.13.0"}'; do
+    panel_update "$junk"
+    : > "$CALLS"
+    run_sync sync
+    rc=$?
+    check "мусорная версия $junk: синк прошёл, запроса нет, юнит не будили" \
+        test "$rc" = 0 -a ! -e "$ED/state/update-request.json" -a "$(calls 'xray-entry-update')" = 0
+done
+
+# Понижение и та же версия — не работа.
+for v in 2.12.1 2.12.2 1.99.99; do
+    panel_update "\"$v\""
+    : > "$CALLS"
+    run_sync sync
+    check "целевая $v не выше установленной 2.12.2: запроса нет" \
+        test $? = 0 -a ! -e "$ED/state/update-request.json" -a "$(calls 'xray-entry-update')" = 0
+done
+# И сам обновитель понижать не станет, даже если запрос положили руками.
+printf '{"version": "2.12.1", "request": ""}\n' > "$ED/state/update-request.json"
+: > "$CALLS"
+run_update
+check "запрос на понижение руками: отказ, установщик не звали" \
+    test $? = 1 -a "$(calls 'new-installer')" = 0 -a "$(cat "$ED/release")" = 2.12.2
+check "запрос на понижение руками: запрос убран, причина — version" \
+    test ! -e "$ED/state/update-request.json"
+check "запрос на понижение руками: состояние failed/version" ustate 'u["state"] == "failed" and u["reason"] == "version"'
+printf '{"state": "idle"}\n' > "$ED/state/update.json"
+
+# Неудачная установка: откат из копии.
+cp "$ED/settings.json" "$WORK/settings.before"
+setstate NEW_INSTALL_RC 1
+panel_update '"2.13.0"'
+: > "$CALLS"
+run_sync sync
+check "целевая 2.13.0 выше 2.12.2: синк положил запрос и разбудил юнит" \
+    test $? = 0 -a -f "$ED/state/update-request.json" -a "$(calls 'systemctl start --no-block xray-entry-update.service')" = 1
+check "в запросе — только версия, без адреса и суммы из ответа панели" python3 -I -c '
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert r["version"] == "2.13.0" and set(r) <= {"version", "request"}, r' "$ED/state/update-request.json"
+check "синк сам ничего не ставит" test "$(calls 'new-installer')" = 0
+: > "$CALLS"
+run_update
+rc=$?
+check "установка упала: код 1, установщик выпуска звали с --role entry" \
+    test "$rc" = 1 -a "$(calls 'new-installer --role entry')" = 1
+check "установка упала: откат вернул settings.json и версию" \
+    test "$(cat "$ED/release")" = 2.12.2 -a ! -e "$ED/new-junk"
+check "установка упала: settings.json — прежний" cmp -s "$ED/settings.json" "$WORK/settings.before"
+check "установка упала: после отката Xray перезапущен" test "$(calls 'systemctl restart xray-entry')" -ge 1
+check "установка упала: состояние failed/install, запрос убран" \
+    ustate 'u["state"] == "failed" and u["reason"] == "install" and u["target"] == "2.13.0" and u["attempt_utc"]'
+check "установка упала: запрос убран, копия для отката убрана" test ! -e "$ED/state/update-request.json"
+run_sync sync
+check "установка упала: в отчёте — failed, причина install, версия прежняя" \
+    report 'r["update"]["state"] == "failed" and r["update"]["reason"] == "install" and r["update"]["target"] == "2.13.0" and r["release"] == "2.12.2"'
+
+# Пауза после неудачи: следующий синк запроса не кладёт.
+setstate NEW_INSTALL_RC 0
+: > "$CALLS"
+run_sync sync
+check "пауза после неудачи: синк прошёл, запроса нет, юнит не будили" \
+    test $? = 0 -a ! -e "$ED/state/update-request.json" -a "$(calls 'xray-entry-update')" = 0
+
+# Запрос владельца из панели паузу пропускает — один раз.
+panel_update '"2.13.0"' 2026-10-28T12:00:00Z
+: > "$CALLS"
+run_sync sync
+check "запрос владельца: запрос положен несмотря на паузу" requested
+check "запрос владельца: метка запроса запомнена и уходит в отчёт" \
+    report 'r["update"]["request"] == "2026-10-28T12:00:00Z"'
+rm -f "$ED/state/update-request.json"
+: > "$CALLS"
+run_sync sync
+check "тот же запрос владельца второй раз паузу не пропускает" test ! -e "$ED/state/update-request.json"
+
+# Пауза кончилась (попытка 31 минуту назад) — снова пробует.
+python3 -I - "$ED/state/update.json" <<'EOF'
+import json, sys, time
+u = json.load(open(sys.argv[1]))
+u["attempt_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 31 * 60))
+json.dump(u, open(sys.argv[1], "w"))
+EOF
+run_sync sync
+check "пауза 30 минут кончилась: запрос положен" requested
+
+# Xray не поднялся после установки — откат.
+setstate NEW_INSTALL_STOP 1
+: > "$CALLS"
+run_update
+check "Xray не поднялся после установки: код 1, откат, версия прежняя" \
+    test $? = 1 -a "$(cat "$ED/release")" = 2.12.2 -a ! -e "$ED/new-marker"
+check "Xray не поднялся: состояние failed/inactive" ustate 'u["state"] == "failed" and u["reason"] == "inactive"'
+setstate NEW_INSTALL_STOP 0
+
+# Сумма не сошлась — ничего не тронуто, установщик не звали.
+publish_release 2.13.0 "$(printf 'a%.0s' $(seq 64))"
+printf '{"version": "2.13.0", "request": ""}\n' > "$ED/state/update-request.json"
+: > "$CALLS"
+run_update
+check "сумма не сошлась: отказ, установщик не звали" test $? = 1 -a "$(calls 'new-installer')" = 0
+check "сумма не сошлась: состояние failed/checksum" ustate 'u["reason"] == "checksum"'
+# Выпуска нет на GitHub.
+printf '{"version": "2.14.0", "request": ""}\n' > "$ED/state/update-request.json"
+run_update
+check "выпуска нет: отказ" test $? = 1
+check "выпуска нет: причина download" ustate 'u["reason"] == "download"'
+
+# Другой обновитель уже идёт: второй выходит, ничего не трогая.
+publish_release 2.13.0
+printf '{"version": "2.13.0", "request": ""}\n' > "$ED/state/update-request.json"
+python3 -I -c '
+import fcntl, sys, time
+f = open(sys.argv[1], "w"); fcntl.flock(f, fcntl.LOCK_EX); open(sys.argv[2], "w").close(); time.sleep(3)' \
+    "$ED/state/update.lock" "$WORK/locked" &
+lock_pid=$!
+for _ in $(seq 50); do [ -e "$WORK/locked" ] && break; sleep 0.1; done
+: > "$CALLS"
+run_update
+check "параллельный запуск: второй выходит с 0, установщик не звали" test $? = 0 -a "$(calls 'new-installer')" = 0
+grep -q "уже идёт" "$WORK/update.log" && pass "параллельный запуск: так и сказано" || fail "параллельный запуск: так и сказано"
+# Пока тот держит замок, синк не объявляет его прерванным.
+printf '{"state": "updating", "target": "2.13.0"}\n' > "$ED/state/update.json"
+run_sync sync
+check "идёт обновление: синк не трогает состояние" ustate 'u["state"] == "updating"'
+wait "$lock_pid"
+rm -f "$WORK/locked"
+# Замок свободен, а в состоянии updating — прогон умер, не дописав итог.
+run_sync sync
+check "прерванное обновление: failed/interrupted" ustate 'u["state"] == "failed" and u["reason"] == "interrupted"'
+
+# Удачное обновление.
+: > "$CALLS"
+run_update
+rc=$?
+check "удачное обновление: код 0, установщик выпуска с --role entry" \
+    test "$rc" = 0 -a "$(calls 'new-installer --role entry')" = 1 -a -e "$ED/new-marker"
+check "удачное обновление: версия 2.13.0" test "$(cat "$ED/release")" = 2.13.0
+check "удачное обновление: состояние idle" ustate 'u["state"] == "idle" and u["reason"] == "" and u["target"] == "2.13.0"'
+check "удачное обновление: копия для отката убрана" test ! -e "$ED.rollback"
+if grep -q evil "$WORK/update.log" "$CALLS"; then fail "адрес из ответа панели не использован"; else pass "адрес из ответа панели не использован"; fi
+: > "$CALLS"
+run_sync sync
+check "после обновления: запроса нет" test ! -e "$ED/state/update-request.json" -a "$(calls 'xray-entry-update')" = 0
+check "после обновления: в отчёте 2.13.0 и idle" report 'r["release"] == "2.13.0" and r["update"]["state"] == "idle"'
 
 echo
 if [ "$ERRORS" -gt 0 ]; then

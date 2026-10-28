@@ -5,6 +5,7 @@ import { AddClientDialog } from "@/components/AddClientDialog";
 import { AppShell } from "@/components/AppShell";
 import { ClientCard } from "@/components/ClientCard";
 import { EmptyClients } from "@/components/EmptyClients";
+import { EntryUpdateBanner } from "@/components/EntryUpdateBanner";
 import { ClientInfoDialog } from "@/components/ClientInfoDialog";
 import { QrDialog } from "@/components/QrDialog";
 import { MailFailureBanner } from "@/components/MailFailureBanner";
@@ -230,6 +231,9 @@ export default function HomePage() {
         timedOut={updateTimedOut}
         onChanged={reloadUpdate}
       />
+      {/* Каскады, отстающие от панели, — сразу под полосой о выпуске этого
+          сервера; состояние — из того же опроса шапки (amnezia-vpn-server-q1do.2). */}
+      <EntryUpdateBanner entries={host?.entries ?? []} onChanged={load} />
       {/* И на экране первого запуска: отказ почты не должен прятаться в окне
           только потому, что клиентов пока нет (amnezia-vpn-server-063p). На
           пустом экране колонка центрирована, поэтому полоса на всю ширину и

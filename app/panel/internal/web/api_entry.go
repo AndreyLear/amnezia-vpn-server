@@ -95,6 +95,13 @@ func (s *Server) apiEntryConfig(w http.ResponseWriter, r *http.Request) {
 	if err := db.TouchXrayEntrySync(s.db(), name, now); err != nil {
 		s.cfg.Logger.Printf("api entry config: %v", err)
 	}
+	// Самообновление (amnezia-vpn-server-q1do.2): целевой выпуск — версия
+	// панели, и метка запроса владельца. Не прочиталась метка — узел
+	// обойдётся без неё: паузу после неудачи он выдержит, и только.
+	cfg.TargetVersion = xray.EntryTargetVersion(productVersion())
+	if req, err := db.XrayEntryUpdateRequest(s.db(), name); err == nil {
+		cfg.UpdateRequest = req
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, cfg)
 }

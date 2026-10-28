@@ -120,3 +120,55 @@ func quote(s string) string {
 	b.WriteByte('"')
 	return b.String()
 }
+
+// Состояние самообновления узла (amnezia-vpn-server-q1do.2) — тоже не
+// вслепую: состояние из трёх слов, причина — код из списка (текст
+// показывает панель), выпуск и метки времени — по шаблону.
+func TestParseEntryReportUpdate(t *testing.T) {
+	r, err := ParseEntryReport([]byte(`{"update": {"state": "failed", "target": "3.4.0", "reason": "install",
+		"at_utc": "2026-10-28T10:00:00Z", "request": "2026-10-28T09:59:00Z", "extra": 1}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := EntryUpdate{State: "failed", Target: "3.4.0", Reason: "install",
+		AtUTC: "2026-10-28T10:00:00Z", Request: "2026-10-28T09:59:00Z"}
+	if r.Update == nil || *r.Update != want {
+		t.Fatalf("update = %+v", r.Update)
+	}
+
+	if r, err := ParseEntryReport([]byte(`{"update": {"state": "pwned"}}`)); err != nil || r.Update != nil {
+		t.Errorf("состояние не из списка: %+v, %v", r.Update, err)
+	}
+	if _, err := ParseEntryReport([]byte(`{"update": "idle"}`)); err == nil {
+		t.Error("update не объект — принят")
+	}
+
+	r, err = ParseEntryReport([]byte(`{"update": {"state": "idle", "target": "3.4.0; rm -rf /",
+		"reason": "Позвоните нам", "at_utc": "вчера", "request": "<script>"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Update == nil || *r.Update != (EntryUpdate{State: "idle"}) {
+		t.Fatalf("мусор не отброшен: %+v", r.Update)
+	}
+	// Причина — только у неудачи и только из списка.
+	r, _ = ParseEntryReport([]byte(`{"update": {"state": "updating", "reason": "install"}}`))
+	if r.Update == nil || r.Update.Reason != "" {
+		t.Fatalf("причина у updating: %+v", r.Update)
+	}
+	r, _ = ParseEntryReport([]byte(`{"update": {"state": "failed", "reason": "something-new"}}`))
+	if r.Update == nil || r.Update.Reason != "" {
+		t.Fatalf("неизвестная причина: %+v", r.Update)
+	}
+}
+
+func TestEntryTargetVersion(t *testing.T) {
+	for in, want := range map[string]string{
+		"3.4.0": "3.4.0", "10.0.12": "10.0.12", "": "", "dev": "", "3.4.0-rc.1": "",
+		"v3.4.0": "", "03.4.0": "", "3.4": "", " 3.4.0": "",
+	} {
+		if got := EntryTargetVersion(in); got != want {
+			t.Errorf("EntryTargetVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

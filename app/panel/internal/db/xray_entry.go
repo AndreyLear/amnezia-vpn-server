@@ -35,7 +35,8 @@ const xrayEntriesTable = `CREATE TABLE IF NOT EXISTS xray_entries (
 		token_hash TEXT NOT NULL DEFAULT '',
 		last_sync_utc TEXT NOT NULL DEFAULT '',
 		report_json TEXT NOT NULL DEFAULT '',
-		report_utc TEXT NOT NULL DEFAULT ''
+		report_utc TEXT NOT NULL DEFAULT '',
+		update_request_utc TEXT NOT NULL DEFAULT ''
 	);`
 
 // XrayEntry — узел-вход. Секретов в нём нет: всё это и так видно в любой
@@ -354,6 +355,9 @@ type XrayEntryReport struct {
 	LastSync   time.Time
 	ReportedAt time.Time
 	Report     string
+	// UpdateRequest — метка последнего запроса владельца на обновление
+	// узла (amnezia-vpn-server-q1do.2); пусто — не просил.
+	UpdateRequest string
 }
 
 // SaveXrayEntryReport запоминает отчёт узла name, полученный в момент
@@ -370,7 +374,8 @@ func SaveXrayEntryReport(handle *sql.DB, name, report string, now time.Time) err
 // XrayEntryReports — время синка и последний отчёт всех узлов по имени.
 // Нечитаемое время считается «ни разу», как в XrayEntrySyncs.
 func XrayEntryReports(handle Querier) ([]XrayEntryReport, error) {
-	rows, err := handle.Query(`SELECT name, last_sync_utc, report_utc, report_json FROM xray_entries ORDER BY name`)
+	rows, err := handle.Query(`SELECT name, last_sync_utc, report_utc, report_json, update_request_utc
+		FROM xray_entries ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("db: query entry reports: %w", err)
 	}
@@ -381,7 +386,7 @@ func XrayEntryReports(handle Querier) ([]XrayEntryReport, error) {
 			r              XrayEntryReport
 			sync, reported string
 		)
-		if err := rows.Scan(&r.Name, &sync, &reported, &r.Report); err != nil {
+		if err := rows.Scan(&r.Name, &sync, &reported, &r.Report, &r.UpdateRequest); err != nil {
 			return nil, fmt.Errorf("db: scan entry report: %w", err)
 		}
 		if t, err := time.Parse(time.RFC3339, sync); err == nil {
@@ -409,6 +414,55 @@ func migrateXrayEntryReport(handle *sql.DB) error {
 		if _, err := handle.Exec(`ALTER TABLE xray_entries ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("db: add xray_entries.%s: %w", col, err)
 		}
+	}
+	return nil
+}
+
+// Запрос владельца на обновление узла (amnezia-vpn-server-q1do.2): кнопка
+// «Обновить каскад» пишет сюда время нажатия, панель отдаёт его узлу в
+// ответе синка (update_request), узел, забрав, называет его в отчёте.
+// Метка, а не флаг: узлу надо отличить новый запрос от уже обработанного,
+// а панели — видеть, забрал ли узел запрос, по одному отчёту.
+
+// RequestXrayEntryUpdate запоминает запрос владельца в момент now.
+// ErrXrayEntryNotFound — узла нет.
+func RequestXrayEntryUpdate(handle *sql.DB, name string, now time.Time) error {
+	res, err := handle.Exec(`UPDATE xray_entries SET update_request_utc = ? WHERE name = ?`,
+		now.UTC().Format(time.RFC3339), name)
+	if err != nil {
+		return fmt.Errorf("db: write entry update request: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("db: write entry update request: %w", err)
+	} else if n == 0 {
+		return ErrXrayEntryNotFound
+	}
+	return nil
+}
+
+// XrayEntryUpdateRequest — метка последнего запроса владельца; пусто — не
+// просил. ErrXrayEntryNotFound — узла нет.
+func XrayEntryUpdateRequest(handle Querier, name string) (string, error) {
+	var out string
+	err := handle.QueryRow(`SELECT update_request_utc FROM xray_entries WHERE name = ?`, name).Scan(&out)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrXrayEntryNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("db: read entry update request: %w", err)
+	}
+	return out, nil
+}
+
+// migrateXrayEntryUpdateRequest добавляет колонку запроса в таблицу узлов
+// выпуска 3.3.0. Аддитивно, без подъёма SchemaVersion, как report_json.
+func migrateXrayEntryUpdateRequest(handle *sql.DB) error {
+	has, err := tableHasColumn(handle, "xray_entries", "update_request_utc")
+	if err != nil || has {
+		return err
+	}
+	if _, err := handle.Exec(`ALTER TABLE xray_entries ADD COLUMN update_request_utc TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("db: add xray_entries.update_request_utc: %w", err)
 	}
 	return nil
 }

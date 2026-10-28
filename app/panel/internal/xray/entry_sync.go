@@ -118,6 +118,12 @@ type EntryConfig struct {
 	Entry    string        `json:"entry"`
 	Clients  []EntryClient `json:"clients"`
 	Upstream EntryUpstream `json:"upstream"`
+	// TargetVersion и UpdateRequest — самообновление узла
+	// (amnezia-vpn-server-q1do.2, см. entry_update.go): только номер
+	// выпуска и метка запроса владельца, без адресов и сумм. Пустые не
+	// отдаются; entry-sync старше самообновления их не читает.
+	TargetVersion string `json:"target_version,omitempty"`
+	UpdateRequest string `json:"update_request,omitempty"`
 }
 
 // BuildEntryConfig собирает конфигурацию узла name. Включённость — то же

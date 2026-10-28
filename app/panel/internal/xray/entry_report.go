@@ -51,6 +51,9 @@ type EntryReport struct {
 	UptimeSeconds   *int64   `json:"uptime_seconds"`
 	XrayVersion     string   `json:"xray_version"`
 	Release         string   `json:"release"`
+	// Update — состояние самообновления (amnezia-vpn-server-q1do.2); nil —
+	// узел старше самообновления и о нём не сообщает.
+	Update *EntryUpdate `json:"update,omitempty"`
 }
 
 // rawEntryReport — тело как пришло: все числа — float64, чтобы дробное или
@@ -67,8 +70,9 @@ type rawEntryReport struct {
 	TxBytes         *float64 `json:"tx_bytes"`
 	IntervalSeconds *float64 `json:"interval_seconds"`
 	UptimeSeconds   *float64 `json:"uptime_seconds"`
-	XrayVersion     string   `json:"xray_version"`
-	Release         string   `json:"release"`
+	XrayVersion     string       `json:"xray_version"`
+	Release         string       `json:"release"`
+	Update          *EntryUpdate `json:"update"`
 }
 
 // ParseEntryReport разбирает и проверяет тело отчёта. Ошибка — тело не
@@ -104,6 +108,7 @@ func ParseEntryReport(body []byte) (EntryReport, error) {
 		UptimeSeconds:   counter(raw.UptimeSeconds),
 		XrayVersion:     raw.XrayVersion,
 		Release:         raw.Release,
+		Update:          raw.Update,
 	}.Sanitized(), nil
 }
 
@@ -126,6 +131,7 @@ func (r EntryReport) Sanitized() EntryReport {
 	if !entryVersionPattern.MatchString(r.Release) {
 		r.Release = ""
 	}
+	r.Update = r.Update.sanitized()
 	return r
 }
 
