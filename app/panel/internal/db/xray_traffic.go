@@ -133,6 +133,11 @@ func RecordVLESSCounters(handle *sql.DB, started time.Time, counters map[int64]V
 		); err != nil {
 			return fmt.Errorf("db: vless traffic: record %d: %w", id, err)
 		}
+		// Тот же прирост — в историю по часам (amnezia-vpn-server-gzmb):
+		// Up — от клиента (rx), Down — к нему (tx).
+		if err := addTrafficHour(tx, id, trafficProtoVLESS, now, dUp, dDown); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("db: commit vless traffic: %w", err)

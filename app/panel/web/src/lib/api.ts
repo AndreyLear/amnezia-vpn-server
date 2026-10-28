@@ -1,5 +1,7 @@
 import { toast } from "sonner";
 
+import type { TrafficHour } from "@/lib/dailyTraffic";
+
 let csrf = "";
 let lastUsername = "";
 let csrfWaiters: Array<() => void> = [];
@@ -237,6 +239,22 @@ export function fetchSpeed(
 ): Promise<SpeedSeries> {
   const vless = protocol === "vless" ? "&protocol=vless" : "";
   return api<SpeedSeries>(`/api/clients/${id}/speed?window=${window}&columns=${columns}${vless}`);
+}
+
+/**
+ * Трафик клиента по часам UTC с from (amnezia-vpn-server-gzmb). В дни
+ * местного пояса их складывает lib/dailyTraffic.
+ */
+export type TrafficHistory = {
+  from_utc: string;
+  to_utc: string;
+  hours: TrafficHour[];
+};
+
+export function fetchTraffic(id: number, from: Date): Promise<TrafficHistory> {
+  return api<TrafficHistory>(
+    `/api/clients/${id}/traffic?from=${encodeURIComponent(from.toISOString())}`,
+  );
 }
 
 /**

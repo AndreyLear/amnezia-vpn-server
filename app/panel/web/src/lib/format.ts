@@ -51,6 +51,21 @@ export function formatDateShort(d: Date, now = Date.now()): string {
 }
 
 /**
+ * Та же «11 сен», но для дня в поясе браузера: трафик по дням считается в
+ * местных сутках (amnezia-vpn-server-gzmb), а formatDateShort читает UTC —
+ * около полуночи он назвал бы соседний день. Местные число, месяц и год
+ * перекладываются в UTC и отдаются тому же форматтеру, чтобы формат даты
+ * в панели остался один.
+ */
+export function formatLocalDateShort(d: Date, now = Date.now()): string {
+  const n = new Date(now);
+  return formatDateShort(
+    new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())),
+    Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()),
+  );
+}
+
+/**
  * Single formatter for every "date" or "date and time" display in the panel
  * (journal entries, service restarts, client handshakes) — the owner asked
  * that a new screen never grow a fourth date format of its own

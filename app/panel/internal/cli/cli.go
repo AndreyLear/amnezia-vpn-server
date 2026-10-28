@@ -518,8 +518,9 @@ func (a *app) serveHTTP(ctx context.Context, cfg web.Config) int {
 	// остановки (amnezia-vpn-server-14y0.2, см. xray.ClearStaleSocket).
 	go xray.WatchSocket(ctx, xray.APIAddr(), 30*time.Second, cfg.Logger.Printf)
 	// Трафик VLESS по клиентам копится из счётчиков Xray
-	// (amnezia-vpn-server-14y0.8).
-	go server.WatchXrayTraffic(ctx, web.XraySpeedInterval)
+	// (amnezia-vpn-server-14y0.8), а история по часам — ещё и из
+	// status.json AWG (amnezia-vpn-server-gzmb).
+	go server.WatchTraffic(ctx, web.XraySpeedInterval)
 	if err := server.ListenAndServe(ctx); err != nil {
 		return a.fatal(opServe, err)
 	}
