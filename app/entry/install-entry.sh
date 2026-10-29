@@ -129,7 +129,9 @@ DEST=""
 SERVER_NAMES=""
 XVER=""
 IMPORT=""
-FAIL2BAN=1
+# Пусто — флага не было: действует то, что записано в settings.json, а без
+# записи — «включено» (amnezia-vpn-server-0b80).
+FAIL2BAN=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --help | -h) usage; exit 0 ;;
@@ -241,10 +243,12 @@ settings_args=()
 [ -z "$DEST" ] || settings_args+=(--dest "$DEST")
 [ -z "$SERVER_NAMES" ] || settings_args+=(--server-names "$SERVER_NAMES")
 [ -z "$XVER" ] || settings_args+=(--xver "$XVER")
+[ -z "$FAIL2BAN" ] || settings_args+=(--fail2ban "$FAIL2BAN")
 out="$(sync_py settings ${settings_args[@]+"${settings_args[@]}"} 2>&1)" || die_op "settings: ${out#entry-sync: }"
 [ -z "$out" ] || log "${out#entry-sync: }"
 SETTINGS_PANEL="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("panel_url",""))' "$ENTRY_DIR/settings.json")"
 SETTINGS_DEST="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["dest"])' "$ENTRY_DIR/settings.json")"
+FAIL2BAN="$(python3 -I -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("fail2ban", True) else 0)' "$ENTRY_DIR/settings.json")"
 
 if [ "$TOKEN_SET" = "1" ]; then
     umask 077
