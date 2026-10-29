@@ -162,6 +162,31 @@ func TestParseEntryReportUpdate(t *testing.T) {
 	}
 }
 
+// Последний перезапуск Xray сторожем узла (amnezia-vpn-server-q1do.5):
+// время — по RFC 3339, причина — код из списка, иначе пусто. Без времени
+// записи нет вовсе: перезапуск «когда-то» панели сказать нечего.
+func TestParseEntryReportWatchdog(t *testing.T) {
+	r, err := ParseEntryReport([]byte(`{"watchdog": {"restarted_at_utc": "2026-10-29T08:00:00Z", "reason": "api", "extra": 1}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Watchdog == nil || *r.Watchdog != (EntryWatchdog{RestartedAtUTC: "2026-10-29T08:00:00Z", Reason: "api"}) {
+		t.Fatalf("watchdog = %+v", r.Watchdog)
+	}
+	r, _ = ParseEntryReport([]byte(`{"watchdog": {"restarted_at_utc": "2026-10-29T08:00:00Z", "reason": "Позвоните нам"}}`))
+	if r.Watchdog == nil || r.Watchdog.Reason != "" {
+		t.Fatalf("причина не из списка: %+v", r.Watchdog)
+	}
+	for _, body := range []string{`{"watchdog": {"restarted_at_utc": "вчера", "reason": "api"}}`, `{"watchdog": null}`, `{}`} {
+		if r, err := ParseEntryReport([]byte(body)); err != nil || r.Watchdog != nil {
+			t.Errorf("%s: %+v, %v", body, r.Watchdog, err)
+		}
+	}
+	if _, err := ParseEntryReport([]byte(`{"watchdog": "api"}`)); err == nil {
+		t.Error("watchdog не объект — принят")
+	}
+}
+
 func TestEntryTargetVersion(t *testing.T) {
 	for in, want := range map[string]string{
 		"3.4.0": "3.4.0", "10.0.12": "10.0.12", "": "", "dev": "", "3.4.0-rc.1": "",

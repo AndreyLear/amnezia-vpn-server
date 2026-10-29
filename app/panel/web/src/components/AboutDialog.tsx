@@ -73,6 +73,15 @@ function entryUpdateState(entry: EntryAbout): string | null {
   return null;
 }
 
+// Последний перезапуск Xray сторожем каскада (amnezia-vpn-server-q1do.5):
+// строка есть, только если он был. Причины нет — по той же причине, что у
+// обновления: длинная сломала бы строку списка.
+function entryWatchdog(entry: EntryAbout): string | null {
+  const at = entry.watchdog?.restarted_at_utc;
+  if (!at) return null;
+  return `Перезапуск ${formatHandshakeAge(at)} назад`;
+}
+
 // Подпись строки каскада: с именем владельца — «Каскад «Москва»», без —
 // как раньше, по узлу (amnezia-vpn-server-q1do.4). Имя помечено как
 // непереводимое, как имена клиентов.
@@ -185,6 +194,9 @@ export function AboutDialog({
                   <Row nested label="Без перезагрузки" value={entryUptime(entry)} />
                   {entryUpdateState(entry) !== null && (
                     <Row nested label="Обновление" value={entryUpdateState(entry)!} />
+                  )}
+                  {entryWatchdog(entry) !== null && (
+                    <Row nested label="Сторож Xray" value={entryWatchdog(entry)!} />
                   )}
                 </Fragment>
               ))}

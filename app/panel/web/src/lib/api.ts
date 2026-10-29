@@ -442,6 +442,17 @@ export type EntryAbout = {
   uptime_seconds?: number | null;
   /** Самообновление узла (amnezia-vpn-server-q1do.2); нет у старой панели. */
   update?: EntryUpdate;
+  /**
+   * Последний перезапуск Xray сторожем узла (amnezia-vpn-server-q1do.5) по
+   * последнему известному отчёту; null — не было, нет у старой панели.
+   */
+  watchdog?: EntryWatchdog | null;
+};
+
+/** reason — код: api (API не ответил), port (вход не принимал), пусто. */
+export type EntryWatchdog = {
+  restarted_at_utc: string;
+  reason: string;
 };
 
 /**

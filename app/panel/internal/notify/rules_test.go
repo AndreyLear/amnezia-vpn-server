@@ -306,6 +306,28 @@ func TestWatchdogRestartRecovered(t *testing.T) {
 	wantKeys(t, w.minutes(30, func() { w.clientsActive("a", "b") }))
 }
 
+// Сторож перезапустил Xray (amnezia-vpn-server-q1do.5) — письмо называет его
+// по имени, а не служебным словом из снимка.
+func TestWatchdogRestartXray(t *testing.T) {
+	w := newWorld(t)
+	w.in.Services.Services = append(w.in.Services.Services, status.Service{Name: "xray", State: "ok"})
+	w.step(time.Minute)
+	x := &w.in.Services.Services[2]
+	x.State = "fail"
+	x.RestartedAtUTC = w.clock.Add(30 * time.Second).Format(time.RFC3339)
+	x.RestartReason = "xray не отвечает на запрос статистики"
+	wantKeys(t, w.step(time.Minute))
+	x.State = "ok"
+	got := w.step(time.Minute)
+	wantKeys(t, got, keyRestart("xray"))
+	if got[0].Message.Subject != "Сторож перезапустил Xray" {
+		t.Errorf("тема: %q", got[0].Message.Subject)
+	}
+	if !strings.Contains(got[0].Message.Body, "Xray перестал работать") {
+		t.Errorf("письмо: %q", got[0].Message.Body)
+	}
+}
+
 // Перезапуск не помог — письмо через 5 минут; заработал позже — ещё одно.
 func TestWatchdogRestartDidNotHelp(t *testing.T) {
 	w := newWorld(t)

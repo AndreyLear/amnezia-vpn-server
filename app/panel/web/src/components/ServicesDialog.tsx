@@ -23,6 +23,8 @@ import { formatHandshake, formatHandshakeAge } from "@/lib/format";
 const titles: Record<string, string> = {
   dns: "Резолвер в туннеле",
   awg: "Туннель",
+  // Сторож следит за Xray, когда он включён (amnezia-vpn-server-q1do.5).
+  xray: "Xray",
 };
 
 function serviceTitle(name: string): string {

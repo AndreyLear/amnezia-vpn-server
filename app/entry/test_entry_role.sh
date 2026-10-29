@@ -104,6 +104,11 @@ case "\$1" in
             [ -f "\$XRAY_LOCATION_ASSET/geosite.dat" ] || { echo "fake xray: no geosite.dat"; exit 1; }
             python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "\$4"
         fi ;;
+    api)
+        # Проверка сторожа (amnezia-vpn-server-q1do.5): ответил ли API.
+        echo "xray-api \$*" >> "\$FAKE_CALLS"
+        . "\$FAKE_STATE"
+        exit "\${XRAY_API_RC:-0}" ;;
 esac
 EOF
 make_zip() { # make_zip DEST SRC_FILE
@@ -209,7 +214,7 @@ reset_host() {
     : > "$CALLS"
     echo 200 > "$WORK/panel.status"
     echo 204 > "$WORK/report.status"
-    printf 'XRAY_TEST_RC=0\nNGINX_T_RC=0\nCERTBOT_RC=0\nXRAY_START_RC=0\n' > "$STATE"
+    printf 'XRAY_TEST_RC=0\nNGINX_T_RC=0\nCERTBOT_RC=0\nXRAY_START_RC=0\nXRAY_API_RC=0\n' > "$STATE"
     write_lock "$XRAY_ZIP_SHA"
     panel_clients true false
     publish_geo v1
@@ -332,8 +337,8 @@ check "конфиг: только включённые клиенты, email c<i
 check "конфиг: клиент уходит на основной сервер под своим UUID" \
     cfg 'outs["upstream-c1"]["settings"]["vnext"][0]["users"][0]["id"] == "'$UUID1'" and outs["upstream-c1"]["settings"]["vnext"][0]["address"] == "super-space.com.de" and outs["upstream-c1"]["streamSettings"]["realitySettings"] == {"serverName": "super-space.com.de", "fingerprint": "chrome", "publicKey": "'$UP_PBK'", "shortId": "48651fdff605420e"} and outs["upstream-c1"]["streamSettings"]["xhttpSettings"]["path"] == "/96f96172" and "upstream-c2" not in outs'
 check "конфиг: правило по user ведёт клиента в его outbound" cfg '{"type": "field", "user": ["c1"], "outboundTag": "upstream-c1"} in rules'
-check "конфиг: частные сети и QUIC — в блок, российское — напрямую" \
-    cfg 'rules[0] == {"type": "field", "ip": ["geoip:private"], "outboundTag": "block"} and rules[1] == {"type": "field", "network": "udp", "port": "443", "outboundTag": "block"} and rules[2]["outboundTag"] == "direct" and "geosite:category-ru" in rules[2]["domain"] and "domain:xn--p1ai" in rules[2]["domain"] and rules[3] == {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"}'
+check "конфиг: частные сети и QUIC — в блок, российское — напрямую (после правила API)" \
+    cfg 'rules[1] == {"type": "field", "ip": ["geoip:private"], "outboundTag": "block"} and rules[2] == {"type": "field", "network": "udp", "port": "443", "outboundTag": "block"} and rules[3]["outboundTag"] == "direct" and "geosite:category-ru" in rules[3]["domain"] and "domain:xn--p1ai" in rules[3]["domain"] and rules[4] == {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"}'
 check "конфиг: всё прочее — в блок, напрямую — только IPv4" \
     cfg 'rules[-1] == {"type": "field", "network": "tcp,udp", "outboundTag": "block"} and outs["direct"]["streamSettings"]["sockopt"]["domainStrategy"] == "UseIPv4"'
 check "конфиг: без журнала доступа" cfg 'c["log"]["access"] == "none"'
@@ -984,6 +989,163 @@ check "снова --no-fail2ban: выбор записан в settings.json" f2b
 : > "$CALLS"
 run_install
 check "повторный запуск после --no-fail2ban: fail2ban не трогали" test "$(calls 'fail2ban')" = 0
+
+# --- 10. сторож каскада (amnezia-vpn-server-q1do.5) ----------------------------------
+#
+# xray-entry закрыт от смерти Restart=always, от зависания — ничем. Сторож
+# раз в минуту спрашивает у Xray статистику через его API и проверяет, что
+# вход принимает TCP; два отказа подряд — перезапуск, между перезапусками
+# пауза. Недоступный основной сервер поводом не служит: перезапуск входа
+# его не вернёт. Пока идёт самообновление, сторож не вмешивается.
+
+reset_host
+printf '%s\n' "$TOKEN" | run_install --panel "$PANEL" --entry-token - \
+    --entry-dest 127.0.0.1:4441 --entry-server-names a.example.ru
+check "сторож: юнит — oneshot entry-sync.py watchdog" \
+    grep -q "python3 -I $ED/entry-sync.py watchdog" "$WORK/systemd/xray-entry-watchdog.service"
+check "сторож: таймер раз в минуту" grep -q '^OnUnitActiveSec=1min$' "$WORK/systemd/xray-entry-watchdog.timer"
+check "сторож: таймер включён вместе с прочими" grep -q 'enable --now xray-entry-sync.timer xray-entry-geo.timer xray-entry-watchdog.timer' "$CALLS"
+check "конфиг: API Xray на абстрактном сокете, только StatsService" \
+    cfg 'c["api"] == {"tag": "api", "services": ["StatsService"]} and any(i["tag"] == "api" and i["listen"] == "@xray-entry-api" and i["protocol"] == "dokodemo-door" for i in c["inbounds"])'
+check "конфиг: правило API — первым, до блока частных сетей" \
+    cfg 'rules[0] == {"type": "field", "inboundTag": ["api"], "outboundTag": "api"}'
+
+# Вход узла — слушатель на петле; settings.json указывает на него.
+ENTRY_LISTEN_PID=""
+entry_listen_start() {
+    rm -f "$WORK/entry.port"
+    python3 -I -c '
+import socket, sys
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(16)
+open(sys.argv[1], "w").write(str(s.getsockname()[1]))
+while True:
+    c, _ = s.accept(); c.close()' "$WORK/entry.port" &
+    ENTRY_LISTEN_PID=$!
+    for _ in $(seq 50); do [ -s "$WORK/entry.port" ] && break; sleep 0.1; done
+    python3 -I -c 'import json,sys; p=sys.argv[1]; s=json.load(open(p)); s["port"]=int(sys.argv[2]); open(p,"w").write(json.dumps(s))' \
+        "$ED/settings.json" "$(cat "$WORK/entry.port")"
+    # Новый порт — новый конфиг: синк перезапустит Xray сейчас, а не
+    # посреди проверок сторожа, где этот перезапуск сочли бы его.
+    run_sync sync --offline
+}
+entry_listen_stop() {
+    [ -z "$ENTRY_LISTEN_PID" ] || { kill "$ENTRY_LISTEN_PID" 2>/dev/null; wait "$ENTRY_LISTEN_PID" 2>/dev/null; ENTRY_LISTEN_PID=""; }
+}
+entry_listen_start
+fake_proc 100000 0 0 0 0
+mkdir -p "$WORK/proc/sys/kernel/random"
+echo boot-1 > "$WORK/proc/sys/kernel/random/boot_id"
+# run_watchdog [ENV=…] — entry-sync.py watchdog так, как его зовёт таймер.
+run_watchdog() {
+    env PATH="$FAKE:$PATH" AMNEZIA_ENTRY_DIR="$ED" AMNEZIA_ENTRY_PROC="$WORK/proc" "$@" \
+        python3 -I "$ED/entry-sync.py" watchdog > "$WORK/watchdog.log" 2>&1
+}
+wd_restarts() { calls 'systemctl restart xray-entry'; }
+wstate() { # wstate PYTHON-EXPR — над state/watchdog.json (w)
+    python3 -I - "$ED/state/watchdog.json" "$1" <<'EOF'
+import json, sys
+w = json.load(open(sys.argv[1]))
+sys.exit(0 if eval(sys.argv[2]) else 1)
+EOF
+}
+wd_reset() { rm -f "$ED/state/watchdog.json" "$ED/state/update.json"; : > "$CALLS"; setstate XRAY_API_RC 0; }
+
+wd_reset
+run_watchdog
+rc=$?
+run_watchdog
+check "исправный Xray: сторож выходит с нулём и молчит" test "$rc" = 0 -a ! -s "$WORK/watchdog.log"
+check "исправный Xray: API спрошен через xray api statssys по абстрактному сокету" \
+    test "$(calls 'xray-api api statssys --server=unix-abstract:xray-entry-api')" = 2
+check "исправный Xray: перезапуска нет" test "$(wd_restarts)" = 0
+run_sync sync
+check "отчёт: перезапусков не было — watchdog пуст" report 'r["watchdog"] is None'
+
+setstate XRAY_API_RC 1
+run_watchdog
+check "API молчит один раз: перезапуска нет" test "$(wd_restarts)" = 0
+grep -q "отказ 1 из 2" "$WORK/watchdog.log" && pass "API молчит один раз: сказано вслух" || fail "API молчит один раз: сказано вслух"
+run_watchdog
+check "API молчит второй раз подряд: xray-entry перезапущен" test "$(wd_restarts)" = 1
+check "причина и время перезапуска записаны" wstate 'w["restart_reason"] == "api" and w["restarted_at_utc"].endswith("Z")'
+run_watchdog
+run_watchdog
+check "пауза: второй перезапуск не выпущен" test "$(wd_restarts)" = 1
+grep -q "жду" "$WORK/watchdog.log" && pass "пауза: причина названа" || fail "пауза: причина названа"
+run_watchdog AMNEZIA_ENTRY_WATCHDOG_RESTART_INTERVAL_SEC=0
+check "истёкшая пауза: перезапуск снова разрешён" test "$(wd_restarts)" = 2
+setstate XRAY_API_RC 0
+run_sync sync
+WD_AT="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["restarted_at_utc"])' "$ED/state/watchdog.json")"
+check "отчёт: последний перезапуск — время и причина" \
+    report 'r["watchdog"] == {"restarted_at_utc": "'"$WD_AT"'", "reason": "api"}'
+
+wd_reset
+run_watchdog
+setstate XRAY_API_RC 1; run_watchdog
+setstate XRAY_API_RC 0; run_watchdog
+setstate XRAY_API_RC 1; run_watchdog
+check "отказ, успех, отказ: перезапуска нет" test "$(wd_restarts)" = 0
+
+# Проверка, ни разу не ответившая в этой загрузке системы, ничего не
+# доказывает: старый конфиг без API, Xray, который ещё поднимается.
+wd_reset
+run_watchdog
+echo boot-2 > "$WORK/proc/sys/kernel/random/boot_id"
+setstate XRAY_API_RC 1
+run_watchdog; run_watchdog; run_watchdog
+check "API ни разу не ответил с загрузки: перезапуска нет" test "$(wd_restarts)" = 0
+grep -q "ни разу не ответил" "$WORK/watchdog.log" && pass "и сказано, почему" || fail "и сказано, почему"
+echo boot-1 > "$WORK/proc/sys/kernel/random/boot_id"
+
+# Вход не принимает соединения — отказ и при живом API.
+wd_reset
+run_watchdog
+entry_listen_stop
+run_watchdog; run_watchdog
+check "вход не принимает соединения: xray-entry перезапущен" test "$(wd_restarts)" = 1
+check "причина — вход" wstate 'w["restart_reason"] == "port"'
+entry_listen_start
+
+# Основной сервер недоступен, а сам Xray жив — перезапуск не лечит.
+wd_reset
+echo 503 > "$WORK/panel.status"
+run_watchdog
+run_sync sync; run_watchdog
+run_sync sync; run_watchdog
+check "основной сервер недоступен, Xray отвечает: перезапуска нет" test "$(wd_restarts)" = 0
+echo 200 > "$WORK/panel.status"
+
+# Владелец остановил xray-entry (или systemd его поднимает) — не дело сторожа.
+wd_reset
+run_watchdog
+rm -f "$WORK/active/xray-entry"
+setstate XRAY_API_RC 1
+run_watchdog; run_watchdog
+check "xray-entry остановлен: сторож его не поднимает" test "$(wd_restarts)" = 0
+touch "$WORK/active/xray-entry"
+
+# Самообновление: установщик сам перезапускает Xray, сторож не вмешивается.
+wd_reset
+run_watchdog
+printf '{"state": "updating", "target": "2.13.0"}\n' > "$ED/state/update.json"
+setstate XRAY_API_RC 1
+run_watchdog; run_watchdog; run_watchdog
+check "идёт обновление (state updating): перезапуска нет" test "$(wd_restarts)" = 0
+rm -f "$ED/state/update.json"
+python3 -I -c 'import fcntl,sys,time; f=open(sys.argv[1],"w"); fcntl.flock(f, fcntl.LOCK_EX); open(sys.argv[2],"w").close(); time.sleep(30)' \
+    "$ED/state/update.lock" "$WORK/wd-locked" &
+LOCKER=$!
+for _ in $(seq 50); do [ -e "$WORK/wd-locked" ] && break; sleep 0.1; done
+run_watchdog; run_watchdog
+check "идёт обновление (замок взят): перезапуска нет" test "$(wd_restarts)" = 0
+kill "$LOCKER" 2>/dev/null; wait "$LOCKER" 2>/dev/null
+rm -f "$WORK/wd-locked"
+run_watchdog
+check "после обновления счёт отказов начат заново: один отказ — не повод" test "$(wd_restarts)" = 0
+run_watchdog
+check "после обновления: второй отказ подряд — перезапуск" test "$(wd_restarts)" = 1
+entry_listen_stop
 
 echo
 if [ "$ERRORS" -gt 0 ]; then

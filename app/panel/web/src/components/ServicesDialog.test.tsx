@@ -45,6 +45,20 @@ describe("состояние служб", () => {
     expect(screen.getAllByText("Работает")).toHaveLength(2);
   });
 
+  // Сторож следит и за Xray (amnezia-vpn-server-q1do.5): в окне — его имя,
+  // а не служебное слово из снимка.
+  it("называет Xray по имени", async () => {
+    reply({
+      checked_at_utc: new Date().toISOString(),
+      services: [
+        { name: "xray", state: "ok", reason: "", fails: 0, restarted_at_utc: "", restart_reason: "" },
+      ],
+    });
+    render(<ServicesDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText("Xray")).toBeInTheDocument();
+    expect(screen.queryByText("xray")).not.toBeInTheDocument();
+  });
+
   it("называет причину, когда служба не отвечает", async () => {
     reply({
       services: [
