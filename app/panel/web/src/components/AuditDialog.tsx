@@ -40,6 +40,9 @@ const actions: Record<string, string> = {
   "client.delete": "Клиент удалён",
   "backup.restore": "Восстановление из копии",
   "entry.update": "Обновление каскада",
+  // Имена серверов (amnezia-vpn-server-q1do.4): подробность — «было → стало».
+  "server.rename": "Сервер переименован",
+  "entry.rename": "Каскад переименован",
 };
 
 function actionTitle(action: string): string {

@@ -315,6 +315,9 @@ func New(cfg Config) (*Server, error) {
 	// Запрос владельца на обновление каскада (amnezia-vpn-server-q1do.2):
 	// в отличие от двух путей выше — для панели, по сессии и CSRF.
 	s.mux.Handle("POST /api/entries/{name}/update", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiEntryUpdate))))
+	// Имена серверов (amnezia-vpn-server-q1do.4).
+	s.mux.Handle("PUT /api/server/name", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiServerName))))
+	s.mux.Handle("PUT /api/entries/{name}/title", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiEntryTitle))))
 	s.mux.Handle("PATCH /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsPatch))))
 	s.mux.Handle("DELETE /api/clients/{id}", s.auth.RequireAPI(s.auth.RequireCSRF(http.HandlerFunc(s.apiClientsDelete))))
 	distRoot, err := fs.Sub(distFS, "dist")

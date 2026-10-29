@@ -51,6 +51,8 @@ type versionsJSON struct {
 	Xray       string           `json:"xray"`
 	VLESSState string           `json:"vless_state"`
 	Entries    []entryAboutJSON `json:"entries"`
+	// ServerName — имя этого сервера от владельца (amnezia-vpn-server-q1do.4).
+	ServerName string `json:"server_name"`
 }
 
 // entryAboutJSON — узел-вход для окна «О версиях». Online считает сервер
@@ -62,7 +64,9 @@ type versionsJSON struct {
 // они и подсказывают, что обновлять. Аптайм — только из свежего отчёта:
 // старый аптайм врёт.
 type entryAboutJSON struct {
-	Name          string  `json:"name"`
+	Name string `json:"name"`
+	// Title — имя каскада от владельца (amnezia-vpn-server-q1do.4).
+	Title         string  `json:"title"`
 	LastSync      *string `json:"last_sync_utc"`
 	Online        bool    `json:"online"`
 	Xray          string  `json:"xray"`
@@ -86,7 +90,7 @@ func xrayVersion() string {
 func entriesAbout(reports []db.XrayEntryReport, now time.Time) []entryAboutJSON {
 	out := make([]entryAboutJSON, 0, len(reports))
 	for _, s := range reports {
-		e := entryAboutJSON{Name: s.Name}
+		e := entryAboutJSON{Name: s.Name, Title: s.Title}
 		if !s.LastSync.IsZero() {
 			v := s.LastSync.UTC().Format(time.RFC3339)
 			e.LastSync = &v
@@ -174,6 +178,7 @@ func (s *Server) apiVersions(w http.ResponseWriter, r *http.Request) {
 	if reports, err := db.XrayEntryReports(s.db()); err == nil {
 		out.Entries = entriesAbout(reports, time.Now().UTC())
 	}
+	out.ServerName, _ = db.ServerName(s.db())
 	dir := filepath.Dir(s.cfg.StatusPath)
 
 	if v, err := status.ReadVersions(filepath.Join(dir, "versions.json")); err == nil && v != nil {

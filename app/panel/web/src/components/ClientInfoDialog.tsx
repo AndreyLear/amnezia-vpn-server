@@ -88,7 +88,7 @@ function PropertyRow({
   );
 }
 
-function ReadOnlyProperty({
+export function ReadOnlyProperty({
   label,
   optional,
   actions,

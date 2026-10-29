@@ -30,6 +30,9 @@ type hostStatsResponse struct {
 	// Entries — узлы-входы для строк «Каскад» в шапке
 	// (amnezia-vpn-server-q1do.1); пустой список — узлов нет.
 	Entries []entryHostJSON `json:"entries"`
+	// ServerName — имя этого сервера от владельца (amnezia-vpn-server-q1do.4);
+	// пусто — строка шапки без подписи, как раньше.
+	ServerName string `json:"server_name"`
 }
 
 // entryHostJSON — узел-вход в шапке: те же CPU, память и диск, что у
@@ -45,7 +48,10 @@ type hostStatsResponse struct {
 // Числа несвежего отчёта не отдаются: шапка показала бы прочерк вместо
 // нагрузки пятиминутной давности, выдающей себя за текущую.
 type entryHostJSON struct {
-	Name      string `json:"name"`
+	Name string `json:"name"`
+	// Title — имя каскада от владельца (amnezia-vpn-server-q1do.4); пусто —
+	// подпись по умолчанию.
+	Title     string `json:"title"`
 	State     string `json:"state"`
 	Reporting bool   `json:"reporting"`
 	Seen      bool   `json:"seen"`
@@ -62,6 +68,7 @@ func entriesHost(reports []db.XrayEntryReport, now time.Time) []entryHostJSON {
 	for _, r := range reports {
 		e := entryHostJSON{
 			Name:      r.Name,
+			Title:     r.Title,
 			State:     "down",
 			Reporting: entryFresh(r.ReportedAt, now),
 			Seen:      !r.LastSync.IsZero() || !r.ReportedAt.IsZero(),
@@ -145,6 +152,9 @@ func (s *Server) apiStatsHost(w http.ResponseWriter, r *http.Request) {
 		entries = entriesHost(reports, time.Now().UTC())
 	}
 
+	// Имени не прочитать — строка без подписи, как без имени.
+	serverName, _ := db.ServerName(s.db())
+
 	writeJSON(w, http.StatusOK, hostStatsResponse{
 		CPUPercent:     snap.CPU,
 		RAMPercent:     snap.RAM,
@@ -157,5 +167,6 @@ func (s *Server) apiStatsHost(w http.ResponseWriter, r *http.Request) {
 		IfaceState:     ifaceStateJSON(rec.Interface),
 		VLESSState:     s.vlessStateJSON(),
 		Entries:        entries,
+		ServerName:     serverName,
 	})
 }

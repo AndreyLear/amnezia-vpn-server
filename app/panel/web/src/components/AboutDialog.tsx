@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 
 import {
   Dialog,
@@ -6,6 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { UserText } from "@/components/UserText";
 import { api, type EntryAbout, type Versions } from "@/lib/api";
 import { formatDurationSeconds, formatHandshakeAge } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -72,13 +73,26 @@ function entryUpdateState(entry: EntryAbout): string | null {
   return null;
 }
 
+// Подпись строки каскада: с именем владельца — «Каскад «Москва»», без —
+// как раньше, по узлу (amnezia-vpn-server-q1do.4). Имя помечено как
+// непереводимое, как имена клиентов.
+function entryCaption(entry: EntryAbout): ReactNode {
+  const title = entry.title?.trim();
+  if (!title) return `Каскад ${entry.name}`;
+  return (
+    <>
+      Каскад «<UserText>{title}</UserText>»
+    </>
+  );
+}
+
 function Row({
   label,
   value,
   nested = false,
 }: {
-  label: string;
-  value: string;
+  label: ReactNode;
+  value: ReactNode;
   nested?: boolean;
 }) {
   return (
@@ -122,6 +136,7 @@ export function AboutDialog({
   })();
 
   const entries = versions?.entries ?? [];
+  const serverName = versions?.server_name?.trim() ?? "";
   const vlessState = versions?.vless_state;
   const showXray = (vlessState !== undefined && vlessState !== "none") || entries.length > 0;
 
@@ -132,6 +147,9 @@ export function AboutDialog({
           <DialogTitle>О версиях</DialogTitle>
         </DialogHeader>
         <dl className="divide-y divide-border text-sm">
+          {/* Имя сервера от владельца (amnezia-vpn-server-q1do.4): строка
+              есть, только когда имя задано, — без него окно как раньше. */}
+          {serverName ? <Row label="Имя" value={<UserText>{serverName}</UserText>} /> : null}
           <Row label="Версия" value={product} />
           <Row label="Протокол" value={text(versions?.protocol)} />
           {/* Версия того, на чём туннель работает на самом деле: модуль ядра на
@@ -161,7 +179,7 @@ export function AboutDialog({
                   «Нет связи»: по ним видно, что обновлять. */}
               {entries.map((entry) => (
                 <Fragment key={entry.name}>
-                  <Row label={`Каскад ${entry.name}`} value={entrySync(entry)} />
+                  <Row label={entryCaption(entry)} value={entrySync(entry)} />
                   <Row nested label="Версия" value={text(entry.release)} />
                   <Row nested label="Xray" value={text(entry.xray)} />
                   <Row nested label="Без перезагрузки" value={entryUptime(entry)} />

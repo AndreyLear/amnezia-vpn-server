@@ -22,6 +22,13 @@ describe("vlessRouteLabel", () => {
     expect(vlessRouteLabel(entry, [direct, entry, second])).toBe("Каскад entry");
     expect(vlessRouteLabel(second, [direct, entry, second])).toBe("Каскад kz");
   });
+
+  // Имя каскада от владельца (amnezia-vpn-server-q1do.4) — само по себе.
+  it("uses the owner's cascade name as is", () => {
+    const named = { ...entry, title: "Москва" };
+    expect(vlessRouteLabel(named, [direct, named])).toBe("Москва");
+    expect(vlessRouteLabel(named, [direct, named, second])).toBe("Москва");
+  });
 });
 
 describe("vlessRouteHint", () => {

@@ -20,6 +20,7 @@ export function AppShell({
   pendingUpdate = false,
   onUpdateChecked,
   onShowUpdate,
+  onHostChanged,
 }: {
   children: ReactNode;
   restorePending?: boolean;
@@ -31,6 +32,8 @@ export function AppShell({
   /** Проверка обновлений принесла новый ответ: полосе пора перечитать своё. */
   onUpdateChecked?: () => void;
   onShowUpdate?: () => void;
+  /** Имя сервера или каскада сохранено (amnezia-vpn-server-q1do.4). */
+  onHostChanged?: () => void | Promise<void>;
 }) {
   const [theme, setThemeState] = useState<Theme>(() =>
     typeof window === "undefined" ? "dark" : getTheme(),
@@ -63,7 +66,7 @@ export function AppShell({
             <BrandMark className="size-8 shrink-0" />
             {empty ? null : (
               <>
-                <HeaderStats host={host} className="ms-3 flex min-w-0 flex-col" />
+                <HeaderStats host={host} className="ms-3 flex min-w-0 flex-col" onRenamed={onHostChanged} />
                 <div className="ml-auto flex shrink-0 items-center gap-2">
                   <Button
                     type="button"

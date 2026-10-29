@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { vlessQrUrl, type VlessInfo, type VlessRoute } from "@/lib/api";
 import { formatBytes, formatHandshake } from "@/lib/format";
+import { entryLabel } from "@/lib/serverNames";
 import { cn } from "@/lib/utils";
 
 // Раздел VLESS в окне клиента (amnezia-vpn-server-14y0.5): второй способ
@@ -34,10 +35,12 @@ import { cn } from "@/lib/utils";
 // просто «Каскад»; узлов несколько — с именем узла. Приставка ссылки
 // («VLESS ») для подписи не годится: она одинакова у всех узлов. Прежнее
 // «Через вход» владелец сменил на «Каскад» (amnezia-vpn-server-14y0.17).
+// Имя каскада, которое задал владелец, — само по себе, как в шапке
+// (amnezia-vpn-server-q1do.4).
 export function vlessRouteLabel(route: VlessRoute, routes: VlessRoute[]): string {
   if (!route.entry) return "Напрямую";
   const entries = routes.filter((r) => r.entry).length;
-  return entries > 1 ? `Каскад ${route.entry}` : "Каскад";
+  return entryLabel({ name: route.entry, title: route.title }, entries);
 }
 
 export function vlessRouteHint(route: VlessRoute): string {

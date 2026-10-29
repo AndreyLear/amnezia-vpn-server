@@ -71,6 +71,19 @@ describe("журнал", () => {
     expect(screen.getByText("До версии 3.4.0")).toBeInTheDocument();
   });
 
+  // Имена серверов (amnezia-vpn-server-q1do.4): «было → стало».
+  it("называет переименование сервера и каскада", async () => {
+    entries = [
+      { at_utc: "2026-09-07T12:01:00Z", actor: "admin", action: "server.rename", subject: "", detail: "без имени → «Дача»" },
+      { at_utc: "2026-09-07T12:00:00Z", actor: "admin", action: "entry.rename", subject: "entry", detail: "«Москва» → без имени" },
+    ];
+    render(<AuditDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText("Сервер переименован")).toBeInTheDocument();
+    expect(screen.getByText("без имени → «Дача»")).toBeInTheDocument();
+    expect(screen.getByText(/Каскад переименован/)).toBeInTheDocument();
+    expect(screen.getByText("«Москва» → без имени")).toBeInTheDocument();
+  });
+
   // «Изменён» без указания чего отвечает на вопрос наполовину.
   it("говорит, что именно изменилось", async () => {
     entries = [

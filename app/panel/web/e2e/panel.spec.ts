@@ -547,3 +547,58 @@ for (const width of [1280, 375]) test(`окно QR из меню строки: A
   const box = await viaEntry.boundingBox();
   expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
 });
+
+// Имена серверов (amnezia-vpn-server-q1do.4): владелец называет основной
+// сервер и каскад по клику на их строки в шапке; имена видны в шапке, в
+// «О версиях» и в окне клиента, пустое имя возвращает подпись по
+// умолчанию. В конце имена сброшены: остальные проверки ждут «Каскад».
+for (const width of [1280, 375]) test(`имена сервера и каскада из шапки (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await login(page);
+  const header = page.locator("header");
+
+  async function rename(row: string, title: string, value: string) {
+    await header.getByRole("button", { name: row, exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: title });
+    await dialog.getByRole("button", { name: "Изменить имя" }).click();
+    const edit = page.getByRole("dialog", { name: "Имя" });
+    await edit.getByLabel("Имя", { exact: true }).fill(value);
+    await edit.getByRole("button", { name: "Сохранить имя" }).click();
+    await expect(edit).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+  }
+
+  // По умолчанию — как было: строка сервера без подписи, каскад «Каскад».
+  await expect(header.getByRole("button", { name: "Сервер", exact: true })).toBeVisible();
+  await expect(header.getByLabel("Состояние каскада", { exact: true })).toHaveText("Каскад");
+  await header.getByRole("button", { name: "Каскад", exact: true }).click();
+  const cascade = page.getByRole("dialog", { name: "Каскад" });
+  await expect(cascade.getByText("Не задано")).toBeVisible();
+  await expect(cascade.getByText("entry", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await rename("Сервер", "Сервер", "Дача");
+  await rename("Каскад", "Каскад", "Москва");
+  await expect(header.getByRole("button", { name: "Сервер «Дача»" })).toContainText("Дача");
+  await expect(header.getByLabel("Состояние каскада «Москва»")).toHaveText("Москва");
+  // Шапка не выезжает за экран и на телефоне.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await page.getByRole("button", { name: "Ещё" }).click();
+  await page.getByRole("menuitem", { name: "О версиях" }).click();
+  const about = page.getByRole("dialog", { name: "О версиях" });
+  await expect(about.locator("dt", { hasText: /^Имя$/ }).locator("+ dd")).toHaveText("Дача");
+  await expect(about.locator("dt", { hasText: "Каскад «Москва»" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.getByText("alice", { exact: true }).click();
+  await page.getByRole("tab", { name: "VLESS" }).click();
+  await expect(page.getByRole("dialog").getByText("Москва", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await rename("Сервер «Дача»", "Сервер", "");
+  await rename("Каскад «Москва»", "Каскад", "");
+  await expect(header.getByRole("button", { name: "Сервер", exact: true })).toBeVisible();
+  await expect(header.getByLabel("Состояние каскада", { exact: true })).toHaveText("Каскад");
+});

@@ -173,3 +173,37 @@ describe("окно обновления каскада", () => {
     expect(screen.getByRole("heading", { name: "Обновить каскад entry" })).toBeInTheDocument();
   });
 });
+
+// Имя каскада от владельца (amnezia-vpn-server-q1do.4): во фразах —
+// «Каскад «Москва»», запрос — по техническому имени узла.
+describe("полоса обновления — имя каскада", () => {
+  it("имя в полосе, в окне и в итоге; запрос — по узлу", async () => {
+    const user = userEvent.setup();
+    const named = (u: EntryUpdate): EntryHost => ({ ...entry(u), title: "Москва" });
+    const { rerender } = render(<EntryUpdateBanner entries={[named(update())]} onChanged={() => {}} />);
+    expect(screen.getByText("Каскад «Москва» на версии 3.3.0, панель — на 3.4.0")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Обновить каскад" }));
+    expect(screen.getByRole("heading", { name: "Обновить каскад «Москва»" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Обновить" }));
+    await waitFor(() => expect(posted).toEqual(["/api/entries/entry/update"]));
+    expect(screen.getByRole("heading", { name: "Обновляем каскад «Москва»…" })).toBeInTheDocument();
+    rerender(<EntryUpdateBanner entries={[named(update({ requested: true }))]} onChanged={() => {}} />);
+    expect(screen.getByTestId("entry-update-entry")).toHaveTextContent("Каскад «Москва» начнёт обновление в течение минуты");
+    rerender(<EntryUpdateBanner entries={[named(update({ state: "idle", release: "3.4.0", available: false }))]} onChanged={() => {}} />);
+    expect(screen.getByText("Каскад «Москва» обновлён до версии 3.4.0")).toBeInTheDocument();
+  });
+
+  it("неудача и обновление — с именем", () => {
+    render(
+      <EntryUpdateBanner
+        entries={[
+          { ...entry(update({ state: "failed", reason: "download" })), title: "Москва" },
+          { ...entry(update({ state: "updating", target: "3.4.0" }), "de-1"), title: "Дача" },
+        ]}
+        onChanged={() => {}}
+      />,
+    );
+    expect(screen.getByText("Каскад «Москва» не обновился: не удалось скачать выпуск с GitHub")).toBeInTheDocument();
+    expect(screen.getByTestId("entry-update-de-1")).toHaveTextContent("Каскад «Дача» обновляется до 3.4.0");
+  });
+});

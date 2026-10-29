@@ -85,6 +85,8 @@ export default function HomePage() {
           vless_state: snap.vless_state ?? "none",
           // Строки «Каскад» (amnezia-vpn-server-q1do.1); не список — строк нет.
           entries: Array.isArray(snap.entries) ? snap.entries : [],
+          // Имя сервера от владельца (amnezia-vpn-server-q1do.4).
+          server_name: typeof snap.server_name === "string" ? snap.server_name : "",
         });
       }
     } catch {
@@ -222,6 +224,7 @@ export default function HomePage() {
       pendingUpdate={updateInfo?.available ?? false}
       onUpdateChecked={reloadUpdate}
       onShowUpdate={() => setUpdateDetailsOpen(true)}
+      onHostChanged={load}
     >
       <UpdateBanner
         detailsOpen={updateDetailsOpen}

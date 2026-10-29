@@ -200,3 +200,37 @@ describe("о версиях", () => {
     }
   });
 });
+
+// Имена серверов (amnezia-vpn-server-q1do.4): имя основного — строкой
+// «Имя» вверху, только когда задано; каскад с именем — «Каскад «Москва»».
+describe("о версиях — имена", () => {
+  it("без имени строки «Имя» нет", async () => {
+    reply({ product: "3.3.0", server_name: "" });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    await screen.findByText("3.3.0");
+    expect(screen.queryByText("Имя", { selector: "dt" })).not.toBeInTheDocument();
+  });
+
+  it("имя основного — первой строкой, текстом", async () => {
+    reply({ product: "3.3.0", server_name: "<b>Дача</b>" });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    const label = await screen.findByText("Имя", { selector: "dt" });
+    expect(rowValue("Имя")).toBe("<b>Дача</b>");
+    expect(label.closest("dl")?.firstElementChild).toContainElement(label);
+    expect(document.querySelector("dd b")).toBeNull();
+  });
+
+  it("каскад с именем — «Каскад «Москва»», без имени — как раньше", async () => {
+    reply({
+      vless_state: "up",
+      entries: [
+        { name: "entry", title: "Москва", last_sync_utc: null, online: false },
+        { name: "de-1", last_sync_utc: null, online: false },
+      ],
+    });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText("Каскад de-1", { selector: "dt" })).toBeInTheDocument();
+    const named = screen.getByText((_, el) => el?.tagName === "DT" && el.textContent === "Каскад «Москва»");
+    expect(named.nextElementSibling?.textContent).toBe("Нет связи");
+  });
+});

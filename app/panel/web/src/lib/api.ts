@@ -266,6 +266,8 @@ export function fetchTraffic(id: number, from: Date): Promise<TrafficHistory> {
 export type VlessRoute = {
   entry: string;
   prefix: string;
+  /** Имя каскада от владельца (amnezia-vpn-server-q1do.4); пусто — подпись по умолчанию. */
+  title?: string;
   link: string;
 };
 
@@ -419,6 +421,8 @@ export type Versions = {
   vless_state?: string;
   /** Узлы-входы и когда каждый последний раз забирал конфиг. */
   entries?: EntryAbout[];
+  /** Имя этого сервера от владельца (amnezia-vpn-server-q1do.4); пусто — не задано. */
+  server_name?: string;
 };
 
 /**
@@ -427,6 +431,8 @@ export type Versions = {
  */
 export type EntryAbout = {
   name: string;
+  /** Имя каскада от владельца (amnezia-vpn-server-q1do.4); пусто — не задано. */
+  title?: string;
   last_sync_utc: string | null;
   online: boolean;
   /** Из отчёта узла (amnezia-vpn-server-q1do.1): последние известные версии, пусто — неизвестно. */
@@ -601,6 +607,8 @@ export type HostSnapshot = {
   vless_state?: VLESSState;
   /** Узлы-входы для строк «Каскад» (amnezia-vpn-server-q1do.1); нет — строк нет. */
   entries?: EntryHost[];
+  /** Имя этого сервера от владельца (amnezia-vpn-server-q1do.4); пусто — строка без подписи. */
+  server_name?: string;
 };
 
 /**
@@ -612,6 +620,8 @@ export type HostSnapshot = {
  */
 export type EntryHost = {
   name: string;
+  /** Имя каскада от владельца (amnezia-vpn-server-q1do.4); пусто — «Каскад»/«Каскад <узел>». */
+  title?: string;
   state: "up" | "down";
   reporting: boolean;
   seen: boolean;
