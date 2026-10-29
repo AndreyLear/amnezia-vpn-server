@@ -165,6 +165,60 @@ func TestAPIEntryReport(t *testing.T) {
 	}
 }
 
+// Последний перезапуск Xray сторожем узла (amnezia-vpn-server-q1do.5) —
+// в «О версиях» у каскада. Это след, а не показатель: виден и по старому
+// отчёту, иначе через пять минут без связи пропал бы именно тогда, когда
+// нужен.
+func TestAPIEntryReportWatchdog(t *testing.T) {
+	f, _, _ := vlessFixture(t)
+	token, err := xray.RotateEntryToken(f.h, "ru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type watchdogView struct {
+		RestartedAtUTC string `json:"restarted_at_utc"`
+		Reason         string `json:"reason"`
+	}
+	versions := func() *watchdogView {
+		t.Helper()
+		var got struct {
+			Entries []struct {
+				Watchdog *watchdogView `json:"watchdog"`
+			} `json:"entries"`
+		}
+		if err := json.Unmarshal(f.get("/api/versions").Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Entries) != 1 {
+			t.Fatalf("entries: %+v", got.Entries)
+		}
+		return got.Entries[0].Watchdog
+	}
+
+	if rec := f.entryPost("198.51.100.7", "Bearer "+token, goodReport); rec.Code != http.StatusNoContent {
+		t.Fatalf("отчёт: код %d", rec.Code)
+	}
+	if w := versions(); w != nil {
+		t.Fatalf("перезапусков не было, а строка есть: %+v", w)
+	}
+
+	body := strings.TrimSuffix(goodReport, "}") + `, "watchdog": {"restarted_at_utc": "2026-10-29T08:00:00Z", "reason": "port"}}`
+	if rec := f.entryPost("198.51.100.7", "Bearer "+token, body); rec.Code != http.StatusNoContent {
+		t.Fatalf("отчёт со сторожем: код %d", rec.Code)
+	}
+	if w := versions(); w == nil || *w != (watchdogView{RestartedAtUTC: "2026-10-29T08:00:00Z", Reason: "port"}) {
+		t.Fatalf("versions: %+v", w)
+	}
+
+	old := time.Now().UTC().Add(-6 * time.Minute).Format(time.RFC3339)
+	if _, err := f.h.Exec(`UPDATE xray_entries SET last_sync_utc = ?, report_utc = ?`, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if w := versions(); w == nil || w.RestartedAtUTC != "2026-10-29T08:00:00Z" {
+		t.Fatalf("узел без связи: след перезапуска пропал: %+v", w)
+	}
+}
+
 // Отчёт и конфиг делят одни лимиты на адрес: секрет, кому бы он ни
 // достался, не даёт запросов больше, чем было до отчётов, а подбор
 // секрета через отчёт упирается в ту же стену неудач.

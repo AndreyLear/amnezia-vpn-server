@@ -54,25 +54,29 @@ type EntryReport struct {
 	// Update — состояние самообновления (amnezia-vpn-server-q1do.2); nil —
 	// узел старше самообновления и о нём не сообщает.
 	Update *EntryUpdate `json:"update,omitempty"`
+	// Watchdog — последний перезапуск Xray сторожем узла
+	// (amnezia-vpn-server-q1do.5); nil — не было или узел старше сторожа.
+	Watchdog *EntryWatchdog `json:"watchdog,omitempty"`
 }
 
 // rawEntryReport — тело как пришло: все числа — float64, чтобы дробное или
 // отрицательное обрезалось, а не валило весь отчёт.
 type rawEntryReport struct {
-	CPUPercent      *float64 `json:"cpu_percent"`
-	RAMPercent      *float64 `json:"ram_percent"`
-	DiskPercent     *float64 `json:"disk_percent"`
-	RAMUsedBytes    *float64 `json:"ram_used_bytes"`
-	RAMTotalBytes   *float64 `json:"ram_total_bytes"`
-	DiskUsedBytes   *float64 `json:"disk_used_bytes"`
-	DiskTotalBytes  *float64 `json:"disk_total_bytes"`
-	RxBytes         *float64 `json:"rx_bytes"`
-	TxBytes         *float64 `json:"tx_bytes"`
-	IntervalSeconds *float64 `json:"interval_seconds"`
-	UptimeSeconds   *float64 `json:"uptime_seconds"`
-	XrayVersion     string       `json:"xray_version"`
-	Release         string       `json:"release"`
-	Update          *EntryUpdate `json:"update"`
+	CPUPercent      *float64       `json:"cpu_percent"`
+	RAMPercent      *float64       `json:"ram_percent"`
+	DiskPercent     *float64       `json:"disk_percent"`
+	RAMUsedBytes    *float64       `json:"ram_used_bytes"`
+	RAMTotalBytes   *float64       `json:"ram_total_bytes"`
+	DiskUsedBytes   *float64       `json:"disk_used_bytes"`
+	DiskTotalBytes  *float64       `json:"disk_total_bytes"`
+	RxBytes         *float64       `json:"rx_bytes"`
+	TxBytes         *float64       `json:"tx_bytes"`
+	IntervalSeconds *float64       `json:"interval_seconds"`
+	UptimeSeconds   *float64       `json:"uptime_seconds"`
+	XrayVersion     string         `json:"xray_version"`
+	Release         string         `json:"release"`
+	Update          *EntryUpdate   `json:"update"`
+	Watchdog        *EntryWatchdog `json:"watchdog"`
 }
 
 // ParseEntryReport разбирает и проверяет тело отчёта. Ошибка — тело не
@@ -109,6 +113,7 @@ func ParseEntryReport(body []byte) (EntryReport, error) {
 		XrayVersion:     raw.XrayVersion,
 		Release:         raw.Release,
 		Update:          raw.Update,
+		Watchdog:        raw.Watchdog,
 	}.Sanitized(), nil
 }
 
@@ -132,6 +137,7 @@ func (r EntryReport) Sanitized() EntryReport {
 		r.Release = ""
 	}
 	r.Update = r.Update.sanitized()
+	r.Watchdog = r.Watchdog.sanitized()
 	return r
 }
 

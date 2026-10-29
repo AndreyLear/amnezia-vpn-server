@@ -96,7 +96,7 @@ Endpoint:  example.com:4500
 | --- | --- | --- |
 | SSH protection | `fail2ban`: five failed attempts in ten minutes, banned for an hour. It never touches the tunnel port: there are no passwords there, and a ban would cut off a real client | `--no-fail2ban` |
 | IPv6 in the tunnel | on when the server has working IPv6. What is checked is that traffic actually leaves, not that an address exists: some hosts hand out an address that routes nowhere | `--no-ipv6` |
-| Watchdog | once a minute it checks that the in-tunnel DNS answers and the tunnel writes its status. After two failures in a row it restarts the service, at most once every ten minutes. A container can be running and useless, and Docker does not notice. It ignores client handshakes: people are legitimately offline | `--no-watchdog` |
+| Watchdog | once a minute it checks that the in-tunnel DNS answers and the tunnel writes its status. If VLESS is on, it also checks that Xray answers and accepts connections. After two failures in a row it restarts the service, at most once every ten minutes. A container can be running and useless, and Docker does not notice. It ignores client handshakes: people are legitimately offline | `--no-watchdog` |
 | Update check | once a day the server asks GitHub whether a new release is out, and the panel shows the answer. It downloads and installs nothing | `--no-update-check` |
 | In-tunnel DNS | the server answers the panel's hostname with an address inside the tunnel, so the panel opens with the VPN on and off | `--no-tunnel-dns` |
 
@@ -224,6 +224,7 @@ From then on the node fetches the client list from the panel every minute. A new
 
 - Xray at a pinned version, the archive checked against its sha256
 - Sync with the panel every minute
+- Watchdog: once a minute it checks the node's Xray (its answer and its entry port) and restarts it after two failures in a row, at most once every 10 minutes. If only the main server is unreachable, it leaves Xray alone. The last restart is shown in the panel, in the «О версиях» (About) window
 - Direct-exit site lists, updated weekly
 - TCP settings for mobile networks (BBR)
 - fail2ban for SSH. Not needed? Add `--no-fail2ban`

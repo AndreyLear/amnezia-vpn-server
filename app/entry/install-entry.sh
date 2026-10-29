@@ -11,7 +11,8 @@
 # (бинарник из релиза XTLS, архив сверяется с sha256 из versions.lock),
 # раз в минуту — синхронизация с панелью (entry-sync.py sync: клиенты и
 # дорога до основного сервера по секрету узла), раз в неделю — списки
-# российских ресурсов, sysctl для мобильных клиентов, fail2ban для SSH.
+# российских ресурсов, sysctl для мобильных клиентов, fail2ban для SSH,
+# раз в минуту — сторож зависшего Xray (amnezia-vpn-server-q1do.5).
 # Это ровно то, что 28.10.2026 было собрано руками на 62.109.31.63 в
 # /opt/xray-entry; каталог, имена юнитов и settings.json те же, поэтому
 # установка поверх ручной настройки забирает её на месте, не меняя ключей
@@ -490,6 +491,30 @@ Environment=AMNEZIA_ENTRY_DIR=$ENTRY_DIR
 ExecStart=/usr/bin/python3 -I $SYNC update
 TimeoutStartSec=3600
 EOF
+# Сторож (amnezia-vpn-server-q1do.5): Restart=always поднимает упавший
+# Xray, а зависший — нет. Раз в минуту entry-sync.py watchdog спрашивает
+# у Xray статистику через API и проверяет вход; два отказа подряд —
+# перезапуск, с паузой. Срок — с запасом на ожидание замка синка.
+write_unit xray-entry-watchdog.service <<EOF
+[Unit]
+Description=Xray entry node: restart Xray when it hangs
+After=xray-entry.service
+[Service]
+Type=oneshot
+Environment=AMNEZIA_ENTRY_DIR=$ENTRY_DIR
+ExecStart=/usr/bin/python3 -I $SYNC watchdog
+TimeoutStartSec=90
+EOF
+write_unit xray-entry-watchdog.timer <<'EOF'
+[Unit]
+Description=Xray entry node: watchdog every minute
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=5s
+[Install]
+WantedBy=timers.target
+EOF
 write_unit xray-entry-geo.service <<EOF
 [Unit]
 Description=Xray entry node: update the geo lists
@@ -535,9 +560,9 @@ elif [ "$before" = "$after" ] && { [ "$XRAY_CHANGED" = "1" ] || [ "$UNITS_CHANGE
     systemctl restart xray-entry || die_op "xray-entry did not restart (journalctl -u xray-entry)"
 fi
 systemctl is-active --quiet xray-entry || die_op "xray-entry is not running (journalctl -u xray-entry)"
-systemctl enable --now xray-entry-sync.timer xray-entry-geo.timer >/dev/null 2>&1 \
+systemctl enable --now xray-entry-sync.timer xray-entry-geo.timer xray-entry-watchdog.timer >/dev/null 2>&1 \
     || die_op "cannot enable the xray-entry timers"
-log "xray-entry is running; sync every minute, geo lists weekly"
+log "xray-entry is running; sync and watchdog every minute, geo lists weekly"
 
 # --- итог -----------------------------------------------------------------------
 

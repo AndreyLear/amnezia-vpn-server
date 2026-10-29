@@ -37,9 +37,12 @@ cat > "$FAKE_DIR/dig" <<'FAKE'
 echo "dig $*" >> "${WD_CALLS:?}"
 exit "${DIG_RC:-0}"
 FAKE
+# docker compose exec … xray api — проверка API Xray: XRAY_API_RC решает,
+# ответил ли он (amnezia-vpn-server-q1do.5).
 cat > "$FAKE_DIR/docker" <<'FAKE'
 #!/bin/bash
 echo "docker $*" >> "${WD_CALLS:?}"
+case " $* " in *" exec "*) exit "${XRAY_API_RC:-0}" ;; esac
 exit "${DOCKER_RC:-0}"
 FAKE
 chmod +x "$FAKE_DIR"/*
@@ -136,6 +139,97 @@ run_watchdog AMNEZIA_WATCHDOG_DIG=amnezia-no-such-dig >/dev/null 2>&1
 check_not "без dig резолвер не объявляется сломанным" \
     grep -q '"name":"dns","state":"fail"' <<<"$(snapshot)"
 check_not "и не перезапускается" grep -q "restart dns" "$CALLS"
+
+# --- Xray (amnezia-vpn-server-q1do.5) -----------------------------------
+# Смерть контейнера закрыта restart: unless-stopped, зависание — нет: процесс
+# жив, порт открыт, а VLESS молчит. Сторож спрашивает у Xray статистику через
+# его API (настоящий gRPC-вызов, а не «порт открыт») и проверяет, что вход
+# принимает TCP. Вход здесь — маленький слушатель на петле.
+LISTEN_PID=""
+listen_start() {
+    rm -f "$TMP/xray.port"
+    python3 -I -c '
+import socket, sys
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(16)
+open(sys.argv[1], "w").write(str(s.getsockname()[1]))
+while True:
+    c, _ = s.accept(); c.close()' "$TMP/xray.port" &
+    LISTEN_PID=$!
+    for _ in $(seq 50); do [ -s "$TMP/xray.port" ] && break; sleep 0.1; done
+    XRAY_PORT="$(cat "$TMP/xray.port")"
+}
+listen_stop() { [ -z "$LISTEN_PID" ] || { kill "$LISTEN_PID" 2>/dev/null; wait "$LISTEN_PID" 2>/dev/null; LISTEN_PID=""; }; }
+trap 'listen_stop; rm -rf "${TMP}"' EXIT
+listen_start
+
+setup_xray() { setup; printf 'XRAY_ENABLED=1\n' >> "$ROOT/.env"; }
+run_xray() { run_watchdog AMNEZIA_WATCHDOG_XRAY_PORT="$XRAY_PORT" "$@" >"$TMP/out" 2>&1; }
+restarts() { grep -c "restart xray" "$CALLS"; }
+
+setup_xray
+run_xray
+check "Xray исправен: API спрошен через docker compose exec" \
+    grep -q "docker compose --profile xray --env-file versions.lock exec -T xray xray api statssys --server=unix:/run/xray/api.sock" "$CALLS"
+check_not "Xray исправен: перезапуска нет" grep -q "restart" "$CALLS"
+check "Xray исправен: сторож молчит" test ! -s "$TMP/out"
+check "Xray исправен: в снимке для панели" grep -q '"name":"xray","state":"ok"' <<<"$(snapshot)"
+
+# API замолчал: один отказ — не повод, второй подряд — перезапуск.
+run_xray XRAY_API_RC=1
+check_not "API Xray молчит один раз: перезапуска нет" grep -q "restart xray" "$CALLS"
+check "API Xray молчит один раз: отказ посчитан" grep -q '"name":"xray","state":"fail"' <<<"$(snapshot)"
+check "и сказано вслух" grep -q "xray: отказ 1 из 2" "$TMP/out"
+run_xray XRAY_API_RC=1
+check "API Xray молчит второй раз подряд: Xray перезапущен с профилем" \
+    grep -q "docker compose --profile xray --env-file versions.lock restart xray" "$CALLS"
+check "причина — запрос статистики" grep -q '"restart_reason":"xray не отвечает на запрос статистики"' <<<"$(snapshot)"
+check_not "резолвер и туннель не тронуты" grep -qE "restart (dns|awg)" "$CALLS"
+# Пауза: сервис, который не поднимается, не крутится в карусели.
+run_xray XRAY_API_RC=1
+run_xray XRAY_API_RC=1
+check "пауза: второй перезапуск Xray не выпущен" test "$(restarts)" = 1
+check "пауза: причина названа" grep -q "жду" "$TMP/out"
+run_xray XRAY_API_RC=1 AMNEZIA_WATCHDOG_RESTART_INTERVAL=0
+check "истёкшая пауза: перезапуск снова разрешён" test "$(restarts)" = 2
+
+# Отказ, успех, отказ — не два подряд.
+setup_xray
+run_xray
+run_xray XRAY_API_RC=1
+run_xray
+run_xray XRAY_API_RC=1
+check_not "отказ, успех, отказ: Xray не перезапущен" grep -q "restart xray" "$CALLS"
+
+# Проверка, которая ни разу не ответила с загрузки, ничего не доказывает:
+# так выглядит и сломанная проверка (не тот адрес, нет бинарника в образе), и
+# Xray, который ещё поднимается. Перезапускать по ней каждые 10 минут — вред.
+setup_xray
+run_xray XRAY_API_RC=1
+run_xray XRAY_API_RC=1
+run_xray XRAY_API_RC=1
+check_not "API ни разу не ответил: Xray не перезапускается" grep -q "restart xray" "$CALLS"
+check "и сказано, почему" grep -q "ни разу не ответил" "$TMP/out"
+
+# Вход не принимает соединения — тоже отказ, даже при живом API.
+setup_xray
+run_xray
+listen_stop
+run_xray
+run_xray
+check "вход не принимает соединения: Xray перезапущен" grep -q "restart xray" "$CALLS"
+check "причина — вход" grep -q "\"restart_reason\":\"вход VLESS не принимает соединения на 127.0.0.1:$XRAY_PORT\"" <<<"$(snapshot)"
+listen_start
+
+# Xray выключен — его не проверяют и в снимке его нет.
+setup
+run_watchdog AMNEZIA_WATCHDOG_XRAY_PORT=1 XRAY_API_RC=1 >/dev/null 2>&1
+run_watchdog AMNEZIA_WATCHDOG_XRAY_PORT=1 XRAY_API_RC=1 >/dev/null 2>&1
+check_not "без XRAY_ENABLED: API не спрашивают" grep -q "exec" "$CALLS"
+check_not "без XRAY_ENABLED: Xray не перезапускается" grep -q "restart xray" "$CALLS"
+check_not "без XRAY_ENABLED: в снимке Xray нет" grep -q '"name":"xray"' <<<"$(snapshot)"
+printf 'XRAY_ENABLED=0\n' >> "$ROOT/.env"
+run_watchdog AMNEZIA_WATCHDOG_XRAY_PORT=1 XRAY_API_RC=1 >/dev/null 2>&1
+check_not "XRAY_ENABLED=0: API не спрашивают" grep -q "exec" "$CALLS"
 
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"

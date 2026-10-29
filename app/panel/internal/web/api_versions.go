@@ -74,6 +74,10 @@ type entryAboutJSON struct {
 	UptimeSeconds *int64  `json:"uptime_seconds"`
 	// Update — самообновление узла (amnezia-vpn-server-q1do.2).
 	Update *entryUpdateJSON `json:"update"`
+	// Watchdog — последний перезапуск Xray сторожем узла
+	// (amnezia-vpn-server-q1do.5), из последнего известного отчёта: это
+	// след, и при «нет связи» он нужнее всего; null — не было.
+	Watchdog *xray.EntryWatchdog `json:"watchdog"`
 }
 
 // entryOfflineAfter — после скольких минут без синка узел считается без
@@ -98,6 +102,7 @@ func entriesAbout(reports []db.XrayEntryReport, now time.Time) []entryAboutJSON 
 		}
 		if report, ok := storedEntryReport(s.Report); ok {
 			e.Xray, e.Release = report.XrayVersion, report.Release
+			e.Watchdog = report.Watchdog
 			if entryFresh(s.ReportedAt, now) {
 				e.UptimeSeconds = report.UptimeSeconds
 			}

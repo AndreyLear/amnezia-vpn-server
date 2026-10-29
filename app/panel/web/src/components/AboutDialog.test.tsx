@@ -157,6 +157,28 @@ describe("о версиях", () => {
     expect(values).toEqual(["Обновляется до 3.4.0", "Запрошено", "Не удалось"]);
   });
 
+  // Сторож каскада (amnezia-vpn-server-q1do.5): последний перезапуск Xray —
+  // строкой под узлом, только если он был. Причины в строке нет: длинная
+  // сломала бы список.
+  it("показывает последний перезапуск Xray сторожем каскада, только если он был", async () => {
+    const restarted = new Date(Date.now() - 2 * 3600_000 - 60_000).toISOString();
+    reply({
+      product: "3.5.0",
+      xray: "26.10.21",
+      vless_state: "up",
+      entries: [
+        { name: "a", last_sync_utc: null, online: false, watchdog: { restarted_at_utc: restarted, reason: "api" } },
+        { name: "b", last_sync_utc: null, online: false, watchdog: null },
+        { name: "c", last_sync_utc: null, online: false },
+      ],
+    });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    await screen.findByText("Каскад c");
+    const rows = screen.getAllByText("Сторож Xray", { selector: "dt" });
+    expect(rows.map((dt) => dt.nextElementSibling?.textContent)).toEqual(["Перезапуск 2 ч назад"]);
+    expect(rows[0]).toHaveClass("ps-4");
+  });
+
   // Опрос Xray не ответил — VLESS всё равно включён: строка говорит о
   // настройке, а не о том, ответил ли Xray в последние пять секунд.
   it("считает VLESS включённым при любом состоянии, кроме none", async () => {

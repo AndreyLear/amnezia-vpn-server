@@ -40,6 +40,8 @@ token (0600) и только в заголовке запроса: ни в ад�
   pubkey                     публичный ключ Reality из settings.json
   update                     обновить узел до выпуска из state/update-request.json
                              (юнит xray-entry-update.service, amnezia-vpn-server-q1do.2)
+  watchdog                   сторож: перезапустить зависший xray-entry
+                             (таймер xray-entry-watchdog.timer, amnezia-vpn-server-q1do.5)
 
 Каталог — AMNEZIA_ENTRY_DIR (по умолчанию /opt/xray-entry).
 """
@@ -53,6 +55,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tarfile
@@ -115,6 +118,20 @@ SHA_IN_RELEASE_RE = re.compile(r"amnezia-sha256: ([0-9a-f]{64})")
 # Причины неудачи — коды, а не текст: панель показывает свои слова, а не
 # то, что прислал узел.
 UPDATE_REASONS = ("download", "checksum", "archive", "install", "inactive", "rollback", "interrupted", "version")
+
+# Сторож (amnezia-vpn-server-q1do.5): те же правила, что у watchdog.sh
+# основного сервера — два отказа подряд, пауза между перезапусками.
+WATCHDOG_THRESHOLD = 2
+WATCHDOG_RESTART_INTERVAL = int(os.environ.get("AMNEZIA_ENTRY_WATCHDOG_RESTART_INTERVAL_SEC", "600"))
+# Причины перезапуска — коды, как у обновления: слова — у панели.
+WATCHDOG_REASONS = ("api", "port")
+# API Xray узла — абстрактный Unix-сокет: файла нет, и брошенный после
+# SIGKILL сокет не помешает следующему запуску (у основного сервера такой
+# файл приходится убирать панели, internal/xray/socket.go). Права на него
+# не ставятся, поэтому API открыт только на чтение: StatsService, без
+# HandlerService, который меняет пользователей.
+API_SOCKET = "@xray-entry-api"
+API_TARGET = "unix-abstract:" + API_SOCKET[1:]
 
 
 class Fail(Exception):
@@ -601,7 +618,7 @@ def collect_metrics(prev):
               "rx_bytes": None, "tx_bytes": None, "interval_seconds": None,
               "uptime_seconds": int(up) if up is not None else None,
               "xray_version": xray_version(), "release": release_version(),
-              "update": update_report()}
+              "update": update_report(), "watchdog": watchdog_report()}
     prev_up = prev.get("uptime")
     # Тот же запуск системы — аптайм вырос. Иначе перезагрузка или первый
     # запуск, и разницы нет.
@@ -1018,6 +1035,154 @@ def cmd_update(_args):
         return 0
 
 
+# --- сторож (amnezia-vpn-server-q1do.5) -------------------------------------
+# Restart=always у xray-entry закрывает смерть процесса, но не зависание:
+# процесс жив, ядро принимает соединения, а клиенты стоят. Раз в минуту
+# (xray-entry-watchdog.timer) сторож спрашивает у Xray статистику через его
+# API — на это отвечает сам процесс — и проверяет, что вход принимает TCP.
+# Два отказа подряд — перезапуск, между перезапусками — пауза: так же, как
+# watchdog.sh основного сервера.
+#
+# Чего сторож нарочно не делает:
+#   - не смотрит на основной сервер и панель: если недоступны они, а Xray
+#     узла отвечает, перезапуск входа ничего не вернёт, только порвёт
+#     соединения клиентов, у которых российские сайты идут напрямую;
+#   - не поднимает остановленный xray-entry: упавший поднимает systemd, а
+#     остановленный руками остановлен намеренно;
+#   - не вмешивается в самообновление (state updating или взятый замок
+#     обновителя): установщик сам перезапускает Xray и откатывается, и
+#     перезапуск посреди этого спутал бы его проверку «работает ли Xray»;
+#   - не верит проверке API, которая ни разу не ответила с загрузки
+#     системы: так выглядят и Xray, который ещё поднимается, и конфиг,
+#     собранный прежней версией без API. Перезапускать по ней раз в
+#     10 минут — рвать связь без причины.
+#
+# Итог — state/watchdog.json; время и причина последнего перезапуска уходят
+# панели в отчёте, «О версиях» показывает их у каскада.
+
+def read_watchdog_state():
+    try:
+        st = read_json(path("state/watchdog.json"))
+    except (OSError, ValueError):
+        st = {}
+    if not isinstance(st, dict):
+        st = {}
+    if not isinstance(st.get("fails"), int) or isinstance(st.get("fails"), bool):
+        st["fails"] = 0
+    return st
+
+
+def write_watchdog_state(st):
+    os.makedirs(path("state"), mode=0o700, exist_ok=True)
+    write_atomic(path("state/watchdog.json"), dump(st))
+
+
+def watchdog_report():
+    """Последний перезапуск для отчёта панели; None — не было."""
+    st = read_watchdog_state()
+    at = st.get("restarted_at_utc")
+    if utc_seconds(at) is None:
+        return None
+    reason = st.get("restart_reason")
+    return {"restarted_at_utc": at, "reason": reason if reason in WATCHDOG_REASONS else ""}
+
+
+def update_in_progress():
+    if read_update_state()["state"] == "updating":
+        return True
+    held = update_lock(blocking=False)
+    if held is None:
+        return True
+    held.close()
+    return False
+
+
+def boot_id():
+    """Метка загрузки системы; без /proc — пустая, одна на все запуски."""
+    try:
+        return proc_text("sys/kernel/random/boot_id").strip()
+    except OSError:
+        return ""
+
+
+def probe_api():
+    try:
+        r = subprocess.run([path("xray"), "api", "statssys", "--server=" + API_TARGET, "--timeout=5"],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+def probe_port(s):
+    """Принимает ли вход TCP. Вход слушает все адреса — спрашиваем петлю."""
+    listen = s.get("listen", "::")
+    host = "127.0.0.1" if listen in ("", "::", "0.0.0.0") else listen
+    try:
+        socket.create_connection((host, s.get("port", 443)), timeout=5).close()
+    except OSError:
+        return False
+    return True
+
+
+def cmd_watchdog(_args):
+    st = read_watchdog_state()
+    before = dict(st)
+    if update_in_progress():
+        # Отказ до обновления и отказ после него — не «два подряд».
+        st["fails"] = 0
+        if st != before:
+            write_watchdog_state(st)
+        return 0
+    if not xray_active():
+        st["fails"] = 0
+        if st != before:
+            write_watchdog_state(st)
+        return 0
+    s = load_settings()
+    boot = boot_id()
+    reason = None
+    if probe_api():
+        st["api_boot"] = boot
+    elif st.get("api_boot") == boot:
+        reason = "api"
+    else:
+        log("API Xray ни разу не ответил с загрузки системы — его молчание не засчитывается")
+    if reason is None and not probe_port(s):
+        reason = "port"
+    words = {"api": "API Xray не отвечает на запрос статистики",
+             "port": "вход не принимает соединения на порту %s" % s.get("port", 443)}
+    if reason is None:
+        st["fails"] = 0
+    else:
+        st["fails"] += 1
+        if st["fails"] < WATCHDOG_THRESHOLD:
+            log("%s: отказ %d из %d (%s)" % (SERVICE, st["fails"], WATCHDOG_THRESHOLD, words[reason]))
+        else:
+            last = utc_seconds(st.get("restarted_at_utc"))
+            age = int(time.time() - last) if last is not None else None
+            if age is not None and age < WATCHDOG_RESTART_INTERVAL:
+                log("%s всё ещё не работает (%s), но прошлый перезапуск был %d с назад — жду"
+                    % (SERVICE, words[reason], age))
+            else:
+                # Под замком синка: не вперемешку с его перезапуском после
+                # смены конфига и с откатом обновителя.
+                with lock():
+                    if update_in_progress():
+                        st["fails"] = 0
+                    else:
+                        log("перезапускаю %s: %s" % (SERVICE, words[reason]))
+                        r = subprocess.run(["systemctl", "restart", SERVICE], capture_output=True, text=True)
+                        if r.returncode == 0:
+                            st.update(fails=0, restarted_at_utc=utc_now(), restart_reason=reason)
+                            log("%s перезапущен" % SERVICE)
+                        else:
+                            warn("перезапустить %s не удалось: %s" % (SERVICE, r.stderr.strip() or r.returncode))
+    if st != before:
+        write_watchdog_state(st)
+    return 0
+
+
 # --- конфиг Xray ---------------------------------------------------------
 
 def reality_out(up, uuid, tag):
@@ -1078,9 +1243,21 @@ def build(s, panel):
                                                              "serverNames": s["server_names"],
                                                              "privateKey": s["private_key"],
                                                              "shortIds": [s["short_id"]]}},
-                      "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"]}}],
+                      "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"]}},
+                     # Как у основного сервера (internal/xray/config.go):
+                     # dokodemo-door на сокете; адрес в settings ему нужен
+                     # лишь для формы, наружу ничего не уходит.
+                     {"tag": "api", "listen": API_SOCKET, "protocol": "dokodemo-door",
+                      "settings": {"address": "127.0.0.1", "port": 10085, "network": "unix"}}],
         "outbounds": outbounds,
-        "routing": {"domainStrategy": "IPIfNonMatch", "rules": rules},
+        "routing": {"domainStrategy": "IPIfNonMatch",
+                    # API — первым: правило частных сетей перехватило бы его
+                    # адрес 127.0.0.1 и отправило в блок.
+                    "rules": [{"type": "field", "inboundTag": ["api"], "outboundTag": "api"}] + rules},
+        # API для сторожа (amnezia-vpn-server-q1do.5): «процесс жив» и «порт
+        # открыт» зависание не ловят, ответ на gRPC-вызов — ловит.
+        "api": {"tag": "api", "services": ["StatsService"]},
+        "stats": {},
     }
 
 
@@ -1281,7 +1458,8 @@ def parse_flags(args, known):
 
 
 COMMANDS = {"sync": cmd_sync, "geo": cmd_geo, "settings": cmd_settings, "describe": cmd_describe,
-            "install-xray": cmd_install_xray, "pubkey": cmd_pubkey, "update": cmd_update}
+            "install-xray": cmd_install_xray, "pubkey": cmd_pubkey, "update": cmd_update,
+            "watchdog": cmd_watchdog}
 
 
 def main(argv):

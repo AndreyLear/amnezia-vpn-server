@@ -18,6 +18,14 @@
 #             интерфейс исчез или UAPI не отвечает — поэтому смерть уже
 #             закрыта политикой перезапуска. Не закрыт застой: цикл жив, а
 #             файл не обновляется.
+#   Xray      (только при XRAY_ENABLED=1, amnezia-vpn-server-q1do.5) спросить
+#             у него статистику через его же API: `xray api statssys` в
+#             контейнере по сокету API. Это настоящий gRPC-вызов, на который
+#             отвечает сам процесс, — «порт открыт» его не заменяет: зависшему
+#             процессу ядро соединения принимает по-прежнему. Вдобавок вход
+#             VLESS на 127.0.0.1:4432 должен принимать TCP — это ловит вход,
+#             который пропал при живом API. Смерть процесса закрыта
+#             restart: unless-stopped, зависание — нет.
 #
 # Рукопожатия пиров намеренно НЕ являются поводом для перезапуска. Все
 # клиенты могут быть законно офлайн (ночь, отпуск), и перезапуск туннеля из-за
@@ -44,6 +52,10 @@ RESTART_INTERVAL="${AMNEZIA_WATCHDOG_RESTART_INTERVAL:-600}"
 STATUS_MAX_AGE="${AMNEZIA_WATCHDOG_STATUS_MAX_AGE:-120}"
 DOCKER="${AMNEZIA_WATCHDOG_DOCKER:-docker}"
 DIG="${AMNEZIA_WATCHDOG_DIG:-dig}"
+# Вход VLESS Xray на петле хоста (internal/xray: inboundPort).
+XRAY_PORT="${AMNEZIA_WATCHDOG_XRAY_PORT:-4432}"
+# Сокет API Xray — путь внутри контейнера (internal/xray: DefaultAPIAddr).
+XRAY_API_SOCKET=/run/xray/api.sock
 
 log() { printf 'watchdog: %s\n' "$*"; }
 
@@ -51,8 +63,9 @@ usage() {
     cat <<'EOF'
 watchdog.sh — перезапускает сервис Amnezia VPN, который жив, но не работает.
 
-Проверяет резолвер (отвечает ли он на запрос) и свежесть status.json,
-который пишет туннель. Перезапускает контейнер после двух отказов подряд,
+Проверяет резолвер (отвечает ли он на запрос), свежесть status.json,
+который пишет туннель, и, если включён, Xray (отвечает ли его API и
+принимает ли вход соединения). Перезапускает контейнер после двух отказов подряд,
 не чаще одного раза в 10 минут на сервис.
 
 Использование:
@@ -83,6 +96,24 @@ mkdir -p "$STATE_DIR" 2>/dev/null || {
 
 now="$(date +%s)"
 
+# Xray объявлен в compose.yaml с профилем: без --profile compose его не
+# видит (тот же вызов, что у amnezia-vpn-xray-restart.service).
+compose_profile() { # compose_profile СЕРВИС
+    [ "$1" != xray ] || printf -- '--profile xray'
+}
+
+# with_timeout СЕК КОМАНДА… — с пределом, если есть timeout(1): зависший
+# docker не должен вешать сторожа. На macOS, где гоняют харнесс, его нет.
+with_timeout() {
+    local sec="$1"
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$sec" "$@"
+    else
+        "$@"
+    fi
+}
+
 counter_read() { # counter_read СЕРВИС
     local v
     v="$(cat "$STATE_DIR/$1.fail" 2>/dev/null || true)"
@@ -104,7 +135,7 @@ restart_service() { # restart_service СЕРВИС ПРИЧИНА
         return 0
     fi
     log "перезапускаю $service: $reason"
-    if (cd "$ROOT_DIR" && "$DOCKER" compose --env-file versions.lock restart "$service") >/dev/null 2>&1; then
+    if (cd "$ROOT_DIR" && "$DOCKER" compose $(compose_profile "$service") --env-file versions.lock restart "$service") >/dev/null 2>&1; then
         printf '%s' "$now" > "$STATE_DIR/$service.restarted"
         # Причина перезапуска переживает сам перезапуск: через минуту всё
         # будет исправно, и без этой записи в панели не останется следа,
@@ -185,6 +216,35 @@ else
     fi
 fi
 
+# --- Xray (amnezia-vpn-server-q1do.5) -----------------------------------
+XRAY_ON=0
+[ "$(env_read XRAY_ENABLED)" != "1" ] || XRAY_ON=1
+if [ "$XRAY_ON" = "1" ]; then
+    xray_reason=""
+    if (cd "$ROOT_DIR" && with_timeout 20 "$DOCKER" compose --profile xray --env-file versions.lock \
+            exec -T xray xray api statssys "--server=unix:$XRAY_API_SOCKET" --timeout=5) >/dev/null 2>&1; then
+        # Запомнить, что проверка в этой загрузке системы работает: STATE_DIR
+        # живёт в /run и с перезагрузкой пропадает.
+        : > "$STATE_DIR/xray.api_seen"
+    elif [ -f "$STATE_DIR/xray.api_seen" ]; then
+        xray_reason="xray не отвечает на запрос статистики"
+    else
+        # Проверка, которая ни разу не ответила, ничего не доказывает: так
+        # выглядит и Xray, который ещё поднимается, и сама проверка, которой
+        # здесь не на чем работать (другой образ, другой адрес сокета).
+        # Перезапускать по ней раз в 10 минут — рвать VLESS без причины.
+        log "API Xray ни разу не ответил с загрузки системы — его молчание не засчитывается"
+    fi
+    if [ -z "$xray_reason" ] && ! with_timeout 5 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$XRAY_PORT" 2>/dev/null; then
+        xray_reason="вход VLESS не принимает соединения на 127.0.0.1:$XRAY_PORT"
+    fi
+    if [ -n "$xray_reason" ]; then
+        record xray fail "$xray_reason"
+    else
+        record xray ok
+    fi
+fi
+
 # --- снимок для панели (amnezia-vpn-server-eq82) -----------------------
 #
 # Панель живёт в контейнере и ни про журнал, ни про systemd знать не может.
@@ -220,6 +280,7 @@ services_snapshot() {
             "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         printf '%s,' "$(entry dns)"
         printf '%s' "$(entry awg)"
+        [ "$XRAY_ON" != "1" ] || printf ',%s' "$(entry xray)"
         printf ']}\n'
     } > "$tmp" 2>/dev/null \
         && chmod 0644 "$tmp" \

@@ -85,6 +85,9 @@ func serviceName(service string) string {
 		return "DNS-сервер"
 	case "awg":
 		return "туннель"
+	case "xray":
+		// Имя собственное — с заглавной (amnezia-vpn-server-q1do.5).
+		return "Xray"
 	}
 	return service
 }
