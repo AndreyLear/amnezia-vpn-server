@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { api, mutationOk, type EntryHost, type EntryUpdate, type MutationResponse } from "@/lib/api";
+import { entryRef } from "@/lib/serverNames";
 
 /**
  * Обновление каскада (amnezia-vpn-server-q1do.2).
@@ -67,12 +68,15 @@ type Phase = "offer" | "running" | "done" | "failed";
  */
 export function EntryUpdateDialog({
   name,
+  title,
   update,
   open,
   onOpenChange,
   onRequested,
 }: {
   name: string;
+  /** Имя каскада от владельца (amnezia-vpn-server-q1do.4); запрос — по name. */
+  title?: string;
   update: EntryUpdate;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -127,26 +131,29 @@ export function EntryUpdateDialog({
     }
   }
 
-  const title =
+  // Во фразах — «Каскад «Москва»», если владелец дал имя, иначе узел, как
+  // раньше (amnezia-vpn-server-q1do.4).
+  const ref = entryRef({ name, title });
+  const heading =
     phase === "running" ? (
       <>
-        Обновляем каскад {name}
+        Обновляем каскад {ref}
         <RunningEllipsis />
       </>
     ) : phase === "done" ? (
       "Каскад обновлён"
     ) : phase === "failed" ? (
-      `Каскад ${name} не обновился`
+      `Каскад ${ref} не обновился`
     ) : (
-      `Обновить каскад ${name}`
+      `Обновить каскад ${ref}`
     );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent bodyClassName="gap-6">
         <DialogHeader>
-          <DialogTitle aria-label={phase === "running" ? `Обновляем каскад ${name}…` : undefined}>
-            {title}
+          <DialogTitle aria-label={phase === "running" ? `Обновляем каскад ${ref}…` : undefined}>
+            {heading}
           </DialogTitle>
         </DialogHeader>
         {phase === "running" ? (
@@ -155,7 +162,7 @@ export function EntryUpdateDialog({
           </p>
         ) : phase === "done" ? (
           <p>
-            Каскад {name} обновлён до версии {update.release || update.panel}
+            {`Каскад ${ref} обновлён до версии ${update.release || update.panel}`}
           </p>
         ) : phase === "failed" ? (
           <p className="text-destructive">{capitalize(entryUpdateReason(update.reason))}</p>
@@ -185,7 +192,8 @@ export function EntryUpdateDialog({
   );
 }
 
-function stripText(name: string, u: EntryUpdate): ReactNode {
+function stripText(entry: EntryHost, u: EntryUpdate): ReactNode {
+  const name = entryRef(entry);
   if (!u.supported) {
     return `Каскад ${name} на версии ${u.release}, панель — на ${u.panel}. Обновите его один раз вручную по ssh — дальше он будет обновляться сам`;
   }
@@ -231,7 +239,7 @@ export function EntryUpdateBanner({
             className="mt-4 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3"
           >
             <p className={u.state === "failed" && !u.requested ? "min-w-0 flex-1 text-destructive" : "min-w-0 flex-1"}>
-              {stripText(entry.name, u)}
+              {stripText(entry, u)}
             </p>
             {canRequest ? (
               <Button type="button" variant="outline" size="sm" onClick={() => setOpenName(entry.name)}>
@@ -244,6 +252,7 @@ export function EntryUpdateBanner({
       {dialogEntry?.update ? (
         <EntryUpdateDialog
           name={dialogEntry.name}
+          title={dialogEntry.title}
           update={dialogEntry.update}
           open={openName !== null}
           onOpenChange={(open) => {

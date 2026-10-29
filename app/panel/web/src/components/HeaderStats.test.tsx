@@ -64,8 +64,6 @@ describe("HeaderStats", () => {
     for (const slash of slashes) {
       expect(slash).toHaveClass("text-muted-foreground");
       expect(slash).toHaveAttribute("aria-hidden", "true");
-      expect(slash.closest("button")).toBeNull();
-      expect(slash.closest("[role='button']")).toBeNull();
     }
   });
 
@@ -269,7 +267,10 @@ describe("HeaderStats", () => {
     }
   });
 
-  it("is not a button", () => {
+  // Числа видны прямо в шапке, без окна (amnezia-vpn-server-0py.6). С
+  // amnezia-vpn-server-q1do.4 строка ещё и открывает окно сервера с его
+  // именем — по клику, а не вместо чисел.
+  it("shows the numbers inline; the row opens the server window", async () => {
     render(
       <HeaderStats
         host={{
@@ -285,12 +286,13 @@ describe("HeaderStats", () => {
       />,
     );
 
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
     const cpu = screen.getByLabelText("CPU");
-    expect(cpu.closest("button")).toBeNull();
-    expect(cpu.closest("[role='button']")).toBeNull();
-    expect(cpu).not.toHaveClass("cursor-pointer");
-    expect(cpu.parentElement).not.toHaveClass("cursor-pointer");
+    expect(cpu).toHaveTextContent("1%");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const row = screen.getByRole("button", { name: "Сервер" });
+    expect(row).toContainElement(cpu);
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(row);
+    expect(await screen.findByRole("dialog", { name: "Сервер" })).toBeInTheDocument();
   });
 
   it("rolls the CPU value from the top and clips overflow while both values are on screen", () => {

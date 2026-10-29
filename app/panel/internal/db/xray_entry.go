@@ -36,7 +36,8 @@ const xrayEntriesTable = `CREATE TABLE IF NOT EXISTS xray_entries (
 		last_sync_utc TEXT NOT NULL DEFAULT '',
 		report_json TEXT NOT NULL DEFAULT '',
 		report_utc TEXT NOT NULL DEFAULT '',
-		update_request_utc TEXT NOT NULL DEFAULT ''
+		update_request_utc TEXT NOT NULL DEFAULT '',
+		title TEXT NOT NULL DEFAULT ''
 	);`
 
 // XrayEntry — узел-вход. Секретов в нём нет: всё это и так видно в любой
@@ -50,6 +51,10 @@ type XrayEntry struct {
 	ShortID    string
 	Path       string
 	LinkPrefix string
+	// Title — имя каскада, которое задал владелец (amnezia-vpn-server-q1do.4,
+	// server_names.go); пусто — подпись по умолчанию. SaveXrayEntry его не
+	// пишет: повторный `xray entry set` не стирает имя.
+	Title string
 }
 
 // ErrXrayEntryNotFound — узла с таким именем нет.
@@ -150,7 +155,7 @@ func SaveXrayEntry(handle *sql.DB, e XrayEntry) error {
 // XrayEntries — все узлы по имени.
 func XrayEntries(handle Querier) ([]XrayEntry, error) {
 	rows, err := handle.Query(
-		`SELECT name, link_host, link_port, sni, public_key, short_id, path, link_prefix
+		`SELECT name, link_host, link_port, sni, public_key, short_id, path, link_prefix, title
 		   FROM xray_entries ORDER BY name`,
 	)
 	if err != nil {
@@ -160,7 +165,7 @@ func XrayEntries(handle Querier) ([]XrayEntry, error) {
 	var out []XrayEntry
 	for rows.Next() {
 		var e XrayEntry
-		if err := rows.Scan(&e.Name, &e.LinkHost, &e.LinkPort, &e.SNI, &e.PublicKey, &e.ShortID, &e.Path, &e.LinkPrefix); err != nil {
+		if err := rows.Scan(&e.Name, &e.LinkHost, &e.LinkPort, &e.SNI, &e.PublicKey, &e.ShortID, &e.Path, &e.LinkPrefix, &e.Title); err != nil {
 			return nil, fmt.Errorf("db: scan xray entry: %w", err)
 		}
 		out = append(out, e)
@@ -172,9 +177,9 @@ func XrayEntries(handle Querier) ([]XrayEntry, error) {
 func XrayEntryByName(handle Querier, name string) (*XrayEntry, error) {
 	var e XrayEntry
 	err := handle.QueryRow(
-		`SELECT name, link_host, link_port, sni, public_key, short_id, path, link_prefix
+		`SELECT name, link_host, link_port, sni, public_key, short_id, path, link_prefix, title
 		   FROM xray_entries WHERE name = ?`, name,
-	).Scan(&e.Name, &e.LinkHost, &e.LinkPort, &e.SNI, &e.PublicKey, &e.ShortID, &e.Path, &e.LinkPrefix)
+	).Scan(&e.Name, &e.LinkHost, &e.LinkPort, &e.SNI, &e.PublicKey, &e.ShortID, &e.Path, &e.LinkPrefix, &e.Title)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrXrayEntryNotFound
 	}
@@ -358,6 +363,8 @@ type XrayEntryReport struct {
 	// UpdateRequest — метка последнего запроса владельца на обновление
 	// узла (amnezia-vpn-server-q1do.2); пусто — не просил.
 	UpdateRequest string
+	// Title — имя каскада от владельца (amnezia-vpn-server-q1do.4).
+	Title string
 }
 
 // SaveXrayEntryReport запоминает отчёт узла name, полученный в момент
@@ -374,7 +381,7 @@ func SaveXrayEntryReport(handle *sql.DB, name, report string, now time.Time) err
 // XrayEntryReports — время синка и последний отчёт всех узлов по имени.
 // Нечитаемое время считается «ни разу», как в XrayEntrySyncs.
 func XrayEntryReports(handle Querier) ([]XrayEntryReport, error) {
-	rows, err := handle.Query(`SELECT name, last_sync_utc, report_utc, report_json, update_request_utc
+	rows, err := handle.Query(`SELECT name, last_sync_utc, report_utc, report_json, update_request_utc, title
 		FROM xray_entries ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("db: query entry reports: %w", err)
@@ -386,7 +393,7 @@ func XrayEntryReports(handle Querier) ([]XrayEntryReport, error) {
 			r              XrayEntryReport
 			sync, reported string
 		)
-		if err := rows.Scan(&r.Name, &sync, &reported, &r.Report, &r.UpdateRequest); err != nil {
+		if err := rows.Scan(&r.Name, &sync, &reported, &r.Report, &r.UpdateRequest, &r.Title); err != nil {
 			return nil, fmt.Errorf("db: scan entry report: %w", err)
 		}
 		if t, err := time.Parse(time.RFC3339, sync); err == nil {

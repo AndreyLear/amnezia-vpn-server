@@ -21,7 +21,10 @@ type vlessRouteJSON struct {
 	Entry string `json:"entry"`
 	// Prefix — приставка узла («RU »): по ней окно подписывает маршрут.
 	Prefix string `json:"prefix"`
-	Link   string `json:"link"`
+	// Title — имя каскада от владельца (amnezia-vpn-server-q1do.4): окно
+	// подписывает им маршрут; пусто — «Каскад»/«Каскад <узел>».
+	Title string `json:"title"`
+	Link  string `json:"link"`
 }
 
 type vlessJSON struct {
@@ -58,15 +61,16 @@ func (s *Server) apiClientVLESS(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	prefixes := map[string]string{}
+	prefixes, titles := map[string]string{}, map[string]string{}
 	if entries, err := db.XrayEntries(s.db()); err == nil {
 		for _, e := range entries {
 			prefixes[e.Name] = e.LinkPrefix
+			titles[e.Name] = e.Title
 		}
 	}
 	out := vlessJSON{Enabled: c.Enabled, Routes: []vlessRouteJSON{}}
 	for _, rt := range routes {
-		out.Routes = append(out.Routes, vlessRouteJSON{Entry: rt.Entry, Prefix: prefixes[rt.Entry], Link: rt.Link})
+		out.Routes = append(out.Routes, vlessRouteJSON{Entry: rt.Entry, Prefix: prefixes[rt.Entry], Title: titles[rt.Entry], Link: rt.Link})
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)

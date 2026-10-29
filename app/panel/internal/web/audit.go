@@ -33,6 +33,10 @@ const (
 	auditRestore      = "backup.restore"
 	// Владелец попросил обновить каскад (amnezia-vpn-server-q1do.2).
 	auditEntryUpdate = "entry.update"
+	// Владелец переименовал основной сервер или каскад
+	// (amnezia-vpn-server-q1do.4); подробность — «было → стало».
+	auditServerRename = "server.rename"
+	auditEntryRename  = "entry.rename"
 )
 
 // actorOf — кто это сделал. Для неудачного входа сессии ещё нет, и имя
