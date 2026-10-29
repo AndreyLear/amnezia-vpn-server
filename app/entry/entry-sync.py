@@ -273,6 +273,8 @@ def check_settings(s):
         raise Fail("dest в settings.json — не host:port")
     if s.get("xver", 0) not in (0, 1, 2):
         raise Fail("xver в settings.json — не 0, 1 или 2")
+    if not isinstance(s.get("fail2ban", True), bool):
+        raise Fail("fail2ban в settings.json — не true или false")
     port = s.get("port", 443)
     if not isinstance(port, int) or not 1 <= port <= 65535:
         raise Fail("port в settings.json — не порт")
@@ -314,7 +316,7 @@ def cmd_settings(args):
     никогда: они уже в ссылках у клиентов. Перенос ручной настройки —
     --import: файл берётся как есть, проверяется и становится settings.json.
     """
-    opts = parse_flags(args, {"--panel", "--domain", "--dest", "--server-names", "--xver", "--import"})
+    opts = parse_flags(args, {"--panel", "--domain", "--dest", "--server-names", "--xver", "--import", "--fail2ban"})
     target = path("settings.json")
     if "--import" in opts:
         src = opts["--import"]
@@ -346,6 +348,13 @@ def cmd_settings(args):
         s["xver"] = int(opts["--xver"])
     if "--panel" in opts:
         s["panel_url"] = opts["--panel"].rstrip("/")
+    # Выбор --[no-]fail2ban — решение владельца для узла, а не одного запуска:
+    # самообновление зовёт install.sh без флагов и иначе снова включало бы
+    # fail2ban (amnezia-vpn-server-0b80). Нет ключа — включён.
+    if "--fail2ban" in opts:
+        if opts["--fail2ban"] not in ("0", "1"):
+            raise Fail("--fail2ban — 0 или 1")
+        s["fail2ban"] = opts["--fail2ban"] == "1"
     s.setdefault("listen", "::")
     s.setdefault("port", 443)
     s.setdefault("direct_domains", DEFAULT_DIRECT_DOMAINS)

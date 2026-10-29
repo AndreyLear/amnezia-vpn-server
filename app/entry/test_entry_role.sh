@@ -904,6 +904,87 @@ run_sync sync
 check "после обновления: запроса нет" test ! -e "$ED/state/update-request.json" -a "$(calls 'xray-entry-update')" = 0
 check "после обновления: в отчёте 2.13.0 и idle" report 'r["release"] == "2.13.0" and r["update"]["state"] == "idle"'
 
+# --- 9. выбор --no-fail2ban запоминается (amnezia-vpn-server-0b80) ---------------------
+#
+# Повторный запуск без флагов — и самообновление, которое зовёт install.sh
+# без флагов, — не должны снова включать fail2ban там, где владелец его
+# выключил. Явный --fail2ban/--no-fail2ban меняет выбор и тоже запоминается.
+
+JAIL="$WORK/f2b/jail.d/amnezia-vpn-sshd.conf"
+f2b_setting() { # f2b_setting true|false — что записано в settings.json
+    python3 -I -c 'import json,sys; v = json.load(open(sys.argv[1])).get("fail2ban"); sys.exit(0 if v is (sys.argv[2] == "true") else 1)' \
+        "$ED/settings.json" "$1"
+}
+f2b_off() { test ! -e "$JAIL" -a "$(calls 'fail2ban')" = 0; }
+f2b_on() { grep -q '^\[sshd\]' "$JAIL" && test "$(calls 'systemctl restart fail2ban')" = 1; }
+
+reset_host
+printf '%s\n' "$TOKEN" | run_install --panel "$PANEL" --entry-token - --no-fail2ban \
+    --entry-dest 127.0.0.1:4441 --entry-server-names a.example.ru
+check "--no-fail2ban: установка прошла, jail нет, fail2ban не ставили" test $? = 0 -a ! -e "$JAIL" -a "$(calls 'fail2ban')" = 0
+check "--no-fail2ban: выбор записан в settings.json" f2b_setting false
+: > "$CALLS"
+run_install
+check "повторный запуск без флагов: прошёл" test $? = 0
+check "повторный запуск без флагов: fail2ban так и выключен" f2b_off
+check "повторный запуск без флагов: так и сказано" grep -q 'fail2ban skipped' "$WORK/out.log"
+
+# Самообновление: в выпуске — настоящий установщик этого дерева.
+publish_real_release() { # publish_real_release VERSION
+    local v="$1" dir="$WORK/rel-src/amnezia-vpn-server-$1"
+    rm -rf "$WORK/rel-src"
+    mkdir -p "$dir/app/entry" "$GH_API/repos/AndreyLear/avl/releases/tags" "$GH_DL/AndreyLear/avl/releases/download/v$v"
+    cp "$REPO/install.sh" "$dir/install.sh"
+    cp "$REPO/app/entry/install-entry.sh" "$REPO/app/entry/entry-sync.py" "$dir/app/entry/"
+    sed "s/^IMAGE_VERSION=.*/IMAGE_VERSION=$v/" "$WORK/versions.lock" > "$dir/versions.lock"
+    (cd "$WORK/rel-src" && tar -czf "$GH_DL/AndreyLear/avl/releases/download/v$v/amnezia-vpn-server-$v.tar.gz" "amnezia-vpn-server-$v")
+    printf '{"tag_name":"v%s","body":"amnezia-sha256: %s\\n"}\n' "$v" \
+        "$(sha256 "$GH_DL/AndreyLear/avl/releases/download/v$v/amnezia-vpn-server-$v.tar.gz")" \
+        > "$GH_API/repos/AndreyLear/avl/releases/tags/v$v"
+}
+rm -rf "$GH_API" "$GH_DL"
+publish_real_release 2.13.0
+mkdir -p "$ED/state"
+printf '{"version": "2.13.0", "request": ""}\n' > "$ED/state/update-request.json"
+# update зовёт install.sh с окружением синка; хуки харнесса — через него же.
+: > "$CALLS"
+(
+    export AMNEZIA_INSTALL_TEST=1 AMNEZIA_INSTALL_FAKE_DIR="$FAKE" \
+        AMNEZIA_INSTALL_OS_RELEASE="$WORK/os-release" \
+        AMNEZIA_INSTALL_SYSTEMD_DIR="$WORK/systemd" \
+        AMNEZIA_INSTALL_SYSCTL_DIR="$WORK/sysctl" \
+        AMNEZIA_INSTALL_MODULES_DIR="$WORK/modules" \
+        AMNEZIA_INSTALL_FAIL2BAN_JAIL="$JAIL" \
+        AMNEZIA_INSTALL_UNAME_M=x86_64 \
+        AMNEZIA_INSTALL_XRAY_BASE="file://$WORK/xray-rel" \
+        AMNEZIA_INSTALL_GEO_BASE="file://$GEO" \
+        AMNEZIA_INSTALL_NGINX_SITES_DIR="$WORK/sites" \
+        AMNEZIA_INSTALL_LETSENCRYPT_DIR="$WORK/le" \
+        AMNEZIA_INSTALL_ACME_ROOT="$WORK/acme" \
+        AMNEZIA_INSTALL_ENTRY_STUB_ROOT="$WORK/stub"
+    run_update
+)
+rc=$?
+check "самообновление настоящим установщиком: прошло, версия 2.13.0" test "$rc" = 0 -a "$(cat "$ED/release")" = 2.13.0
+check "самообновление: установщик выпуска выполнился" grep -q 'settings: keeping' "$ED/state/update-log.txt"
+check "самообновление: fail2ban так и выключен" f2b_off
+check "самообновление: выбор в settings.json прежний" f2b_setting false
+
+# Явный флаг меняет выбор — и он тоже запоминается.
+: > "$CALLS"
+run_install --fail2ban
+check "--fail2ban: fail2ban включён" f2b_on
+check "--fail2ban: выбор записан в settings.json" f2b_setting true
+: > "$CALLS"
+run_install
+check "повторный запуск после --fail2ban: fail2ban включён" f2b_on
+: > "$CALLS"
+run_install --no-fail2ban
+check "снова --no-fail2ban: выбор записан в settings.json" f2b_setting false
+: > "$CALLS"
+run_install
+check "повторный запуск после --no-fail2ban: fail2ban не трогали" test "$(calls 'fail2ban')" = 0
+
 echo
 if [ "$ERRORS" -gt 0 ]; then
     printf 'entry: %d проверок не прошли\n' "$ERRORS"
