@@ -16,8 +16,10 @@ SYNC_SRC="$REPO/app/entry/entry-sync.py"
 ERRORS=0
 WORK="$(mktemp -d /tmp/entry-role.XXXXXX)"
 PANEL_PID=""
+PANEL6_PID=""
 cleanup() {
     [ -z "$PANEL_PID" ] || { kill "$PANEL_PID" 2>/dev/null; wait "$PANEL_PID" 2>/dev/null; }
+    [ -z "$PANEL6_PID" ] || { kill "$PANEL6_PID" 2>/dev/null; wait "$PANEL6_PID" 2>/dev/null; }
     if [ "$ERRORS" -gt 0 ]; then
         printf 'entry: вывод упавших запусков оставлен в %s\n' "$WORK" >&2
         return
@@ -156,8 +158,15 @@ EOF
 }
 panel_clients true false
 cat > "$WORK/panel.py" <<'EOF'
-import http.server, os, sys
+import http.server, os, socket, sys, threading
 work, token = sys.argv[1], sys.argv[2]
+# dual — та же панель на 127.0.0.1 и ::1 одним портом (amnezia-vpn-server-q1do.6):
+# по какому семейству пришёл запрос, пишется в panel.family.
+dual = sys.argv[3:] == ["dual"]
+def family_log(h):
+    if dual:
+        with open(os.path.join(work, "panel.family"), "a") as f:
+            f.write("%s %s\n" % (h.path, h.server.family))
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -165,6 +174,7 @@ class H(http.server.BaseHTTPRequestHandler):
         ok = self.headers.get("Authorization") == "Bearer " + token
         with open(os.path.join(work, "panel.log"), "a") as f:
             f.write("%s auth=%s\n" % (self.path, "ok" if ok else "bad"))
+        family_log(self)
         status = open(os.path.join(work, "panel.status")).read().strip()
         if status == "302":
             self.send_response(302); self.send_header("Location", "/elsewhere"); self.end_headers(); return
@@ -184,6 +194,7 @@ class H(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         with open(os.path.join(work, "report.log"), "a") as f:
             f.write("%s auth=%s type=%s\n" % (self.path, "ok" if ok else "bad", self.headers.get("Content-Type")))
+        family_log(self)
         if self.path != "/api/entry/report" or not os.path.exists(os.path.join(work, "report.status")):
             self.send_response(404); self.end_headers(); return
         if not ok:
@@ -192,6 +203,16 @@ class H(http.server.BaseHTTPRequestHandler):
         if status == 204:
             open(os.path.join(work, "report.json"), "wb").write(body)
         self.send_response(status); self.end_headers()
+if dual:
+    class S6(http.server.HTTPServer):
+        address_family = socket.AF_INET6
+    srv = S6(("::1", 0), H)
+    srv.family = "v6"
+    s4 = http.server.HTTPServer(("127.0.0.1", srv.server_port), H)
+    s4.family = "v4"
+    threading.Thread(target=s4.serve_forever, daemon=True).start()
+    open(os.path.join(work, "panel6.port"), "w").write(str(srv.server_port))
+    srv.serve_forever()
 srv = http.server.HTTPServer(("127.0.0.1", 0), H)
 open(os.path.join(work, "panel.port"), "w").write(str(srv.server_port))
 srv.serve_forever()
@@ -336,6 +357,11 @@ check "конфиг: слушает :: 443, Reality на локальный са
 check "конфиг: только включённые клиенты, email c<id>" cfg 'emails == ["c1"] and inb["settings"]["clients"][0]["id"] == "'$UUID1'"'
 check "конфиг: клиент уходит на основной сервер под своим UUID" \
     cfg 'outs["upstream-c1"]["settings"]["vnext"][0]["users"][0]["id"] == "'$UUID1'" and outs["upstream-c1"]["settings"]["vnext"][0]["address"] == "super-space.com.de" and outs["upstream-c1"]["streamSettings"]["realitySettings"] == {"serverName": "super-space.com.de", "fingerprint": "chrome", "publicKey": "'$UP_PBK'", "shortId": "48651fdff605420e"} and outs["upstream-c1"]["streamSettings"]["xhttpSettings"]["path"] == "/96f96172" and "upstream-c2" not in outs'
+# Исходящие к основному серверу (amnezia-vpn-server-q1do.6): Xray сам берёт
+# A и AAAA имени и гонит соединения, IPv4 первым, IPv6 — через 250 мс.
+UP_SOCKOPT='{"domainStrategy": "UseIP", "happyEyeballs": {"tryDelayMs": 250, "prioritizeIPv6": False, "interleave": 1, "maxConcurrentTry": 4}}'
+check "конфиг: к основному — оба семейства, IPv4 первым, IPv6 через 250 мс" \
+    cfg 'outs["upstream-c1"]["streamSettings"]["sockopt"] == '"$UP_SOCKOPT"
 check "конфиг: правило по user ведёт клиента в его outbound" cfg '{"type": "field", "user": ["c1"], "outboundTag": "upstream-c1"} in rules'
 check "конфиг: частные сети и QUIC — в блок, российское — напрямую (после правила API)" \
     cfg 'rules[1] == {"type": "field", "ip": ["geoip:private"], "outboundTag": "block"} and rules[2] == {"type": "field", "network": "udp", "port": "443", "outboundTag": "block"} and rules[3]["outboundTag"] == "direct" and "geosite:category-ru" in rules[3]["domain"] and "domain:xn--p1ai" in rules[3]["domain"] and rules[4] == {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"}'
@@ -611,6 +637,8 @@ EOF
 run_sync sync
 check "extra_clients: проба уходит служебной учёткой, остальное не в блок" \
     cfg '"probe" in emails and outs["upstream"]["settings"]["vnext"][0]["users"][0]["id"] == "33333333-3333-4333-8333-333333333333" and rules[-1]["outboundTag"] == "upstream"'
+check "перенос: служебная учётка к основному — тоже по обоим семействам (amnezia-vpn-server-q1do.6)" \
+    cfg 'outs["upstream"]["streamSettings"]["sockopt"] == '"$UP_SOCKOPT"
 
 # --- 6. своя заглушка --entry-domain ------------------------------------------------
 
@@ -1146,6 +1174,105 @@ check "после обновления счёт отказов начат зан
 run_watchdog
 check "после обновления: второй отказ подряд — перезапуск" test "$(wd_restarts)" = 1
 entry_listen_stop
+
+# --- 11. связь с панелью по IPv4 и IPv6 (amnezia-vpn-server-q1do.6) ------------------------
+
+# Инцидент 29.10.2026: TCP по IPv4 между каскадом и основным пропал, и
+# синк падал «timed out», хотя IPv6 работал. Панель здесь — та же подделка
+# на 127.0.0.1 и ::1 одним портом; что вернул бы DNS на имя панели,
+# подменяет AMNEZIA_ENTRY_PANEL_ADDRS. Мёртвые адреса — 192.0.2.1 и 100::1
+# (TEST-NET-1 и discard-префикс): SYN уходит в никуда, как в инциденте.
+python3 -I "$WORK/panel.py" "$WORK" "$TOKEN" dual &
+PANEL6_PID=$!
+for _ in $(seq 50); do [ -s "$WORK/panel6.port" ] && break; sleep 0.1; done
+PANEL6="http://localhost:$(cat "$WORK/panel6.port" 2>/dev/null)"
+
+reset_host
+printf '%s\n' "$TOKEN" | run_install --panel "$PANEL" --entry-token - \
+    --entry-dest 127.0.0.1:4441 --entry-server-names a.example.ru
+fake_proc 3600.50 1000 9000 100000 50000
+run_sync settings --panel "$PANEL6"
+check "IPv6: адрес панели — по имени" grep -q "\"panel_url\": \"$PANEL6\"" "$ED/settings.json"
+rm -f "$ED/state/net.json"
+# run_net АДРЕСА — синк, будто DNS вернул на имя панели эти адреса;
+# попытка соединения, после которой берётся следующий адрес, — 1 с.
+run_net() {
+    : > "$WORK/panel.family"
+    rm -f "$WORK/report.json"
+    local t0
+    t0=$(date +%s)
+    env PATH="$FAKE:$PATH" AMNEZIA_ENTRY_DIR="$ED" AMNEZIA_ENTRY_GEO_BASE="file://$GEO" \
+        AMNEZIA_ENTRY_PROC="$WORK/proc" AMNEZIA_ENTRY_DISK_PATH="$WORK" \
+        AMNEZIA_ENTRY_PANEL_ADDRS="$1" AMNEZIA_ENTRY_CONNECT_TRY_SEC=1 \
+        python3 -I "$ED/entry-sync.py" sync > "$WORK/sync.log" 2>&1
+    NET_RC=$?
+    NET_SEC=$(($(date +%s) - t0))
+    { printf '=== sync через %s (rc=%s, %s с)\n' "$1" "$NET_RC" "$NET_SEC"; cat "$WORK/sync.log"; } >> "$WORK/all-out.log"
+}
+served() { # served PATH — семейство, по которому панель получила запрос
+    awk -v p="$1" '$1 == p { f = $2 } END { print f }' "$WORK/panel.family"
+}
+net_family() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("family", ""))' "$ED/state/net.json" 2>/dev/null; }
+
+run_net "127.0.0.1,::1"
+check "оба семейства живы: синк прошёл" test "$NET_RC" = 0
+check "оба семейства живы: запрос к панели — по IPv4, как раньше" test "$(served /api/entry/config)" = v4
+check "оба семейства живы: отчёт — тоже по IPv4" test "$(served /api/entry/report)" = v4
+check "оба семейства живы: в отчёте family v4" report 'r.get("family") == "v4"'
+check "сработавшее семейство запомнено в state/net.json, 0600" test "$(net_family)" = v4 -a "$(mode_of "$ED/state/net.json")" = 0o600
+
+run_net "192.0.2.1,::1"
+check "IPv4 не проходит: синк прошёл по IPv6" test "$NET_RC" = 0 -a "$(served /api/entry/config)" = v6
+check "IPv4 не проходит: отчёт сразу по IPv6" test "$(served /api/entry/report)" = v6
+check "IPv4 не проходит: в отчёте family v6" report 'r.get("family") == "v6"'
+check "IPv4 не проходит: на IPv4 — короткая попытка, а не весь срок запроса" test "$NET_SEC" -lt 8
+check "IPv4 не проходит: IPv6 запомнен" test "$(net_family)" = v6
+if grep -q "недоступна" "$WORK/sync.log"; then fail "IPv4 не проходит: в журнале тихо"; else pass "IPv4 не проходит: в журнале тихо"; fi
+
+run_net "127.0.0.1,::1"
+check "оба живы, в прошлый раз сработал IPv6: он и первый" \
+    test "$NET_RC" = 0 -a "$(served /api/entry/config)" = v6 -a "$(net_family)" = v6
+
+run_net "127.0.0.1,100::1"
+check "IPv6 пропал, IPv4 есть: синк прошёл по IPv4 и запомнил его" \
+    test "$NET_RC" = 0 -a "$(served /api/entry/config)" = v4 -a "$(net_family)" = v4
+
+# Только IPv4 (у имени нет AAAA) — как раньше.
+run_net "127.0.0.1"
+check "только IPv4: синк как раньше" test "$NET_RC" = 0 -a "$(served /api/entry/config)" = v4
+
+printf '{"family": "v9"}\n' > "$ED/state/net.json"
+run_net "127.0.0.1,::1"
+check "испорченный state/net.json: как без него — IPv4 первым" \
+    test "$NET_RC" = 0 -a "$(served /api/entry/config)" = v4 -a "$(net_family)" = v4
+
+# HTTPS: соединение — с адресом, а SNI и проверка сертификата — по имени
+# панели. Подделка на ::1 читает ClientHello и закрывает соединение.
+sni_ok="$(env AMNEZIA_ENTRY_DIR="$ED" AMNEZIA_ENTRY_PANEL_ADDRS="192.0.2.1,::1" AMNEZIA_ENTRY_CONNECT_TRY_SEC=1 \
+    python3 -I - "$ED/entry-sync.py" <<'EOF'
+import importlib.util, socket, ssl, sys, threading
+sys.dont_write_bytecode = True; spec = importlib.util.spec_from_file_location("es", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+srv = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+srv.bind(("::1", 0)); srv.listen(1)
+hello = []
+def serve():
+    c, _ = srv.accept()
+    c.settimeout(5)
+    hello.append(c.recv(4096))
+    c.close()
+threading.Thread(target=serve, daemon=True).start()
+try:
+    m.panel_request({"panel_url": "https://panel.example.test:%d" % srv.getsockname()[1]}, m.CONFIG_PATH, timeout=5)
+except Exception:
+    pass
+ctx = m._Https()._context
+verify = ctx is None or (ctx.check_hostname and ctx.verify_mode == ssl.CERT_REQUIRED)
+ok = hello and hello[0][:1] == b"\x16" and b"panel.example.test" in hello[0] and verify
+print("ok" if ok else "bad %r" % (hello,))
+EOF
+)"
+[ "$sni_ok" = ok ] && pass "HTTPS по адресу: SNI и проверка сертификата — по имени панели" \
+    || fail "HTTPS по адресу: SNI и проверка сертификата — по имени панели ($sni_ok)"
 
 echo
 if [ "$ERRORS" -gt 0 ]; then

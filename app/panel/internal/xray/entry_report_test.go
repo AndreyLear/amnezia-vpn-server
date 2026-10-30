@@ -187,6 +187,31 @@ func TestParseEntryReportWatchdog(t *testing.T) {
 	}
 }
 
+// По какому протоколу узел достучался до панели (amnezia-vpn-server-q1do.6):
+// только v4 или v6, всё прочее — пусто, а не текст узла в окне панели.
+func TestParseEntryReportFamily(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"family": "v4"}`:           "v4",
+		`{"family": "v6"}`:           "v6",
+		`{"family": "V6"}`:           "",
+		`{"family": "ipv6 via tor"}`: "",
+		`{"family": null}`:           "",
+		`{}`:                         "",
+	} {
+		r, err := ParseEntryReport([]byte(body))
+		if err != nil || r.Family != want {
+			t.Errorf("%s: family = %q, %v; want %q", body, r.Family, err, want)
+		}
+	}
+	if _, err := ParseEntryReport([]byte(`{"family": 6}`)); err == nil {
+		t.Error("family не строка — принят")
+	}
+	// Из базы — та же проверка: строка могла быть поправлена руками.
+	if r := (EntryReport{Family: "v5"}).Sanitized(); r.Family != "" {
+		t.Errorf("Sanitized: family = %q", r.Family)
+	}
+}
+
 func TestEntryTargetVersion(t *testing.T) {
 	for in, want := range map[string]string{
 		"3.4.0": "3.4.0", "10.0.12": "10.0.12", "": "", "dev": "", "3.4.0-rc.1": "",

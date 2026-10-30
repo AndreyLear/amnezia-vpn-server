@@ -179,6 +179,29 @@ describe("о версиях", () => {
     expect(rows[0]).toHaveClass("ps-4");
   });
 
+  // По какому протоколу каскад достучался до панели (amnezia-vpn-server-q1do.6):
+  // строка есть, только если узел сообщил; сервер отдаёт его лишь из
+  // свежего отчёта. Подпись не «Связь»: у строки каскада выше значение
+  // «Нет связи», и «Связь: IPv6» читалось бы как её продолжение.
+  it("показывает протокол запроса каскада к панели, только если он известен", async () => {
+    reply({
+      product: "3.5.1",
+      xray: "26.10.21",
+      vless_state: "up",
+      entries: [
+        { name: "a", last_sync_utc: null, online: false, family: "v6" },
+        { name: "b", last_sync_utc: null, online: false, family: "v4" },
+        { name: "c", last_sync_utc: null, online: false, family: "" },
+        { name: "d", last_sync_utc: null, online: false },
+      ],
+    });
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    await screen.findByText("Каскад d");
+    const rows = screen.getAllByText("Запрос к панели", { selector: "dt" });
+    expect(rows.map((dt) => dt.nextElementSibling?.textContent)).toEqual(["IPv6", "IPv4"]);
+    expect(rows[0]).toHaveClass("ps-4");
+  });
+
   // Опрос Xray не ответил — VLESS всё равно включён: строка говорит о
   // настройке, а не о том, ответил ли Xray в последние пять секунд.
   it("считает VLESS включённым при любом состоянии, кроме none", async () => {

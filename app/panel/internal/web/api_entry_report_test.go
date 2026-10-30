@@ -219,6 +219,58 @@ func TestAPIEntryReportWatchdog(t *testing.T) {
 	}
 }
 
+// По какому протоколу узел достучался до панели (amnezia-vpn-server-q1do.6) —
+// в «О версиях» у каскада, только из свежего отчёта: у узла без связи
+// «IPv6» читалось бы как «связь есть». В шапке поля нет.
+func TestAPIEntryReportFamily(t *testing.T) {
+	f, _, _ := vlessFixture(t)
+	token, err := xray.RotateEntryToken(f.h, "ru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	family := func() *string {
+		t.Helper()
+		var got struct {
+			Entries []struct {
+				Family *string `json:"family"`
+			} `json:"entries"`
+		}
+		if err := json.Unmarshal(f.get("/api/versions").Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Entries) != 1 {
+			t.Fatalf("entries: %+v", got.Entries)
+		}
+		return got.Entries[0].Family
+	}
+
+	if rec := f.entryPost("198.51.100.7", "Bearer "+token, goodReport); rec.Code != http.StatusNoContent {
+		t.Fatalf("отчёт: код %d", rec.Code)
+	}
+	if got := family(); got == nil || *got != "" {
+		t.Fatalf("узел не сообщил протокол, а он есть: %v", got)
+	}
+
+	body := strings.TrimSuffix(goodReport, "}") + `, "family": "v6"}`
+	if rec := f.entryPost("198.51.100.7", "Bearer "+token, body); rec.Code != http.StatusNoContent {
+		t.Fatalf("отчёт с протоколом: код %d", rec.Code)
+	}
+	if got := family(); got == nil || *got != "v6" {
+		t.Fatalf("versions: family = %v", got)
+	}
+	if strings.Contains(f.get("/api/stats/host").Body.String(), `"family"`) {
+		t.Error("протокол попал в шапку")
+	}
+
+	old := time.Now().UTC().Add(-6 * time.Minute).Format(time.RFC3339)
+	if _, err := f.h.Exec(`UPDATE xray_entries SET last_sync_utc = ?, report_utc = ?`, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := family(); got == nil || *got != "" {
+		t.Fatalf("узел без связи, а протокол показан: %v", got)
+	}
+}
+
 // Отчёт и конфиг делят одни лимиты на адрес: секрет, кому бы он ни
 // достался, не даёт запросов больше, чем было до отчётов, а подбор
 // секрета через отчёт упирается в ту же стену неудач.

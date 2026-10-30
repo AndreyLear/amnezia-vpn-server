@@ -22,7 +22,8 @@ update-geo.sh, 28.10.2026):
 После успешного синка узел отправляет панели свои показатели
 (POST /api/entry/report тем же секретом, amnezia-vpn-server-q1do.1): CPU,
 память, диск, трафик основного интерфейса за интервал между синками,
-аптайм, версии Xray и выпуска. Отчёт — не обязанность: панель старше
+аптайм, версии Xray и выпуска, протокол, по которому ответила панель
+(amnezia-vpn-server-q1do.6). Отчёт — не обязанность: панель старше
 отчётов отвечает 404, и узел молча обходится без него; любой сбой отчёта
 на синк и его код выхода не влияет.
 
@@ -49,6 +50,7 @@ import base64
 import calendar
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -443,6 +445,121 @@ def read_token():
         raise Fail("секрета узла нет (install.sh --role entry --entry-token …)")
 
 
+# --- связь с панелью по IPv4 и IPv6 (amnezia-vpn-server-q1do.6) -------------
+# Инцидент 29.10.2026: TCP по IPv4 между каскадом и основным пропал на 13 ч,
+# IPv6 при этом работал, но urllib брал первый адрес из getaddrinfo и ждал
+# его весь срок запроса — синк падал «timed out». Теперь адреса имени панели
+# (A и AAAA) перебираются сами: семейство, сработавшее в прошлый раз
+# (state/net.json), первым, без него — IPv4, как было; семейства чередуются
+# (RFC 8305, 4); на каждый адрес, кроме последнего, — CONNECT_TRY секунд.
+# Сокет соединяется с адресом, а HTTP и TLS идут по имени: заголовок Host,
+# SNI и проверка сертификата — те же, что раньше.
+#
+# AMNEZIA_ENTRY_PANEL_ADDRS — только для харнесса: что «вернул бы DNS».
+CONNECT_TRY = float(os.environ.get("AMNEZIA_ENTRY_CONNECT_TRY_SEC", "3"))
+PANEL_ADDRS = os.environ.get("AMNEZIA_ENTRY_PANEL_ADDRS", "")
+FAMILY_NAMES = {socket.AF_INET: "v4", socket.AF_INET6: "v6"}
+# Семейство последнего удавшегося соединения с панелью в этом запуске.
+_panel_family = None
+
+
+def read_net_family():
+    """Семейство, по которому панель ответила в прошлый раз, или None."""
+    try:
+        f = read_json(path("state/net.json")).get("family")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return f if f in ("v4", "v6") else None
+
+
+def remember_net_family(family):
+    if family and family != read_net_family():
+        os.makedirs(path("state"), mode=0o700, exist_ok=True)
+        write_atomic(path("state/net.json"), dump({"family": family}))
+
+
+def panel_addresses(host, port):
+    """[(семейство, sockaddr)] имени панели без повторов, в порядке DNS."""
+    if PANEL_ADDRS:
+        infos = []
+        for a in PANEL_ADDRS.split(","):
+            af = socket.AF_INET6 if ":" in a else socket.AF_INET
+            infos.append((af, (a.strip(), port) if af == socket.AF_INET else (a.strip(), port, 0, 0)))
+    else:
+        infos = [(i[0], i[4]) for i in socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)]
+    out = []
+    for af, sa in infos:
+        if af in FAMILY_NAMES and (af, sa) not in out:
+            out.append((af, sa))
+    return out
+
+
+def order_addresses(addrs, first):
+    """Чередование семейств, начиная с first (RFC 8305, 4)."""
+    a = [x for x in addrs if FAMILY_NAMES[x[0]] == first]
+    b = [x for x in addrs if FAMILY_NAMES[x[0]] != first]
+    out = []
+    for i in range(max(len(a), len(b))):
+        out += a[i:i + 1] + b[i:i + 1]
+    return out
+
+
+def connect_panel(address, timeout=None, source_address=None):
+    """Замена socket.create_connection для запросов к панели: адреса по
+    очереди, короткая попытка на каждый, кроме последнего."""
+    global _panel_family
+    host, port = address[0], address[1]
+    if not isinstance(timeout, (int, float)):
+        timeout = None
+    addrs = order_addresses(panel_addresses(host, port), read_net_family() or "v4")
+    err = OSError("у имени %s нет адресов" % host)
+    for i, (af, sa) in enumerate(addrs):
+        s = socket.socket(af, socket.SOCK_STREAM)
+        try:
+            if source_address:
+                s.bind(source_address)
+            # Последнему адресу — весь срок: другого пути уже нет, а
+            # медленная, но живая связь не должна обрываться раньше, чем
+            # до этой правки.
+            if i == len(addrs) - 1:
+                s.settimeout(timeout)
+            else:
+                s.settimeout(CONNECT_TRY if timeout is None else min(CONNECT_TRY, timeout))
+            s.connect(sa)
+            s.settimeout(timeout)
+        except OSError as e:
+            s.close()
+            err = e
+            continue
+        _panel_family = FAMILY_NAMES[af]
+        return s
+    raise err
+
+
+def _panel_connection(base):
+    class Conn(base):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            # Шов http.client: только соединение сокета, всё прочее
+            # (Host, TLS с server_hostname=имя) — как у base.
+            self._create_connection = connect_panel
+    return Conn
+
+
+_PanelHTTP = _panel_connection(http.client.HTTPConnection)
+_PanelHTTPS = _panel_connection(http.client.HTTPSConnection)
+
+
+class _Http(urllib.request.HTTPHandler):
+    def do_open(self, http_class, req, **kw):
+        return super().do_open(_PanelHTTP, req, **kw)
+
+
+class _Https(urllib.request.HTTPSHandler):
+    def do_open(self, http_class, req, **kw):
+        return super().do_open(_PanelHTTPS, req, **kw)
+
+
 def panel_request(settings, api_path, body=None, timeout=20):
     """Запрос к панели с секретом узла в заголовке, без перенаправлений.
     body — JSON для POST. Возвращает тело ответа; ошибки — как у urllib."""
@@ -457,9 +574,16 @@ def panel_request(settings, api_path, body=None, timeout=20):
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url.rstrip("/") + api_path, data=data, headers=headers)
-    opener = urllib.request.build_opener(_NoRedirect)
+    opener = urllib.request.build_opener(_NoRedirect, _Http, _Https)
     with opener.open(req, timeout=timeout) as r:
-        return r.read(1 << 20)
+        out = r.read(1 << 20)
+    # Запомнить семейство — только когда панель ответила: соединиться мало,
+    # если дальше по этому пути ничего не проходит.
+    try:
+        remember_net_family(_panel_family)
+    except OSError as e:
+        warn("не запомнено, по какому протоколу ответила панель: %s" % e.__class__.__name__)
+    return out
 
 
 def fetch(settings):
@@ -618,7 +742,10 @@ def collect_metrics(prev):
               "rx_bytes": None, "tx_bytes": None, "interval_seconds": None,
               "uptime_seconds": int(up) if up is not None else None,
               "xray_version": xray_version(), "release": release_version(),
-              "update": update_report(), "watchdog": watchdog_report()}
+              "update": update_report(), "watchdog": watchdog_report(),
+              # По какому протоколу панель ответила на запрос конфига в
+              # этом синке: v4 | v6 (amnezia-vpn-server-q1do.6).
+              "family": read_net_family()}
     prev_up = prev.get("uptime")
     # Тот же запуск системы — аптайм вырос. Иначе перезагрузка или первый
     # запуск, и разницы нет.
@@ -1185,11 +1312,33 @@ def cmd_watchdog(_args):
 
 # --- конфиг Xray ---------------------------------------------------------
 
+# Дорога до основного сервера по IPv4 и IPv6 (amnezia-vpn-server-q1do.6).
+# Без sockopt Xray 26.x отдаёт имя системному dialer'у Go
+# (transport/internet/dialer.go, DialSystem: sockopt == nil), и порядок
+# семейств решает сортировка RFC 6724 на хосте с запасным через 300 мс —
+# на узле с IPv6 это IPv6 первым, то есть смена пути при живом IPv4.
+# Одна domainStrategy без happyEyeballs хуже: Xray берёт случайный адрес
+# из ответа (dice.Roll) и с мёртвым IPv4 промахивался бы через раз. С
+# domainStrategy UseIP Xray сам берёт A и AAAA (LookupForIP через
+# системный резолвер: секции dns у узла нет), а happyEyeballs с
+# tryDelayMs > 0 включает TcpRaceDial
+# (transport/internet/happy_eyeballs.go): IPv4 первым (prioritizeIPv6
+# false), следующий адрес — через 250 мс без ответа или сразу после отказа,
+# побеждает первое установленное соединение. Живой IPv4 отвечает раньше —
+# путь прежний; мёртвый — через 250 мс идёт IPv6. Нет AAAA или у узла нет
+# IPv6 — один адрес или быстрый отказ v6, всё как раньше. UseIP, а не
+# ForceIP: при сбое резолвера Xray, как и прежде, наберёт имя сам.
+UPSTREAM_SOCKOPT = {"domainStrategy": "UseIP",
+                    "happyEyeballs": {"tryDelayMs": 250, "prioritizeIPv6": False,
+                                      "interleave": 1, "maxConcurrentTry": 4}}
+
+
 def reality_out(up, uuid, tag):
     return {"tag": tag, "protocol": "vless",
             "settings": {"vnext": [{"address": up["address"], "port": up["port"],
                                     "users": [{"id": uuid, "encryption": "none"}]}]},
             "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": up["path"], "mode": "auto"},
+                               "sockopt": json.loads(json.dumps(UPSTREAM_SOCKOPT)),
                                "security": "reality",
                                "realitySettings": {"serverName": up["server_name"], "fingerprint": "chrome",
                                                    "publicKey": up["public_key"], "shortId": up["short_id"]}}}

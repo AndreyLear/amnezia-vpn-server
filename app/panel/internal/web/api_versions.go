@@ -78,6 +78,11 @@ type entryAboutJSON struct {
 	// (amnezia-vpn-server-q1do.5), из последнего известного отчёта: это
 	// след, и при «нет связи» он нужнее всего; null — не было.
 	Watchdog *xray.EntryWatchdog `json:"watchdog"`
+	// Family — по какому протоколу узел достучался до панели: v4 | v6
+	// (amnezia-vpn-server-q1do.6). Только из свежего отчёта, как аптайм:
+	// у узла без связи «IPv6» читалось бы как «связь есть»; пусто —
+	// неизвестно.
+	Family string `json:"family"`
 }
 
 // entryOfflineAfter — после скольких минут без синка узел считается без
@@ -105,6 +110,7 @@ func entriesAbout(reports []db.XrayEntryReport, now time.Time) []entryAboutJSON 
 			e.Watchdog = report.Watchdog
 			if entryFresh(s.ReportedAt, now) {
 				e.UptimeSeconds = report.UptimeSeconds
+				e.Family = report.Family
 			}
 		}
 		e.Update = entryUpdateOf(s, xray.EntryTargetVersion(productVersion()))
