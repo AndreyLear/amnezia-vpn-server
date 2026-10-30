@@ -14,7 +14,8 @@ update-geo.sh, 28.10.2026):
     upstream-c<id> и правило по user): основной сервер сам считает трафик,
     график и последнюю активность и для дороги через вход;
   - частные сети и QUIC (udp/443) — в блок, российское — напрямую, с
-    UseIPv4 (у входа нет IPv6: без этого первое соединение ждёт отказа v6);
+    UseIPv4 (так было на ручной настройке без IPv6; IPv6 у узла теперь
+    может быть, но прямой выход остаётся на IPv4);
   - конфиг меняется, только если изменился, и только после xray run -test;
     перезапуск — только при изменении;
   - нет связи с панелью — узел работает на последнем конфиге.
@@ -1328,25 +1329,37 @@ def cmd_watchdog(_args):
 # путь прежний; мёртвый — через 250 мс идёт IPv6. Нет AAAA или у узла нет
 # IPv6 — один адрес или быстрый отказ v6, всё как раньше. UseIP, а не
 # ForceIP: при сбое резолвера Xray, как и прежде, наберёт имя сам.
-UPSTREAM_SOCKOPT = {"domainStrategy": "UseIP",
-                    "happyEyeballs": {"tryDelayMs": 250, "prioritizeIPv6": False,
-                                      "interleave": 1, "maxConcurrentTry": 4}}
+#
+# Какое семейство первым. Панель и основной сервер — один хост, поэтому
+# протокол, на котором панель ответила в этом синке (state/net.json),
+# годится и для Xray: ответила по IPv6 — prioritizeIPv6 true, иначе с
+# мёртвым IPv4 каждое новое соединение клиента теряло бы 250 мс (для XHTTP
+# это заметно). Смена семейства меняет config.json, и apply() перезапускает
+# Xray обычным путём «конфиг изменился»; то же семейство — тот же конфиг,
+# без перезапуска.
+def upstream_sockopt(v6_first):
+    return {"domainStrategy": "UseIP",
+            "happyEyeballs": {"tryDelayMs": 250, "prioritizeIPv6": bool(v6_first),
+                              "interleave": 1, "maxConcurrentTry": 4}}
 
 
-def reality_out(up, uuid, tag):
+def reality_out(up, uuid, tag, v6_first=False):
     return {"tag": tag, "protocol": "vless",
             "settings": {"vnext": [{"address": up["address"], "port": up["port"],
                                     "users": [{"id": uuid, "encryption": "none"}]}]},
             "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": up["path"], "mode": "auto"},
-                               "sockopt": json.loads(json.dumps(UPSTREAM_SOCKOPT)),
+                               "sockopt": upstream_sockopt(v6_first),
                                "security": "reality",
                                "realitySettings": {"serverName": up["server_name"], "fingerprint": "chrome",
                                                    "publicKey": up["public_key"], "shortId": up["short_id"]}}}
 
 
-def build(s, panel):
+def build(s, panel, v6_first=None):
     """Конфиг Xray узла. panel — ответ панели или None (ещё ни разу не
-    получен): тогда узел поднимается без клиентов и показывает маскировку."""
+    получен): тогда узел поднимается без клиентов и показывает маскировку.
+    v6_first — IPv6 первым к основному; None — по state/net.json."""
+    if v6_first is None:
+        v6_first = read_net_family() == "v6"
     users = [c for c in (panel or {}).get("clients", []) if c["enabled"]]
     up = (panel or {}).get("upstream")
     extra = s.get("extra_clients", []) or []
@@ -1363,19 +1376,23 @@ def build(s, panel):
         for c in users:
             tag = "upstream-c%d" % c["client_id"]
             rules.append({"type": "field", "user": ["c%d" % c["client_id"]], "outboundTag": tag})
-            outbounds.append(reality_out(up, c["uuid"], tag))
+            outbounds.append(reality_out(up, c["uuid"], tag, v6_first))
     # Служебная учётка входа на основном сервере (upstream.id в ручной
     # настройке) — только для своих учёток узла (extra_clients, например
     # проба): у клиентов панели дорога своя. Нет её — всё прочее в блок.
     service_id = (s.get("upstream") or {}).get("id", "")
     if up and extra and UUID_RE.match(service_id or ""):
-        outbounds.append(reality_out(up, service_id, "upstream"))
+        outbounds.append(reality_out(up, service_id, "upstream", v6_first))
         rules.append({"type": "field", "network": "tcp,udp", "outboundTag": "upstream"})
     else:
         rules.append({"type": "field", "network": "tcp,udp", "outboundTag": "block"})
     outbounds += [{"tag": "direct", "protocol": "freedom",
-                   # У входа нет IPv6: без этого Xray сперва пробует v6-адрес
-                   # российского сайта и теряет время на первом соединении.
+                   # Российские сайты — только по IPv4, как на ручной
+                   # настройке 62.109.31.63, где IPv6 не было: без этого
+                   # Xray сперва пробовал v6-адрес сайта и терял время на
+                   # первом соединении. IPv6 у каскада теперь может быть
+                   # (для дороги к основному, amnezia-vpn-server-q1do.6), но
+                   # прямой выход по нему не проверен — поведение прежнее.
                    "streamSettings": {"sockopt": {"domainStrategy": "UseIPv4"}}},
                   {"tag": "block", "protocol": "blackhole"}]
     return {

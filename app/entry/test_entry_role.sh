@@ -1198,6 +1198,7 @@ rm -f "$ED/state/net.json"
 # попытка соединения, после которой берётся следующий адрес, — 1 с.
 run_net() {
     : > "$WORK/panel.family"
+    : > "$CALLS"
     rm -f "$WORK/report.json"
     local t0
     t0=$(date +%s)
@@ -1213,6 +1214,9 @@ served() { # served PATH — семейство, по которому пане�
     awk -v p="$1" '$1 == p { f = $2 } END { print f }' "$WORK/panel.family"
 }
 net_family() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("family", ""))' "$ED/state/net.json" 2>/dev/null; }
+# v6_first True|False — prioritizeIPv6 у всех исходящих к основному.
+v6_first() { cfg 'all(o["streamSettings"]["sockopt"]["happyEyeballs"]["prioritizeIPv6"] is '"$1"' for t, o in outs.items() if t.startswith("upstream")) and any(t.startswith("upstream") for t in outs)'; }
+restarts() { calls 'systemctl restart xray-entry'; }
 
 run_net "127.0.0.1,::1"
 check "оба семейства живы: синк прошёл" test "$NET_RC" = 0
@@ -1220,6 +1224,8 @@ check "оба семейства живы: запрос к панели — по
 check "оба семейства живы: отчёт — тоже по IPv4" test "$(served /api/entry/report)" = v4
 check "оба семейства живы: в отчёте family v4" report 'r.get("family") == "v4"'
 check "сработавшее семейство запомнено в state/net.json, 0600" test "$(net_family)" = v4 -a "$(mode_of "$ED/state/net.json")" = 0o600
+check "запомнен IPv4: Xray к основному — IPv4 первым, без перезапуска" v6_first False
+check "запомнен IPv4: конфиг прежний — без перезапуска" test "$(restarts)" = 0
 
 run_net "192.0.2.1,::1"
 check "IPv4 не проходит: синк прошёл по IPv6" test "$NET_RC" = 0 -a "$(served /api/entry/config)" = v6
@@ -1227,15 +1233,22 @@ check "IPv4 не проходит: отчёт сразу по IPv6" test "$(serv
 check "IPv4 не проходит: в отчёте family v6" report 'r.get("family") == "v6"'
 check "IPv4 не проходит: на IPv4 — короткая попытка, а не весь срок запроса" test "$NET_SEC" -lt 8
 check "IPv4 не проходит: IPv6 запомнен" test "$(net_family)" = v6
+# Панель и основной сервер — один хост: раз панель ответила по IPv6, Xray
+# тоже начинает с IPv6, а не теряет 250 мс на мёртвый IPv4 в каждом
+# новом соединении клиента.
+check "запомнен IPv6: Xray к основному — IPv6 первым" v6_first True
+check "семейство сменилось: конфиг пересобран, Xray перезапущен один раз" test "$(restarts)" = 1
 if grep -q "недоступна" "$WORK/sync.log"; then fail "IPv4 не проходит: в журнале тихо"; else pass "IPv4 не проходит: в журнале тихо"; fi
 
 run_net "127.0.0.1,::1"
 check "оба живы, в прошлый раз сработал IPv6: он и первый" \
     test "$NET_RC" = 0 -a "$(served /api/entry/config)" = v6 -a "$(net_family)" = v6
+check "семейство то же (IPv6): Xray не перезапускается каждую минуту" test "$(restarts)" = 0 -a "$(v6_first True; echo $?)" = 0
 
 run_net "127.0.0.1,100::1"
 check "IPv6 пропал, IPv4 есть: синк прошёл по IPv4 и запомнил его" \
     test "$NET_RC" = 0 -a "$(served /api/entry/config)" = v4 -a "$(net_family)" = v4
+check "IPv6 пропал: Xray снова IPv4 первым, перезапуск один" test "$(restarts)" = 1 -a "$(v6_first False; echo $?)" = 0
 
 # Только IPv4 (у имени нет AAAA) — как раньше.
 run_net "127.0.0.1"
