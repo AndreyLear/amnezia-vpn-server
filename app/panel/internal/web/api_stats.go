@@ -82,6 +82,9 @@ func entriesHost(reports []db.XrayEntryReport, now time.Time) []entryHostJSON {
 			// След сторожа — в «О версиях», шапке он ни к чему
 			// (amnezia-vpn-server-q1do.5).
 			e.EntryReport.Watchdog = nil
+			// Протокол связи с панелью — тоже только в «О версиях»
+			// (amnezia-vpn-server-q1do.6).
+			e.EntryReport.Family = ""
 		}
 		e.Update = entryUpdateOf(r, xray.EntryTargetVersion(productVersion()))
 		out = append(out, e)

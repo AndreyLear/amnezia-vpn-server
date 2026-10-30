@@ -224,6 +224,7 @@ From then on the node fetches the client list from the panel every minute. A new
 
 - Xray at a pinned version, the archive checked against its sha256
 - Sync with the panel every minute
+- Connection to the main server over IPv4 and IPv6: the request to the panel and the clients' traffic go over IPv4, and if it doesn't answer, over IPv6. This needs IPv6 on both servers and an AAAA record in DNS for the main server's name (and for the panel's name, if it differs); without it everything goes over IPv4 only. The «О версиях» (About) window in the panel shows which protocol the last request to the panel used
 - Watchdog: once a minute it checks the node's Xray (its answer and its entry port) and restarts it after two failures in a row, at most once every 10 minutes. If only the main server is unreachable, it leaves Xray alone. The last restart is shown in the panel, in the «О версиях» (About) window
 - Direct-exit site lists, updated weekly
 - TCP settings for mobile networks (BBR)

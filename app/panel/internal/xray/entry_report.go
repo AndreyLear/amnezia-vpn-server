@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"regexp"
+	"slices"
 )
 
 // Показатели узла-входа (amnezia-vpn-server-q1do.1).
@@ -57,7 +58,14 @@ type EntryReport struct {
 	// Watchdog — последний перезапуск Xray сторожем узла
 	// (amnezia-vpn-server-q1do.5); nil — не было или узел старше сторожа.
 	Watchdog *EntryWatchdog `json:"watchdog,omitempty"`
+	// Family — по какому протоколу узел достучался до панели в последнем
+	// синке: v4 или v6 (amnezia-vpn-server-q1do.6); пусто — узел старше
+	// или прислал непонятное.
+	Family string `json:"family,omitempty"`
 }
+
+// EntryFamilies — что узел может сообщить в Family.
+var EntryFamilies = []string{"v4", "v6"}
 
 // rawEntryReport — тело как пришло: все числа — float64, чтобы дробное или
 // отрицательное обрезалось, а не валило весь отчёт.
@@ -77,6 +85,7 @@ type rawEntryReport struct {
 	Release         string         `json:"release"`
 	Update          *EntryUpdate   `json:"update"`
 	Watchdog        *EntryWatchdog `json:"watchdog"`
+	Family          *string        `json:"family"`
 }
 
 // ParseEntryReport разбирает и проверяет тело отчёта. Ошибка — тело не
@@ -98,7 +107,12 @@ func ParseEntryReport(body []byte) (EntryReport, error) {
 	if dec.More() {
 		return EntryReport{}, ErrEntryReportInvalid
 	}
+	family := ""
+	if raw.Family != nil {
+		family = *raw.Family
+	}
 	return EntryReport{
+		Family:          family,
 		CPUPercent:      raw.CPUPercent,
 		RAMPercent:      raw.RAMPercent,
 		DiskPercent:     raw.DiskPercent,
@@ -138,6 +152,9 @@ func (r EntryReport) Sanitized() EntryReport {
 	}
 	r.Update = r.Update.sanitized()
 	r.Watchdog = r.Watchdog.sanitized()
+	if !slices.Contains(EntryFamilies, r.Family) {
+		r.Family = ""
+	}
 	return r
 }
 

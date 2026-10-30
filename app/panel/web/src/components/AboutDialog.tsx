@@ -82,6 +82,15 @@ function entryWatchdog(entry: EntryAbout): string | null {
   return `Перезапуск ${formatHandshakeAge(at)} назад`;
 }
 
+// По какому протоколу каскад достучался до панели в последнем синке
+// (amnezia-vpn-server-q1do.6): строка есть, только если узел сообщил.
+// Сервер отдаёт его лишь из свежего отчёта.
+const entryFamilies: Record<string, string> = { v4: "IPv4", v6: "IPv6" };
+
+function entryFamily(entry: EntryAbout): string | null {
+  return entryFamilies[entry.family ?? ""] ?? null;
+}
+
 // Подпись строки каскада: с именем владельца — «Каскад «Москва»», без —
 // как раньше, по узлу (amnezia-vpn-server-q1do.4). Имя помечено как
 // непереводимое, как имена клиентов.
@@ -192,6 +201,12 @@ export function AboutDialog({
                   <Row nested label="Версия" value={text(entry.release)} />
                   <Row nested label="Xray" value={text(entry.xray)} />
                   <Row nested label="Без перезагрузки" value={entryUptime(entry)} />
+                  {/* Подпись не «Связь»: у строки каскада выше значение
+                      «Нет связи», и «Связь: IPv6» читалось бы как её
+                      продолжение. */}
+                  {entryFamily(entry) !== null && (
+                    <Row nested label="Запрос к панели" value={entryFamily(entry)!} />
+                  )}
                   {entryUpdateState(entry) !== null && (
                     <Row nested label="Обновление" value={entryUpdateState(entry)!} />
                   )}
